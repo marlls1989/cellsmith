@@ -142,7 +142,13 @@ fn mutex_generates_all_three_artifacts() {
 fn when_flag_reaches_arcs() {
     let cell = analyse_one(C2);
     let off = cell_arcs_tcl(&cell, ArcsTclOptions::default());
-    let on = cell_arcs_tcl(&cell, ArcsTclOptions { emit_when: true });
+    let on = cell_arcs_tcl(
+        &cell,
+        ArcsTclOptions {
+            emit_when: true,
+            ..Default::default()
+        },
+    );
     assert!(!off.contains("-when"));
     assert!(on.contains("-when"));
 }

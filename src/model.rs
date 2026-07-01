@@ -10,6 +10,7 @@ use serde::Deserialize;
 use thiserror::Error;
 
 use crate::expr::{self, ParseError};
+use crate::logic::confluence::{self, Constraint};
 use crate::logic::interlock::{self, Arbitration};
 
 /// The whole input file: a list of `[[cell]]` tables.
@@ -43,6 +44,15 @@ pub struct Cell {
     /// omitted, arbitration is still detected (and a warning surfaced) but not required.
     #[serde(default)]
     pub arbitrate: Vec<String>,
+    /// Optional: input pins that are clocks. A declared clock authorises suppressing a `non_seq` hazard
+    /// on a pin pair when a setup/hold on the same pins (with the clock as its related pin) already
+    /// covers it — EDA/Liberate's special treatment of clocks. See [`crate::logic::confluence`].
+    #[serde(default)]
+    pub clock: Vec<String>,
+    /// Optional: opt in to emitting derived constraint arcs (setup/hold, non_seq) for this cell. Off by
+    /// default; also enabled globally by the `--constraints` CLI flag.
+    #[serde(default)]
+    pub constraint_arcs: bool,
 }
 
 #[derive(Debug, Error)]
@@ -68,6 +78,8 @@ pub enum ModelError {
     },
     #[error("cell {cell:?}: async pin {pin:?} is not a declared input")]
     AsyncNotInput { cell: String, pin: String },
+    #[error("cell {cell:?}: clock pin {pin:?} is not a declared input")]
+    ClockNotInput { cell: String, pin: String },
     #[error("cell {cell:?}: arbitrate pin {pin:?} is not a declared output")]
     ArbitrateNotOutput { cell: String, pin: String },
     #[error("cell {cell:?}: declared arbitrate group {declared:?} is not a mutually-coupled (interlocked) set of outputs; detected interlock groups: {detected:?}")]
@@ -110,6 +122,13 @@ pub struct AnalysedCell {
     /// Whether the cell explicitly declared its arbitration set (`arbitrate = [...]`). When an
     /// interlock is detected but not declared, the CLI warns.
     pub arbitrate_declared: bool,
+    /// Declared clock input pins (`clock = [...]`). See [`crate::logic::confluence`].
+    pub clock_pins: Vec<String>,
+    /// All detected constraint hazards (setup/hold and non_seq), before clock suppression. Detection is
+    /// always run; suppression and emission are applied downstream via [`confluence::resolve`].
+    pub constraints: Vec<Constraint>,
+    /// Whether the cell opted in to constraint-arc emission (`constraint_arcs = true`).
+    pub constraint_arcs_declared: bool,
 }
 
 impl AnalysedCell {
@@ -157,6 +176,14 @@ impl Cell {
         for pin in &self.async_pins {
             if !input_set.contains(pin) {
                 return Err(ModelError::AsyncNotInput {
+                    cell: self.name.clone(),
+                    pin: pin.clone(),
+                });
+            }
+        }
+        for pin in &self.clock {
+            if !input_set.contains(pin) {
+                return Err(ModelError::ClockNotInput {
                     cell: self.name.clone(),
                     pin: pin.clone(),
                 });
@@ -233,7 +260,7 @@ impl Cell {
         let internals = all.split_off(n_outputs);
         let outputs = all;
 
-        Ok(AnalysedCell {
+        let mut analysed = AnalysedCell {
             name: self.name.clone(),
             inputs: self.inputs.clone(),
             outputs,
@@ -241,7 +268,14 @@ impl Cell {
             async_pins: self.async_pins.clone(),
             arbitration,
             arbitrate_declared,
-        })
+            clock_pins: self.clock.clone(),
+            constraints: Vec::new(),
+            constraint_arcs_declared: self.constraint_arcs,
+        };
+        // Detect all constraint hazards (setup/hold, non_seq) over the state machine. Clock suppression
+        // and emission gating are applied downstream (see [`confluence::resolve`]).
+        analysed.constraints = confluence::cell_constraints(&analysed);
+        Ok(analysed)
     }
 }
 

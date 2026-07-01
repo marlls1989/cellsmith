@@ -6,6 +6,7 @@
 
 use crate::logic::arcs::{cell_arcs, Arc, Edge};
 use crate::logic::assignment;
+use crate::logic::confluence::{Constraint, ConstraintKind};
 use crate::logic::interlock::Arbitration;
 use crate::model::AnalysedCell;
 
@@ -16,16 +17,97 @@ pub struct ArcsTclOptions {
     /// Off by default — Liberate can usually infer the conditioning from the vector, and hsNCL's
     /// `-when` differs from ours in pin ordering. Kept available for cells that need it.
     pub emit_when: bool,
+    /// Emit derived constraint arcs (setup/hold, non_seq) from state-machine confluence. Off by default;
+    /// a cell can opt in individually via `constraint_arcs = true`. See [`crate::logic::confluence`].
+    pub emit_constraints: bool,
 }
 
 /// All `define_arc` blocks for a cell, concatenated. Interlocked (mutex/arbiter) cells are prefixed
-/// with a comment documenting the metastable condition, which timing arcs cannot express.
+/// with a comment documenting the metastable condition, which timing arcs cannot express. When enabled,
+/// derived constraint arcs (setup/hold, non_seq) follow the delay arcs.
 pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     let mut out = arbitration_comment(cell);
     for arc in &cell_arcs(cell) {
         out.push_str(&format_arc(cell, arc, opts));
     }
+    if opts.emit_constraints || cell.constraint_arcs_declared {
+        for c in &cell.constraints {
+            out.push_str(&format_constraint(cell, c));
+        }
+    }
     out
+}
+
+/// A constraint arc as a pair of `define_arc` blocks — the setup member and the hold member (Liberate
+/// characterises them as separate arcs): `setup`/`hold` for a directed clock↔data constraint,
+/// `non_seq_setup`/`non_seq_hold` for a symmetric (arbitration / mutual-exclusion) one.
+fn format_constraint(cell: &AnalysedCell, c: &Constraint) -> String {
+    let (setup, hold) = match c.kind {
+        ConstraintKind::SetupHold => ("setup", "hold"),
+        ConstraintKind::NonSeq => ("non_seq_setup", "non_seq_hold"),
+    };
+    let mut s = constraint_block(cell, c, setup);
+    s.push_str(&constraint_block(cell, c, hold));
+    s
+}
+
+/// One constraint `define_arc` of the given `-type`. Liberate cannot infer how to prepare these
+/// non-standard state-holding cells, so every pin is listed and fully specified: the `-prevector`
+/// drives the cell (inputs + internal state) into the pre-toggle state, and the full `-vector` carries
+/// the two switching pins as `R`/`F`, the other inputs at their held value, and the outputs as `X`.
+fn constraint_block(cell: &AnalysedCell, c: &Constraint, arc_type: &str) -> String {
+    let mut s = String::from("define_arc \\\n");
+    s.push_str(&format!("\t-type {arc_type} \\\n"));
+    s.push_str(&format!(
+        "\t-prevector_pinlist {{{}}} \\\n",
+        cell.inputs.join(" ")
+    ));
+    s.push_str(&format!(
+        "\t-prevector {{{}}} \\\n",
+        prevector_str(cell, &c.prevector)
+    ));
+    s.push_str(&format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell)));
+    s.push_str(&format!(
+        "\t-vector {{{}}} \\\n",
+        constraint_vector_str(cell, c)
+    ));
+    s.push_str(&format!("\t-related_pin {} \\\n", c.related));
+    s.push_str(&format!("\t-pin {} \\\n", c.pin));
+    s.push_str(&format!("\t{{ {} }}\n", cell.name));
+    s.push('\n');
+    s
+}
+
+/// The full constraint vector over `pinlist_str` order (inputs then outputs): the related and pin pins
+/// as their `R`/`F` edges, every other input at its held value in the pre-toggle state (the prevector's
+/// last step), and every output as `X` (a constraint arc measures no output transition).
+fn constraint_vector_str(cell: &AnalysedCell, c: &Constraint) -> String {
+    let edge = |e: Edge| match e {
+        Edge::Rise => "R",
+        Edge::Fall => "F",
+    };
+    let held = c.prevector.last().map(assignment).unwrap_or_default();
+    let mut parts = Vec::with_capacity(cell.inputs.len() + cell.outputs.len());
+    for input in &cell.inputs {
+        if *input == c.related {
+            parts.push(edge(c.related_edge).to_string());
+        } else if *input == c.pin {
+            parts.push(edge(c.pin_edge).to_string());
+        } else {
+            parts.push(
+                if *held.get(input).unwrap_or(&false) {
+                    "1"
+                } else {
+                    "0"
+                }
+                .to_string(),
+            );
+        }
+    }
+    for _ in &cell.outputs {
+        parts.push("X".to_string());
+    }
+    parts.join(" ")
 }
 
 /// A `#` comment block describing each detected arbitration condition (empty for ordinary cells).
@@ -220,10 +302,85 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        let off = cell_arcs_tcl(&cell, ArcsTclOptions { emit_when: false });
-        let on = cell_arcs_tcl(&cell, ArcsTclOptions { emit_when: true });
+        let off = cell_arcs_tcl(
+            &cell,
+            ArcsTclOptions {
+                emit_when: false,
+                ..Default::default()
+            },
+        );
+        let on = cell_arcs_tcl(
+            &cell,
+            ArcsTclOptions {
+                emit_when: true,
+                ..Default::default()
+            },
+        );
         assert!(!off.contains("-when"));
         assert!(on.contains("-when"));
+    }
+
+    #[test]
+    fn dff_constraint_arcs_gated_and_setup_hold_under_declared_clock() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#,
+        );
+        // Off by default: no constraint arcs.
+        let off = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        assert!(!off.contains("-type setup"));
+        assert!(!off.contains("-type hold"));
+
+        // Enabled: separate setup and hold blocks of D w.r.t. CLK. With CLK declared a clock the CLK/D
+        // hazard is a setup/hold, so no non_seq is produced for the pair.
+        let on = cell_arcs_tcl(
+            &cell,
+            ArcsTclOptions {
+                emit_constraints: true,
+                ..Default::default()
+            },
+        );
+        eprintln!("{on}");
+        assert!(on.contains("-type setup \\"));
+        assert!(on.contains("-type hold \\"));
+        assert!(on.contains("-related_pin CLK"));
+        assert!(on.contains("-pin D"));
+        assert!(!on.contains("non_seq"));
+    }
+
+    #[test]
+    fn mutex_emits_non_seq_constraint_arcs_when_enabled() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "MUT"
+inputs = ["A", "B"]
+[cell.outputs]
+Qa = "!Qb * A"
+Qb = "!Qa * B"
+"#,
+        );
+        let on = cell_arcs_tcl(
+            &cell,
+            ArcsTclOptions {
+                emit_constraints: true,
+                ..Default::default()
+            },
+        );
+        eprintln!("{on}");
+        assert!(on.contains("-type non_seq_setup \\"));
+        assert!(on.contains("-type non_seq_hold \\"));
+        // Both request pins appear as related/pin of the constraint.
+        assert!(on.contains("-related_pin A"));
+        assert!(on.contains("-pin B"));
     }
 
     #[test]

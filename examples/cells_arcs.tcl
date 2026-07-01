@@ -39,6 +39,46 @@ define_arc \
 	{ C2 }
 
 define_arc \
+	-type non_seq_setup \
+	-prevector_pinlist {A B} \
+	-prevector {00 10} \
+	-pinlist {A B Q} \
+	-vector {F R X} \
+	-related_pin A \
+	-pin B \
+	{ C2 }
+
+define_arc \
+	-type non_seq_hold \
+	-prevector_pinlist {A B} \
+	-prevector {00 10} \
+	-pinlist {A B Q} \
+	-vector {F R X} \
+	-related_pin A \
+	-pin B \
+	{ C2 }
+
+define_arc \
+	-type non_seq_setup \
+	-prevector_pinlist {A B} \
+	-prevector {00 01} \
+	-pinlist {A B Q} \
+	-vector {R F X} \
+	-related_pin A \
+	-pin B \
+	{ C2 }
+
+define_arc \
+	-type non_seq_hold \
+	-prevector_pinlist {A B} \
+	-prevector {00 01} \
+	-pinlist {A B Q} \
+	-vector {R F X} \
+	-related_pin A \
+	-pin B \
+	{ C2 }
+
+define_arc \
 	-type combinational \
 	-prevector_pinlist {A B R} \
 	-prevector {000 100} \
@@ -119,6 +159,86 @@ define_arc \
 	{ RCELEM2 }
 
 define_arc \
+	-type non_seq_setup \
+	-prevector_pinlist {A B R} \
+	-prevector {000 100} \
+	-pinlist {A B R Q} \
+	-vector {F R 0 X} \
+	-related_pin A \
+	-pin B \
+	{ RCELEM2 }
+
+define_arc \
+	-type non_seq_hold \
+	-prevector_pinlist {A B R} \
+	-prevector {000 100} \
+	-pinlist {A B R Q} \
+	-vector {F R 0 X} \
+	-related_pin A \
+	-pin B \
+	{ RCELEM2 }
+
+define_arc \
+	-type non_seq_setup \
+	-prevector_pinlist {A B R} \
+	-prevector {000 100 110 111} \
+	-pinlist {A B R Q} \
+	-vector {F 1 F X} \
+	-related_pin A \
+	-pin R \
+	{ RCELEM2 }
+
+define_arc \
+	-type non_seq_hold \
+	-prevector_pinlist {A B R} \
+	-prevector {000 100 110 111} \
+	-pinlist {A B R Q} \
+	-vector {F 1 F X} \
+	-related_pin A \
+	-pin R \
+	{ RCELEM2 }
+
+define_arc \
+	-type non_seq_setup \
+	-prevector_pinlist {A B R} \
+	-prevector {000 010} \
+	-pinlist {A B R Q} \
+	-vector {R F 0 X} \
+	-related_pin A \
+	-pin B \
+	{ RCELEM2 }
+
+define_arc \
+	-type non_seq_hold \
+	-prevector_pinlist {A B R} \
+	-prevector {000 010} \
+	-pinlist {A B R Q} \
+	-vector {R F 0 X} \
+	-related_pin A \
+	-pin B \
+	{ RCELEM2 }
+
+define_arc \
+	-type non_seq_setup \
+	-prevector_pinlist {A B R} \
+	-prevector {000 100 110 111} \
+	-pinlist {A B R Q} \
+	-vector {1 F F X} \
+	-related_pin B \
+	-pin R \
+	{ RCELEM2 }
+
+define_arc \
+	-type non_seq_hold \
+	-prevector_pinlist {A B R} \
+	-prevector {000 100 110 111} \
+	-pinlist {A B R Q} \
+	-vector {1 F F X} \
+	-related_pin B \
+	-pin R \
+	{ RCELEM2 }
+
+define_arc \
 	-type combinational \
 	-prevector_pinlist {S R} \
 	-prevector {00} \
@@ -196,6 +316,26 @@ define_arc \
 	-vector {1 F X F} \
 	-related_pin R \
 	-pin Qn \
+	{ SR }
+
+define_arc \
+	-type non_seq_setup \
+	-prevector_pinlist {S R} \
+	-prevector {00 10 11} \
+	-pinlist {S R Q Qn} \
+	-vector {F F X X} \
+	-related_pin S \
+	-pin R \
+	{ SR }
+
+define_arc \
+	-type non_seq_hold \
+	-prevector_pinlist {S R} \
+	-prevector {00 10 11} \
+	-pinlist {S R Q Qn} \
+	-vector {F F X X} \
+	-related_pin S \
+	-pin R \
 	{ SR }
 
 # arbitration: A*B metastable; grants {Qa, Qb} mutually exclusive ({Qa=0, Qb=1} | {Qa=1, Qb=0})
@@ -280,6 +420,26 @@ define_arc \
 	{ MUT }
 
 define_arc \
+	-type non_seq_setup \
+	-prevector_pinlist {A B} \
+	-prevector {00} \
+	-pinlist {A B Qa Qb} \
+	-vector {R R X X} \
+	-related_pin A \
+	-pin B \
+	{ MUT }
+
+define_arc \
+	-type non_seq_hold \
+	-prevector_pinlist {A B} \
+	-prevector {00} \
+	-pinlist {A B Qa Qb} \
+	-vector {R R X X} \
+	-related_pin A \
+	-pin B \
+	{ MUT }
+
+define_arc \
 	-prevector_pinlist {CLK D} \
 	-prevector {00} \
 	-type combinational \
@@ -297,5 +457,45 @@ define_arc \
 	-vector {R 1 R} \
 	-related_pin CLK \
 	-pin Q \
+	{ DFF }
+
+define_arc \
+	-type setup \
+	-prevector_pinlist {CLK D} \
+	-prevector {00 01} \
+	-pinlist {CLK D Q} \
+	-vector {R F X} \
+	-related_pin CLK \
+	-pin D \
+	{ DFF }
+
+define_arc \
+	-type hold \
+	-prevector_pinlist {CLK D} \
+	-prevector {00 01} \
+	-pinlist {CLK D Q} \
+	-vector {R F X} \
+	-related_pin CLK \
+	-pin D \
+	{ DFF }
+
+define_arc \
+	-type setup \
+	-prevector_pinlist {CLK D} \
+	-prevector {00} \
+	-pinlist {CLK D Q} \
+	-vector {R R X} \
+	-related_pin CLK \
+	-pin D \
+	{ DFF }
+
+define_arc \
+	-type hold \
+	-prevector_pinlist {CLK D} \
+	-prevector {00} \
+	-pinlist {CLK D Q} \
+	-vector {R R X} \
+	-related_pin CLK \
+	-pin D \
 	{ DFF }
 

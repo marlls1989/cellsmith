@@ -34,6 +34,8 @@ Qb  = "!Qa * B"
 [[cell]]
 name = "DFF"
 inputs = ["CLK", "D"]
+clock = ["CLK"]                # CLK is a clock: setup/hold of D is characterised w.r.t. it, and the
+                               #   concomitant non_seq hazard on (CLK, D) is suppressed as redundant
 [cell.internal]                # internal master latch: a state node with no external pin
 M = "!CLK*D + CLK*M"           #   transparent when CLK low, holds when high
 [cell.outputs]

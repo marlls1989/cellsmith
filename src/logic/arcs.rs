@@ -15,7 +15,7 @@
 //!      and the prevector is the BFS path — each node projected onto the inputs — that drives every
 //!      state variable (internal ones included) into the measured edge's start state.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 
 use espresso_logic::{bdd_builder, Minterm, Symbol};
 
@@ -110,56 +110,19 @@ pub fn cell_arcs(cell: &AnalysedCell) -> Vec<Arc> {
         }
     };
 
-    // A full node from an input assignment `x` (bit i = inputs[i]) and a state assignment `s`
-    // (bit i = state_vars[i]).
-    let bit = |mask: usize, list: &[String], name: &str| -> Option<bool> {
-        list.iter()
-            .position(|v| v == name)
-            .map(|i| (mask >> i) & 1 == 1)
-    };
-    let make_node = |x: usize, s: usize| -> Minterm<Symbol> {
-        machine::node_from(&full_header, |name| {
-            bit(x, inputs, name)
-                .or_else(|| bit(s, &state_vars, name))
-                .expect("every header variable is an input or a state variable")
-        })
-    };
-
-    let n_st = 1usize << k;
-
-    // Reset-stable states: state stable under the all-zero input. Fall back to every stable node if the
-    // all-zero input has no stable state.
-    let mut starts: Vec<Minterm<Symbol>> = (0..n_st)
-        .map(|s| make_node(0, s))
-        .filter(|node| machine::is_stable(&deltas, node))
-        .collect();
-    if starts.is_empty() {
-        starts = (0..(1usize << n))
-            .flat_map(|x| (0..n_st).map(move |s| (x, s)))
-            .map(|(x, s)| make_node(x, s))
-            .filter(|node| machine::is_stable(&deltas, node))
-            .collect();
-    }
-
-    // BFS over stable nodes; `prev[node] = predecessor` for prevector reconstruction.
-    let mut prev: HashMap<Minterm<Symbol>, Option<Minterm<Symbol>>> = HashMap::new();
-    let mut queue: VecDeque<Minterm<Symbol>> = VecDeque::new();
-    for st in &starts {
-        prev.entry(st.clone()).or_insert(None);
-    }
-    queue.extend(starts.iter().cloned());
+    // Explore the reachable stable states once (reset-stable starts, BFS, settle); [`machine::explore`]
+    // records the visitation order and predecessors, shared with [`super::confluence`].
+    let ex = machine::explore(&deltas, &full_header, inputs, &state_vars);
 
     let async_set: BTreeSet<&str> = cell.async_pins.iter().map(String::as_str).collect();
     let mut seen_arc: BTreeSet<(String, String, bool, Minterm<Symbol>)> = BTreeSet::new();
     let mut arcs: Vec<Arc> = Vec::new();
 
     // The prevector: the input assignments from a start node to `node`, each projected onto the inputs.
-    let path_to = |prev: &HashMap<Minterm<Symbol>, Option<Minterm<Symbol>>>,
-                   node: &Minterm<Symbol>|
-     -> Vec<Minterm<Symbol>> {
+    let path_to = |node: &Minterm<Symbol>| -> Vec<Minterm<Symbol>> {
         let mut chain = vec![node.clone()];
         let mut cur = node.clone();
-        while let Some(Some(p)) = prev.get(&cur) {
+        while let Some(Some(p)) = ex.prev.get(&cur) {
             chain.push(p.clone());
             cur = p.clone();
         }
@@ -170,7 +133,9 @@ pub fn cell_arcs(cell: &AnalysedCell) -> Vec<Arc> {
             .collect()
     };
 
-    while let Some(node) = queue.pop_front() {
+    // Re-walk the reachable stable states in BFS order; wherever a single input toggle flips an output,
+    // emit an arc.
+    for node in &ex.order {
         for related in inputs {
             // Toggle one input, hold the state, and let the state settle.
             let toggled = machine::node_from(&full_header, |name| {
@@ -186,15 +151,11 @@ pub fn cell_arcs(cell: &AnalysedCell) -> Vec<Arc> {
             let Some(np) = machine::settle(&deltas, &full_header, &toggled) else {
                 continue;
             };
-            if let std::collections::hash_map::Entry::Vacant(e) = prev.entry(np.clone()) {
-                e.insert(Some(node.clone()));
-                queue.push_back(np.clone());
-            }
             // An arc for every output whose value flips across this input toggle.
             let start = node.project_onto(&input_header);
             let end = np.project_onto(&input_header);
             for o in &cell.outputs {
-                let before = output_value(&o.name, &node);
+                let before = output_value(&o.name, node);
                 let after = output_value(&o.name, &np);
                 if before == after {
                     continue;
@@ -210,7 +171,7 @@ pub fn cell_arcs(cell: &AnalysedCell) -> Vec<Arc> {
                     related: related.clone(),
                     start: start.clone(),
                     end: end.clone(),
-                    prevector: path_to(&prev, &node),
+                    prevector: path_to(node),
                     is_async: async_set.contains(related.as_str()),
                 });
             }

@@ -2,6 +2,7 @@
 //! (`define_arc` + prevectors), a behavioural Verilog model (sequential UDP + wrapper), and a minimal
 //! Liberty fragment (`statetable` for hysteretic outputs, plain `function` for combinational ones).
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs;
 use std::io::{self, Read, Write};
@@ -12,6 +13,7 @@ use clap::Parser;
 use lobsterate::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
 use lobsterate::emit::liberty::cell_liberty;
 use lobsterate::emit::verilog::cell_verilog;
+use lobsterate::logic::confluence;
 use lobsterate::model::{parse_spec, AnalysedCell};
 
 /// Generate Cadence Liberate transition arcs (with prevectors), a behavioural Verilog model and a
@@ -33,6 +35,11 @@ struct Cli {
     /// Emit `-when` conditions on the arcs (off by default).
     #[arg(long)]
     when: bool,
+
+    /// Emit derived setup/hold & non_seq constraint arcs (off by default; a cell can opt in with
+    /// `constraint_arcs = true`).
+    #[arg(long)]
+    constraints: bool,
 
     /// Write all three artifacts to stdout (with banners) instead of writing files.
     #[arg(long)]
@@ -69,8 +76,37 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         }
     }
 
+    // Diagnose every detected constraint hazard, for any cell, listing the conditions under which each
+    // occurs. Each input pin pair is uniformly one kind (setup/hold if it holds a declared clock, else
+    // non_seq), so its conditions are gathered and reported once.
+    type HazardPairs<'a> = BTreeMap<(&'a str, &'a str), (&'static str, Vec<String>)>;
+    for c in &cells {
+        let mut pairs: HazardPairs = BTreeMap::new();
+        for con in &c.constraints {
+            let (a, b) = (con.related.as_str(), con.pin.as_str());
+            let key = if a <= b { (a, b) } else { (b, a) };
+            let kind = match con.kind {
+                confluence::ConstraintKind::SetupHold => "setup/hold",
+                confluence::ConstraintKind::NonSeq => "non_seq",
+            };
+            pairs
+                .entry(key)
+                .or_insert((kind, Vec::new()))
+                .1
+                .push(con.condition());
+        }
+        for ((a, b), (kind, conditions)) in &pairs {
+            eprintln!(
+                "lobsterate: warning: cell {:?}: {kind} hazard on inputs ({a}, {b}) when {}.",
+                c.name,
+                conditions.join("; "),
+            );
+        }
+    }
+
     let arc_opts = ArcsTclOptions {
         emit_when: cli.when,
+        emit_constraints: cli.constraints,
     };
     let arcs = render(&cells, |c| Ok(cell_arcs_tcl(c, arc_opts)))?;
     let verilog = render(&cells, |c| Ok(cell_verilog(c)))?;

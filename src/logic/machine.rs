@@ -11,7 +11,7 @@
 //! [`Symbols`] for the shared header — rather than a hand-rolled restrict loop over an integer state
 //! bitmask. The functions are generic over the BDD brand, mirroring [`super::resolve`].
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
@@ -90,6 +90,94 @@ pub fn settle<B: Brand, C: ManagerCell>(
         }
         cur = next;
     }
+}
+
+/// The reachable **stable** states of a cell's state machine, in the order [`explore`] discovered them,
+/// with a predecessor map for prevector reconstruction.
+pub struct Explored {
+    /// Reachable stable nodes in BFS dequeue order (each appears once).
+    pub order: Vec<Minterm<Symbol>>,
+    /// Predecessor of each reachable node (`None` at a start node).
+    pub prev: HashMap<Minterm<Symbol>, Option<Minterm<Symbol>>>,
+}
+
+/// Explore the reachable **stable** states of the machine. Start from the reset-stable states (stable
+/// under the all-zero input, falling back to every stable node if none), then BFS: from each node toggle
+/// one input at a time, hold the state, and [`settle`]. Metastable toggles (no fixpoint) are dropped.
+///
+/// Shared by [`super::arcs`] (which re-walks `order`, re-toggling to measure output edges) and
+/// [`super::confluence`] (which re-walks `order`, testing pairwise input-order confluence). `input_names`
+/// and `state_names` index into the `full_header` node fields.
+pub fn explore<B: Brand, C: ManagerCell>(
+    deltas: &[Delta<B, C>],
+    full_header: &Arc<Symbols<Symbol>>,
+    input_names: &[String],
+    state_names: &[String],
+) -> Explored {
+    let n = input_names.len();
+    let k = state_names.len();
+
+    // A node from an input assignment `x` (bit i = input_names[i]) and a state assignment `s`.
+    let bit = |mask: usize, list: &[String], name: &str| -> Option<bool> {
+        list.iter()
+            .position(|v| v == name)
+            .map(|i| (mask >> i) & 1 == 1)
+    };
+    let make_node = |x: usize, s: usize| -> Minterm<Symbol> {
+        node_from(full_header, |name| {
+            bit(x, input_names, name)
+                .or_else(|| bit(s, state_names, name))
+                .expect("every header variable is an input or a state variable")
+        })
+    };
+
+    let n_st = 1usize << k;
+    // Reset-stable states: state stable under the all-zero input. Fall back to every stable node if the
+    // all-zero input has no stable state.
+    let mut starts: Vec<Minterm<Symbol>> = (0..n_st)
+        .map(|s| make_node(0, s))
+        .filter(|node| is_stable(deltas, node))
+        .collect();
+    if starts.is_empty() {
+        starts = (0..(1usize << n))
+            .flat_map(|x| (0..n_st).map(move |s| (x, s)))
+            .map(|(x, s)| make_node(x, s))
+            .filter(|node| is_stable(deltas, node))
+            .collect();
+    }
+
+    let mut prev: HashMap<Minterm<Symbol>, Option<Minterm<Symbol>>> = HashMap::new();
+    let mut queue: VecDeque<Minterm<Symbol>> = VecDeque::new();
+    for st in &starts {
+        prev.entry(st.clone()).or_insert(None);
+    }
+    queue.extend(starts.iter().cloned());
+
+    let mut order: Vec<Minterm<Symbol>> = Vec::new();
+    while let Some(node) = queue.pop_front() {
+        order.push(node.clone());
+        for related in input_names {
+            let toggled = node_from(full_header, |name| {
+                let cur = node
+                    .value_of(name)
+                    .expect("a header variable is fixed in the node");
+                if name == related.as_str() {
+                    !cur
+                } else {
+                    cur
+                }
+            });
+            let Some(np) = settle(deltas, full_header, &toggled) else {
+                continue;
+            };
+            if let std::collections::hash_map::Entry::Vacant(e) = prev.entry(np.clone()) {
+                e.insert(Some(node.clone()));
+                queue.push_back(np);
+            }
+        }
+    }
+
+    Explored { order, prev }
 }
 
 #[cfg(test)]
