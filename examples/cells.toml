@@ -12,14 +12,12 @@ Q = "A*B + Q*(A+B)"            # Q on the RHS => feedback/delayed Q (a 2-input C
 [[cell]]
 name = "RCELEM2"
 inputs = ["A", "B", "R"]
-async = ["R"]                  # optional: pins that force the output (async set/reset)
 [cell.outputs]                 #   -> their arcs are emitted as `-type async`
 Q = "(A*B + Q*(A+B))*!R"
 
 [[cell]]
 name = "RACELEM21"
 inputs = ["M1", "M2", "P1", "P2", "C", "R"]
-async = ["R"]                  # optional: pins that force the output (async set/reset)
 [cell.outputs]                 #   -> their arcs are emitted as `-type async`
 Q = "(P1*P2*C+Q*(M1+M2))*!R"
 
@@ -51,7 +49,6 @@ Q = "CLK*M + !CLK*Q"           # slave: captures M on the rising edge (M establi
 name = "ICM"
 inputs = ["CLKA", "CLKB", "RA", "RB", "S"]
 clock = ["CLKA", "CLKB"]
-async = ["RA", "RB"]
 
 [cell.internal]
 # selection interlock

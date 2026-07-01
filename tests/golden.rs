@@ -137,18 +137,18 @@ fn mutex_generates_all_three_artifacts() {
         .any(|g| g.type_ == "cell" && g.name == "MUT"));
 }
 
-/// The `-when` flag threads through to the arc text.
+/// `-when` is emitted by default; disabling it (the `--no-when` path) drops it from the arc text.
 #[test]
-fn when_flag_reaches_arcs() {
+fn when_default_on_and_suppressible() {
     let cell = analyse_one(C2);
-    let off = cell_arcs_tcl(&cell, ArcsTclOptions::default());
-    let on = cell_arcs_tcl(
+    let on = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+    let off = cell_arcs_tcl(
         &cell,
         ArcsTclOptions {
-            emit_when: true,
+            emit_when: false,
             ..Default::default()
         },
     );
-    assert!(!off.contains("-when"));
     assert!(on.contains("-when"));
+    assert!(!off.contains("-when"));
 }

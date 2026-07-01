@@ -11,15 +11,25 @@ use crate::logic::interlock::Arbitration;
 use crate::model::AnalysedCell;
 
 /// Knobs for the arc emitter.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct ArcsTclOptions {
-    /// Emit a `-when` condition (the other inputs' fixed values in the end state) on each arc.
-    /// Off by default — Liberate can usually infer the conditioning from the vector, and hsNCL's
-    /// `-when` differs from ours in pin ordering. Kept available for cells that need it.
+    /// Emit a `-when` condition (the other inputs' fixed values in the end state) on each arc, keeping
+    /// every held-input context as its own conditioned arc. **On by default.** When off, arcs that share
+    /// a (related, pin, edge) collapse to one — a single prevector exercises the transition, so the
+    /// distinct held contexts (which only `-when` would distinguish) are redundant.
     pub emit_when: bool,
     /// Emit derived constraint arcs (setup/hold, non_seq) from state-machine confluence. Off by default;
     /// a cell can opt in individually via `constraint_arcs = true`. See [`crate::logic::confluence`].
     pub emit_constraints: bool,
+}
+
+impl Default for ArcsTclOptions {
+    fn default() -> Self {
+        Self {
+            emit_when: true,
+            emit_constraints: false,
+        }
+    }
 }
 
 /// All `define_arc` blocks for a cell, concatenated. Interlocked (mutex/arbiter) cells are prefixed
@@ -27,7 +37,17 @@ pub struct ArcsTclOptions {
 /// derived constraint arcs (setup/hold, non_seq) follow the delay arcs.
 pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     let mut out = arbitration_comment(cell);
-    for arc in &cell_arcs(cell) {
+    // Without `-when`, arcs of the same (related, pin, edge) that differ only in the held-input context
+    // are the *same* arc — one prevector is enough to exercise it, so collapse them (keeping the
+    // shortest prevector). With `-when` each held context is a distinct characterisation condition and
+    // is kept.
+    let arcs = cell_arcs(cell);
+    let arcs = if opts.emit_when {
+        arcs
+    } else {
+        collapse_conditions(arcs)
+    };
+    for arc in &arcs {
         out.push_str(&format_arc(cell, arc, opts));
     }
     if opts.emit_constraints || cell.constraint_arcs_declared {
@@ -123,6 +143,33 @@ fn arbitration_comment(cell: &AnalysedCell) -> String {
         ));
     }
     s
+}
+
+/// Collapse arcs that share a `(pin, related, edge)` — the same physical transition reached under
+/// different held-input contexts — to one, keeping the shortest prevector. Used when `-when` is off,
+/// where the held context is not emitted, so a single prevector suffices to exercise the arc.
+fn collapse_conditions(arcs: Vec<Arc>) -> Vec<Arc> {
+    use std::collections::btree_map::Entry;
+    use std::collections::BTreeMap;
+    let mut best: BTreeMap<(String, String, bool), Arc> = BTreeMap::new();
+    for arc in arcs {
+        let key = (
+            arc.output.clone(),
+            arc.related.clone(),
+            matches!(arc.edge, Edge::Rise),
+        );
+        match best.entry(key) {
+            Entry::Vacant(e) => {
+                e.insert(arc);
+            }
+            Entry::Occupied(mut e) => {
+                if arc.prevector.len() < e.get().prevector.len() {
+                    e.insert(arc);
+                }
+            }
+        }
+    }
+    best.into_values().collect()
 }
 
 fn format_arc(cell: &AnalysedCell, arc: &Arc, opts: ArcsTclOptions) -> String {
@@ -287,8 +334,8 @@ Q = "A*B + Q*(A+B)"
             tcl.matches("-pin Q").count()
         );
         assert!(!tcl.contains("-type async"));
-        // -when is off by default.
-        assert!(!tcl.contains("-when"));
+        // -when is emitted by default.
+        assert!(tcl.contains("-when"));
     }
 
     #[test]

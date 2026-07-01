@@ -32,9 +32,10 @@ struct Cli {
     #[arg(short, long)]
     name: Option<String>,
 
-    /// Emit `-when` conditions on the arcs (off by default).
+    /// Suppress the `-when` conditions on arcs (emitted by default); collapses arcs that share a
+    /// (related, pin, edge) to a single representative.
     #[arg(long)]
-    when: bool,
+    no_when: bool,
 
     /// Emit derived setup/hold & non_seq constraint arcs (off by default; a cell can opt in with
     /// `constraint_arcs = true`).
@@ -105,7 +106,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     }
 
     let arc_opts = ArcsTclOptions {
-        emit_when: cli.when,
+        emit_when: !cli.no_when,
         emit_constraints: cli.constraints,
     };
     let arcs = render(&cells, |c| Ok(cell_arcs_tcl(c, arc_opts)))?;
