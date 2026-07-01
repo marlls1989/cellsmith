@@ -54,6 +54,21 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         .map(|c| c.analyse())
         .collect::<Result<_, _>>()?;
 
+    // Diagnose interlocked cells that were not explicitly declared: their arbitration is detected and
+    // annotated, but never expressed as deterministic timing, so the user should know.
+    for c in &cells {
+        if !c.arbitration.is_empty() && !c.arbitrate_declared {
+            let conds: Vec<String> = c.arbitration.iter().map(|a| a.condition_str()).collect();
+            eprintln!(
+                "lobsterate: warning: cell {:?} is interlocked (metastable at {}); \
+                 arbitration is annotated only, not modelled as timing. \
+                 Add `arbitrate = [...]` to acknowledge it.",
+                c.name,
+                conds.join(", "),
+            );
+        }
+    }
+
     let arc_opts = ArcsTclOptions {
         emit_when: cli.when,
     };

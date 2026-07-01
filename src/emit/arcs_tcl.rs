@@ -5,6 +5,7 @@
 //! declaration order (lobsterate's deliberate divergence from hsNCL's alphabetical sort).
 
 use crate::logic::arcs::{cell_arcs, Arc, Edge};
+use crate::logic::interlock::Arbitration;
 use crate::logic::walk::{assignment, WalkError};
 use crate::model::AnalysedCell;
 
@@ -17,13 +18,33 @@ pub struct ArcsTclOptions {
     pub emit_when: bool,
 }
 
-/// All `define_arc` blocks for a cell, concatenated.
+/// All `define_arc` blocks for a cell, concatenated. Interlocked (mutex/arbiter) cells are prefixed
+/// with a comment documenting the metastable condition, which timing arcs cannot express.
 pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> Result<String, WalkError> {
-    let mut out = String::new();
+    let mut out = arbitration_comment(cell);
     for arc in &cell_arcs(cell)? {
         out.push_str(&format_arc(cell, arc, opts));
     }
     Ok(out)
+}
+
+/// A `#` comment block describing each detected arbitration condition (empty for ordinary cells).
+fn arbitration_comment(cell: &AnalysedCell) -> String {
+    let mut s = String::new();
+    for a in &cell.arbitration {
+        let states: Vec<String> = a
+            .stable
+            .iter()
+            .map(|st| Arbitration::state_str(st))
+            .collect();
+        s.push_str(&format!(
+            "# arbitration: {} metastable; grants {{{}}} mutually exclusive ({})\n",
+            a.condition_str(),
+            a.group.join(", "),
+            states.join(" | "),
+        ));
+    }
+    s
 }
 
 fn format_arc(cell: &AnalysedCell, arc: &Arc, opts: ArcsTclOptions) -> String {
@@ -207,6 +228,32 @@ Q = "A*B + Q*(A+B)"
         let on = cell_arcs_tcl(&cell, ArcsTclOptions { emit_when: true }).unwrap();
         assert!(!off.contains("-when"));
         assert!(on.contains("-when"));
+    }
+
+    #[test]
+    fn mutex_emits_arbitration_comment_and_input_only_related_pins() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "MUT"
+inputs = ["A", "B"]
+[cell.outputs]
+Qa = "!Qb * A"
+Qb = "!Qa * B"
+"#,
+        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default()).unwrap();
+        eprintln!("{tcl}");
+        // Arbitration documented up front.
+        assert!(tcl.contains("# arbitration: A*B metastable"));
+        assert!(tcl.contains("Qa, Qb"));
+        // Related pins are primary inputs only — never an output (a Qb→Qa arc is a deadlock).
+        assert!(!tcl.contains("-related_pin Qa"));
+        assert!(!tcl.contains("-related_pin Qb"));
+        assert!(tcl.contains("-related_pin A"));
+        assert!(tcl.contains("-related_pin B"));
+        assert!(tcl.contains("-prevector_pinlist {A B}"));
+        assert!(tcl.contains("-pinlist {A B Qa Qb}"));
     }
 
     #[test]

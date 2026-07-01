@@ -24,7 +24,7 @@ use crate::model::AnalysedOutput;
 /// A set of fully-assigned input minterms (every cell input pin fixed).
 pub type MintermSet = BTreeSet<Minterm<Symbol>>;
 
-/// The three regions of an output over the cell's input pins.
+/// The three regions of an output over the cell's primary inputs.
 #[derive(Debug, Clone)]
 pub struct Regions {
     pub on: MintermSet,
@@ -43,16 +43,85 @@ impl Regions {
     }
 }
 
-/// Derive the on/off/hold regions of `output` over `inputs` (the cell's pinlist order).
-pub fn regions(output: &AnalysedOutput, inputs: &[String]) -> Regions {
-    let builder = bdd_builder!();
-    let f = builder.build(&output.expr);
-    let not_f = builder.build(&!output.expr.clone());
+/// Split an output's feedback into the *other* outputs it references (kept as columns) and its *own*
+/// self-feedback (the hysteretic state to project out). Used by [`state_regions`].
+fn feedback_split(output: &AnalysedOutput) -> (Vec<String>, Vec<&str>) {
+    let others: Vec<String> = output
+        .feedback
+        .iter()
+        .filter(|f| **f != output.name)
+        .cloned()
+        .collect();
+    let self_state: Vec<&str> = if output.feedback.iter().any(|x| x == &output.name) {
+        vec![output.name.as_str()]
+    } else {
+        vec![]
+    };
+    (others, self_state)
+}
 
-    // Project the feedback/state variables out: hold them at all values.
-    let state: Vec<&str> = output.feedback.iter().map(String::as_str).collect();
-    let on_bdd = f.forall(&state);
-    let off_bdd = not_f.forall(&state);
+/// Derive the on/off/hold regions of `output` over the cell's primary `inputs`.
+///
+/// For a genuinely cross-coupled cell (a mutex `Qa = !Qb·A`, a reset arbiter) the function first
+/// **collapses the coupling**: every *other* output it references is composed away (its own function
+/// substituted in) until the result is **self-holding** — a function of primary inputs plus this
+/// pin's own feedback only. This is what makes the arcs correct: the related pin is always a primary
+/// input (no other output survives to become one), the mutual-exclusion/deadlock states fall into the
+/// `hold` region (so no impossible output→output arc is produced), and an input that only reaches this
+/// output *through* the coupling (a reset forcing the other grant) now appears in the collapsed
+/// function, so its cascade arc is generated.
+///
+/// A cell with no cross-references (C-element, latch, non-mutual SR) collapses to itself, so its
+/// regions are unchanged. All logic is on BDDs; `BoolExpr` is only the parse-input to `build`.
+pub fn regions(output: &AnalysedOutput, outputs: &[AnalysedOutput], inputs: &[String]) -> Regions {
+    let builder = bdd_builder!();
+    // Build every output's BDD in one builder so they can be composed (BDDs are branded per builder).
+    let bdds: std::collections::BTreeMap<&str, _> = outputs
+        .iter()
+        .map(|o| (o.name.as_str(), builder.build(&o.expr)))
+        .collect();
+
+    // Collapse: compose every *other* output out of this one, to a self-holding fixpoint.
+    let other_names: BTreeSet<&str> = outputs
+        .iter()
+        .map(|o| o.name.as_str())
+        .filter(|n| *n != output.name)
+        .collect();
+    let mut f = bdds[output.name.as_str()].clone();
+    let mut rounds = 0usize;
+    loop {
+        let present: Vec<Symbol> = f
+            .variables()
+            .filter(|s| other_names.contains(s.as_str()))
+            .collect();
+        if present.is_empty() {
+            break;
+        }
+        for s in present {
+            // f[v := g]  via the Shannon cofactor identity (no compose primitive in espresso).
+            let v = s.as_str();
+            let g = &bdds[v];
+            let f1 = f.restrict(v, true);
+            let f0 = f.restrict(v, false);
+            f = g.and(&f1).or(&(!g).and(&f0));
+        }
+        rounds += 1;
+        assert!(
+            rounds <= outputs.len() + 1,
+            "collapse of output {:?} did not converge: a non-self output cycle (an extra latch among \
+             {other_names:?}) is unsupported",
+            output.name,
+        );
+    }
+
+    // Project the pin's own self-feedback out (universal quantification); combinational if absent.
+    let self_state: Vec<&str> = if f.variables().any(|s| s.as_str() == output.name) {
+        vec![output.name.as_str()]
+    } else {
+        vec![]
+    };
+    let on_bdd = f.forall(&self_state);
+    let off_bdd = (!&f).forall(&self_state);
     let hold_bdd = !on_bdd.or(&off_bdd);
 
     // Expand each region to fully-assigned minterms over the input pinlist.
@@ -102,12 +171,7 @@ pub struct StateRegions {
 /// Derive the state-table regions of `output` over `inputs` (see [`StateRegions`]).
 pub fn state_regions(output: &AnalysedOutput, inputs: &[String]) -> StateRegions {
     // Columns: primary inputs, then the other outputs this function references (self excluded).
-    let others: Vec<String> = output
-        .feedback
-        .iter()
-        .filter(|f| **f != output.name)
-        .cloned()
-        .collect();
+    let (others, self_state) = feedback_split(output);
     let cols: Vec<String> = inputs.iter().cloned().chain(others).collect();
 
     let builder = bdd_builder!();
@@ -115,11 +179,6 @@ pub fn state_regions(output: &AnalysedOutput, inputs: &[String]) -> StateRegions
     let not_f = builder.build(&!output.expr.clone());
 
     // Project out only the pin's *own* feedback (its current state); other outputs stay as columns.
-    let self_state: Vec<&str> = if output.feedback.iter().any(|x| x == &output.name) {
-        vec![output.name.as_str()]
-    } else {
-        vec![]
-    };
     let on_bdd = f.forall(&self_state);
     let off_bdd = not_f.forall(&self_state);
     let hold_bdd = !on_bdd.or(&off_bdd);
@@ -188,7 +247,7 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        let r = regions(&cell.outputs[0], &cell.inputs);
+        let r = regions(&cell.outputs[0], &cell.outputs, &cell.inputs);
         let cols = ["A", "B"];
 
         assert_eq!(r.on, cover_of("A*B", &cols));
@@ -205,6 +264,30 @@ Q = "A*B + Q*(A+B)"
     }
 
     #[test]
+    fn cross_coupled_mutex_collapses_to_self_holding() {
+        // Mutex grant Qa = !Qb·A collapses (Qb composed out) to the self-holding Qa = A·!B + Qa·A:
+        //   on = A·!B, off = !A, hold = {A=1,B=1} (the metastable arbitration state).
+        // The other grant Qb never survives as a column — regions are over the primary inputs only.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "MUT"
+inputs = ["A", "B"]
+[cell.outputs]
+Qa = "!Qb * A"
+Qb = "!Qa * B"
+"#,
+        );
+        let r = regions(&cell.outputs[0], &cell.outputs, &cell.inputs);
+        let cols = ["A", "B"];
+        assert_eq!(r.on, cover_of("A*!B", &cols));
+        assert_eq!(r.off, cover_of("!A", &cols));
+        assert_eq!(r.hold, cover_of("A*B", &cols)); // metastable hold
+        assert_eq!(r.len(), 4); // full partition of the 2-input space
+        assert!(r.on.is_disjoint(&r.off));
+    }
+
+    #[test]
     fn inverter_has_no_hold() {
         let cell = analyse(
             r#"
@@ -215,7 +298,7 @@ inputs = ["A"]
 Y = "!A"
 "#,
         );
-        let r = regions(&cell.outputs[0], &cell.inputs);
+        let r = regions(&cell.outputs[0], &cell.outputs, &cell.inputs);
         assert!(r.hold.is_empty());
         assert_eq!(r.on, cover_of("!A", &["A"]));
         assert_eq!(r.off, cover_of("A", &["A"]));
@@ -290,7 +373,7 @@ async = ["R"]
 Q = "(A*B + Q*(A+B))*!R"
 "#,
         );
-        let r = regions(&cell.outputs[0], &cell.inputs);
+        let r = regions(&cell.outputs[0], &cell.outputs, &cell.inputs);
         // Every state with R=1 is forced off; on-set requires A*B*!R.
         assert_eq!(r.on, cover_of("A*B*!R", &["A", "B", "R"]));
         // Hold can only happen when R=0.

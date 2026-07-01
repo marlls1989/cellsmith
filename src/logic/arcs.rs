@@ -21,7 +21,9 @@ pub enum Edge {
     Fall,
 }
 
-/// One characterization arc: an input edge on `related` driving `output` in direction `edge`.
+/// One characterization arc: an input edge on `related` driving `output` in direction `edge`. The
+/// related pin is always a primary input — for a cross-coupled cell the coupling is collapsed away
+/// (see [`regions`]) before arcs are derived, so no output is ever a related pin.
 #[derive(Debug, Clone)]
 pub struct Arc {
     pub edge: Edge,
@@ -41,7 +43,7 @@ pub fn transition_arcs(
     cell: &AnalysedCell,
     output: &AnalysedOutput,
 ) -> Result<Vec<Arc>, WalkError> {
-    let r = regions(output, &cell.inputs);
+    let r = regions(output, &cell.outputs, &cell.inputs);
     let async_set: BTreeSet<&str> = cell.async_pins.iter().map(String::as_str).collect();
     let mut arcs = Vec::new();
 
@@ -131,6 +133,67 @@ Q = "A*B + Q*(A+B)"
                 assert_eq!(w[0].hamming_distance(&w[1]), 1);
             }
         }
+    }
+
+    #[test]
+    fn cross_coupled_mutex_related_pins_are_inputs_only() {
+        // After collapse, related pins are ALWAYS primary inputs — never the other output. A `Qb→Qa`
+        // arc is a physical deadlock and must not exist. Both A and B drive each grant (B releasing
+        // lets A take the grant, and vice versa — the cascade).
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "MUT"
+inputs = ["A", "B"]
+[cell.outputs]
+Qa = "!Qb * A"
+Qb = "!Qa * B"
+"#,
+        );
+        let arcs = cell_arcs(&cell).unwrap();
+        assert!(!arcs.is_empty());
+        // No output is ever a related pin.
+        assert!(
+            arcs.iter().all(|a| a.related == "A" || a.related == "B"),
+            "related pins must be primary inputs, got {:?}",
+            arcs.iter().map(|a| a.related.as_str()).collect::<Vec<_>>()
+        );
+        assert!(arcs.iter().all(|a| a.related != "Qa" && a.related != "Qb"));
+        // Both inputs drive Qa (A directly, B via the cascade) and symmetrically both drive Qb.
+        assert!(arcs.iter().any(|a| a.output == "Qa" && a.related == "A"));
+        assert!(arcs.iter().any(|a| a.output == "Qa" && a.related == "B"));
+        assert!(arcs.iter().any(|a| a.output == "Qb" && a.related == "B"));
+        assert!(arcs.iter().any(|a| a.output == "Qb" && a.related == "A"));
+    }
+
+    #[test]
+    fn reset_cascade_propagates_to_both_grants() {
+        // Qb = Sb + !Qa*B: Sb forces Qb high, which forces Qa low. The Sb arc must propagate to BOTH
+        // outputs — directly to Qb (rise) and, cascaded via Qb, to Qa (fall).
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "MUTS"
+inputs = ["A", "B", "Sb"]
+async = ["Sb"]
+[cell.outputs]
+Qa = "!Qb * A"
+Qb = "Sb + !Qa * B"
+"#,
+        );
+        let arcs = cell_arcs(&cell).unwrap();
+        // Related pins are still inputs only.
+        assert!(arcs
+            .iter()
+            .all(|a| ["A", "B", "Sb"].contains(&a.related.as_str())));
+        // Sb rises Qb.
+        assert!(arcs
+            .iter()
+            .any(|a| a.output == "Qb" && a.related == "Sb" && a.edge == Edge::Rise));
+        // Sb cascades to Qa (falls) — the required propagation via Qb.
+        assert!(arcs
+            .iter()
+            .any(|a| a.output == "Qa" && a.related == "Sb" && a.edge == Edge::Fall));
     }
 
     #[test]

@@ -1,0 +1,32 @@
+# Example lobsterate input — the cells cited in the README.
+#
+#   lobsterate examples/cells.toml -o out      # -> out/cells_arcs.tcl, out/cells.v, out/cells.lib
+#   lobsterate examples/cells.toml --stdout    # preview everything on stdout
+
+[[cell]]
+name = "C2"                    # physical cell name used in the arcs
+inputs = ["A", "B"]            # ordered: defines pinlist/vector order
+[cell.outputs]
+Q = "A*B + Q*(A+B)"            # Q on the RHS => feedback/delayed Q (a 2-input C-element)
+
+[[cell]]
+name = "RCELEM2"
+inputs = ["A", "B", "R"]
+async = ["R"]                  # optional: pins that force the output (async set/reset)
+[cell.outputs]                 #   -> their arcs are emitted as `-type async`
+Q = "(A*B + Q*(A+B))*!R"
+
+[[cell]]
+name = "SR"
+inputs = ["S", "R"]
+[cell.outputs]
+Q  = "S + Q*!R"                # cross-coupling: Q and Qn reference each other
+Qn = "R + Qn*!S"
+
+[[cell]]
+name = "MUT"
+inputs = ["A", "B"]
+arbitrate = ["Qa", "Qb"]       # mutex/arbiter: grants are mutually exclusive, metastable at A*B
+[cell.outputs]                 #   -> arcs condition each grant on the other; arbitration is annotated
+Qa  = "!Qb * A"
+Qb  = "!Qa * B"

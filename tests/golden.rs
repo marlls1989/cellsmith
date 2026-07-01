@@ -94,6 +94,49 @@ Y = "!(A*B)"
     assert_eq!(names, ["C2", "ND2"]);
 }
 
+const MUT: &str = r#"
+[[cell]]
+name = "MUT"
+inputs = ["A", "B"]
+arbitrate = ["Qa", "Qb"]
+[cell.outputs]
+Qa = "!Qb * A"
+Qb = "!Qa * B"
+"#;
+
+/// A cross-coupled mutex generates arcs across all three artifacts (it used to abort at arc
+/// generation), documents its metastable point, and — after collapse — uses only primary inputs as
+/// related pins (a `Qb→Qa` arc would be a physical deadlock).
+#[test]
+fn mutex_generates_all_three_artifacts() {
+    let cell = analyse_one(MUT);
+
+    // Arcs: no crash, arbitration documented, related pins are inputs only.
+    let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default()).unwrap();
+    assert!(tcl.contains("# arbitration: A*B metastable"));
+    assert!(!tcl.contains("-related_pin Qa"));
+    assert!(!tcl.contains("-related_pin Qb"));
+    assert!(tcl.contains("-related_pin A"));
+    assert!(tcl.contains("-related_pin B"));
+    assert!(tcl.contains("-prevector_pinlist {A B}"));
+
+    // Verilog: each grant's UDP still keeps the other grant as an input column (functional model).
+    let v = cell_verilog(&cell);
+    assert!(v.contains("primitive MUT_Qa(Qa, A, B, Qb);"));
+    assert!(v.contains("primitive MUT_Qb(Qb, A, B, Qa);"));
+    assert!(v.contains("module MUT(Qa, Qb, A, B);"));
+
+    // Liberty: annotated and still syntactically valid (round-trips through liberty-parse).
+    let frag = cell_liberty(&cell);
+    assert!(frag.contains("arbitration:"));
+    let wrapped = format!("library (test) {{\n{frag}}}\n");
+    let lib = liberty_parse::parse_lib(&wrapped).expect("emitted Liberty must parse");
+    assert!(lib
+        .iter()
+        .flat_map(|g| g.subgroups.iter())
+        .any(|g| g.type_ == "cell" && g.name == "MUT"));
+}
+
 /// The `-when` flag threads through to the arc text.
 #[test]
 fn when_flag_reaches_arcs() {

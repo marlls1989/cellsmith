@@ -26,9 +26,19 @@ fn set_attr(group: &mut Group, name: &str, value: Value) {
 }
 
 /// The Liberty `cell (...) { ... }` fragment for a cell, as text (newline-terminated so fragments
-/// concatenate cleanly).
+/// concatenate cleanly). Interlocked (mutex/arbiter) cells are prefixed with a comment recording the
+/// metastable condition and the mutually-exclusive (forbidden-both-high) grants.
 pub fn cell_liberty(cell: &AnalysedCell) -> String {
-    format!("{}\n", Liberty(vec![cell_group(cell)]))
+    let mut out = String::new();
+    for a in &cell.arbitration {
+        out.push_str(&format!(
+            "/* arbitration: {} metastable; grants {} mutually exclusive (both-high forbidden) */\n",
+            a.condition_str(),
+            a.group.join(", "),
+        ));
+    }
+    out.push_str(&format!("{}\n", Liberty(vec![cell_group(cell)])));
+    out
 }
 
 /// Build the `cell` group: one input `pin` per primary input, then each output's pin (and, if

@@ -203,7 +203,7 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        let r = regions(&cell.outputs[0], &cell.inputs);
+        let r = regions(&cell.outputs[0], &cell.outputs, &cell.inputs);
         // Rise preconditioning: from off (00), through hold (01/10), to on (11).
         let path = transitions_path(&r.off, &r.hold, &r.on).unwrap();
 
@@ -238,7 +238,7 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        let r = regions(&cell.outputs[0], &cell.inputs);
+        let r = regions(&cell.outputs[0], &cell.outputs, &cell.inputs);
         let empty = MintermSet::new();
         let path = transitions_path(&r.off, &empty, &r.on).unwrap();
         assert_eq!(path.len(), 2);
@@ -257,7 +257,7 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        let r = regions(&cell.outputs[0], &cell.inputs);
+        let r = regions(&cell.outputs[0], &cell.outputs, &cell.inputs);
         let empty = MintermSet::new();
         assert_eq!(
             transitions_path(&empty, &r.hold, &r.on).unwrap_err(),
@@ -277,7 +277,7 @@ inputs = ["A", "B", "C"]
 Q = "A*B*C + Q*(A+B+C)"
 "#,
         );
-        let r = regions(&cell.outputs[0], &cell.inputs);
+        let r = regions(&cell.outputs[0], &cell.outputs, &cell.inputs);
         // on = ABC=111 ; off = 000 ; hold = everything else (6 states)
         assert_eq!(r.on.len(), 1);
         assert_eq!(r.off.len(), 1);

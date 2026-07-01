@@ -33,6 +33,33 @@ Each output is split into three regions by projecting out its feedback variables
 - `hold` — state-dependent, the **hysteretic** region (encoded as `-` no-change in Verilog, `N` in the
   Liberty state table). A purely combinational output has an empty `hold` and degenerates cleanly.
 
+### Interlocked cells (mutexes / arbiters)
+
+When outputs reference a *different* output (genuine cross-coupling, e.g. a mutex `Qa = !Qb·A`,
+`Qb = !Qa·B`), the **arc derivation first collapses the coupling**: each output's function has the
+other outputs composed away (their functions substituted in) until it is a self-holding function of
+primary inputs plus its own feedback only. That collapse is what makes the arcs physically correct:
+
+- **related pins are always primary inputs** — no other output survives to become one (a
+  `-related_pin Qb` on `Qa` would be invalid);
+- **impossible output→output arcs are never generated** — the mutual-exclusion / deadlock states
+  (one grant holds the other low) fall into the `hold` region, so no arc is emitted for them;
+- **a forcing input cascades** — a reset that reaches an output only *through* the coupling (with
+  `Qb = Sb + !Qa·B`, `Sb` forces `Qb` high which forces `Qa` low) appears in the collapsed function,
+  so both `Sb→Qb` and the cascaded `Sb→Qa` arcs are produced.
+
+Such a cell is also **bistable**: under some input condition (`A·B` for the plain mutex) the joint
+next-state has two stable states and the physical cell picks one non-deterministically
+(metastability). lobsterate **detects** this, annotates the arcs and Liberty stub with the metastable
+condition and the mutually-exclusive grants, and warns if the cell did not declare it. Declare the
+grants with `arbitrate = ["Qa", "Qb"]` to acknowledge the interlock (validated against detection). The
+arbitration *choice* itself is a physical property Liberate characterises separately — it is not, and
+cannot be, expressed as a deterministic timing arc.
+
+(The Verilog UDP and Liberty `statetable` keep the *original* function with the other output as an
+input column — that is the correct instantaneous functional model, distinct from the collapsed
+self-holding view used for timing arcs.)
+
 ## Input format
 
 A TOML file describing many cells:
@@ -55,8 +82,16 @@ Q = "(A*B + Q*(A+B))*!R"
 name = "SR"
 inputs = ["S", "R"]
 [cell.outputs]
-Q  = "S + Q*!R"                # cross-coupling: Q and Qn reference each other
+Q  = "S + Q*!R"                # each output references only its own held state
 Qn = "R + Qn*!S"
+
+[[cell]]
+name = "MUT"
+inputs = ["A", "B"]
+arbitrate = ["Qa", "Qb"]       # optional: declare the mutually-exclusive grants of a mutex/arbiter
+[cell.outputs]                 #   -> validated against detection; silences the interlock warning
+Qa = "!Qb * A"                 # genuine cross-coupling: each grant references the *other*
+Qb = "!Qa * B"
 ```
 
 Function syntax: `*` (AND), `+` (OR), `!` (NOT), `1`/`0` (constants), parentheses. Every variable in a
@@ -144,8 +179,15 @@ Requirements:
 
 Deliberate divergences from the hsNCL reference: pins are emitted in **declaration order** (not
 alphabetically), the `vclk`/alias/library layer is dropped, and don't-care cubes are factored via BDD
-paths rather than Quine–McCluskey — so a function may render correctly but non-minimally. Extending to
-interlocked cells (mutexes / arbiters) is future work.
+paths rather than Quine–McCluskey — so a function may render correctly but non-minimally.
+
+Interlocked cells (mutexes / arbiters) are supported: the arc path **collapses the cross-coupling**
+(composing each output into a self-holding function of primary inputs) so related pins are always
+inputs, impossible output→output arcs are never generated, and input-forced transitions cascade
+through the coupling. The metastable arbitration point is detected and annotated; the arbitration
+*choice* is left to Liberate's physical characterisation — timing arcs cannot express a
+non-deterministic next-state, so lobsterate documents it rather than fabricating deterministic
+behaviour for it.
 
 ## Licence
 

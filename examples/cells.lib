@@ -1,0 +1,72 @@
+cell (C2) {
+  pin (A) {
+    direction : input;
+  }
+  pin (B) {
+    direction : input;
+  }
+  statetable ("A B", "Q") {
+    table : "H H : - : H , H L : - : N , L H : - : N , L L : - : L";
+  }
+  pin (Q) {
+    direction : output;
+    function : "Q";
+  }
+}
+cell (RCELEM2) {
+  pin (A) {
+    direction : input;
+  }
+  pin (B) {
+    direction : input;
+  }
+  pin (R) {
+    direction : input;
+  }
+  statetable ("A B R", "Q") {
+    table : "H - H : - : L , H H L : - : H , H L L : - : N , L H H : - : L , L H L : - : N , L L - : - : L";
+  }
+  pin (Q) {
+    direction : output;
+    function : "Q";
+  }
+}
+cell (SR) {
+  pin (S) {
+    direction : input;
+  }
+  pin (R) {
+    direction : input;
+  }
+  statetable ("S R", "Q") {
+    table : "H - : - : H , L H : - : L , L L : - : N";
+  }
+  pin (Q) {
+    direction : output;
+    function : "Q";
+  }
+  statetable ("S R", "Qn") {
+    table : "- H : - : H , H L : - : L , L L : - : N";
+  }
+  pin (Qn) {
+    direction : output;
+    function : "Qn";
+  }
+}
+/* arbitration: A*B metastable; grants Qa, Qb mutually exclusive (both-high forbidden) */
+cell (MUT) {
+  pin (A) {
+    direction : input;
+  }
+  pin (B) {
+    direction : input;
+  }
+  pin (Qa) {
+    direction : output;
+    function : "A*!Qb";
+  }
+  pin (Qb) {
+    direction : output;
+    function : "B*!Qa";
+  }
+}
