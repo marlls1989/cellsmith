@@ -48,11 +48,13 @@ mod smoke {
 
         // Maximum-cover / minterm expansion must widen to variables absent from the function:
         // adding an unused variable `z` doubles the minterm count (z split both polarities).
-        let m_abq = f.to_minterms(&["a", "b", "q"]);
-        let m_abqz = f.to_minterms(&["a", "b", "q", "z"]);
+        // (`Bdd::maximize` replaces 5.0's removed `to_minterms`; each cube of the maximal cover is a
+        // minterm.)
+        let m_abq = f.maximize(&["a", "b", "q"]).cubes().count();
+        let m_abqz = f.maximize(&["a", "b", "q", "z"]).cubes().count();
         assert_eq!(
-            m_abqz.len(),
-            m_abq.len() * 2,
+            m_abqz,
+            m_abq * 2,
             "absent variable in `vars` must be split into both polarities"
         );
     }

@@ -58,10 +58,18 @@ pub fn regions(output: &AnalysedOutput, inputs: &[String]) -> Regions {
     // Expand each region to fully-assigned minterms over the input pinlist.
     let cols: Vec<&str> = inputs.iter().map(String::as_str).collect();
     Regions {
-        on: on_bdd.to_minterms(&cols).into_iter().collect(),
-        off: off_bdd.to_minterms(&cols).into_iter().collect(),
-        hold: hold_bdd.to_minterms(&cols).into_iter().collect(),
+        on: cover_minterms(&on_bdd.maximize(&cols)),
+        off: cover_minterms(&off_bdd.maximize(&cols)),
+        hold: cover_minterms(&hold_bdd.maximize(&cols)),
     }
+}
+
+/// Collect a maximal cover's cubes (each a fully-assigned minterm) into a [`MintermSet`].
+///
+/// In espresso-logic 5.1 `Bdd::maximize` replaces the removed `to_minterms`: it returns the
+/// deduplicated maximal cover over the requested variables, each cube of which is a minterm.
+fn cover_minterms(cover: &Cover<Symbol, Anonymous>) -> MintermSet {
+    cover.cubes().map(|c| c.inputs().clone()).collect()
 }
 
 /// One cube over the state-table/UDP column set: `Some(true)`/`Some(false)` for a fixed column,
@@ -166,11 +174,7 @@ mod tests {
     fn cover_of(func: &str, cols: &[&str]) -> MintermSet {
         let builder = bdd_builder!();
         let parsed = expr::parse(func).unwrap();
-        builder
-            .build(&parsed.expr)
-            .to_minterms(cols)
-            .into_iter()
-            .collect()
+        cover_minterms(&builder.build(&parsed.expr).maximize(cols))
     }
 
     #[test]

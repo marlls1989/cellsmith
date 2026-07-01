@@ -274,9 +274,9 @@ dependencies = [
 
 [[package]]
 name = "espresso-logic"
-version = "5.0.0"
+version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b551e9f45615782a3129958cc898c7b3cd9b264a54156d99cc7eca22d6d26cd7"
+checksum = "858c4f6bd2805a5188676ae914acdba5721cf75166a1b4542925b15561bf6a6d"
 dependencies = [
  "bindgen",
  "cc",
@@ -289,9 +289,9 @@ dependencies = [
 
 [[package]]
 name = "espresso-logic-macros"
-version = "5.0.0"
+version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33e6e00b784a2679d5f62d50a01e8cdf4078db7907f5c9882753cde13c235a4d"
+checksum = "8288d7a5bf186c428e0ef30e58324c04daed249e7d976bee229a46605039fa82"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -484,6 +484,7 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 [[package]]
 name = "liberty-parse"
 version = "0.3.0"
+source = "git+https://github.com/marlls1989/liberty-parse.git?rev=8e2e3532cdde5a1fa592e0b033b6d748b92d40b3#8e2e3532cdde5a1fa592e0b033b6d748b92d40b3"
 dependencies = [
  "gpoint",
  "indexmap 1.9.3",
