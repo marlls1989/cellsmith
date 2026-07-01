@@ -17,6 +17,13 @@ async = ["R"]                  # optional: pins that force the output (async set
 Q = "(A*B + Q*(A+B))*!R"
 
 [[cell]]
+name = "RACELEM21"
+inputs = ["M1", "M2", "P1", "P2", "C", "R"]
+async = ["R"]                  # optional: pins that force the output (async set/reset)
+[cell.outputs]                 #   -> their arcs are emitted as `-type async`
+Q = "(P1*P2*C+Q*(M1+M2))*!R"
+
+[[cell]]
 name = "SR"
 inputs = ["S", "R"]
 [cell.outputs]
@@ -25,8 +32,7 @@ Qn = "R + Qn*!S"
 
 [[cell]]
 name = "MUT"
-inputs = ["A", "B"]
-arbitrate = ["Qa", "Qb"]       # mutex/arbiter: grants are mutually exclusive, metastable at A*B
+inputs = ["A", "B"]            # mutex/arbiter: grants are mutually exclusive, metastable at A*B
 [cell.outputs]                 #   -> arcs condition each grant on the other; arbitration is annotated
 Qa  = "!Qb * A"
 Qb  = "!Qa * B"
@@ -40,3 +46,24 @@ clock = ["CLK"]                # CLK is a clock: setup/hold of D is characterise
 M = "!CLK*D + CLK*M"           #   transparent when CLK low, holds when high
 [cell.outputs]
 Q = "CLK*M + !CLK*Q"           # slave: captures M on the rising edge (M established by the prevector)
+
+[[cell]]
+name = "ICM"
+inputs = ["CLKA", "CLKB", "RA", "RB", "S"]
+clock = ["CLKA", "CLKB"]
+async = ["RA", "RB"]
+
+[cell.internal]
+# selection interlock
+sela = "!enB*!S"
+selb = "!enA*S"
+# CLKA synchroniser
+sela1 = "!RA*(!CLKA*sela+CLKA*sela1)"
+sela2 = "!RA*(CLKA*sela1+!CLKA*sela2)"
+enA   = "!RA*(!CLKA*sela2+CLKA*enA)"
+# CLKB synchroniser
+selb1 = "!RB*(!CLKB*selb+CLKB*selb1)"
+selb2 = "!RB*(CLKB*selb1+!CLKB*selb2)"
+enB   = "!RB*(!CLKB*selb2+CLKB*enB)"
+[cell.outputs]
+GCLK = "enA*CLKA+enB*CLKB"

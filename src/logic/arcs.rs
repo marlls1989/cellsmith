@@ -97,26 +97,33 @@ pub fn cell_arcs(cell: &AnalysedCell) -> Vec<Arc> {
     let full_header = machine::header(&full_names);
     let input_header = machine::header(inputs);
 
-    // The value of `output` at a node: a state output reads its state field; a combinational output is
-    // its δ evaluated at the node.
-    let output_value = |name: &str, node: &Minterm<Symbol>| -> bool {
+    // The value of `output` at a node, or `None` when the node does not define it: a state output reads
+    // its state field (absent ⇒ undefined); a combinational output is its δ evaluated at the node
+    // (`Err` ⇒ still depends on absent state ⇒ undefined). An arc is only measured where the output is
+    // defined at both ends.
+    let output_value = |name: &str, node: &Minterm<Symbol>| -> Option<bool> {
         if state_set.contains(name) {
             node.value_of(name)
-                .expect("a state variable is fixed in the node")
         } else {
-            out_delta[name]
-                .evaluate(node)
-                .expect("a complete assignment determines a combinational output")
+            out_delta[name].evaluate(node).ok()
         }
     };
 
-    // Explore the reachable stable states once (reset-stable starts, BFS, settle); [`machine::explore`]
-    // records the visitation order and predecessors, shared with [`super::confluence`].
-    let ex = machine::explore(&deltas, &full_header, inputs, &state_vars);
+    // Explore the reachable stable states once. Candidates are seeded from the on/off covers of every
+    // signal function (state δ plus the combinational outputs, so combinational cells seed too);
+    // [`machine::explore`] records the visitation order and predecessors, shared with
+    // [`super::confluence`].
+    let seed_funcs: Vec<_> = deltas
+        .iter()
+        .map(|(_, d)| d.clone())
+        .chain(out_delta.values().cloned())
+        .collect();
+    let ex = machine::explore(&deltas, &seed_funcs, &full_header, inputs, &state_vars);
 
     let async_set: BTreeSet<&str> = cell.async_pins.iter().map(String::as_str).collect();
-    let mut seen_arc: BTreeSet<(String, String, bool, Minterm<Symbol>)> = BTreeSet::new();
-    let mut arcs: Vec<Arc> = Vec::new();
+    // The same arc can be reached from several start candidates; keep the one with the shortest
+    // prevector. Keyed by (output, related, edge-direction, start over the inputs).
+    let mut best_arc: BTreeMap<(String, String, bool, Minterm<Symbol>), Arc> = BTreeMap::new();
 
     // The prevector: the input assignments from a start node to `node`, each projected onto the inputs.
     let path_to = |node: &Minterm<Symbol>| -> Vec<Minterm<Symbol>> {
@@ -137,13 +144,11 @@ pub fn cell_arcs(cell: &AnalysedCell) -> Vec<Arc> {
     // emit an arc.
     for node in &ex.order {
         for related in inputs {
-            // Toggle one input, hold the state, and let the state settle.
-            let toggled = machine::node_from(&full_header, |name| {
-                let cur = node
-                    .value_of(name)
-                    .expect("a header variable is fixed in the node");
+            // Toggle one input, hold the (partial) state, and let the state settle.
+            let toggled = machine::node_from_opt(&full_header, |name| {
+                let cur = node.value_of(name);
                 if name == related.as_str() {
-                    !cur
+                    cur.map(|v| !v)
                 } else {
                     cur
                 }
@@ -151,32 +156,45 @@ pub fn cell_arcs(cell: &AnalysedCell) -> Vec<Arc> {
             let Some(np) = machine::settle(&deltas, &full_header, &toggled) else {
                 continue;
             };
-            // An arc for every output whose value flips across this input toggle.
+            // An arc for every output that is defined at both ends and flips across this input toggle.
             let start = node.project_onto(&input_header);
             let end = np.project_onto(&input_header);
+            let prevector = path_to(node);
             for o in &cell.outputs {
-                let before = output_value(&o.name, node);
-                let after = output_value(&o.name, &np);
+                let (Some(before), Some(after)) =
+                    (output_value(&o.name, node), output_value(&o.name, &np))
+                else {
+                    continue;
+                };
                 if before == after {
                     continue;
                 }
                 let edge = if after { Edge::Rise } else { Edge::Fall };
                 let key = (o.name.clone(), related.clone(), after, start.clone());
-                if !seen_arc.insert(key) {
-                    continue;
-                }
-                arcs.push(Arc {
+                let arc = Arc {
                     edge,
                     output: o.name.clone(),
                     related: related.clone(),
                     start: start.clone(),
                     end: end.clone(),
-                    prevector: path_to(node),
+                    prevector: prevector.clone(),
                     is_async: async_set.contains(related.as_str()),
-                });
+                };
+                match best_arc.entry(key) {
+                    std::collections::btree_map::Entry::Vacant(e) => {
+                        e.insert(arc);
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut e) => {
+                        if arc.prevector.len() < e.get().prevector.len() {
+                            e.insert(arc);
+                        }
+                    }
+                }
             }
         }
     }
+
+    let arcs: Vec<Arc> = best_arc.into_values().collect();
 
     arcs
 }

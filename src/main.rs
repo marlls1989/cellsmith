@@ -61,17 +61,17 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         .map(|c| c.analyse())
         .collect::<Result<_, _>>()?;
 
-    // Diagnose interlocked cells that were not explicitly declared: their arbitration is detected and
-    // annotated, but never expressed as deterministic timing, so the user should know.
+    // Diagnose interlocked cells: their arbitration is detected and annotated, but never expressed as
+    // deterministic timing, so the user should know — naming the nodes (outputs or internals) that
+    // arbitrate.
     for c in &cells {
-        if !c.arbitration.is_empty() && !c.arbitrate_declared {
-            let conds: Vec<String> = c.arbitration.iter().map(|a| a.condition_str()).collect();
+        for a in &c.arbitration {
             eprintln!(
-                "lobsterate: warning: cell {:?} is interlocked (metastable at {}); \
-                 arbitration is annotated only, not modelled as timing. \
-                 Add `arbitrate = [...]` to acknowledge it.",
+                "lobsterate: warning: cell {:?}: nodes {{{}}} arbitrate (metastable at {}) — \
+                 annotated only, not modelled as timing.",
                 c.name,
-                conds.join(", "),
+                a.group.join(", "),
+                a.condition_str(),
             );
         }
     }

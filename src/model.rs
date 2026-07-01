@@ -39,14 +39,9 @@ pub struct Cell {
     /// so their arcs are emitted as `-type async` rather than combinational.
     #[serde(rename = "async", default)]
     pub async_pins: Vec<String>,
-    /// Optional: a set of mutually-exclusive outputs (a mutex/arbiter's grant lines). Declaring it
-    /// asserts the cell is interlocked and is validated against the detected arbitration; when
-    /// omitted, arbitration is still detected (and a warning surfaced) but not required.
-    #[serde(default)]
-    pub arbitrate: Vec<String>,
-    /// Optional: input pins that are clocks. A declared clock authorises suppressing a `non_seq` hazard
-    /// on a pin pair when a setup/hold on the same pins (with the clock as its related pin) already
-    /// covers it — EDA/Liberate's special treatment of clocks. See [`crate::logic::confluence`].
+    /// Optional: input pins that are clocks. A hazard on a pin pair holding a declared clock is a
+    /// directed setup/hold (clock ← data); any other pair is a symmetric non_seq. See
+    /// [`crate::logic::confluence`].
     #[serde(default)]
     pub clock: Vec<String>,
     /// Optional: opt in to emitting derived constraint arcs (setup/hold, non_seq) for this cell. Off by
@@ -80,14 +75,6 @@ pub enum ModelError {
     AsyncNotInput { cell: String, pin: String },
     #[error("cell {cell:?}: clock pin {pin:?} is not a declared input")]
     ClockNotInput { cell: String, pin: String },
-    #[error("cell {cell:?}: arbitrate pin {pin:?} is not a declared output")]
-    ArbitrateNotOutput { cell: String, pin: String },
-    #[error("cell {cell:?}: declared arbitrate group {declared:?} is not a mutually-coupled (interlocked) set of outputs; detected interlock groups: {detected:?}")]
-    ArbitrateNotInterlocked {
-        cell: String,
-        declared: Vec<String>,
-        detected: Vec<Vec<String>>,
-    },
 }
 
 /// A signal (output **or** internal) after analysis: its function, the variables it references, and
@@ -119,13 +106,10 @@ pub struct AnalysedCell {
     /// Detected arbitration/metastability conditions (empty for ordinary combinational or
     /// self-holding cells). See [`crate::logic::interlock`].
     pub arbitration: Vec<Arbitration>,
-    /// Whether the cell explicitly declared its arbitration set (`arbitrate = [...]`). When an
-    /// interlock is detected but not declared, the CLI warns.
-    pub arbitrate_declared: bool,
     /// Declared clock input pins (`clock = [...]`). See [`crate::logic::confluence`].
     pub clock_pins: Vec<String>,
-    /// All detected constraint hazards (setup/hold and non_seq), before clock suppression. Detection is
-    /// always run; suppression and emission are applied downstream via [`confluence::resolve`].
+    /// All detected constraint hazards (setup/hold and non_seq). Emission is gated by the CLI flag or
+    /// `constraint_arcs_declared`; the kind of each hazard follows the declared clock.
     pub constraints: Vec<Constraint>,
     /// Whether the cell opted in to constraint-arc emission (`constraint_arcs = true`).
     pub constraint_arcs_declared: bool,
@@ -228,34 +212,9 @@ impl Cell {
             });
         }
 
-        // Detect arbitration/metastability over all state signals, then validate any explicit
-        // `arbitrate` declaration against it.
+        // Detect arbitration/metastability over all state signals (purely algorithmic — see
+        // [`interlock`]).
         let arbitration = interlock::detect(&self.inputs, &all);
-        let arbitrate_declared = !self.arbitrate.is_empty();
-        if arbitrate_declared {
-            for pin in &self.arbitrate {
-                if !output_set.contains(pin) {
-                    return Err(ModelError::ArbitrateNotOutput {
-                        cell: self.name.clone(),
-                        pin: pin.clone(),
-                    });
-                }
-            }
-            let declared: BTreeSet<&String> = self.arbitrate.iter().collect();
-            let matches_group = arbitration
-                .iter()
-                .any(|a| a.group.iter().collect::<BTreeSet<_>>() == declared);
-            if !matches_group {
-                let mut detected: Vec<Vec<String>> =
-                    arbitration.iter().map(|a| a.group.clone()).collect();
-                detected.dedup();
-                return Err(ModelError::ArbitrateNotInterlocked {
-                    cell: self.name.clone(),
-                    declared: self.arbitrate.clone(),
-                    detected,
-                });
-            }
-        }
 
         let internals = all.split_off(n_outputs);
         let outputs = all;
@@ -267,7 +226,6 @@ impl Cell {
             internals,
             async_pins: self.async_pins.clone(),
             arbitration,
-            arbitrate_declared,
             clock_pins: self.clock.clone(),
             constraints: Vec::new(),
             constraint_arcs_declared: self.constraint_arcs,
@@ -343,53 +301,6 @@ Y = "A*Z"
 "#;
         let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
         assert!(matches!(err, ModelError::UnknownVar { .. }));
-    }
-
-    #[test]
-    fn arbitrate_declaration_validates_against_detection() {
-        let s = r#"
-[[cell]]
-name = "MUT"
-inputs = ["A", "B"]
-arbitrate = ["Qa", "Qb"]
-[cell.outputs]
-Qa = "!Qb * A"
-Qb = "!Qa * B"
-"#;
-        let cell = parse_spec(s).unwrap().cells.remove(0).analyse().unwrap();
-        assert!(cell.arbitrate_declared);
-        assert_eq!(cell.arbitration.len(), 1);
-        assert_eq!(cell.arbitration[0].group, ["Qa", "Qb"]);
-    }
-
-    #[test]
-    fn arbitrate_on_non_interlocked_cell_errors() {
-        // A plain C-element is not interlocked; declaring an arbitrate group must be rejected.
-        let s = r#"
-[[cell]]
-name = "C2"
-inputs = ["A", "B"]
-arbitrate = ["Q"]
-[cell.outputs]
-Q = "A*B + Q*(A+B)"
-"#;
-        let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
-        assert!(matches!(err, ModelError::ArbitrateNotInterlocked { .. }));
-    }
-
-    #[test]
-    fn arbitrate_pin_must_be_output() {
-        let s = r#"
-[[cell]]
-name = "MUT"
-inputs = ["A", "B"]
-arbitrate = ["Qa", "Zz"]
-[cell.outputs]
-Qa = "!Qb * A"
-Qb = "!Qa * B"
-"#;
-        let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
-        assert!(matches!(err, ModelError::ArbitrateNotOutput { .. }));
     }
 
     #[test]

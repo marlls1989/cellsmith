@@ -31,6 +31,33 @@ cell (RCELEM2) {
     function : "Q";
   }
 }
+cell (RACELEM21) {
+  pin (M1) {
+    direction : input;
+  }
+  pin (M2) {
+    direction : input;
+  }
+  pin (P1) {
+    direction : input;
+  }
+  pin (P2) {
+    direction : input;
+  }
+  pin (C) {
+    direction : input;
+  }
+  pin (R) {
+    direction : input;
+  }
+  statetable ("M1 M2 P1 P2 C R", "Q") {
+    table : "- - H H H H : - : L , - - H H H L : - : H , H - H H L H : - : L , H - H H L L : - : N , H - H L - H : - : L , H - H L - L : - : N , H - L - - H : - : L , H - L - - L : - : N , L H H H L H : - : L , L H H H L L : - : N , L H H L - H : - : L , L H H L - L : - : N , L H L - - H : - : L , L H L - - L : - : N , L L H H L - : - : L , L L H L - - : - : L , L L L - - - : - : L";
+  }
+  pin (Q) {
+    direction : output;
+    function : "Q";
+  }
+}
 cell (SR) {
   pin (S) {
     direction : input;
@@ -90,5 +117,100 @@ cell (DFF) {
   pin (M) {
     direction : internal;
     function : "M";
+  }
+}
+/* arbitration: !CLKA*!CLKB*!RA*!RB*!S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: CLKA*!CLKB*!RA*!RB*!S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: !CLKA*CLKB*!RA*!RB*!S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: CLKA*CLKB*!RA*!RB*!S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: !CLKA*!CLKB*RA*!RB*!S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: CLKA*!CLKB*RA*!RB*!S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: !CLKA*CLKB*RA*!RB*!S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: CLKA*CLKB*RA*!RB*!S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: !CLKA*!CLKB*!RA*RB*!S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: CLKA*!CLKB*!RA*RB*!S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: !CLKA*CLKB*!RA*RB*!S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: CLKA*CLKB*!RA*RB*!S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: !CLKA*!CLKB*!RA*!RB*S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: CLKA*!CLKB*!RA*!RB*S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: !CLKA*CLKB*!RA*!RB*S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: CLKA*CLKB*!RA*!RB*S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: !CLKA*!CLKB*RA*!RB*S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: CLKA*!CLKB*RA*!RB*S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: !CLKA*CLKB*RA*!RB*S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: CLKA*CLKB*RA*!RB*S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: !CLKA*!CLKB*!RA*RB*S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: CLKA*!CLKB*!RA*RB*S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: !CLKA*CLKB*!RA*RB*S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+/* arbitration: CLKA*CLKB*!RA*RB*S metastable; grants sela, selb, sela1, sela2, enA, selb1, selb2, enB mutually exclusive (both-high forbidden) */
+cell (ICM) {
+  pin (CLKA) {
+    direction : input;
+  }
+  pin (CLKB) {
+    direction : input;
+  }
+  pin (RA) {
+    direction : input;
+  }
+  pin (RB) {
+    direction : input;
+  }
+  pin (S) {
+    direction : input;
+  }
+  pin (GCLK) {
+    direction : output;
+    function : "CLKB*!enA*enB + !CLKA*CLKB*enA*enB + CLKA*enA";
+  }
+  pin (sela) {
+    direction : internal;
+    function : "!S*!enB";
+  }
+  pin (selb) {
+    direction : internal;
+    function : "S*!enA";
+  }
+  statetable ("CLKA CLKB RA RB S sela", "sela1") {
+    table : "- - H - - - : - : L , H - L - - - : - : N , L - L - - H : - : H , L - L - - L : - : L";
+  }
+  pin (sela1) {
+    direction : internal;
+    function : "sela1";
+  }
+  statetable ("CLKA CLKB RA RB S sela1", "sela2") {
+    table : "- - H - - - : - : L , H - L - - H : - : H , H - L - - L : - : L , L - L - - - : - : N";
+  }
+  pin (sela2) {
+    direction : internal;
+    function : "sela2";
+  }
+  statetable ("CLKA CLKB RA RB S sela2", "enA") {
+    table : "- - H - - - : - : L , H - L - - - : - : N , L - L - - H : - : H , L - L - - L : - : L";
+  }
+  pin (enA) {
+    direction : internal;
+    function : "enA";
+  }
+  statetable ("CLKA CLKB RA RB S selb", "selb1") {
+    table : "- - - H - - : - : L , - H - L - - : - : N , - L - L - H : - : H , - L - L - L : - : L";
+  }
+  pin (selb1) {
+    direction : internal;
+    function : "selb1";
+  }
+  statetable ("CLKA CLKB RA RB S selb1", "selb2") {
+    table : "- - - H - - : - : L , - H - L - H : - : H , - H - L - L : - : L , - L - L - - : - : N";
+  }
+  pin (selb2) {
+    direction : internal;
+    function : "selb2";
+  }
+  statetable ("CLKA CLKB RA RB S selb2", "enB") {
+    table : "- - - H - - : - : L , - H - L - - : - : N , - L - L - H : - : H , - L - L - L : - : L";
+  }
+  pin (enB) {
+    direction : internal;
+    function : "enB";
   }
 }

@@ -164,15 +164,25 @@ pub fn cell_constraints(cell: &AnalysedCell) -> Vec<Constraint> {
     let full_header = machine::header(&full_names);
     let input_header = machine::header(inputs);
 
-    let ex = machine::explore(&deltas, &full_header, inputs, &state_vars);
+    // Seed candidates from the on/off covers of every signal function (state δ plus the combinational
+    // outputs), matching [`super::arcs`].
+    let seed_funcs: Vec<_> = deltas
+        .iter()
+        .map(|(_, d)| d.clone())
+        .chain(
+            cell.outputs
+                .iter()
+                .filter(|o| !state_set.contains(&o.name))
+                .map(|o| resolve::delta(&o.name, &bdds, &deps, &state_set)),
+        )
+        .collect();
+    let ex = machine::explore(&deltas, &seed_funcs, &full_header, inputs, &state_vars);
 
     let settle_toggle = |node: &Minterm<Symbol>, name: &str| -> Option<Minterm<Symbol>> {
-        let toggled = machine::node_from(&full_header, |nm| {
-            let cur = node
-                .value_of(nm)
-                .expect("a header variable is fixed in the node");
+        let toggled = machine::node_from_opt(&full_header, |nm| {
+            let cur = node.value_of(nm);
             if nm == name {
-                !cur
+                cur.map(|v| !v)
             } else {
                 cur
             }
