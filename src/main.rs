@@ -72,7 +72,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     let arc_opts = ArcsTclOptions {
         emit_when: cli.when,
     };
-    let arcs = render(&cells, |c| Ok(cell_arcs_tcl(c, arc_opts)?))?;
+    let arcs = render(&cells, |c| Ok(cell_arcs_tcl(c, arc_opts)))?;
     let verilog = render(&cells, |c| Ok(cell_verilog(c)))?;
     let liberty = render(&cells, |c| Ok(cell_liberty(c)))?;
 

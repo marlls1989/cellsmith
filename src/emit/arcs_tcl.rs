@@ -5,8 +5,8 @@
 //! declaration order (lobsterate's deliberate divergence from hsNCL's alphabetical sort).
 
 use crate::logic::arcs::{cell_arcs, Arc, Edge};
+use crate::logic::assignment;
 use crate::logic::interlock::Arbitration;
-use crate::logic::walk::{assignment, WalkError};
 use crate::model::AnalysedCell;
 
 /// Knobs for the arc emitter.
@@ -20,23 +20,19 @@ pub struct ArcsTclOptions {
 
 /// All `define_arc` blocks for a cell, concatenated. Interlocked (mutex/arbiter) cells are prefixed
 /// with a comment documenting the metastable condition, which timing arcs cannot express.
-pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> Result<String, WalkError> {
+pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     let mut out = arbitration_comment(cell);
-    for arc in &cell_arcs(cell)? {
+    for arc in &cell_arcs(cell) {
         out.push_str(&format_arc(cell, arc, opts));
     }
-    Ok(out)
+    out
 }
 
 /// A `#` comment block describing each detected arbitration condition (empty for ordinary cells).
 fn arbitration_comment(cell: &AnalysedCell) -> String {
     let mut s = String::new();
     for a in &cell.arbitration {
-        let states: Vec<String> = a
-            .stable
-            .iter()
-            .map(|st| Arbitration::state_str(st))
-            .collect();
+        let states: Vec<String> = a.stable.iter().map(Arbitration::state_str).collect();
         s.push_str(&format!(
             "# arbitration: {} metastable; grants {{{}}} mutually exclusive ({})\n",
             a.condition_str(),
@@ -193,7 +189,7 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default()).unwrap();
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}"); // visible with `cargo test -- --nocapture`
 
         assert!(tcl.contains("define_arc \\"));
@@ -224,8 +220,8 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        let off = cell_arcs_tcl(&cell, ArcsTclOptions { emit_when: false }).unwrap();
-        let on = cell_arcs_tcl(&cell, ArcsTclOptions { emit_when: true }).unwrap();
+        let off = cell_arcs_tcl(&cell, ArcsTclOptions { emit_when: false });
+        let on = cell_arcs_tcl(&cell, ArcsTclOptions { emit_when: true });
         assert!(!off.contains("-when"));
         assert!(on.contains("-when"));
     }
@@ -242,7 +238,7 @@ Qa = "!Qb * A"
 Qb = "!Qa * B"
 "#,
         );
-        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default()).unwrap();
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
         // Arbitration documented up front.
         assert!(tcl.contains("# arbitration: A*B metastable"));
@@ -268,7 +264,7 @@ async = ["R"]
 Q = "(A*B + Q*(A+B))*!R"
 "#,
         );
-        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default()).unwrap();
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         assert!(tcl.contains("-type async"));
         assert!(tcl.contains("-related_pin R"));
     }

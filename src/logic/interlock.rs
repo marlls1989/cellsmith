@@ -18,8 +18,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use espresso_logic::{bdd_builder, BoolExpr};
+use espresso_logic::{bdd_builder, Minterm, Symbol};
 
+use crate::logic::{machine, resolve};
 use crate::model::AnalysedOutput;
 
 /// One metastable (arbitration) condition of a cell: an interlock group, the primary-input condition
@@ -28,11 +29,11 @@ use crate::model::AnalysedOutput;
 pub struct Arbitration {
     /// The mutually-exclusive output group (a size-≥2 SCC of the coupling graph), in output order.
     pub group: Vec<String>,
-    /// Primary-input condition under which the group is metastable, as `(pin, value)` in input order.
-    pub condition: Vec<(String, bool)>,
-    /// The competing stable states — each a full assignment of the `group` outputs (output order),
-    /// sorted for determinism.
-    pub stable: Vec<Vec<(String, bool)>>,
+    /// Primary-input condition under which the group is metastable, as a full input assignment.
+    pub condition: Minterm<Symbol>,
+    /// The competing stable states — each a group-projected minterm (group order), sorted for
+    /// determinism.
+    pub stable: Vec<Minterm<Symbol>>,
 }
 
 impl Arbitration {
@@ -42,10 +43,12 @@ impl Arbitration {
     }
 
     /// A competing stable state as a brace-wrapped literal product (`{Qa=1, Qb=0}`).
-    pub fn state_str(state: &[(String, bool)]) -> String {
+    pub fn state_str(state: &Minterm<Symbol>) -> String {
         let inner: Vec<String> = state
+            .vars()
             .iter()
-            .map(|(n, v)| format!("{n}={}", if *v { 1 } else { 0 }))
+            .zip(state.iter())
+            .filter_map(|(n, v)| v.map(|b| format!("{}={}", n.as_str(), if b { 1 } else { 0 })))
             .collect();
         format!("{{{}}}", inner.join(", "))
     }
@@ -61,7 +64,8 @@ pub fn detect(inputs: &[String], outputs: &[AnalysedOutput]) -> Vec<Arbitration>
 
     // The held outputs: any output referenced as feedback by some function (self or other). These are
     // the joint-state coordinates; every referenced output is one of them, so a full input+state
-    // assignment determines each next-state completely.
+    // assignment determines each next-state completely. A held output's own function *is* its
+    // next-state as a function of inputs + held outputs, so these double as the machine's δ.
     let mut state_outputs: Vec<String> = Vec::new();
     for o in outputs {
         for f in &o.feedback {
@@ -71,8 +75,8 @@ pub fn detect(inputs: &[String], outputs: &[AnalysedOutput]) -> Vec<Arbitration>
         }
     }
 
-    // The next-state function of each held output.
-    let exprs: BTreeMap<&str, &BoolExpr> = state_outputs
+    let builder = bdd_builder!();
+    let deltas: Vec<machine::Delta<_, _>> = state_outputs
         .iter()
         .map(|name| {
             let expr = &outputs
@@ -80,35 +84,49 @@ pub fn detect(inputs: &[String], outputs: &[AnalysedOutput]) -> Vec<Arbitration>
                 .find(|o| &o.name == name)
                 .expect("state output is a declared output")
                 .expr;
-            (name.as_str(), expr)
+            (name.clone(), builder.build(expr))
         })
         .collect();
 
+    // Shared headers: the full node (inputs + held outputs) and the input-only condition header.
+    let full_names: Vec<String> = inputs
+        .iter()
+        .cloned()
+        .chain(state_outputs.clone())
+        .collect();
+    let full_header = machine::header(&full_names);
+    let input_header = machine::header(inputs);
+
+    let bit = |mask: usize, list: &[String], name: &str| -> Option<bool> {
+        list.iter()
+            .position(|v| v == name)
+            .map(|i| (mask >> i) & 1 == 1)
+    };
+    let n_in = 1usize << inputs.len();
+    let n_st = 1usize << state_outputs.len();
+
     let mut result = Vec::new();
     for group in &groups {
-        for input_asn in assignments(inputs) {
-            // Stable fixpoints under this input assignment, projected onto the group.
-            let mut projections: BTreeSet<Vec<(String, bool)>> = BTreeSet::new();
-            for state_asn in assignments(&state_outputs) {
-                if is_fixpoint(&exprs, &state_outputs, &input_asn, &state_asn) {
-                    let proj: Vec<(String, bool)> = group
-                        .iter()
-                        .map(|g| {
-                            let v = state_asn
-                                .iter()
-                                .find(|(n, _)| n == g)
-                                .map(|(_, v)| *v)
-                                .expect("group member is a held output");
-                            (g.clone(), v)
-                        })
-                        .collect();
-                    projections.insert(proj);
+        let group_header = machine::header(group);
+        for x in 0..n_in {
+            // Stable joint states under this input assignment, projected onto the group.
+            let mut projections: BTreeSet<Minterm<Symbol>> = BTreeSet::new();
+            for s in 0..n_st {
+                let node = machine::node_from(&full_header, |name| {
+                    bit(x, inputs, name)
+                        .or_else(|| bit(s, &state_outputs, name))
+                        .expect("every header variable is an input or a held output")
+                });
+                if machine::is_stable(&deltas, &node) {
+                    projections.insert(node.project_onto(&group_header));
                 }
             }
             if projections.len() >= 2 {
+                let condition =
+                    machine::node_from(&input_header, |name| bit(x, inputs, name).unwrap_or(false));
                 result.push(Arbitration {
                     group: group.clone(),
-                    condition: input_asn,
+                    condition,
                     stable: projections.into_iter().collect(),
                 });
             }
@@ -117,83 +135,29 @@ pub fn detect(inputs: &[String], outputs: &[AnalysedOutput]) -> Vec<Arbitration>
     result
 }
 
-/// Whether `state_asn` is a stable joint state: every held output's next value equals its current one
-/// under `input_asn ∪ state_asn`.
-fn is_fixpoint(
-    exprs: &BTreeMap<&str, &BoolExpr>,
-    state_outputs: &[String],
-    input_asn: &[(String, bool)],
-    state_asn: &[(String, bool)],
-) -> bool {
-    state_outputs.iter().all(|name| {
-        let next = eval(exprs[name.as_str()], input_asn, state_asn);
-        let current = state_asn
-            .iter()
-            .find(|(n, _)| n == name)
-            .map(|(_, v)| *v)
-            .expect("state output is in the state assignment");
-        next == current
-    })
-}
-
-/// Evaluate a fully-assigned function to a constant by restricting every input and held-output name.
-fn eval(expr: &BoolExpr, input_asn: &[(String, bool)], state_asn: &[(String, bool)]) -> bool {
-    let builder = bdd_builder!();
-    let mut cur = builder.build(expr);
-    for (n, v) in input_asn.iter().chain(state_asn.iter()) {
-        cur = cur.restrict(n.as_str(), *v);
-    }
-    debug_assert!(
-        cur.is_tautology() || cur.is_contradiction(),
-        "a full input+state assignment must determine the next-state"
-    );
-    cur.is_tautology()
-}
-
 /// The interlock groups: strongly-connected components of size ≥ 2 in the output coupling graph
 /// (self-loops excluded), each in the cells' output order.
 fn interlock_groups(outputs: &[AnalysedOutput]) -> Vec<Vec<String>> {
     let order: Vec<&str> = outputs.iter().map(|o| o.name.as_str()).collect();
 
-    // edges: o -> p for each *other* output p that o's function references.
-    let mut edges: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-    for o in outputs {
-        let set = edges.entry(o.name.as_str()).or_default();
-        for f in &o.feedback {
-            if f != &o.name {
-                set.insert(f.as_str());
-            }
-        }
-    }
-
-    // Transitive closure (≥1 step) via repeated relaxation — graphs are tiny.
-    let mut reach = edges.clone();
-    loop {
-        let mut changed = false;
-        let keys: Vec<&str> = reach.keys().copied().collect();
-        for u in keys {
-            let succ: Vec<&str> = reach[u].iter().copied().collect();
-            for v in succ {
-                let vs: Vec<&str> = reach
-                    .get(v)
-                    .map(|s| s.iter().copied().collect())
-                    .unwrap_or_default();
-                for w in vs {
-                    if reach.get_mut(u).unwrap().insert(w) {
-                        changed = true;
-                    }
-                }
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
+    // edges: o -> p for each *other* output p that o's function references (self-loops excluded).
+    let edges: BTreeMap<String, Vec<String>> = outputs
+        .iter()
+        .map(|o| {
+            let succ = o
+                .feedback
+                .iter()
+                .filter(|f| **f != o.name)
+                .cloned()
+                .collect();
+            (o.name.clone(), succ)
+        })
+        .collect();
+    let reach = resolve::transitive_closure(&edges);
 
     // u and v (u != v) share an SCC iff each reaches the other.
     let mutual = |u: &str, v: &str| {
-        reach.get(u).map(|s| s.contains(v)).unwrap_or(false)
-            && reach.get(v).map(|s| s.contains(u)).unwrap_or(false)
+        reach.get(u).is_some_and(|s| s.contains(v)) && reach.get(v).is_some_and(|s| s.contains(u))
     };
 
     let mut groups: Vec<Vec<String>> = Vec::new();
@@ -217,29 +181,28 @@ fn interlock_groups(outputs: &[AnalysedOutput]) -> Vec<Vec<String>> {
     groups
 }
 
-/// Every assignment of `names` as `(name, value)` pairs in the given order (2^n rows).
-fn assignments(names: &[String]) -> Vec<Vec<(String, bool)>> {
-    let n = names.len();
-    (0..(1u32 << n))
-        .map(|mask| {
-            names
-                .iter()
-                .enumerate()
-                .map(|(i, nm)| (nm.clone(), (mask >> i) & 1 == 1))
-                .collect()
+/// A minterm's fixed values as a product of literals: `A*B`, `!R*S` (in the minterm's variable order).
+/// No fixed value ⇒ the tautology `1`.
+fn literals_str(m: &Minterm<Symbol>) -> String {
+    let lits: Vec<String> = m
+        .vars()
+        .iter()
+        .zip(m.iter())
+        .filter_map(|(n, v)| {
+            v.map(|b| {
+                if b {
+                    n.as_str().to_string()
+                } else {
+                    format!("!{}", n.as_str())
+                }
+            })
         })
-        .collect()
-}
-
-/// A product of literals: `A*B`, `!R*S`. Empty ⇒ the tautology `1`.
-fn literals_str(lits: &[(String, bool)]) -> String {
+        .collect();
     if lits.is_empty() {
-        return "1".to_owned();
+        "1".to_owned()
+    } else {
+        lits.join("*")
     }
-    lits.iter()
-        .map(|(n, v)| if *v { n.clone() } else { format!("!{n}") })
-        .collect::<Vec<_>>()
-        .join("*")
 }
 
 #[cfg(test)]
@@ -270,12 +233,13 @@ Qb = "!Qa * B"
         assert_eq!(a.condition_str(), "A*B");
         // Competing stable states: Qa high / Qb low, and the mirror.
         assert_eq!(a.stable.len(), 2);
-        assert!(a
-            .stable
-            .contains(&vec![("Qa".into(), true), ("Qb".into(), false)]));
-        assert!(a
-            .stable
-            .contains(&vec![("Qa".into(), false), ("Qb".into(), true)]));
+        let states: BTreeSet<String> = a.stable.iter().map(Arbitration::state_str).collect();
+        assert_eq!(
+            states,
+            ["{Qa=1, Qb=0}".to_string(), "{Qa=0, Qb=1}".to_string()]
+                .into_iter()
+                .collect()
+        );
     }
 
     #[test]

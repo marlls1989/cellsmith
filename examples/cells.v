@@ -113,3 +113,36 @@ MUT_Qa u_MUT_Qa (Qa, A, B, Qb);
 MUT_Qb u_MUT_Qb (Qb, A, B, Qa);
 endmodule
 `endcelldefine
+primitive DFF_Q(Q, CLK, D, M);
+output Q;
+input  CLK, D, M;
+reg    Q;
+table
+	0 ? ? : ? : -;
+	1 ? 0 : ? : 0;
+	1 ? 1 : ? : 1;
+endtable
+endprimitive
+primitive DFF_M(M, CLK, D);
+output M;
+input  CLK, D;
+reg    M;
+table
+	0 0 : ? : 0;
+	0 1 : ? : 1;
+	1 ? : ? : -;
+endtable
+endprimitive
+`celldefine
+module DFF(Q, CLK, D);
+output Q;
+input  CLK, D;
+wire   M;
+specify
+	(CLK => Q) = (0.1, 0.1);
+	(D => Q) = (0.1, 0.1);
+endspecify
+DFF_Q u_DFF_Q (Q, CLK, D, M);
+DFF_M u_DFF_M (M, CLK, D);
+endmodule
+`endcelldefine

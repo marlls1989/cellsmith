@@ -70,3 +70,25 @@ cell (MUT) {
     function : "B*!Qa";
   }
 }
+cell (DFF) {
+  pin (CLK) {
+    direction : input;
+  }
+  pin (D) {
+    direction : input;
+  }
+  statetable ("CLK D M", "Q") {
+    table : "H - H : - : H , H - L : - : L , L - - : - : N";
+  }
+  pin (Q) {
+    direction : output;
+    function : "Q";
+  }
+  statetable ("CLK D", "M") {
+    table : "H - : - : N , L H : - : H , L L : - : L";
+  }
+  pin (M) {
+    direction : internal;
+    function : "M";
+  }
+}

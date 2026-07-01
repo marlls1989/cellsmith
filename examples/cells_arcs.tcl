@@ -1,16 +1,6 @@
 define_arc \
 	-type combinational \
 	-prevector_pinlist {A B} \
-	-prevector {00 01} \
-	-pinlist {A B Q} \
-	-vector {R 1 R} \
-	-related_pin A \
-	-pin Q \
-	{ C2 }
-
-define_arc \
-	-type combinational \
-	-prevector_pinlist {A B} \
 	-prevector {00 10} \
 	-pinlist {A B Q} \
 	-vector {1 R R} \
@@ -19,8 +9,18 @@ define_arc \
 	{ C2 }
 
 define_arc \
+	-type combinational \
 	-prevector_pinlist {A B} \
-	-prevector {11 01} \
+	-prevector {00 01} \
+	-pinlist {A B Q} \
+	-vector {R 1 R} \
+	-related_pin A \
+	-pin Q \
+	{ C2 }
+
+define_arc \
+	-prevector_pinlist {A B} \
+	-prevector {00 10 11 01} \
 	-type combinational \
 	-pinlist {A B Q} \
 	-vector {0 F F} \
@@ -30,23 +30,13 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {A B} \
-	-prevector {11 10} \
+	-prevector {00 10 11 10} \
 	-type combinational \
 	-pinlist {A B Q} \
 	-vector {F 0 F} \
 	-related_pin A \
 	-pin Q \
 	{ C2 }
-
-define_arc \
-	-type combinational \
-	-prevector_pinlist {A B R} \
-	-prevector {000 010} \
-	-pinlist {A B R Q} \
-	-vector {R 1 0 R} \
-	-related_pin A \
-	-pin Q \
-	{ RCELEM2 }
 
 define_arc \
 	-type combinational \
@@ -59,18 +49,28 @@ define_arc \
 	{ RCELEM2 }
 
 define_arc \
-	-type async \
+	-type combinational \
 	-prevector_pinlist {A B R} \
-	-prevector {111} \
+	-prevector {000 010} \
 	-pinlist {A B R Q} \
-	-vector {1 1 F R} \
+	-vector {R 1 0 R} \
+	-related_pin A \
+	-pin Q \
+	{ RCELEM2 }
+
+define_arc \
+	-prevector_pinlist {A B R} \
+	-prevector {000 100 110} \
+	-type async \
+	-pinlist {A B R Q} \
+	-vector {1 1 R F} \
 	-related_pin R \
 	-pin Q \
 	{ RCELEM2 }
 
 define_arc \
 	-prevector_pinlist {A B R} \
-	-prevector {110 010} \
+	-prevector {000 100 110 010} \
 	-type combinational \
 	-pinlist {A B R Q} \
 	-vector {0 F 0 F} \
@@ -80,7 +80,7 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {A B R} \
-	-prevector {110 010} \
+	-prevector {000 100 110 010} \
 	-type async \
 	-pinlist {A B R Q} \
 	-vector {0 1 R F} \
@@ -90,7 +90,7 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {A B R} \
-	-prevector {110 100} \
+	-prevector {000 100 110 100} \
 	-type combinational \
 	-pinlist {A B R Q} \
 	-vector {F 0 0 F} \
@@ -100,7 +100,7 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {A B R} \
-	-prevector {110 100} \
+	-prevector {000 100 110 100} \
 	-type async \
 	-pinlist {A B R Q} \
 	-vector {1 0 R F} \
@@ -109,11 +109,11 @@ define_arc \
 	{ RCELEM2 }
 
 define_arc \
-	-prevector_pinlist {A B R} \
-	-prevector {110} \
 	-type async \
+	-prevector_pinlist {A B R} \
+	-prevector {000 100 110 111} \
 	-pinlist {A B R Q} \
-	-vector {1 1 R F} \
+	-vector {1 1 F R} \
 	-related_pin R \
 	-pin Q \
 	{ RCELEM2 }
@@ -121,7 +121,7 @@ define_arc \
 define_arc \
 	-type combinational \
 	-prevector_pinlist {S R} \
-	-prevector {01 00} \
+	-prevector {00} \
 	-pinlist {S R Q Qn} \
 	-vector {R 0 R X} \
 	-related_pin S \
@@ -131,16 +131,16 @@ define_arc \
 define_arc \
 	-type combinational \
 	-prevector_pinlist {S R} \
-	-prevector {01} \
+	-prevector {00} \
 	-pinlist {S R Q Qn} \
-	-vector {R 1 R X} \
-	-related_pin S \
-	-pin Q \
+	-vector {0 R X R} \
+	-related_pin R \
+	-pin Qn \
 	{ SR }
 
 define_arc \
 	-prevector_pinlist {S R} \
-	-prevector {10 00} \
+	-prevector {00} \
 	-type combinational \
 	-pinlist {S R Q Qn} \
 	-vector {0 R F X} \
@@ -150,37 +150,7 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {S R} \
-	-prevector {11} \
-	-type combinational \
-	-pinlist {S R Q Qn} \
-	-vector {F 1 F X} \
-	-related_pin S \
-	-pin Q \
-	{ SR }
-
-define_arc \
-	-type combinational \
-	-prevector_pinlist {S R} \
-	-prevector {10 00} \
-	-pinlist {S R Q Qn} \
-	-vector {0 R X R} \
-	-related_pin R \
-	-pin Qn \
-	{ SR }
-
-define_arc \
-	-type combinational \
-	-prevector_pinlist {S R} \
-	-prevector {10} \
-	-pinlist {S R Q Qn} \
-	-vector {1 R X R} \
-	-related_pin R \
-	-pin Qn \
-	{ SR }
-
-define_arc \
-	-prevector_pinlist {S R} \
-	-prevector {01 00} \
+	-prevector {00} \
 	-type combinational \
 	-pinlist {S R Q Qn} \
 	-vector {R 0 X F} \
@@ -189,8 +159,38 @@ define_arc \
 	{ SR }
 
 define_arc \
+	-type combinational \
 	-prevector_pinlist {S R} \
-	-prevector {11} \
+	-prevector {00 10} \
+	-pinlist {S R Q Qn} \
+	-vector {1 R X R} \
+	-related_pin R \
+	-pin Qn \
+	{ SR }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {S R} \
+	-prevector {00 01} \
+	-pinlist {S R Q Qn} \
+	-vector {R 1 R X} \
+	-related_pin S \
+	-pin Q \
+	{ SR }
+
+define_arc \
+	-prevector_pinlist {S R} \
+	-prevector {00 10 11} \
+	-type combinational \
+	-pinlist {S R Q Qn} \
+	-vector {F 1 F X} \
+	-related_pin S \
+	-pin Q \
+	{ SR }
+
+define_arc \
+	-prevector_pinlist {S R} \
+	-prevector {00 10 11} \
 	-type combinational \
 	-pinlist {S R Q Qn} \
 	-vector {1 F X F} \
@@ -212,16 +212,16 @@ define_arc \
 define_arc \
 	-type combinational \
 	-prevector_pinlist {A B} \
-	-prevector {01 11} \
+	-prevector {00} \
 	-pinlist {A B Qa Qb} \
-	-vector {1 F R X} \
+	-vector {0 R X R} \
 	-related_pin B \
-	-pin Qa \
+	-pin Qb \
 	{ MUT }
 
 define_arc \
 	-prevector_pinlist {A B} \
-	-prevector {10} \
+	-prevector {00 10} \
 	-type combinational \
 	-pinlist {A B Qa Qb} \
 	-vector {F 0 F X} \
@@ -231,7 +231,17 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {A B} \
-	-prevector {10 11} \
+	-prevector {00 01} \
+	-type combinational \
+	-pinlist {A B Qa Qb} \
+	-vector {0 F X F} \
+	-related_pin B \
+	-pin Qb \
+	{ MUT }
+
+define_arc \
+	-prevector_pinlist {A B} \
+	-prevector {00 10 11} \
 	-type combinational \
 	-pinlist {A B Qa Qb} \
 	-vector {F 1 F X} \
@@ -242,17 +252,7 @@ define_arc \
 define_arc \
 	-type combinational \
 	-prevector_pinlist {A B} \
-	-prevector {00} \
-	-pinlist {A B Qa Qb} \
-	-vector {0 R X R} \
-	-related_pin B \
-	-pin Qb \
-	{ MUT }
-
-define_arc \
-	-type combinational \
-	-prevector_pinlist {A B} \
-	-prevector {10 11} \
+	-prevector {00 10 11} \
 	-pinlist {A B Qa Qb} \
 	-vector {F 1 X R} \
 	-related_pin A \
@@ -260,22 +260,42 @@ define_arc \
 	{ MUT }
 
 define_arc \
-	-prevector_pinlist {A B} \
-	-prevector {01} \
 	-type combinational \
+	-prevector_pinlist {A B} \
+	-prevector {00 01 11} \
 	-pinlist {A B Qa Qb} \
-	-vector {0 F X F} \
+	-vector {1 F R X} \
 	-related_pin B \
-	-pin Qb \
+	-pin Qa \
 	{ MUT }
 
 define_arc \
 	-prevector_pinlist {A B} \
-	-prevector {01 11} \
+	-prevector {00 01 11} \
 	-type combinational \
 	-pinlist {A B Qa Qb} \
 	-vector {1 F X F} \
 	-related_pin B \
 	-pin Qb \
 	{ MUT }
+
+define_arc \
+	-prevector_pinlist {CLK D} \
+	-prevector {00} \
+	-type combinational \
+	-pinlist {CLK D Q} \
+	-vector {R 0 F} \
+	-related_pin CLK \
+	-pin Q \
+	{ DFF }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {CLK D} \
+	-prevector {00 01} \
+	-pinlist {CLK D Q} \
+	-vector {R 1 R} \
+	-related_pin CLK \
+	-pin Q \
+	{ DFF }
 

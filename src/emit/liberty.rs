@@ -1,6 +1,8 @@
-//! Emit a minimal Liberty fragment for a cell: input `pin` groups plus, per output, either a plain
-//! combinational `function` or — for a hysteretic (self-holding) output — a `statetable` whose
-//! next-state encodes the three regions as `H` (on) / `L` (off) / `N` (no-change = hold).
+//! Emit a minimal Liberty fragment for a cell: input `pin` groups, then per output and internal state
+//! node either a plain combinational `function` or — for a hysteretic (self-holding) signal — a
+//! `statetable` whose next-state encodes the three regions as `H` (on) / `L` (off) / `N`
+//! (no-change = hold). Internal state nodes are emitted as `direction : internal` pins and appear as
+//! internal-node columns in the state tables of the outputs that reference them.
 //!
 //! The fragment is a bare `cell (...) { ... }` group, not a full library wrapper: the user drops it
 //! into their own Liberate harness. Groups are built with `liberty-parse`'s `Group`/`Attribute`/`Value`
@@ -13,7 +15,7 @@ use liberty_parse::{
 };
 
 use crate::logic::regions::{state_regions, StateCube, StateRegions};
-use crate::model::AnalysedCell;
+use crate::model::{AnalysedCell, AnalysedOutput};
 
 /// Add a simple `name : value;` attribute to a group.
 ///
@@ -41,30 +43,40 @@ pub fn cell_liberty(cell: &AnalysedCell) -> String {
     out
 }
 
-/// Build the `cell` group: one input `pin` per primary input, then each output's pin (and, if
-/// hysteretic, its `statetable`).
+/// Build the `cell` group: one input `pin` per primary input, then each output pin, then each internal
+/// state node as a `direction : internal` pin — each with a `statetable` when hysteretic.
 fn cell_group(cell: &AnalysedCell) -> Group {
     let mut group = Group::new("cell", &cell.name);
 
     for input in &cell.inputs {
         group.subgroups.push(input_pin(input));
     }
-
     for output in &cell.outputs {
-        let sr = state_regions(output, &cell.inputs);
-        if sr.hysteretic {
-            group.subgroups.push(statetable_group(&sr, &output.name));
-            // The pin reads the internal state node of the same name (see the plan's open note on
-            // the exact internal-node wiring).
-            group.subgroups.push(output_pin(&output.name, &output.name));
-        } else {
-            group
-                .subgroups
-                .push(output_pin(&output.name, &function_sop(&sr)));
-        }
+        push_signal(&mut group, output, &cell.inputs, "output");
+    }
+    for internal in &cell.internals {
+        push_signal(&mut group, internal, &cell.inputs, "internal");
     }
 
     group
+}
+
+/// Emit a signal's pin (and, if hysteretic, its `statetable`). `direction` is `"output"` for an
+/// external pin or `"internal"` for an internal state node — modelled in the state table exactly like
+/// an output, but with no external connection.
+fn push_signal(group: &mut Group, sig: &AnalysedOutput, inputs: &[String], direction: &str) {
+    let sr = state_regions(sig, inputs);
+    if sr.hysteretic {
+        group.subgroups.push(statetable_group(&sr, &sig.name));
+        // A hysteretic pin reads the state node of the same name defined by its statetable.
+        group
+            .subgroups
+            .push(signal_pin(&sig.name, direction, &sig.name));
+    } else {
+        group
+            .subgroups
+            .push(signal_pin(&sig.name, direction, &function_sop(&sr)));
+    }
 }
 
 /// `pin (<name>) { direction : input; }`
@@ -74,13 +86,13 @@ fn input_pin(name: &str) -> Group {
     pin
 }
 
-/// `pin (<name>) { direction : output; function : "<func>"; }`
-fn output_pin(name: &str, func: &str) -> Group {
+/// `pin (<name>) { direction : <output|internal>; function : "<func>"; }`
+fn signal_pin(name: &str, direction: &str, func: &str) -> Group {
     let mut pin = Group::new("pin", name);
     set_attr(
         &mut pin,
         "direction",
-        Value::Expression("output".to_owned()),
+        Value::Expression(direction.to_owned()),
     );
     set_attr(&mut pin, "function", Value::String(func.to_owned()));
     pin
@@ -191,6 +203,41 @@ Q = "A*B + Q*(A+B)"
         assert!(lib.contains(": - : N")); // hold
         assert!(lib.contains("pin (Q)"));
         assert!(lib.contains("function : \"Q\";"));
+    }
+
+    #[test]
+    fn dff_internal_master_is_an_internal_pin_with_statetable() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        // The slave Q's statetable carries the internal master M as an input node.
+        assert!(frag.contains("statetable (\"CLK D M\", \"Q\")"));
+        // The master is an internal pin with its own statetable.
+        assert!(frag.contains("statetable (\"CLK D\", \"M\")"));
+        assert!(frag.contains("pin (M)"));
+        assert!(frag.contains("direction : internal;"));
+        // The fragment still round-trips through liberty-parse.
+        let wrapped = format!("library (test) {{\n{frag}}}\n");
+        let lib = liberty_parse::parse_lib(&wrapped).expect("emitted Liberty must parse");
+        let cellg = lib
+            .iter()
+            .flat_map(|g| g.subgroups.iter())
+            .find(|g| g.type_ == "cell" && g.name == "DFF")
+            .expect("DFF cell present");
+        assert!(cellg
+            .subgroups
+            .iter()
+            .any(|g| g.type_ == "pin" && g.name == "M"));
     }
 
     #[test]

@@ -1,8 +1,8 @@
 # lobsterate
 
 Generate Cadence Liberate **transition arcs** (with prevectors) for logic cells — including
-state-holding / hysteretic cells (C-elements, latches, cross-coupled pairs) that Liberate cannot
-auto-detect on non-standard nodes (e.g. nMOS).
+state-holding / hysteretic cells (C-elements, latches, cross-coupled pairs, mutexes, and flip-flops
+with internal state) that Liberate cannot auto-detect on non-standard nodes (e.g. nMOS).
 
 lobsterate is an arc **generator**, not a characteriser: it derives the arcs, the behavioural model
 and a Liberty stub; Liberate still does the actual characterisation inside your existing harness. It
@@ -16,49 +16,58 @@ For every cell in the input spec, lobsterate emits three artifacts:
 | Artifact | File | Contents |
 |----------|------|----------|
 | Liberate arcs | `<name>_arcs.tcl` | `define_arc` blocks with prevector walks and `R/F/1/0/X` vectors |
-| Behavioural Verilog | `<name>.v` | one sequential UDP `primitive` per output (three-valued next-state table) + a `celldefine`d wrapper `module` with a `specify` block |
-| Liberty stub | `<name>.lib` | a bare `cell (...)` fragment: input `pin`s plus, per output, a `statetable` (hysteretic) or a plain `function` (combinational) |
+| Behavioural Verilog | `<name>.v` | one sequential UDP `primitive` per signal (outputs + internal state nodes, three-valued next-state table) + a `celldefine`d wrapper `module` (internals as internal `wire`s) with a `specify` block |
+| Liberty stub | `<name>.lib` | a bare `cell (...)` fragment: input `pin`s, output/internal `pin`s (`direction : internal` for state nodes), each with a `statetable` (hysteretic) or a plain `function` (combinational) |
 
 ## The model
 
-A cell is a **name**, an ordered list of **inputs**, and a Boolean **function per output**. The one
-rule that makes state-holding cells work: **any output name referenced inside a function is that
-output's feedback/delayed value.** This covers self-coupled cells (a C-element referencing `Q`) and
-cross-coupled cells (an SR pair referencing each other) with no special declarations.
+A cell is a **name**, an ordered list of **inputs**, a Boolean **function per output**, and optionally
+some **internal** functions. Two rules make state-holding cells work with no special ceremony:
 
-Each output is split into three regions by projecting out its feedback variables:
+- **any signal name referenced inside a function is that signal's feedback/delayed value** — so a
+  C-element referencing `Q`, an SR pair referencing each other, and a flop's slave referencing its
+  master are all just ordinary references;
+- an **internal** signal (declared under `[cell.internal]`) is a first-class **state node** that other
+  functions may reference, but which has **no external pin** — it models hidden state like a
+  flip-flop's master latch.
 
-- `on`   — forced high regardless of held state,
-- `off`  — forced low regardless of held state,
-- `hold` — state-dependent, the **hysteretic** region (encoded as `-` no-change in Verilog, `N` in the
-  Liberty state table). A purely combinational output has an empty `hold` and degenerates cleanly.
+lobsterate treats a cell as an **asynchronous state machine** over `inputs × state-variables`, where a
+*state variable* is any signal (output or internal) that sits on a feedback cycle. Combinational
+signals are folded away; only true state remains as machine state.
 
-### Interlocked cells (mutexes / arbiters)
+### Arcs by state-machine exploration
 
-When outputs reference a *different* output (genuine cross-coupling, e.g. a mutex `Qa = !Qb·A`,
-`Qb = !Qa·B`), the **arc derivation first collapses the coupling**: each output's function has the
-other outputs composed away (their functions substituted in) until it is a self-holding function of
-primary inputs plus its own feedback only. That collapse is what makes the arcs physically correct:
+Timing arcs are derived by exploring that state machine, not by any symbolic region collapse:
 
-- **related pins are always primary inputs** — no other output survives to become one (a
-  `-related_pin Qb` on `Qa` would be invalid);
-- **impossible output→output arcs are never generated** — the mutual-exclusion / deadlock states
-  (one grant holds the other low) fall into the `hold` region, so no arc is emitted for them;
-- **a forcing input cascades** — a reset that reaches an output only *through* the coupling (with
-  `Qb = Sb + !Qa·B`, `Sb` forces `Qb` high which forces `Qa` low) appears in the collapsed function,
-  so both `Sb→Qb` and the cascaded `Sb→Qa` arcs are produced.
+1. each state variable's next-state δ is built (folding away combinational signals but **keeping every
+   state cycle** — a tight loop is legitimate held state, never substituted);
+2. a breadth-first search runs from the reset-stable states, stepping **one input at a time** and
+   letting the state settle;
+3. wherever a single input toggle flips an **output**, an arc is emitted.
 
-Such a cell is also **bistable**: under some input condition (`A·B` for the plain mutex) the joint
-next-state has two stable states and the physical cell picks one non-deterministically
+This gives exactly the right behaviour for free:
+
+- **related pins are always primary inputs** — outputs and internal nodes are never arc sources
+  (a `-related_pin Qb` on `Qa` would be invalid); they are established *indirectly* by the prevector,
+  whose input sequence drives every state variable — internal ones included — into the measured edge's
+  start state (e.g. a flop's `CLK→Q` prevector first drives `D` to load the master);
+- **impossible arcs are never generated** — a mutex's deadlock/metastable states oscillate instead of
+  settling, so the search simply drops them; there is no fabricated `Qb→Qa` arc;
+- **forcing inputs cascade naturally** — with `Qb = Sb + !Qa·B`, toggling `Sb` flips both `Qb` (rise)
+  and, through the coupling, `Qa` (fall); the search discovers both.
+
+A cross-coupled cell is also **bistable**: under some input condition (`A·B` for the plain mutex) the
+joint next-state has two stable states and the physical cell picks one non-deterministically
 (metastability). lobsterate **detects** this, annotates the arcs and Liberty stub with the metastable
 condition and the mutually-exclusive grants, and warns if the cell did not declare it. Declare the
 grants with `arbitrate = ["Qa", "Qb"]` to acknowledge the interlock (validated against detection). The
 arbitration *choice* itself is a physical property Liberate characterises separately — it is not, and
 cannot be, expressed as a deterministic timing arc.
 
-(The Verilog UDP and Liberty `statetable` keep the *original* function with the other output as an
-input column — that is the correct instantaneous functional model, distinct from the collapsed
-self-holding view used for timing arcs.)
+The Verilog UDP and Liberty `statetable` are the **functional** view: each keeps the other referenced
+state signals (other outputs *and* internal nodes) as input/internal-node columns and projects out
+only the signal's own feedback. Internal nodes appear as internal `wire`s in the Verilog and
+`direction : internal` pins in the Liberty — modelled, but not exposed as ports.
 
 ## Input format
 
@@ -92,10 +101,19 @@ arbitrate = ["Qa", "Qb"]       # optional: declare the mutually-exclusive grants
 [cell.outputs]                 #   -> validated against detection; silences the interlock warning
 Qa = "!Qb * A"                 # genuine cross-coupling: each grant references the *other*
 Qb = "!Qa * B"
+
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+[cell.internal]                # internal state node: referenceable, but emits no external pin
+M = "!CLK*D + CLK*M"           #   the master latch (transparent low)
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"           # the slave references the internal master; CLK→Q arcs are discovered,
+                               #   and each prevector drives D to load the master first
 ```
 
 Function syntax: `*` (AND), `+` (OR), `!` (NOT), `1`/`0` (constants), parentheses. Every variable in a
-function must be a declared input or one of the cell's own outputs.
+function must be a declared input, an output, or an internal signal of the cell.
 
 ## Usage
 
@@ -181,13 +199,15 @@ Deliberate divergences from the hsNCL reference: pins are emitted in **declarati
 alphabetically), the `vclk`/alias/library layer is dropped, and don't-care cubes are factored via BDD
 paths rather than Quine–McCluskey — so a function may render correctly but non-minimally.
 
-Interlocked cells (mutexes / arbiters) are supported: the arc path **collapses the cross-coupling**
-(composing each output into a self-holding function of primary inputs) so related pins are always
-inputs, impossible output→output arcs are never generated, and input-forced transitions cascade
-through the coupling. The metastable arbitration point is detected and annotated; the arbitration
-*choice* is left to Liberate's physical characterisation — timing arcs cannot express a
-non-deterministic next-state, so lobsterate documents it rather than fabricating deterministic
-behaviour for it.
+State-holding cells of all shapes are supported by the **state-machine** arc engine: self-holding
+C-elements and latches, cross-coupled SR pairs, mutexes / arbiters, and cells with **internal state
+nodes** (a master/slave flip-flop). Because arcs are found by exploring the settled state machine —
+never by collapsing feedback — related pins are always primary inputs, impossible arcs are simply
+never reached, input-forced transitions cascade naturally, and a prevector drives every state
+variable (internal ones included) into the measured start state. The metastable arbitration point is
+detected and annotated; the arbitration *choice* is left to Liberate's physical characterisation —
+timing arcs cannot express a non-deterministic next-state, so lobsterate documents it rather than
+fabricating deterministic behaviour for it.
 
 ## Licence
 

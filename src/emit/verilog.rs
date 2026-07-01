@@ -14,16 +14,14 @@ use crate::model::AnalysedCell;
 /// Fixed rise/fall path delay stamped on every `specify` arc, matching the hsNCL template.
 const PATH_DELAY: &str = "(0.1, 0.1)";
 
-/// The full Verilog model for a cell: the per-output UDP primitives followed by the wrapper module.
+/// The full Verilog model for a cell: a UDP primitive per signal (outputs **and** internal state
+/// nodes) followed by the wrapper module. Internal nodes are modelled exactly like outputs, but appear
+/// as internal `wire`s in the wrapper rather than as module ports.
 pub fn cell_verilog(cell: &AnalysedCell) -> String {
     let mut out = String::new();
-    for output in &cell.outputs {
-        let sr = state_regions(output, &cell.inputs);
-        out.push_str(&primitive(
-            &prim_name(cell, &output.name),
-            &output.name,
-            &sr,
-        ));
+    for sig in cell.signals() {
+        let sr = state_regions(sig, &cell.inputs);
+        out.push_str(&primitive(&prim_name(cell, &sig.name), &sig.name, &sr));
     }
     out.push_str(&wrapper_module(cell));
     out
@@ -104,6 +102,8 @@ fn pattern(cube: &StateCube) -> String {
 /// input to every output, and instantiates each output pin's UDP with that pin's own column set.
 fn wrapper_module(cell: &AnalysedCell) -> String {
     let outputs: Vec<String> = cell.outputs.iter().map(|o| o.name.clone()).collect();
+    let internals: Vec<String> = cell.internals.iter().map(|o| o.name.clone()).collect();
+    // Ports are the external face only: outputs and primary inputs. Internal state nodes are not ports.
     let ports = outputs
         .iter()
         .cloned()
@@ -117,6 +117,10 @@ fn wrapper_module(cell: &AnalysedCell) -> String {
     if !cell.inputs.is_empty() {
         s.push_str(&format!("input  {};\n", cell.inputs.join(", ")));
     }
+    // Internal state nodes are internal wires driven by their own UDP instance.
+    if !internals.is_empty() {
+        s.push_str(&format!("wire   {};\n", internals.join(", ")));
+    }
 
     s.push_str("specify\n");
     for input in &cell.inputs {
@@ -126,14 +130,15 @@ fn wrapper_module(cell: &AnalysedCell) -> String {
     }
     s.push_str("endspecify\n");
 
-    for output in &cell.outputs {
-        let sr = state_regions(output, &cell.inputs);
-        let name = prim_name(cell, &output.name);
+    // Instantiate every signal's UDP (outputs and internals); an internal drives its own wire.
+    for sig in cell.signals() {
+        let sr = state_regions(sig, &cell.inputs);
+        let name = prim_name(cell, &sig.name);
         // Constant pins instantiate with just their own port; sequential pins add their columns.
         let args = if sr.hold.is_empty() && (sr.on.is_empty() || sr.off.is_empty()) {
-            output.name.clone()
+            sig.name.clone()
         } else {
-            std::iter::once(output.name.clone())
+            std::iter::once(sig.name.clone())
                 .chain(sr.cols.iter().cloned())
                 .collect::<Vec<_>>()
                 .join(", ")
@@ -199,6 +204,34 @@ Qn = "R + Qn*!S"
         assert!(v.contains("primitive SR_Q("));
         assert!(v.contains("primitive SR_Qn("));
         assert!(v.contains("module SR(Q, Qn, S, R);"));
+    }
+
+    #[test]
+    fn dff_internal_master_is_a_wire_not_a_port() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#,
+        );
+        let v = cell_verilog(&cell);
+        eprintln!("{v}");
+        // A UDP for the internal master and for the slave; the slave takes M as an input column.
+        assert!(v.contains("primitive DFF_M(M, CLK, D);"));
+        assert!(v.contains("primitive DFF_Q(Q, CLK, D, M);"));
+        // Module ports are the external face only; M is an internal wire, both UDPs instantiated.
+        assert!(v.contains("module DFF(Q, CLK, D);"));
+        assert!(v.contains("wire   M;"));
+        assert!(v.contains("DFF_M u_DFF_M (M, CLK, D);"));
+        assert!(v.contains("DFF_Q u_DFF_Q (Q, CLK, D, M);"));
+        // M is never declared as a module output.
+        assert!(!v.contains("output Q, M"));
+        assert!(!v.contains("module DFF(Q, M,"));
     }
 
     #[test]

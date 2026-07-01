@@ -30,3 +30,11 @@ arbitrate = ["Qa", "Qb"]       # mutex/arbiter: grants are mutually exclusive, m
 [cell.outputs]                 #   -> arcs condition each grant on the other; arbitration is annotated
 Qa  = "!Qb * A"
 Qb  = "!Qa * B"
+
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+[cell.internal]                # internal master latch: a state node with no external pin
+M = "!CLK*D + CLK*M"           #   transparent when CLK low, holds when high
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"           # slave: captures M on the rising edge (M established by the prevector)

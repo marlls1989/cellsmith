@@ -112,7 +112,7 @@ fn mutex_generates_all_three_artifacts() {
     let cell = analyse_one(MUT);
 
     // Arcs: no crash, arbitration documented, related pins are inputs only.
-    let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default()).unwrap();
+    let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
     assert!(tcl.contains("# arbitration: A*B metastable"));
     assert!(!tcl.contains("-related_pin Qa"));
     assert!(!tcl.contains("-related_pin Qb"));
@@ -141,8 +141,8 @@ fn mutex_generates_all_three_artifacts() {
 #[test]
 fn when_flag_reaches_arcs() {
     let cell = analyse_one(C2);
-    let off = cell_arcs_tcl(&cell, ArcsTclOptions::default()).unwrap();
-    let on = cell_arcs_tcl(&cell, ArcsTclOptions { emit_when: true }).unwrap();
+    let off = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+    let on = cell_arcs_tcl(&cell, ArcsTclOptions { emit_when: true });
     assert!(!off.contains("-when"));
     assert!(on.contains("-when"));
 }
