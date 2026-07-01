@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::expr::{self, ParseError};
 use crate::logic::confluence::{self, Constraint};
-use crate::logic::interlock::{self, Arbitration};
+use crate::logic::interlock::Arbitration;
 
 /// The whole input file: a list of `[[cell]]` tables.
 #[derive(Debug, Deserialize)]
@@ -212,10 +212,6 @@ impl Cell {
             });
         }
 
-        // Detect arbitration/metastability over all state signals (purely algorithmic — see
-        // [`interlock`]).
-        let arbitration = interlock::detect(&self.inputs, &all);
-
         let internals = all.split_off(n_outputs);
         let outputs = all;
 
@@ -225,14 +221,16 @@ impl Cell {
             outputs,
             internals,
             async_pins: self.async_pins.clone(),
-            arbitration,
+            arbitration: Vec::new(),
             clock_pins: self.clock.clone(),
             constraints: Vec::new(),
             constraint_arcs_declared: self.constraint_arcs,
         };
-        // Detect all constraint hazards (setup/hold, non_seq) over the state machine. Clock suppression
-        // and emission gating are applied downstream (see [`confluence::resolve`]).
-        analysed.constraints = confluence::cell_constraints(&analysed);
+        // Derive all hazards (setup/hold, non_seq, arbitration) from one confluence pass over the
+        // reachable state machine. Clock suppression and emission gating are applied downstream.
+        let hazards = confluence::cell_hazards(&analysed);
+        analysed.constraints = hazards.constraints;
+        analysed.arbitration = hazards.arbitration;
         Ok(analysed)
     }
 }

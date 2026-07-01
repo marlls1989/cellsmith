@@ -1,4 +1,4 @@
-//! Constraint-arc derivation from **confluence** of the asynchronous state machine.
+//! Constraint-arc and arbitration derivation from **confluence** of the asynchronous state machine.
 //!
 //! A delay arc ([`super::arcs`]) records a single input edge that *causes* an output edge. A
 //! **constraint** arc instead records that two inputs must not change too close together — a setup/hold
@@ -8,8 +8,27 @@
 //!
 //! For a reachable stable state `s` and an unordered input pair `{x, y}` (all other inputs held): settle
 //! `x` then `y` (`s_xy`) and `y` then `x` (`s_yx`). If either oscillates or `s_xy == s_yx`, the pair is
-//! **confluent** at `s` — no hazard. Otherwise it is **non-confluent**: the settled state depends on
-//! which edge lands first — a timing hazard.
+//! **confluent** at `s` — no hazard. Otherwise the state has diverged, but global divergence alone is not
+//! the verdict: it must *interact* with the racing pair in the immediate combinational neighbourhood —
+//! some diverging state variable `w` (`s_xy.value_of(w) != s_yx.value_of(w)`) must have **both** `x` and
+//! `y` in the direct support of its transition function `δ_w`. [`resolve::delta`] composes through
+//! combinational logic only, so a state variable stays a variable in `δ_w` — both pins in `δ_w`'s direct
+//! support means the pins meet within one combinational neighbourhood. A divergence mediated only across
+//! a latch boundary — `δ_w` does not itself see both pins — is a settled snapshot carried across that
+//! latch (e.g. the two domains of a dual-clock synchroniser), design-tolerated rather than a pin-pair
+//! hazard.
+//!
+//! The same pass also detects **arbitration/metastability**: probed from `s`, the pair applied
+//! *simultaneously* (or, degenerately, a single input toggle) can drive the state into a **periodic
+//! oscillation** rather than a fixpoint ([`machine::settle_or_cycle`] returning the cycle instead of
+//! settling). That is reported as an [`Arbitration`] — distinct from order-dependence: a mutex *is*
+//! order-dependent by design (that is its function as an arbiter); its hazard is the oscillation at
+//! simultaneity, not the ordinary settling of one request before the other. For the two-input case, that
+//! same simultaneous-toggle oscillation is *also* filed as the pair's [`Constraint`] (kind still decided
+//! by the declared-clock rule below): metastability at simultaneity **is** the physical origin of the
+//! pair's timing constraint, and it is what supplies one for an arbitrating pair (a mutex's `A`/`B`)
+//! whose order-divergence the combinational-neighbourhood filter above discards — the grant latches that
+//! diverge do not have both racing pins in their own `δ`'s direct support.
 //!
 //! A hazard's **kind is decided solely by the declared clock**, not by the geometry of the race: a pair
 //! containing exactly one declared clock is a directed **setup/hold** (clock ← data — the DFF's `D`
@@ -21,11 +40,12 @@
 //! The reachable states and the prevector into `s` come from the shared [`machine::explore`], the same
 //! exploration the delay-arc BFS uses.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use espresso_logic::{bdd_builder, Minterm, Symbol};
 
 use crate::logic::arcs::Edge;
+use crate::logic::interlock::{self, Arbitration};
 use crate::logic::{machine, resolve};
 use crate::model::{AnalysedCell, AnalysedOutput};
 
@@ -125,13 +145,36 @@ fn constraint_key(c: &Constraint) -> String {
     }
 }
 
-/// Derive constraint arcs for a cell by testing pairwise input-order confluence of its state machine.
-/// Empty for confluent cells (ordinary combinational / self-holding gates without arbitration).
-pub fn cell_constraints(cell: &AnalysedCell) -> Vec<Constraint> {
+/// The hazards of a cell from one confluence pass over the reachable state machine: order-dependence
+/// constraints and simultaneity arbitrations.
+#[derive(Debug, Default)]
+pub struct Hazards {
+    pub constraints: Vec<Constraint>,
+    pub arbitration: Vec<Arbitration>,
+}
+
+/// The state variables that oscillate across a `settle_or_cycle` cycle (`value_of` differs between any
+/// two cycle nodes — `Some(v)` vs `None` counts as differing), in `state_vars` declaration order.
+fn oscillating_group(cycle: &[Minterm<Symbol>], state_vars: &[String]) -> Vec<String> {
+    state_vars
+        .iter()
+        .filter(|v| {
+            let mut vals = cycle.iter().map(|m| m.value_of(v.as_str()));
+            let first = vals.next();
+            vals.any(|val| Some(val) != first)
+        })
+        .cloned()
+        .collect()
+}
+
+/// Derive every hazard for a cell — constraints and arbitrations — by testing pairwise input-order
+/// confluence of its state machine. Empty for confluent cells (ordinary combinational / self-holding
+/// gates without arbitration).
+pub fn cell_hazards(cell: &AnalysedCell) -> Hazards {
     let inputs = &cell.inputs;
     let n = inputs.len();
     if n < 2 {
-        return Vec::new(); // a constraint relates two inputs
+        return Hazards::default(); // a hazard relates two inputs
     }
 
     let signals: Vec<&AnalysedOutput> = cell.signals().collect();
@@ -144,10 +187,10 @@ pub fn cell_constraints(cell: &AnalysedCell) -> Vec<Constraint> {
         .collect();
     let k = state_vars.len();
     if k == 0 {
-        return Vec::new(); // no state to latch ⇒ always confluent
+        return Hazards::default(); // no state to latch ⇒ always confluent
     }
     if n + k > 22 {
-        return Vec::new(); // combinatorial blow-up guard (matches arcs::cell_arcs)
+        return Hazards::default(); // combinatorial blow-up guard (matches arcs::cell_arcs)
     }
 
     let builder = bdd_builder!();
@@ -158,6 +201,12 @@ pub fn cell_constraints(cell: &AnalysedCell) -> Vec<Constraint> {
     let deltas: Vec<machine::Delta<_, _>> = state_vars
         .iter()
         .map(|v| (v.clone(), resolve::delta(v, &bdds, &deps, &state_set)))
+        .collect();
+    // The direct support of every state variable's δ — precomputed once, used by the
+    // combinational-neighbourhood divergence filter below (see the module doc).
+    let support: BTreeMap<String, BTreeSet<String>> = deltas
+        .iter()
+        .map(|(n, d)| (n.clone(), d.variables().map(|v| v.as_str().to_string()).collect()))
         .collect();
 
     let full_names: Vec<String> = inputs.iter().cloned().chain(state_vars.clone()).collect();
@@ -178,16 +227,18 @@ pub fn cell_constraints(cell: &AnalysedCell) -> Vec<Constraint> {
         .collect();
     let ex = machine::explore(&deltas, &seed_funcs, &full_header, inputs, &state_vars);
 
-    let settle_toggle = |node: &Minterm<Symbol>, name: &str| -> Option<Minterm<Symbol>> {
+    let settle_toggle = |node: &Minterm<Symbol>,
+                          names: &[&str]|
+     -> Result<Minterm<Symbol>, Vec<Minterm<Symbol>>> {
         let toggled = machine::node_from_opt(&full_header, |nm| {
             let cur = node.value_of(nm);
-            if nm == name {
+            if names.contains(&nm) {
                 cur.map(|v| !v)
             } else {
                 cur
             }
         });
-        machine::settle(&deltas, &full_header, &toggled)
+        machine::settle_or_cycle(&deltas, &full_header, &toggled)
     };
 
     let path_to = |node: &Minterm<Symbol>| -> Vec<Minterm<Symbol>> {
@@ -209,21 +260,133 @@ pub fn cell_constraints(cell: &AnalysedCell) -> Vec<Constraint> {
     // Dedup by canonical key, keeping the shortest prevector; BTreeMap gives deterministic output order.
     let mut found: BTreeMap<String, Constraint> = BTreeMap::new();
 
+    // Dedup by `group|condition`, keeping the FIRST insertion (BFS order over `ex.order` → the earliest
+    // reachable state at which the arbitration is observed).
+    let mut arbitration: BTreeMap<String, Arbitration> = BTreeMap::new();
+    let mut record_arbitration =
+        |node: &Minterm<Symbol>, names: &[&str], group: Vec<String>, stable: Vec<Minterm<Symbol>>| {
+            let toggled = machine::node_from_opt(&full_header, |nm| {
+                let cur = node.value_of(nm);
+                if names.contains(&nm) {
+                    cur.map(|v| !v)
+                } else {
+                    cur
+                }
+            });
+            let condition = toggled.project_onto(&input_header);
+            let key = format!("{}|{}", group.join(","), interlock::literals_str(&condition));
+            arbitration
+                .entry(key)
+                .or_insert_with(|| Arbitration {
+                    group,
+                    condition,
+                    stable,
+                });
+        };
+
     for s in &ex.order {
         for i in 0..n {
             for j in (i + 1)..n {
                 let x = &inputs[i];
                 let y = &inputs[j];
 
-                let (Some(s_x), Some(s_y)) = (settle_toggle(s, x), settle_toggle(s, y)) else {
+                let r_x = settle_toggle(s, &[x.as_str()]);
+                let r_y = settle_toggle(s, &[y.as_str()]);
+
+                // Single-toggle oscillation capture: a lone input toggle that never settles is itself an
+                // arbitration (no competing order to report — `stable` is empty).
+                if let Err(cycle) = &r_x {
+                    let group = oscillating_group(cycle, &state_vars);
+                    record_arbitration(s, &[x.as_str()], group, Vec::new());
+                }
+                if let Err(cycle) = &r_y {
+                    let group = oscillating_group(cycle, &state_vars);
+                    record_arbitration(s, &[y.as_str()], group, Vec::new());
+                }
+
+                // Simultaneous probe: x and y toggled together. Oscillation here is the mutex/arbiter
+                // case proper — the pair asserted at once, driving the state into a periodic cycle.
+                let r_sim = settle_toggle(s, &[x.as_str(), y.as_str()]);
+                if let Err(cycle) = &r_sim {
+                    let group = oscillating_group(cycle, &state_vars);
+                    let group_header = machine::header(&group);
+                    let mut stable_set: BTreeSet<Minterm<Symbol>> = BTreeSet::new();
+                    if let Ok(sx) = &r_x {
+                        if let Ok(sxy) = settle_toggle(sx, &[y.as_str()]) {
+                            stable_set.insert(sxy.project_onto(&group_header));
+                        }
+                    }
+                    if let Ok(sy) = &r_y {
+                        if let Ok(syx) = settle_toggle(sy, &[x.as_str()]) {
+                            stable_set.insert(syx.project_onto(&group_header));
+                        }
+                    }
+                    record_arbitration(
+                        s,
+                        &[x.as_str(), y.as_str()],
+                        group,
+                        stable_set.into_iter().collect(),
+                    );
+
+                    // Metastability at simultaneity is itself the pair's timing-constraint origin: file
+                    // it into the same dedup map the divergence path below uses, built exactly the same
+                    // way (kind by the declared-clock rule, edges at `s`, prevector = path_to(s)). This
+                    // supplies an arbitrating pair's (e.g. a mutex's) constraint, replacing the
+                    // divergence-derived one the combinational-neighbourhood filter discards for it.
+                    let cons = if is_clock(x) ^ is_clock(y) {
+                        let (clk, data) = if is_clock(x) { (x, y) } else { (y, x) };
+                        Constraint {
+                            kind: ConstraintKind::SetupHold,
+                            related: clk.clone(),
+                            related_edge: edge_from(s, clk),
+                            pin: data.clone(),
+                            pin_edge: edge_from(s, data),
+                            prevector: path_to(s),
+                        }
+                    } else {
+                        Constraint {
+                            kind: ConstraintKind::NonSeq,
+                            related: x.clone(),
+                            related_edge: edge_from(s, x),
+                            pin: y.clone(),
+                            pin_edge: edge_from(s, y),
+                            prevector: path_to(s),
+                        }
+                    };
+                    let key = constraint_key(&cons);
+                    let shorter = found
+                        .get(&key)
+                        .is_none_or(|e| cons.prevector.len() < e.prevector.len());
+                    if shorter {
+                        found.insert(key, cons);
+                    }
+                }
+
+                let (Some(s_x), Some(s_y)) = (r_x.as_ref().ok(), r_y.as_ref().ok()) else {
                     continue; // a single toggle oscillates → treat as confluent (no constraint)
                 };
-                let (Some(s_xy), Some(s_yx)) = (settle_toggle(&s_x, y), settle_toggle(&s_y, x))
-                else {
+                let (Some(s_xy), Some(s_yx)) = (
+                    settle_toggle(s_x, &[y.as_str()]).ok(),
+                    settle_toggle(s_y, &[x.as_str()]).ok(),
+                ) else {
                     continue;
                 };
                 if s_xy == s_yx {
                     continue; // confluent at this state — no hazard
+                }
+
+                // Global divergence is not enough: it must interact with {x, y} in the immediate
+                // combinational neighbourhood — some state variable that actually diverges between the
+                // two settle orders must have BOTH x and y in the direct support of its own δ. Otherwise
+                // the divergence is a settled snapshot mediated across a latch boundary (e.g. a
+                // dual-clock synchroniser's two domains), not a pin-pair hazard.
+                let interacts = state_vars.iter().any(|w| {
+                    s_xy.value_of(w.as_str()) != s_yx.value_of(w.as_str())
+                        && support[w].contains(x.as_str())
+                        && support[w].contains(y.as_str())
+                });
+                if !interacts {
+                    continue; // divergence real but latch-mediated — no constraint
                 }
 
                 // Non-confluent ⇒ a hazard. Its kind is decided solely by the declared clock: a pair
@@ -263,7 +426,10 @@ pub fn cell_constraints(cell: &AnalysedCell) -> Vec<Constraint> {
         }
     }
 
-    found.into_values().collect()
+    Hazards {
+        constraints: found.into_values().collect(),
+        arbitration: arbitration.into_values().collect(),
+    }
 }
 
 #[cfg(test)]
@@ -292,7 +458,7 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 "#,
         );
-        let cons = cell_constraints(&cell);
+        let cons = cell_hazards(&cell).constraints;
         eprintln!("DFF constraints: {cons:#?}");
         assert!(
             cons.iter().all(|c| c.kind == ConstraintKind::SetupHold),
@@ -320,7 +486,7 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 "#,
         );
-        let cons = cell_constraints(&cell);
+        let cons = cell_hazards(&cell).constraints;
         assert!(!cons.is_empty());
         assert!(
             cons.iter().all(|c| c.kind == ConstraintKind::NonSeq),
@@ -330,8 +496,11 @@ Q = "CLK*M + !CLK*Q"
 
     #[test]
     fn mutex_has_non_seq_between_requests() {
-        // Cross-coupled mutex: A and B race symmetrically — a non-sequential (arbitration) constraint,
-        // kept because the divergence is on the interlocked grant outputs.
+        // Cross-coupled mutex: A and B race symmetrically. Their order-divergence is on the interlocked
+        // grant outputs (Qa/Qb), neither of which has *both* A and B in its own δ's direct support, so
+        // the combinational-neighbourhood filter discards that divergence-derived constraint — but the
+        // simultaneous A*B toggle drives the state into oscillation (arbitration), and that metastability
+        // is itself filed as the pair's non_seq constraint.
         let cell = analyse(
             r#"
 [[cell]]
@@ -342,7 +511,7 @@ Qa = "!Qb * A"
 Qb = "!Qa * B"
 "#,
         );
-        let cons = cell_constraints(&cell);
+        let cons = cell_hazards(&cell).constraints;
         eprintln!("MUT constraints: {cons:#?}");
         assert!(
             cons.iter().any(|c| c.kind == ConstraintKind::NonSeq
@@ -370,7 +539,7 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        let cons = cell_constraints(&cell);
+        let cons = cell_hazards(&cell).constraints;
         eprintln!("C2 constraints: {cons:#?}");
         assert!(
             cons.iter().any(|c| c.kind == ConstraintKind::NonSeq
@@ -394,11 +563,47 @@ Q = "S + Q*!R"
 Qn = "R + Qn*!S"
 "#,
         );
-        let cons = cell_constraints(&cell);
+        let cons = cell_hazards(&cell).constraints;
         eprintln!("SR constraints: {cons:#?}");
         assert!(
             cons.iter().any(|c| c.kind == ConstraintKind::NonSeq),
             "expected a non_seq hazard between S and R, got {cons:?}"
+        );
+    }
+
+    #[test]
+    fn latch_mediated_divergence_is_not_a_constraint() {
+        // Two-domain sampling chain: M1 (transparent when C1 is low) samples D; Q (transparent when C2
+        // is low) samples M1. No clocks declared, so every real hazard here is NonSeq. A (C1, C2)
+        // order-divergence is real (e.g. whether Q ends up latching M1's old value or D's new one
+        // depends on whether C2 or C1 closes first) but is mediated only across the M1↔Q latch
+        // boundary: neither δ_M1 (support {C1, D, M1}) nor δ_Q (support {C2, M1, Q}) has both C1 and C2
+        // in its own direct support, so it must be filtered. The (C1, D) hazard is direct — δ_M1 has
+        // both C1 and D — and must survive.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "SYNC2"
+inputs = ["C1", "C2", "D"]
+[cell.internal]
+M1 = "!C1*D + C1*M1"
+[cell.outputs]
+Q = "!C2*M1 + C2*Q"
+"#,
+        );
+        let cons = cell_hazards(&cell).constraints;
+        eprintln!("SYNC2 constraints: {cons:#?}");
+        assert!(
+            !cons.iter().any(|c| [c.related.as_str(), c.pin.as_str()]
+                .iter()
+                .all(|p| *p == "C1" || *p == "C2")),
+            "the C1/C2 divergence is latch-mediated and must be filtered, got {cons:?}"
+        );
+        assert!(
+            cons.iter().any(|c| [c.related.as_str(), c.pin.as_str()]
+                .iter()
+                .all(|p| *p == "C1" || *p == "D")),
+            "expected a genuine C1/D hazard (direct support of δ_M1), got {cons:?}"
         );
     }
 
@@ -413,6 +618,6 @@ inputs = ["A", "B"]
 Y = "!(A*B)"
 "#,
         );
-        assert!(cell_constraints(&cell).is_empty());
+        assert!(cell_hazards(&cell).constraints.is_empty());
     }
 }

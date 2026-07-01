@@ -1,33 +1,23 @@
-//! Arbitration / interlock detection for mutually cross-coupled cells (mutexes, arbiters).
+//! Arbitration / metastability: the report type.
 //!
-//! A state-holding output references another output as a delayed/feedback value. When two (or more)
-//! outputs reference *each other* — a coupling cycle spanning **distinct** outputs — the cell can be
-//! **bistable**: under some primary-input condition the joint next-state relation has more than one
-//! stable state, and which one the physical cell settles into is a non-deterministic (metastable)
-//! choice. That is arbitration, and it cannot be expressed by a deterministic timing arc.
+//! Metastability is the **periodic oscillation of the state** under an input change probed from a
+//! **reachable** state — primarily a **simultaneous change of ≥2 inputs** (a mutex's requests
+//! co-asserting), detected as an integral part of the state-space exploration in [`super::confluence`]:
+//! [`super::machine::settle`] revisiting a non-fixpoint state (see [`super::machine::settle_or_cycle`]).
+//! It is never detected by enumerating state assignments: held state is the product of the sequential
+//! behaviour, an **undefined state variable simply means uninitialised**, and coercing it to fabricated
+//! concrete values manufactures arbitration on states the cell can never reach (the same mistake fixed
+//! on the arc side in commit 5a7c302).
 //!
-//! We *detect and report* it rather than fabricate arc behaviour for it. Detection is structural
-//! plus a small brute-force fixpoint search (cell pin counts are tiny):
-//!
-//! 1. Build the output coupling graph (edge `o → p` iff `o`'s function references the *other* output
-//!    `p`). Self-loops — a C-element holding its own state — are ordinary hysteresis, not arbitration,
-//!    so they are excluded. Strongly-connected components of size ≥ 2 are the **interlock groups**.
-//! 2. For each primary-input assignment, enumerate the joint current-state over the held outputs and
-//!    keep the **stable fixpoints** (`next == current`). An input assignment whose fixpoints, projected
-//!    onto an interlock group, take ≥ 2 distinct values is a **metastable (arbitration) condition**.
+//! This module now only carries the report type.
 
-use std::collections::{BTreeMap, BTreeSet};
+use espresso_logic::{Minterm, Symbol};
 
-use espresso_logic::{bdd_builder, Minterm, Symbol};
-
-use crate::logic::{machine, resolve};
-use crate::model::AnalysedOutput;
-
-/// One metastable (arbitration) condition of a cell: an interlock group, the primary-input condition
-/// under which it is bistable, and the competing stable states.
+/// One metastable (arbitration) condition of a cell: the oscillating state variables, the primary-input
+/// condition under which they oscillate, and the competing order-of-arrival outcomes (if any).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Arbitration {
-    /// The mutually-exclusive output group (a size-≥2 SCC of the coupling graph), in output order.
+    /// The oscillating state variables, in signal declaration order.
     pub group: Vec<String>,
     /// Primary-input condition under which the group is metastable, as a full input assignment.
     pub condition: Minterm<Symbol>,
@@ -54,136 +44,9 @@ impl Arbitration {
     }
 }
 
-/// Detect every arbitration condition of a cell. Empty for ordinary combinational or self-holding
-/// (C-element / latch / non-mutual SR) cells.
-pub fn detect(inputs: &[String], outputs: &[AnalysedOutput]) -> Vec<Arbitration> {
-    let groups = interlock_groups(outputs);
-    if groups.is_empty() {
-        return Vec::new();
-    }
-
-    // The held outputs: any output referenced as feedback by some function (self or other). These are
-    // the joint-state coordinates; every referenced output is one of them, so a full input+state
-    // assignment determines each next-state completely. A held output's own function *is* its
-    // next-state as a function of inputs + held outputs, so these double as the machine's δ.
-    let mut state_outputs: Vec<String> = Vec::new();
-    for o in outputs {
-        for f in &o.feedback {
-            if !state_outputs.contains(f) {
-                state_outputs.push(f.clone());
-            }
-        }
-    }
-
-    let builder = bdd_builder!();
-    let deltas: Vec<machine::Delta<_, _>> = state_outputs
-        .iter()
-        .map(|name| {
-            let expr = &outputs
-                .iter()
-                .find(|o| &o.name == name)
-                .expect("state output is a declared output")
-                .expr;
-            (name.clone(), builder.build(expr))
-        })
-        .collect();
-
-    // Shared headers: the full node (inputs + held outputs) and the input-only condition header.
-    let full_names: Vec<String> = inputs
-        .iter()
-        .cloned()
-        .chain(state_outputs.clone())
-        .collect();
-    let full_header = machine::header(&full_names);
-    let input_header = machine::header(inputs);
-
-    let bit = |mask: usize, list: &[String], name: &str| -> Option<bool> {
-        list.iter()
-            .position(|v| v == name)
-            .map(|i| (mask >> i) & 1 == 1)
-    };
-    let n_in = 1usize << inputs.len();
-    let n_st = 1usize << state_outputs.len();
-
-    let mut result = Vec::new();
-    for group in &groups {
-        let group_header = machine::header(group);
-        for x in 0..n_in {
-            // Stable joint states under this input assignment, projected onto the group.
-            let mut projections: BTreeSet<Minterm<Symbol>> = BTreeSet::new();
-            for s in 0..n_st {
-                let node = machine::node_from(&full_header, |name| {
-                    bit(x, inputs, name)
-                        .or_else(|| bit(s, &state_outputs, name))
-                        .expect("every header variable is an input or a held output")
-                });
-                if machine::is_stable(&deltas, &node) {
-                    projections.insert(node.project_onto(&group_header));
-                }
-            }
-            if projections.len() >= 2 {
-                let condition =
-                    machine::node_from(&input_header, |name| bit(x, inputs, name).unwrap_or(false));
-                result.push(Arbitration {
-                    group: group.clone(),
-                    condition,
-                    stable: projections.into_iter().collect(),
-                });
-            }
-        }
-    }
-    result
-}
-
-/// The interlock groups: strongly-connected components of size ≥ 2 in the output coupling graph
-/// (self-loops excluded), each in the cells' output order.
-fn interlock_groups(outputs: &[AnalysedOutput]) -> Vec<Vec<String>> {
-    let order: Vec<&str> = outputs.iter().map(|o| o.name.as_str()).collect();
-
-    // edges: o -> p for each *other* output p that o's function references (self-loops excluded).
-    let edges: BTreeMap<String, Vec<String>> = outputs
-        .iter()
-        .map(|o| {
-            let succ = o
-                .feedback
-                .iter()
-                .filter(|f| **f != o.name)
-                .cloned()
-                .collect();
-            (o.name.clone(), succ)
-        })
-        .collect();
-    let reach = resolve::transitive_closure(&edges);
-
-    // u and v (u != v) share an SCC iff each reaches the other.
-    let mutual = |u: &str, v: &str| {
-        reach.get(u).is_some_and(|s| s.contains(v)) && reach.get(v).is_some_and(|s| s.contains(u))
-    };
-
-    let mut groups: Vec<Vec<String>> = Vec::new();
-    let mut placed: BTreeSet<&str> = BTreeSet::new();
-    for &u in &order {
-        if placed.contains(u) {
-            continue;
-        }
-        let members: Vec<&str> = order
-            .iter()
-            .copied()
-            .filter(|&v| v == u || mutual(u, v))
-            .collect();
-        if members.len() >= 2 {
-            for &m in &members {
-                placed.insert(m);
-            }
-            groups.push(members.into_iter().map(String::from).collect());
-        }
-    }
-    groups
-}
-
 /// A minterm's fixed values as a product of literals: `A*B`, `!R*S` (in the minterm's variable order).
 /// No fixed value ⇒ the tautology `1`.
-fn literals_str(m: &Minterm<Symbol>) -> String {
+pub(crate) fn literals_str(m: &Minterm<Symbol>) -> String {
     let lits: Vec<String> = m
         .vars()
         .iter()
@@ -207,6 +70,8 @@ fn literals_str(m: &Minterm<Symbol>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     use crate::model::{parse_spec, AnalysedCell};
 
@@ -226,7 +91,7 @@ Qa = "!Qb * A"
 Qb = "!Qa * B"
 "#,
         );
-        let arb = detect(&cell.inputs, &cell.outputs);
+        let arb = &cell.arbitration;
         assert_eq!(arb.len(), 1, "exactly one metastable condition");
         let a = &arb[0];
         assert_eq!(a.group, ["Qa", "Qb"]);
@@ -254,7 +119,7 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        assert!(detect(&cell.inputs, &cell.outputs).is_empty());
+        assert!(cell.arbitration.is_empty());
     }
 
     #[test]
@@ -270,7 +135,7 @@ Q = "S + Q*!R"
 Qn = "R + Qn*!S"
 "#,
         );
-        assert!(detect(&cell.inputs, &cell.outputs).is_empty());
+        assert!(cell.arbitration.is_empty());
     }
 
     #[test]
@@ -284,6 +149,6 @@ inputs = ["A", "B"]
 Y = "!(A*B)"
 "#,
         );
-        assert!(detect(&cell.inputs, &cell.outputs).is_empty());
+        assert!(cell.arbitration.is_empty());
     }
 }

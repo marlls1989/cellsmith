@@ -15,7 +15,7 @@
 //! that actually resolves it — the async pins, a clock edge, both requests high — rather than by an
 //! arbitrary held combination.
 
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
 use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
@@ -83,16 +83,30 @@ pub fn settle<B: Brand, C: ManagerCell>(
     header: &Arc<Symbols<Symbol>>,
     node: &Minterm<Symbol>,
 ) -> Option<Minterm<Symbol>> {
+    settle_or_cycle(deltas, header, node).ok()
+}
+
+/// Like [`settle`], but on oscillation returns the periodic cycle itself — the sequence of states
+/// from the first repeated state back around — so callers can name the oscillating variables.
+pub fn settle_or_cycle<B: Brand, C: ManagerCell>(
+    deltas: &[Delta<B, C>],
+    header: &Arc<Symbols<Symbol>>,
+    node: &Minterm<Symbol>,
+) -> Result<Minterm<Symbol>, Vec<Minterm<Symbol>>> {
+    let mut trace: Vec<Minterm<Symbol>> = vec![node.clone()];
+    let mut pos: HashMap<Minterm<Symbol>, usize> = HashMap::new();
+    pos.insert(node.clone(), 0);
     let mut cur = node.clone();
-    let mut seen: HashSet<Minterm<Symbol>> = HashSet::new();
     loop {
         let next = step(deltas, header, &cur);
         if next == cur {
-            return Some(cur); // fixpoint
+            return Ok(cur); // fixpoint
         }
-        if !seen.insert(next.clone()) {
-            return None; // revisited a non-fixpoint state → oscillation
+        if let Some(&p) = pos.get(&next) {
+            return Err(trace[p..].to_vec()); // revisited a non-fixpoint state → the oscillating cycle
         }
+        pos.insert(next.clone(), trace.len());
+        trace.push(next.clone());
         cur = next;
     }
 }
@@ -319,5 +333,26 @@ mod tests {
         let hdr = header(&["A".into(), "B".into(), "Qa".into(), "Qb".into()]);
         let both_low = node_from(&hdr, |n| matches!(n, "A" | "B"));
         assert_eq!(settle(&deltas, &hdr, &both_low), None);
+    }
+
+    #[test]
+    fn settle_or_cycle_names_the_oscillating_pair() {
+        // Same cross-coupled mutex as `metastable_mutex_oscillates_to_none`, but probed through
+        // settle_or_cycle: the returned cycle should have length 2, with Qa and Qb each taking both
+        // values across it (the pair genuinely oscillates, rather than one of them staying fixed).
+        let builder = bdd_builder!();
+        let da = builder.parse("!Qb*A").unwrap();
+        let db = builder.parse("!Qa*B").unwrap();
+        let deltas = vec![("Qa".to_string(), da), ("Qb".to_string(), db)];
+        let hdr = header(&["A".into(), "B".into(), "Qa".into(), "Qb".into()]);
+        let both_low = node_from(&hdr, |n| matches!(n, "A" | "B"));
+
+        let cycle = settle_or_cycle(&deltas, &hdr, &both_low).expect_err("oscillates, no fixpoint");
+        assert_eq!(cycle.len(), 2, "expected a length-2 cycle, got {cycle:?}");
+
+        let qa_values: BTreeSet<_> = cycle.iter().map(|m| m.value_of("Qa")).collect();
+        let qb_values: BTreeSet<_> = cycle.iter().map(|m| m.value_of("Qb")).collect();
+        assert_eq!(qa_values.len(), 2, "Qa should differ across the cycle, got {cycle:?}");
+        assert_eq!(qb_values.len(), 2, "Qb should differ across the cycle, got {cycle:?}");
     }
 }
