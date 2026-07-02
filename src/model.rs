@@ -120,12 +120,23 @@ pub struct AnalysedCell {
     pub constraints: Vec<Constraint>,
     /// Whether the cell opted in to constraint-arc emission (`constraint_arcs = true`).
     pub constraint_arcs_declared: bool,
+    /// Each signal's state-table regions, precomputed once and cached in `signals()` order (outputs
+    /// then internals), so emitters don't rebuild the BDDs per call site.
+    pub regions: Vec<crate::logic::regions::StateRegions>,
 }
 
 impl AnalysedCell {
     /// Every state-bearing signal: outputs first, then internals, in declaration order.
     pub fn signals(&self) -> impl Iterator<Item = &AnalysedOutput> {
         self.outputs.iter().chain(self.internals.iter())
+    }
+
+    /// Each signal paired with its cached state-table regions, in `signals()` order (outputs then
+    /// internals).
+    pub fn signal_regions(
+        &self,
+    ) -> impl Iterator<Item = (&AnalysedOutput, &crate::logic::regions::StateRegions)> {
+        self.signals().zip(self.regions.iter())
     }
 }
 
@@ -233,6 +244,7 @@ impl Cell {
             clock_pins: self.clock.clone(),
             constraints: Vec::new(),
             constraint_arcs_declared: self.constraint_arcs,
+            regions: Vec::new(),
         };
         // Build the cell's state machine once and derive both its transition arcs and its hazards (the
         // constraints — setup/hold, non_seq — that avoid them plus the arbitration annotations) from the
@@ -241,6 +253,12 @@ impl Cell {
         analysed.arcs = analysis.arcs;
         analysed.constraints = analysis.constraints;
         analysed.arbitration = analysis.arbitration;
+        // Cache each signal's state-table regions once, in `signals()` order, so downstream emitters
+        // don't rebuild the BDDs per call site.
+        analysed.regions = analysed
+            .signals()
+            .map(|s| crate::logic::regions::state_regions(s, &analysed.inputs))
+            .collect();
         Ok(analysed)
     }
 }

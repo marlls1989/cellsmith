@@ -8,7 +8,7 @@
 //! hysteresis as `-` (no-change) rows. Pins are emitted in declaration order (lobsterate's deliberate
 //! divergence from hsNCL's alphabetical sort).
 
-use crate::logic::regions::{state_regions, StateCube, StateRegions};
+use crate::logic::regions::{StateCube, StateRegions};
 use crate::model::AnalysedCell;
 
 /// Fixed rise/fall path delay stamped on every `specify` arc, matching the hsNCL template.
@@ -19,9 +19,8 @@ const PATH_DELAY: &str = "(0.1, 0.1)";
 /// as internal `wire`s in the wrapper rather than as module ports.
 pub fn cell_verilog(cell: &AnalysedCell) -> String {
     let mut out = String::new();
-    for sig in cell.signals() {
-        let sr = state_regions(sig, &cell.inputs);
-        out.push_str(&primitive(&prim_name(cell, &sig.name), &sig.name, &sr));
+    for (sig, sr) in cell.signal_regions() {
+        out.push_str(&primitive(&prim_name(cell, &sig.name), &sig.name, sr));
     }
     out.push_str(&wrapper_module(cell));
     out
@@ -131,8 +130,7 @@ fn wrapper_module(cell: &AnalysedCell) -> String {
     s.push_str("endspecify\n");
 
     // Instantiate every signal's UDP (outputs and internals); an internal drives its own wire.
-    for sig in cell.signals() {
-        let sr = state_regions(sig, &cell.inputs);
+    for (sig, sr) in cell.signal_regions() {
         let name = prim_name(cell, &sig.name);
         // Constant pins instantiate with just their own port; sequential pins add their columns.
         let args = if sr.hold.is_empty() && (sr.on.is_empty() || sr.off.is_empty()) {
