@@ -268,6 +268,14 @@ pub fn parse_spec(toml_src: &str) -> Result<Spec, ModelError> {
     Ok(toml::from_str(toml_src)?)
 }
 
+/// Parse a single-cell TOML `src` and return its analysed form. The one canonical test helper, shared
+/// by the in-crate `#[cfg(test)]` modules (`tests/golden.rs` keeps its own copy — a separate crate
+/// cannot see `pub(crate)`).
+#[cfg(test)]
+pub(crate) fn analyse_one(src: &str) -> AnalysedCell {
+    parse_spec(src).unwrap().cells.remove(0).analyse().unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,6 +335,52 @@ Y = "A*Z"
 "#;
         let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
         assert!(matches!(err, ModelError::UnknownVar { .. }));
+    }
+
+    #[test]
+    fn rejects_unknown_var_in_internal() {
+        // An undefined variable is rejected wherever it appears — an internal function, not just an output.
+        let s = r#"
+[[cell]]
+name = "X"
+inputs = ["A"]
+[cell.internal]
+W = "A*Z"
+[cell.outputs]
+Y = "W"
+"#;
+        let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
+        assert!(matches!(err, ModelError::UnknownVar { var, .. } if var == "Z"));
+    }
+
+    #[test]
+    fn multiple_errors_report_the_first_deterministically() {
+        // Two outputs each reference an undefined variable. Analysis short-circuits on the first in a
+        // fixed traversal order (outputs in declaration order), so the reported error is stable across
+        // repeated parses — never dependent on hash-map iteration.
+        let s = r#"
+[[cell]]
+name = "MULTI"
+inputs = ["A"]
+[cell.outputs]
+Y1 = "A*Z1"
+Y2 = "A*Z2"
+"#;
+        let first = parse_spec(s).unwrap().cells[0]
+            .analyse()
+            .unwrap_err()
+            .to_string();
+        for _ in 0..8 {
+            let again = parse_spec(s).unwrap().cells[0]
+                .analyse()
+                .unwrap_err()
+                .to_string();
+            assert_eq!(again, first, "error reporting must be deterministic");
+        }
+        assert!(
+            first.contains("Z1") && !first.contains("Z2"),
+            "the first-declared offending output is reported first: {first}",
+        );
     }
 
     #[test]

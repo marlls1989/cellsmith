@@ -352,11 +352,7 @@ fn record_constraint(found: &mut BTreeMap<String, Constraint>, cons: Constraint)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{parse_spec, AnalysedCell};
-
-    fn analyse(src: &str) -> AnalysedCell {
-        parse_spec(src).unwrap().cells.remove(0).analyse().unwrap()
-    }
+    use crate::model::analyse_one as analyse;
 
     #[test]
     fn dff_with_declared_clock_yields_only_setup_hold() {

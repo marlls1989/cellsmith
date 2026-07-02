@@ -159,3 +159,104 @@ pub fn analyse_machine(cell: &AnalysedCell) -> MachineAnalysis {
         arbitration: hz.arbitration,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::MAX_MACHINE_VARS;
+    use crate::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
+    use crate::emit::liberty::cell_liberty;
+    use crate::emit::verilog::cell_verilog;
+    use crate::model::analyse_one;
+
+    #[test]
+    fn oversized_cell_trips_the_blowup_guard() {
+        // inputs + state variables > MAX_MACHINE_VARS ⇒ the machine is left unexplored, so arcs,
+        // constraints and arbitration all come back empty (the MachineAnalysis::default path) — yet the
+        // emitters must still run without panicking.
+        let n = MAX_MACHINE_VARS + 1; // 23 primary inputs, 0 state variables ⇒ header width 23 > 22
+        let list = (0..n)
+            .map(|i| format!("\"I{i}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let src =
+            format!("[[cell]]\nname = \"WIDE\"\ninputs = [{list}]\n[cell.outputs]\nY = \"I0\"\n");
+        let cell = analyse_one(&src);
+        assert!(cell.arcs.is_empty(), "guard must suppress arcs");
+        assert!(cell.constraints.is_empty(), "guard must suppress constraints");
+        assert!(cell.arbitration.is_empty(), "guard must suppress arbitration");
+        // Emission still succeeds (no panic); the artifacts are simply arc-free.
+        let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        let _ = cell_verilog(&cell);
+        let _ = cell_liberty(&cell);
+    }
+
+    #[test]
+    fn single_input_state_holder_is_coherent() {
+        // Blind spot: a state-holding cell with fewer than two inputs. A single-input set-only keeper
+        // (Q = A + Q) must be handled without panic. Its region view is a proper hysteretic state table
+        // (Q holds while A is low, is set when A is high); it has no *measured* arc because the only
+        // transition rises out of the uninitialised state, which is deliberately not characterised.
+        let cell = analyse_one(
+            r#"
+[[cell]]
+name = "KEEP"
+inputs = ["A"]
+[cell.outputs]
+Q = "A + Q"
+"#,
+        );
+        assert!(cell.arbitration.is_empty());
+        assert_eq!(cell.regions.len(), 1);
+        let q = &cell.regions[0];
+        assert!(q.hysteretic, "a single-input keeper holds its own state");
+        assert!(!q.on.is_empty(), "Q is forced high when A is high");
+        // No measured arc: the only rise leaves the uninitialised state, which is not characterised.
+        assert!(
+            cell.arcs.is_empty(),
+            "a single-input keeper has no arc between reachable stable states"
+        );
+        // Emission is well-formed: a statetable for the hysteretic output, and no panic on the arcs.
+        assert!(cell_liberty(&cell).contains("statetable"));
+        let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+    }
+
+    #[test]
+    fn midsize_multistate_cell_is_coherent() {
+        // Blind spot: a cell larger than the 2-input C-element but well within the guard, carrying
+        // multiple state signals (internal master M and output Q) plus an async reset. Arcs, constraints
+        // and regions are all produced coherently.
+        let cell = analyse_one(
+            r#"
+[[cell]]
+name = "DFFR"
+inputs = ["CLK", "D", "R"]
+async = ["R"]
+clock = ["CLK"]
+[cell.internal]
+M = "!R*(!CLK*D + CLK*M)"
+[cell.outputs]
+Q = "!R*(CLK*M + !CLK*Q)"
+"#,
+        );
+        // Two state signals (output Q, internal M) ⇒ one region entry per signal.
+        assert_eq!(cell.regions.len(), cell.signals().count());
+        assert_eq!(cell.regions.len(), 2);
+        assert!(!cell.arcs.is_empty(), "a clocked DFF produces transition arcs");
+        assert!(
+            cell.arcs.iter().any(|a| a.is_async),
+            "R is a declared async pin, so its arcs are async-typed",
+        );
+        assert!(
+            !cell.constraints.is_empty(),
+            "the CLK/D setup-hold hazard is constrained",
+        );
+        let tcl = cell_arcs_tcl(
+            &cell,
+            ArcsTclOptions {
+                emit_constraints: true,
+                ..Default::default()
+            },
+        );
+        assert!(tcl.contains("define_arc"));
+    }
+}

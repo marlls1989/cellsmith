@@ -1,0 +1,110 @@
+//! CLI integration checks driving the built binary directly (no extra dependencies): stdout mode and
+//! its banners, file mode and its three artifacts, stdin (`-`), and the non-zero exit on a bad spec.
+
+use std::io::Write;
+use std::process::{Command, Stdio};
+
+/// The binary under test, provided by Cargo for integration tests.
+const BIN: &str = env!("CARGO_BIN_EXE_lobsterate");
+
+const C2: &str = r#"
+[[cell]]
+name = "C2"
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+"#;
+
+/// A unique scratch directory for one test, removed by the caller.
+fn scratch_dir(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("lobsterate_cli_{tag}_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn stdout_mode_emits_all_three_banners() {
+    let dir = scratch_dir("stdout");
+    let spec = dir.join("cells.toml");
+    std::fs::write(&spec, C2).unwrap();
+
+    let out = Command::new(BIN)
+        .arg("--stdout")
+        .arg(&spec)
+        .output()
+        .expect("run lobsterate");
+    assert!(out.status.success(), "exit: {:?}", out.status);
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("// ===== lobsterate arcs.tcl ====="));
+    assert!(stdout.contains("// ===== lobsterate verilog ====="));
+    assert!(stdout.contains("// ===== lobsterate liberty ====="));
+    assert!(stdout.contains("define_arc"));
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn file_mode_writes_the_three_artifacts() {
+    let dir = scratch_dir("file");
+    let spec = dir.join("cells.toml");
+    std::fs::write(&spec, C2).unwrap();
+    let outdir = dir.join("out");
+
+    let status = Command::new(BIN)
+        .arg("--outdir")
+        .arg(&outdir)
+        .arg("--name")
+        .arg("cli")
+        .arg(&spec)
+        .status()
+        .expect("run lobsterate");
+    assert!(status.success());
+    assert!(outdir.join("cli_arcs.tcl").is_file());
+    assert!(outdir.join("cli.v").is_file());
+    assert!(outdir.join("cli.lib").is_file());
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn stdin_dash_reads_the_spec() {
+    let mut child = Command::new(BIN)
+        .arg("--stdout")
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn lobsterate");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(C2.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().expect("wait lobsterate");
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("// ===== lobsterate arcs.tcl ====="));
+    assert!(stdout.contains("define_arc"));
+}
+
+#[test]
+fn bad_spec_exits_non_zero() {
+    let dir = scratch_dir("bad");
+    let spec = dir.join("bad.toml");
+    // Undefined variable Z in the output function: a hard analysis error.
+    std::fs::write(
+        &spec,
+        "[[cell]]\nname = \"X\"\ninputs = [\"A\"]\n[cell.outputs]\nY = \"A*Z\"\n",
+    )
+    .unwrap();
+
+    let status = Command::new(BIN)
+        .arg("--stdout")
+        .arg(&spec)
+        .status()
+        .expect("run lobsterate");
+    assert!(!status.success(), "a bad spec must exit non-zero");
+
+    std::fs::remove_dir_all(&dir).ok();
+}

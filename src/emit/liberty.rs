@@ -174,11 +174,7 @@ fn function_sop(sr: &StateRegions) -> String {
 mod tests {
     use super::*;
     use crate::logic::regions::state_regions;
-    use crate::model::parse_spec;
-
-    fn analyse(src: &str) -> AnalysedCell {
-        parse_spec(src).unwrap().cells.remove(0).analyse().unwrap()
-    }
+    use crate::model::analyse_one as analyse;
 
     #[test]
     fn c_element_emits_statetable() {

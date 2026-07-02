@@ -302,11 +302,7 @@ fn when_str(arc: &Arc) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::parse_spec;
-
-    fn analyse(src: &str) -> AnalysedCell {
-        parse_spec(src).unwrap().cells.remove(0).analyse().unwrap()
-    }
+    use crate::model::analyse_one as analyse;
 
     #[test]
     fn c_element_emits_well_formed_arcs() {
@@ -366,6 +362,47 @@ Q = "A*B + Q*(A+B)"
         );
         assert!(!off.contains("-when"));
         assert!(on.contains("-when"));
+    }
+
+    #[test]
+    fn collapse_conditions_reduces_shared_context_arcs() {
+        // A 3-input majority gate: its output rises via one pin under two distinct held contexts (the
+        // other two inputs at 10 or 01). With `-when` off those share a (output, related, edge) and
+        // collapse to one representative, so the collapsed set has strictly fewer arcs than the raw set.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "MAJ3"
+inputs = ["A", "B", "C"]
+[cell.outputs]
+Y = "A*B + B*C + A*C"
+"#,
+        );
+        let collapsed = collapse_conditions(&cell.arcs);
+        assert!(
+            collapsed.len() < cell.arcs.len(),
+            "collapse should drop redundant held-context duplicates: {} vs {}",
+            collapsed.len(),
+            cell.arcs.len(),
+        );
+        // The emitter reflects the collapse: fewer `define_arc` blocks once `-when` is suppressed.
+        let with_when = cell_arcs_tcl(
+            &cell,
+            ArcsTclOptions {
+                emit_when: true,
+                ..Default::default()
+            },
+        );
+        let without_when = cell_arcs_tcl(
+            &cell,
+            ArcsTclOptions {
+                emit_when: false,
+                ..Default::default()
+            },
+        );
+        assert!(
+            without_when.matches("define_arc").count() < with_when.matches("define_arc").count()
+        );
     }
 
     #[test]

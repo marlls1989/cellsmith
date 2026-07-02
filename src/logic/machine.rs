@@ -30,6 +30,7 @@ pub fn header(names: &[String]) -> Arc<Symbols<Symbol>> {
 }
 
 /// Build a fully-fixed node over `header` from a `name -> value` lookup (called once per variable).
+#[cfg(test)]
 pub fn node_from<F: Fn(&str) -> bool>(header: &Arc<Symbols<Symbol>>, value: F) -> Minterm<Symbol> {
     Minterm::from_symbols(
         header.clone(),
@@ -96,6 +97,7 @@ fn step<B: Brand, C: ManagerCell>(
 
 /// Whether `node` is stable: one [`step`] leaves it unchanged (every defined state variable already
 /// equals its δ, and no absent one has become forced).
+#[cfg(test)]
 pub fn is_stable<B: Brand, C: ManagerCell>(deltas: &[Delta<B, C>], node: &Minterm<Symbol>) -> bool {
     let header = node.symbols();
     step(deltas, header, node) == *node

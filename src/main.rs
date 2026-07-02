@@ -109,9 +109,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         emit_when: !cli.no_when,
         emit_constraints: cli.constraints,
     };
-    let arcs = render(&cells, |c| Ok(cell_arcs_tcl(c, arc_opts)))?;
-    let verilog = render(&cells, |c| Ok(cell_verilog(c)))?;
-    let liberty = render(&cells, |c| Ok(cell_liberty(c)))?;
+    let arcs = render(&cells, |c| cell_arcs_tcl(c, arc_opts));
+    let verilog = render(&cells, cell_verilog);
+    let liberty = render(&cells, cell_liberty);
 
     if cli.stdout {
         let mut out = io::stdout().lock();
@@ -140,16 +140,13 @@ fn read_spec(spec: &str) -> io::Result<String> {
     }
 }
 
-/// Concatenate one artifact across every cell, propagating the first emitter error.
-fn render(
-    cells: &[AnalysedCell],
-    mut one: impl FnMut(&AnalysedCell) -> Result<String, Box<dyn Error>>,
-) -> Result<String, Box<dyn Error>> {
+/// Concatenate one artifact across every cell.
+fn render(cells: &[AnalysedCell], mut one: impl FnMut(&AnalysedCell) -> String) -> String {
     let mut out = String::new();
     for cell in cells {
-        out.push_str(&one(cell)?);
+        out.push_str(&one(cell));
     }
-    Ok(out)
+    out
 }
 
 /// A stdout section banner for one artifact.
@@ -174,4 +171,39 @@ fn write_file(dir: &Path, name: &str, body: &str) -> io::Result<()> {
     fs::write(&path, body)?;
     eprintln!("wrote {}", path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base_name_strips_dir_and_extension() {
+        assert_eq!(base_name("/some/dir/cells.toml"), "cells");
+        assert_eq!(base_name("cells.toml"), "cells");
+        assert_eq!(base_name("plain"), "plain"); // no extension: the whole stem
+        assert_eq!(base_name("-"), "cells"); // stdin sentinel
+    }
+
+    #[test]
+    fn banner_wraps_body_with_a_labelled_header() {
+        assert_eq!(
+            banner("arcs.tcl", "BODY"),
+            "// ===== lobsterate arcs.tcl =====\nBODY\n",
+        );
+    }
+
+    #[test]
+    fn read_spec_reads_a_file() {
+        let path = std::env::temp_dir().join(format!("lobsterate_read_spec_{}.toml", std::process::id()));
+        fs::write(&path, "hello = 1\n").unwrap();
+        let got = read_spec(path.to_str().unwrap()).unwrap();
+        assert_eq!(got, "hello = 1\n");
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn read_spec_errors_on_a_missing_path() {
+        assert!(read_spec("/no/such/lobsterate/spec.toml").is_err());
+    }
 }

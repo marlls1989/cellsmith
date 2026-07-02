@@ -6,10 +6,11 @@
 //!
 //!   1. Build each state variable's next-state δ ([`resolve::delta`]); [`machine::settle`] applies them
 //!      via [`Bdd::evaluate`] until the state stops changing.
-//!   2. BFS from the reset-stable states (state stable under the all-zero input), stepping one input
-//!      at a time and letting the state settle. Metastable transitions (the state oscillates instead
-//!      of settling — a mutex's deadlock) yield no fixpoint and are dropped, so no impossible arc is
-//!      produced.
+//!   2. BFS from the reachable stable states — which are not assumed but discovered by [`machine::explore`]
+//!      from the on/off covers of the signal characteristic functions (never an assumed all-zero state) —
+//!      stepping one input at a time and letting the state settle. Metastable transitions (the state
+//!      oscillates instead of settling — a mutex's deadlock) yield no fixpoint and are dropped, so no
+//!      impossible arc is produced.
 //!   3. Wherever a single input toggle flips an **output**, emit an arc: the toggled input is the
 //!      `related` pin (arcs are only ever sourced by primary inputs — never an output or internal),
 //!      and the prevector is the BFS path — each node projected onto the inputs — that drives every
@@ -154,11 +155,7 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> Vec<Arc> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{parse_spec, AnalysedCell};
-
-    fn analyse(src: &str) -> AnalysedCell {
-        parse_spec(src).unwrap().cells.remove(0).analyse().unwrap()
-    }
+    use crate::model::analyse_one as analyse;
 
     #[test]
     fn c_element_has_rise_and_fall_per_input() {

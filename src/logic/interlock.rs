@@ -1,15 +1,13 @@
-//! Arbitration / metastability: the report type.
+//! Arbitration / metastability: the report type only.
 //!
 //! Metastability is the **periodic oscillation of the state** under an input change probed from a
-//! **reachable** state — primarily a **simultaneous change of ≥2 inputs** (a mutex's requests
-//! co-asserting), detected as an integral part of the state-space exploration in [`super::confluence`]:
-//! [`super::machine::settle`] revisiting a non-fixpoint state (see [`super::machine::settle_or_cycle`]).
-//! It is never detected by enumerating state assignments: held state is the product of the sequential
-//! behaviour, an **undefined state variable simply means uninitialised**, and coercing it to fabricated
-//! concrete values manufactures arbitration on states the cell can never reach (the same mistake fixed
-//! on the arc side in commit 5a7c302).
+//! **reachable** state (primarily a **simultaneous change of ≥2 inputs**, e.g. a mutex's requests
+//! co-asserting). It is detected during the state-space exploration in [`super::confluence`], where
+//! [`super::machine::settle`] revisits a non-fixpoint state — never by enumerating state assignments
+//! (an undefined state variable simply means uninitialised).
 //!
-//! This module now only carries the report type.
+//! The detection lives with the exploration; this module carries only the resulting [`Arbitration`]
+//! report type.
 
 use espresso_logic::{Minterm, Symbol};
 
@@ -43,11 +41,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::model::{parse_spec, AnalysedCell};
-
-    fn analyse(src: &str) -> AnalysedCell {
-        parse_spec(src).unwrap().cells.remove(0).analyse().unwrap()
-    }
+    use crate::model::analyse_one as analyse;
 
     #[test]
     fn mutex_has_one_arbitration_point() {
