@@ -50,6 +50,19 @@ pub fn node_from_opt<F: Fn(&str) -> Option<bool>>(
     )
 }
 
+/// `node` with each name in `names` flipped in value (an absent field stays absent); everything else
+/// keeps its current field.
+pub fn toggle(header: &Arc<Symbols<Symbol>>, node: &Minterm<Symbol>, names: &[&str]) -> Minterm<Symbol> {
+    node_from_opt(header, |nm| {
+        let cur = node.value_of(nm);
+        if names.contains(&nm) {
+            cur.map(|v| !v)
+        } else {
+            cur
+        }
+    })
+}
+
 /// One parallel next-state step: every state variable takes its δ evaluated at `node` — `Ok(v)` fixes
 /// it, `Err` (δ still depends on an absent variable) leaves it **absent**. Inputs (and anything else in
 /// the header) keep their current field.
@@ -58,14 +71,27 @@ fn step<B: Brand, C: ManagerCell>(
     header: &Arc<Symbols<Symbol>>,
     node: &Minterm<Symbol>,
 ) -> Minterm<Symbol> {
-    let next: Vec<(&str, Option<bool>)> = deltas
-        .iter()
-        .map(|(name, d)| (name.as_str(), d.evaluate(node).ok()))
-        .collect();
-    node_from_opt(header, |name| match next.iter().find(|(n, _)| *n == name) {
-        Some((_, v)) => *v,
-        None => node.value_of(name),
-    })
+    // The deltas are exactly the trailing state-variable columns of the header, in order (the header is
+    // `[inputs…, state_vars…]`), so index them positionally rather than scanning by name on this hot path.
+    let labels = header.labels();
+    let split = labels.len() - deltas.len();
+    debug_assert!(
+        labels[split..]
+            .iter()
+            .zip(deltas)
+            .all(|(l, (name, _))| l.as_str() == name.as_str()),
+        "step: deltas must be the trailing state-variable columns of the header, in order"
+    );
+    Minterm::from_symbols(
+        header.clone(),
+        labels.iter().enumerate().map(|(i, l)| {
+            if i < split {
+                node.value_of(l.as_str())
+            } else {
+                deltas[i - split].1.evaluate(node).ok()
+            }
+        }),
+    )
 }
 
 /// Whether `node` is stable: one [`step`] leaves it unchanged (every defined state variable already
@@ -118,6 +144,21 @@ pub struct Explored {
     pub order: Vec<Minterm<Symbol>>,
     /// Predecessor of each reachable node (`None` at a start node).
     pub prev: HashMap<Minterm<Symbol>, Option<Minterm<Symbol>>>,
+}
+
+impl Explored {
+    /// The input-projected BFS path into `node` (the prevector): walk predecessors back to a start,
+    /// reverse, and project each step onto `input_header`.
+    pub fn path_to(&self, node: &Minterm<Symbol>, input_header: &Arc<Symbols<Symbol>>) -> Vec<Minterm<Symbol>> {
+        let mut chain = vec![node.clone()];
+        let mut cur = node.clone();
+        while let Some(Some(p)) = self.prev.get(&cur) {
+            chain.push(p.clone());
+            cur = p.clone();
+        }
+        chain.reverse();
+        chain.iter().map(|m| m.project_onto(input_header)).collect()
+    }
 }
 
 /// Explore the reachable **stable** states of the machine, starting from initialisation candidates
@@ -260,14 +301,7 @@ pub fn explore<B: Brand, C: ManagerCell>(
     while let Some(node) = queue.pop_front() {
         order.push(node.clone());
         for related in input_names {
-            let toggled = node_from_opt(full_header, |name| {
-                let cur = node.value_of(name);
-                if name == related.as_str() {
-                    cur.map(|v| !v)
-                } else {
-                    cur
-                }
-            });
+            let toggled = toggle(full_header, &node, &[related.as_str()]);
             let Some(np) = settle(state_deltas, full_header, &toggled) else {
                 continue;
             };

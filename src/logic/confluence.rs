@@ -45,7 +45,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use espresso_logic::{bdd_builder, Minterm, Symbol};
 
 use crate::logic::arcs::Edge;
-use crate::logic::interlock::{self, Arbitration};
+use crate::logic::interlock::Arbitration;
 use crate::logic::{machine, resolve};
 use crate::model::{AnalysedCell, AnalysedOutput};
 
@@ -76,33 +76,15 @@ impl Constraint {
     /// edges, plus any other
     /// inputs held at a fixed value in the pre-toggle state (e.g. `A↓ & B↑ with R=0`).
     pub fn condition(&self) -> String {
-        let arrow = |e: Edge| {
-            if matches!(e, Edge::Rise) {
-                "↑"
-            } else {
-                "↓"
-            }
-        };
         let mut cond = format!(
             "{}{} & {}{}",
             self.related,
-            arrow(self.related_edge),
+            self.related_edge.arrow(),
             self.pin,
-            arrow(self.pin_edge)
+            self.pin_edge.arrow()
         );
         if let Some(state) = self.prevector.last() {
-            let others: Vec<String> = state
-                .vars()
-                .iter()
-                .zip(state.iter())
-                .filter_map(|(n, v)| {
-                    let name = n.as_str();
-                    if name == self.related || name == self.pin {
-                        return None;
-                    }
-                    v.map(|b| format!("{name}={}", if b { 1 } else { 0 }))
-                })
-                .collect();
+            let others = crate::logic::fixed_pairs(state, &[&self.related, &self.pin]);
             if !others.is_empty() {
                 cond.push_str(&format!(" with {}", others.join(", ")));
             }
@@ -120,26 +102,19 @@ fn edge_from(node: &Minterm<Symbol>, name: &str) -> Edge {
     }
 }
 
-fn edge_char(e: Edge) -> char {
-    match e {
-        Edge::Rise => 'R',
-        Edge::Fall => 'F',
-    }
-}
-
 /// A canonical dedup key: setup/hold is directed; non_seq is unordered over its two pins.
 fn constraint_key(c: &Constraint) -> String {
     match c.kind {
         ConstraintKind::SetupHold => format!(
             "SH|{}{}|{}{}",
             c.related,
-            edge_char(c.related_edge),
+            c.related_edge.rf(),
             c.pin,
-            edge_char(c.pin_edge)
+            c.pin_edge.rf()
         ),
         ConstraintKind::NonSeq => {
-            let a = format!("{}{}", c.related, edge_char(c.related_edge));
-            let b = format!("{}{}", c.pin, edge_char(c.pin_edge));
+            let a = format!("{}{}", c.related, c.related_edge.rf());
+            let b = format!("{}{}", c.pin, c.pin_edge.rf());
             let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
             format!("NS|{lo}|{hi}")
         }
@@ -232,29 +207,8 @@ pub fn analyse_hazards(cell: &AnalysedCell) -> HazardAnalysis {
     let settle_toggle = |node: &Minterm<Symbol>,
                           names: &[&str]|
      -> Result<Minterm<Symbol>, Vec<Minterm<Symbol>>> {
-        let toggled = machine::node_from_opt(&full_header, |nm| {
-            let cur = node.value_of(nm);
-            if names.contains(&nm) {
-                cur.map(|v| !v)
-            } else {
-                cur
-            }
-        });
+        let toggled = machine::toggle(&full_header, node, names);
         machine::settle_or_cycle(&deltas, &full_header, &toggled)
-    };
-
-    let path_to = |node: &Minterm<Symbol>| -> Vec<Minterm<Symbol>> {
-        let mut chain = vec![node.clone()];
-        let mut cur = node.clone();
-        while let Some(Some(p)) = ex.prev.get(&cur) {
-            chain.push(p.clone());
-            cur = p.clone();
-        }
-        chain.reverse();
-        chain
-            .iter()
-            .map(|m| m.project_onto(&input_header))
-            .collect()
     };
 
     let is_clock = |p: &str| cell.clock_pins.iter().any(|c| c.as_str() == p);
@@ -267,16 +221,9 @@ pub fn analyse_hazards(cell: &AnalysedCell) -> HazardAnalysis {
     let mut arbitration: BTreeMap<String, Arbitration> = BTreeMap::new();
     let mut record_arbitration =
         |node: &Minterm<Symbol>, names: &[&str], group: Vec<String>, stable: Vec<Minterm<Symbol>>| {
-            let toggled = machine::node_from_opt(&full_header, |nm| {
-                let cur = node.value_of(nm);
-                if names.contains(&nm) {
-                    cur.map(|v| !v)
-                } else {
-                    cur
-                }
-            });
+            let toggled = machine::toggle(&full_header, node, names);
             let condition = toggled.project_onto(&input_header);
-            let key = format!("{}|{}", group.join(","), interlock::literals_str(&condition));
+            let key = format!("{}|{}", group.join(","), crate::logic::literals_str(&condition));
             arbitration
                 .entry(key)
                 .or_insert_with(|| Arbitration {
@@ -343,7 +290,7 @@ pub fn analyse_hazards(cell: &AnalysedCell) -> HazardAnalysis {
                             related_edge: edge_from(s, clk),
                             pin: data.clone(),
                             pin_edge: edge_from(s, data),
-                            prevector: path_to(s),
+                            prevector: ex.path_to(s, &input_header),
                         }
                     } else {
                         Constraint {
@@ -352,7 +299,7 @@ pub fn analyse_hazards(cell: &AnalysedCell) -> HazardAnalysis {
                             related_edge: edge_from(s, x),
                             pin: y.clone(),
                             pin_edge: edge_from(s, y),
-                            prevector: path_to(s),
+                            prevector: ex.path_to(s, &input_header),
                         }
                     };
                     let key = constraint_key(&cons);
@@ -405,7 +352,7 @@ pub fn analyse_hazards(cell: &AnalysedCell) -> HazardAnalysis {
                         related_edge: edge_from(s, clk),
                         pin: data.clone(),
                         pin_edge: edge_from(s, data),
-                        prevector: path_to(s),
+                        prevector: ex.path_to(s, &input_header),
                     }
                 } else {
                     Constraint {
@@ -414,7 +361,7 @@ pub fn analyse_hazards(cell: &AnalysedCell) -> HazardAnalysis {
                         related_edge: edge_from(s, x),
                         pin: y.clone(),
                         pin_edge: edge_from(s, y),
-                        prevector: path_to(s),
+                        prevector: ex.path_to(s, &input_header),
                     }
                 };
 

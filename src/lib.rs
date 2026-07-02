@@ -23,20 +23,19 @@ mod smoke {
         // C-element next-state: q is the delayed feedback of the output.
         //   next_q = a*b + q*(a+b)
         let next_q = expr!(("a" & "b") | ("q" & ("a" | "b")));
-        let not_next_q = expr!(!(("a" & "b") | ("q" & ("a" | "b"))));
 
         let builder = bdd_builder!();
         let f = builder.build(&next_q);
-        let nf = builder.build(&not_next_q);
 
         // Cover extraction works => FFI + BDD are linked.
         assert!(f.to_cubes().num_cubes() >= 1);
 
-        // Project the feedback variable q out.
+        // Project the feedback variable q out (complement the BDD directly rather than rebuilding a
+        // negated expression).
         //   on  = ∀q. f   == a*b
         //   off = ∀q. !f  == !a*!b
         let on = f.forall(&["q"]);
-        let off = nf.forall(&["q"]);
+        let off = (!f.clone()).forall(&["q"]);
         assert!(
             on.equivalent_to(&builder.build(&expr!("a" & "b"))),
             "on-set of a C-element must be a*b"

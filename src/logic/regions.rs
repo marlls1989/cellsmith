@@ -65,7 +65,7 @@ pub fn state_regions(output: &AnalysedOutput, inputs: &[String]) -> StateRegions
 
     let builder = bdd_builder!();
     let f = builder.build(&output.expr);
-    let not_f = builder.build(&!output.expr.clone());
+    let not_f = !f.clone();
 
     // Project out only the pin's *own* feedback (its current state); other signals stay as columns.
     let on_bdd = f.forall(&self_state);

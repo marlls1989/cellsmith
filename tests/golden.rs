@@ -98,7 +98,6 @@ const MUT: &str = r#"
 [[cell]]
 name = "MUT"
 inputs = ["A", "B"]
-arbitrate = ["Qa", "Qb"]
 [cell.outputs]
 Qa = "!Qb * A"
 Qb = "!Qa * B"

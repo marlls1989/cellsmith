@@ -29,42 +29,12 @@ pub struct Arbitration {
 impl Arbitration {
     /// The condition as a Boolean product of literals (`A*B`, `!R*S`, …).
     pub fn condition_str(&self) -> String {
-        literals_str(&self.condition)
+        crate::logic::literals_str(&self.condition)
     }
 
     /// A competing stable state as a brace-wrapped literal product (`{Qa=1, Qb=0}`).
     pub fn state_str(state: &Minterm<Symbol>) -> String {
-        let inner: Vec<String> = state
-            .vars()
-            .iter()
-            .zip(state.iter())
-            .filter_map(|(n, v)| v.map(|b| format!("{}={}", n.as_str(), if b { 1 } else { 0 })))
-            .collect();
-        format!("{{{}}}", inner.join(", "))
-    }
-}
-
-/// A minterm's fixed values as a product of literals: `A*B`, `!R*S` (in the minterm's variable order).
-/// No fixed value ⇒ the tautology `1`.
-pub(crate) fn literals_str(m: &Minterm<Symbol>) -> String {
-    let lits: Vec<String> = m
-        .vars()
-        .iter()
-        .zip(m.iter())
-        .filter_map(|(n, v)| {
-            v.map(|b| {
-                if b {
-                    n.as_str().to_string()
-                } else {
-                    format!("!{}", n.as_str())
-                }
-            })
-        })
-        .collect();
-    if lits.is_empty() {
-        "1".to_owned()
-    } else {
-        lits.join("*")
+        format!("{{{}}}", crate::logic::fixed_pairs(state, &[]).join(", "))
     }
 }
 

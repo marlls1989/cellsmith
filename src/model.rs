@@ -9,12 +9,15 @@ use indexmap::IndexMap;
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::expr::{self, ParseError};
+use espresso_logic::expression::ParseBoolExprError;
+
+use crate::expr;
 use crate::logic::confluence::{self, Constraint};
 use crate::logic::interlock::Arbitration;
 
 /// The whole input file: a list of `[[cell]]` tables.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Spec {
     #[serde(rename = "cell", default)]
     pub cells: Vec<Cell>,
@@ -22,6 +25,7 @@ pub struct Spec {
 
 /// One cell exactly as written in the TOML.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Cell {
     /// Physical cell name used in the emitted arcs.
     pub name: String,
@@ -52,12 +56,14 @@ pub struct Cell {
 
 #[derive(Debug, Error)]
 pub enum ModelError {
+    #[error("cannot parse spec: {0}")]
+    Spec(#[from] toml::de::Error),
     #[error("cell {cell:?}: cannot parse function for output {output:?}: {source}")]
     Function {
         cell: String,
         output: String,
         #[source]
-        source: ParseError,
+        source: ParseBoolExprError,
     },
     #[error("cell {cell:?}: duplicate input pin {pin:?}")]
     DuplicateInput { cell: String, pin: String },
@@ -88,10 +94,6 @@ pub struct AnalysedOutput {
     /// the cell's signal order.
     pub feedback: Vec<String>,
 }
-
-/// A signal after analysis. Alias of [`AnalysedOutput`], which now models any state-bearing signal
-/// (an external output or an internal variable).
-pub type AnalysedSignal = AnalysedOutput;
 
 /// A cell after validation/analysis.
 #[derive(Debug)]
@@ -238,8 +240,8 @@ impl Cell {
 }
 
 /// Parse a TOML spec into a [`Spec`].
-pub fn parse_spec(toml_src: &str) -> Result<Spec, toml::de::Error> {
-    toml::from_str(toml_src)
+pub fn parse_spec(toml_src: &str) -> Result<Spec, ModelError> {
+    Ok(toml::from_str(toml_src)?)
 }
 
 #[cfg(test)]
@@ -301,6 +303,20 @@ Y = "A*Z"
 "#;
         let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
         assert!(matches!(err, ModelError::UnknownVar { .. }));
+    }
+
+    #[test]
+    fn rejects_unknown_cell_key() {
+        // A misspelt or stale spec key must be a hard error, not silently ignored.
+        let s = r#"
+[[cell]]
+name = "X"
+inputs = ["A"]
+arbitrate = ["Q"]
+[cell.outputs]
+Y = "A"
+"#;
+        assert!(matches!(parse_spec(s), Err(ModelError::Spec(_))));
     }
 
     #[test]

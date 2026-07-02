@@ -28,6 +28,23 @@ pub enum Edge {
     Fall,
 }
 
+impl Edge {
+    /// The `R`/`F` symbol for this edge (Liberate vector notation).
+    pub fn rf(self) -> char {
+        match self {
+            Edge::Rise => 'R',
+            Edge::Fall => 'F',
+        }
+    }
+    /// The `↑`/`↓` arrow for this edge (human-readable condition notation).
+    pub fn arrow(self) -> char {
+        match self {
+            Edge::Rise => '↑',
+            Edge::Fall => '↓',
+        }
+    }
+}
+
 /// One characterization arc: an input edge on `related` driving `output` in direction `edge`. The
 /// related pin is **always a primary input** — outputs and internal state variables are never arc
 /// sources; they are established indirectly by the prevector.
@@ -125,41 +142,19 @@ pub fn cell_arcs(cell: &AnalysedCell) -> Vec<Arc> {
     // prevector. Keyed by (output, related, edge-direction, start over the inputs).
     let mut best_arc: BTreeMap<(String, String, bool, Minterm<Symbol>), Arc> = BTreeMap::new();
 
-    // The prevector: the input assignments from a start node to `node`, each projected onto the inputs.
-    let path_to = |node: &Minterm<Symbol>| -> Vec<Minterm<Symbol>> {
-        let mut chain = vec![node.clone()];
-        let mut cur = node.clone();
-        while let Some(Some(p)) = ex.prev.get(&cur) {
-            chain.push(p.clone());
-            cur = p.clone();
-        }
-        chain.reverse();
-        chain
-            .iter()
-            .map(|m| m.project_onto(&input_header))
-            .collect()
-    };
-
     // Re-walk the reachable stable states in BFS order; wherever a single input toggle flips an output,
     // emit an arc.
     for node in &ex.order {
         for related in inputs {
             // Toggle one input, hold the (partial) state, and let the state settle.
-            let toggled = machine::node_from_opt(&full_header, |name| {
-                let cur = node.value_of(name);
-                if name == related.as_str() {
-                    cur.map(|v| !v)
-                } else {
-                    cur
-                }
-            });
+            let toggled = machine::toggle(&full_header, node, &[related.as_str()]);
             let Some(np) = machine::settle(&deltas, &full_header, &toggled) else {
                 continue;
             };
             // An arc for every output that is defined at both ends and flips across this input toggle.
             let start = node.project_onto(&input_header);
             let end = np.project_onto(&input_header);
-            let prevector = path_to(node);
+            let prevector = ex.path_to(node, &input_header);
             for o in &cell.outputs {
                 let (Some(before), Some(after)) =
                     (output_value(&o.name, node), output_value(&o.name, &np))
