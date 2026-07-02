@@ -182,8 +182,6 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
         machine::settle_or_cycle(deltas, full_header, &toggled)
     };
 
-    let is_clock = |p: &str| cell.clock_pins.iter().any(|c| c.as_str() == p);
-
     // Dedup by canonical key, keeping the shortest prevector; BTreeMap gives deterministic output order.
     let mut found: BTreeMap<String, Constraint> = BTreeMap::new();
 
@@ -205,24 +203,38 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
         };
 
     for s in &ex.order {
+        // `path_to` depends only on `s`: compute the prevector into `s` once and clone it per constraint.
+        let prevector_s = ex.path_to(s, input_header);
+
+        // Each input's single-toggle settle, computed once per state (O(n) instead of O(n²)): reused as
+        // `r_x`/`r_y` across every pair and as the base of the `s_xy`/`s_yx` compositions below.
+        let single: Vec<Result<Minterm<Symbol>, Vec<Minterm<Symbol>>>> =
+            inputs.iter().map(|x| settle_toggle(s, &[x.as_str()])).collect();
+
+        // Single-toggle oscillation capture: a lone input toggle that never settles is itself an
+        // arbitration (no competing order to report — `stable` is empty). Recorded once per input per
+        // state; its `group|condition` key (one input toggled) can collide with neither a simultaneous
+        // pair's key (two toggled) nor another single's, so first-insertion-wins is unaffected.
+        for (i, r) in single.iter().enumerate() {
+            if let Err(cycle) = r {
+                let group = oscillating_group(cycle, state_vars);
+                record_arbitration(s, &[inputs[i].as_str()], group, Vec::new());
+            }
+        }
+
         for i in 0..n {
             for j in (i + 1)..n {
                 let x = &inputs[i];
                 let y = &inputs[j];
 
-                let r_x = settle_toggle(s, &[x.as_str()]);
-                let r_y = settle_toggle(s, &[y.as_str()]);
+                let r_x = &single[i];
+                let r_y = &single[j];
 
-                // Single-toggle oscillation capture: a lone input toggle that never settles is itself an
-                // arbitration (no competing order to report — `stable` is empty).
-                if let Err(cycle) = &r_x {
-                    let group = oscillating_group(cycle, state_vars);
-                    record_arbitration(s, &[x.as_str()], group, Vec::new());
-                }
-                if let Err(cycle) = &r_y {
-                    let group = oscillating_group(cycle, state_vars);
-                    record_arbitration(s, &[y.as_str()], group, Vec::new());
-                }
+                // Compose both settle orders once per pair: x-then-y (`s_xy`) and y-then-x (`s_yx`). Each
+                // is `Some` only when its base single settles and the second toggle settles too. Reused by
+                // the simultaneous-oscillation stable-set and the divergence check.
+                let s_xy = r_x.as_ref().ok().and_then(|sx| settle_toggle(sx, &[y.as_str()]).ok());
+                let s_yx = r_y.as_ref().ok().and_then(|sy| settle_toggle(sy, &[x.as_str()]).ok());
 
                 // Simultaneous probe: x and y toggled together. Oscillation here is the mutex/arbiter
                 // case proper — the pair asserted at once, driving the state into a periodic cycle.
@@ -231,15 +243,11 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
                     let group = oscillating_group(cycle, state_vars);
                     let group_header = machine::header(&group);
                     let mut stable_set: BTreeSet<Minterm<Symbol>> = BTreeSet::new();
-                    if let Ok(sx) = &r_x {
-                        if let Ok(sxy) = settle_toggle(sx, &[y.as_str()]) {
-                            stable_set.insert(sxy.project_onto(&group_header));
-                        }
+                    if let Some(sxy) = &s_xy {
+                        stable_set.insert(sxy.project_onto(&group_header));
                     }
-                    if let Ok(sy) = &r_y {
-                        if let Ok(syx) = settle_toggle(sy, &[x.as_str()]) {
-                            stable_set.insert(syx.project_onto(&group_header));
-                        }
+                    if let Some(syx) = &s_yx {
+                        stable_set.insert(syx.project_onto(&group_header));
                     }
                     record_arbitration(
                         s,
@@ -253,43 +261,14 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
                     // way (kind by the declared-clock rule, edges at `s`, prevector = path_to(s)). This
                     // supplies an arbitrating pair's (e.g. a mutex's) constraint, replacing the
                     // divergence-derived one the combinational-neighbourhood filter discards for it.
-                    let cons = if is_clock(x) ^ is_clock(y) {
-                        let (clk, data) = if is_clock(x) { (x, y) } else { (y, x) };
-                        Constraint {
-                            kind: ConstraintKind::SetupHold,
-                            related: clk.clone(),
-                            related_edge: edge_from(s, clk),
-                            pin: data.clone(),
-                            pin_edge: edge_from(s, data),
-                            prevector: ex.path_to(s, input_header),
-                        }
-                    } else {
-                        Constraint {
-                            kind: ConstraintKind::NonSeq,
-                            related: x.clone(),
-                            related_edge: edge_from(s, x),
-                            pin: y.clone(),
-                            pin_edge: edge_from(s, y),
-                            prevector: ex.path_to(s, input_header),
-                        }
-                    };
-                    let key = constraint_key(&cons);
-                    let shorter = found
-                        .get(&key)
-                        .is_none_or(|e| cons.prevector.len() < e.prevector.len());
-                    if shorter {
-                        found.insert(key, cons);
-                    }
+                    record_constraint(
+                        &mut found,
+                        make_constraint(s, x, y, &cell.clock_pins, prevector_s.clone()),
+                    );
                 }
 
-                let (Some(s_x), Some(s_y)) = (r_x.as_ref().ok(), r_y.as_ref().ok()) else {
-                    continue; // a single toggle oscillates → treat as confluent (no constraint)
-                };
-                let (Some(s_xy), Some(s_yx)) = (
-                    settle_toggle(s_x, &[y.as_str()]).ok(),
-                    settle_toggle(s_y, &[x.as_str()]).ok(),
-                ) else {
-                    continue;
+                let (Some(s_xy), Some(s_yx)) = (s_xy.as_ref(), s_yx.as_ref()) else {
+                    continue; // a toggle in one of the two orders oscillates → confluent (no constraint)
                 };
                 if s_xy == s_yx {
                     continue; // confluent at this state — no hazard
@@ -315,34 +294,10 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
                 // symmetric non_seq. The order-lock geometry is deliberately not used — it is
                 // state-dependent (the same pins/edges read asymmetric from one held state and symmetric
                 // from another), so it is not an invariant of the hazard and distinguishes nothing.
-                let cons = if is_clock(x) ^ is_clock(y) {
-                    let (clk, data) = if is_clock(x) { (x, y) } else { (y, x) };
-                    Constraint {
-                        kind: ConstraintKind::SetupHold,
-                        related: clk.clone(),
-                        related_edge: edge_from(s, clk),
-                        pin: data.clone(),
-                        pin_edge: edge_from(s, data),
-                        prevector: ex.path_to(s, input_header),
-                    }
-                } else {
-                    Constraint {
-                        kind: ConstraintKind::NonSeq,
-                        related: x.clone(),
-                        related_edge: edge_from(s, x),
-                        pin: y.clone(),
-                        pin_edge: edge_from(s, y),
-                        prevector: ex.path_to(s, input_header),
-                    }
-                };
-
-                let key = constraint_key(&cons);
-                let shorter = found
-                    .get(&key)
-                    .is_none_or(|e| cons.prevector.len() < e.prevector.len());
-                if shorter {
-                    found.insert(key, cons);
-                }
+                record_constraint(
+                    &mut found,
+                    make_constraint(s, x, y, &cell.clock_pins, prevector_s.clone()),
+                );
             }
         }
     }
@@ -350,6 +305,47 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
     HazardAnalysis {
         constraints: found.into_values().collect(),
         arbitration: arbitration.into_values().collect(),
+    }
+}
+
+/// Build the constraint that avoids a hazard on pins `x`,`y` observed at state `s`: a directed
+/// setup/hold when exactly one of the pair is a declared clock (clock ← data), else a symmetric non_seq.
+/// The edges are taken at `s` and `prevector` is the (pre-cloned) path into `s`.
+fn make_constraint(
+    s: &Minterm<Symbol>,
+    x: &str,
+    y: &str,
+    clock_pins: &[String],
+    prevector: Vec<Minterm<Symbol>>,
+) -> Constraint {
+    let is_clock = |p: &str| clock_pins.iter().any(|c| c.as_str() == p);
+    if is_clock(x) ^ is_clock(y) {
+        let (clk, data) = if is_clock(x) { (x, y) } else { (y, x) };
+        Constraint {
+            kind: ConstraintKind::SetupHold,
+            related: clk.to_string(),
+            related_edge: edge_from(s, clk),
+            pin: data.to_string(),
+            pin_edge: edge_from(s, data),
+            prevector,
+        }
+    } else {
+        Constraint {
+            kind: ConstraintKind::NonSeq,
+            related: x.to_string(),
+            related_edge: edge_from(s, x),
+            pin: y.to_string(),
+            pin_edge: edge_from(s, y),
+            prevector,
+        }
+    }
+}
+
+/// Record a constraint into the dedup map, keeping the shortest-prevector representative per canonical key.
+fn record_constraint(found: &mut BTreeMap<String, Constraint>, cons: Constraint) {
+    let key = constraint_key(&cons);
+    if found.get(&key).is_none_or(|e| cons.prevector.len() < e.prevector.len()) {
+        found.insert(key, cons);
     }
 }
 
