@@ -255,8 +255,8 @@ Y = "!(A*B)"
         assert!(lib.contains("cell (ND2)"));
         assert!(!lib.contains("statetable"));
         assert!(lib.contains("pin (Y)"));
-        assert!(lib.contains("function :"));
-        // NAND on-set = !A + !B (as SOP over the two off/hold-free cubes).
+        // NAND on-set = !(A*B), Espresso-minimised to the two-cube SOP !B + !A.
+        assert!(lib.contains("function : \"!B + !A\";"));
         assert!(lib.contains("direction : output;"));
     }
 
