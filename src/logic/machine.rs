@@ -30,6 +30,7 @@ pub fn header(names: &[String]) -> Arc<Symbols<Symbol>> {
 }
 
 /// Build a fully-fixed node over `header` from a `name -> value` lookup (called once per variable).
+#[cfg(test)]
 pub fn node_from<F: Fn(&str) -> bool>(header: &Arc<Symbols<Symbol>>, value: F) -> Minterm<Symbol> {
     Minterm::from_symbols(
         header.clone(),
@@ -50,6 +51,19 @@ pub fn node_from_opt<F: Fn(&str) -> Option<bool>>(
     )
 }
 
+/// `node` with each name in `names` flipped in value (an absent field stays absent); everything else
+/// keeps its current field.
+pub fn toggle(header: &Arc<Symbols<Symbol>>, node: &Minterm<Symbol>, names: &[&str]) -> Minterm<Symbol> {
+    node_from_opt(header, |nm| {
+        let cur = node.value_of(nm);
+        if names.contains(&nm) {
+            cur.map(|v| !v)
+        } else {
+            cur
+        }
+    })
+}
+
 /// One parallel next-state step: every state variable takes its δ evaluated at `node` — `Ok(v)` fixes
 /// it, `Err` (δ still depends on an absent variable) leaves it **absent**. Inputs (and anything else in
 /// the header) keep their current field.
@@ -58,18 +72,32 @@ fn step<B: Brand, C: ManagerCell>(
     header: &Arc<Symbols<Symbol>>,
     node: &Minterm<Symbol>,
 ) -> Minterm<Symbol> {
-    let next: Vec<(&str, Option<bool>)> = deltas
-        .iter()
-        .map(|(name, d)| (name.as_str(), d.evaluate(node).ok()))
-        .collect();
-    node_from_opt(header, |name| match next.iter().find(|(n, _)| *n == name) {
-        Some((_, v)) => *v,
-        None => node.value_of(name),
-    })
+    // The deltas are exactly the trailing state-variable columns of the header, in order (the header is
+    // `[inputs…, state_vars…]`), so index them positionally rather than scanning by name on this hot path.
+    let labels = header.labels();
+    let split = labels.len() - deltas.len();
+    debug_assert!(
+        labels[split..]
+            .iter()
+            .zip(deltas)
+            .all(|(l, (name, _))| l.as_str() == name.as_str()),
+        "step: deltas must be the trailing state-variable columns of the header, in order"
+    );
+    Minterm::from_symbols(
+        header.clone(),
+        labels.iter().enumerate().map(|(i, l)| {
+            if i < split {
+                node.value_of(l.as_str())
+            } else {
+                deltas[i - split].1.evaluate(node).ok()
+            }
+        }),
+    )
 }
 
 /// Whether `node` is stable: one [`step`] leaves it unchanged (every defined state variable already
 /// equals its δ, and no absent one has become forced).
+#[cfg(test)]
 pub fn is_stable<B: Brand, C: ManagerCell>(deltas: &[Delta<B, C>], node: &Minterm<Symbol>) -> bool {
     let header = node.symbols();
     step(deltas, header, node) == *node
@@ -120,6 +148,21 @@ pub struct Explored {
     pub prev: HashMap<Minterm<Symbol>, Option<Minterm<Symbol>>>,
 }
 
+impl Explored {
+    /// The input-projected BFS path into `node` (the prevector): walk predecessors back to a start,
+    /// reverse, and project each step onto `input_header`.
+    pub fn path_to(&self, node: &Minterm<Symbol>, input_header: &Arc<Symbols<Symbol>>) -> Vec<Minterm<Symbol>> {
+        let mut chain = vec![node.clone()];
+        let mut cur = node.clone();
+        while let Some(Some(p)) = self.prev.get(&cur) {
+            chain.push(p.clone());
+            cur = p.clone();
+        }
+        chain.reverse();
+        chain.iter().map(|m| m.project_onto(input_header)).collect()
+    }
+}
+
 /// Explore the reachable **stable** states of the machine, starting from initialisation candidates
 /// discovered from the signal covers (never an assumed all-zero state).
 ///
@@ -127,9 +170,10 @@ pub struct Explored {
 /// sets); `seed_funcs` are the characteristic functions whose on/off covers over the inputs seed the
 /// candidate pool (the state δ plus the combinational outputs, so combinational cells seed too).
 ///
-/// Pre-step (no `evaluate`): for each candidate input `x` — an input minterm drawn from the pooled
-/// on/off covers — its **settlement map** records, per state variable `w`, `Some(true)` if `x` forces
-/// `w=1` (in on(w), not off(w)), `Some(false)` if it forces `w=0`, else absent. Candidates are ranked by
+/// Pre-step: for each candidate input `x` — an input minterm drawn from the pooled on/off covers — its
+/// **settlement map** records, per state variable `w`, the value the fixed inputs force on `w`'s δ via
+/// [`Bdd::evaluate`]: `Some(true)` if they force `w=1`, `Some(false)` if `w=0`, else absent (the δ still
+/// depends on unresolved state). Candidates are ranked by
 /// how many state variables they settle, ties broken toward state nearest the inputs. Exploration then
 /// seeds the BFS from the ranked candidates in parallel, each start being the candidate's inputs plus
 /// its settled state, and refines further state with [`settle`] as inputs toggle.
@@ -167,13 +211,6 @@ pub fn explore<B: Brand, C: ManagerCell>(
         pool.extend(cover_inputs(&!f));
     }
 
-    // Per-state-variable on/off sets, for settlement by membership.
-    type InputSet = BTreeSet<Minterm<Symbol>>;
-    let on_off: Vec<(InputSet, InputSet)> = state_deltas
-        .iter()
-        .map(|(_, d)| (cover_inputs(d), cover_inputs(&!d)))
-        .collect();
-
     // Depth of each state variable from the inputs (shallowest dependency chain), for the ranking
     // tie-break. A variable driven purely by inputs is depth 1; others are 1 + the shallowest state
     // variable they reference. Pure cycles (no input-only base) stay at the max.
@@ -203,16 +240,11 @@ pub fn explore<B: Brand, C: ManagerCell>(
         }
     }
 
-    // Settlement map of a candidate input: per state variable, the value it forces (or absent).
+    // Settlement map of a candidate input: per state variable, the value its δ takes when the fixed
+    // inputs already determine it (evaluate → `Ok`), or absent when the δ still depends on unresolved
+    // state (`Err`). This is the membership test on(w)/off(w) done directly against each δ.
     let settlement = |x: &Minterm<Symbol>| -> Vec<Option<bool>> {
-        on_off
-            .iter()
-            .map(|(on, off)| match (on.contains(x), off.contains(x)) {
-                (true, false) => Some(true),
-                (false, true) => Some(false),
-                _ => None,
-            })
-            .collect()
+        state_deltas.iter().map(|(_, d)| d.evaluate(x).ok()).collect()
     };
     let settle_count = |m: &[Option<bool>]| m.iter().filter(|o| o.is_some()).count();
     let depth_sum = |m: &[Option<bool>]| -> u64 {
@@ -260,14 +292,7 @@ pub fn explore<B: Brand, C: ManagerCell>(
     while let Some(node) = queue.pop_front() {
         order.push(node.clone());
         for related in input_names {
-            let toggled = node_from_opt(full_header, |name| {
-                let cur = node.value_of(name);
-                if name == related.as_str() {
-                    cur.map(|v| !v)
-                } else {
-                    cur
-                }
-            });
+            let toggled = toggle(full_header, &node, &[related.as_str()]);
             let Some(np) = settle(state_deltas, full_header, &toggled) else {
                 continue;
             };

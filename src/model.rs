@@ -9,12 +9,16 @@ use indexmap::IndexMap;
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::expr::{self, ParseError};
-use crate::logic::confluence::{self, Constraint};
+use espresso_logic::expression::ParseBoolExprError;
+
+use crate::expr;
+use crate::logic::arcs::Arc;
+use crate::logic::confluence::Constraint;
 use crate::logic::interlock::Arbitration;
 
 /// The whole input file: a list of `[[cell]]` tables.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Spec {
     #[serde(rename = "cell", default)]
     pub cells: Vec<Cell>,
@@ -22,6 +26,7 @@ pub struct Spec {
 
 /// One cell exactly as written in the TOML.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Cell {
     /// Physical cell name used in the emitted arcs.
     pub name: String,
@@ -52,12 +57,14 @@ pub struct Cell {
 
 #[derive(Debug, Error)]
 pub enum ModelError {
+    #[error("cannot parse spec: {0}")]
+    Spec(#[from] toml::de::Error),
     #[error("cell {cell:?}: cannot parse function for output {output:?}: {source}")]
     Function {
         cell: String,
         output: String,
         #[source]
-        source: ParseError,
+        source: ParseBoolExprError,
     },
     #[error("cell {cell:?}: duplicate input pin {pin:?}")]
     DuplicateInput { cell: String, pin: String },
@@ -89,10 +96,6 @@ pub struct AnalysedOutput {
     pub feedback: Vec<String>,
 }
 
-/// A signal after analysis. Alias of [`AnalysedOutput`], which now models any state-bearing signal
-/// (an external output or an internal variable).
-pub type AnalysedSignal = AnalysedOutput;
-
 /// A cell after validation/analysis.
 #[derive(Debug)]
 pub struct AnalysedCell {
@@ -103,6 +106,9 @@ pub struct AnalysedCell {
     /// function; never an arc source or target.
     pub internals: Vec<AnalysedOutput>,
     pub async_pins: Vec<String>,
+    /// The transition arcs derived for the cell's outputs, precomputed once by the shared machine pass
+    /// ([`crate::logic::analysis::analyse_machine`]) and consumed by the arcs emitter.
+    pub arcs: Vec<Arc>,
     /// Detected arbitration/metastability conditions (empty for ordinary combinational or
     /// self-holding cells). See [`crate::logic::interlock`].
     pub arbitration: Vec<Arbitration>,
@@ -114,12 +120,23 @@ pub struct AnalysedCell {
     pub constraints: Vec<Constraint>,
     /// Whether the cell opted in to constraint-arc emission (`constraint_arcs = true`).
     pub constraint_arcs_declared: bool,
+    /// Each signal's state-table regions, precomputed once and cached in `signals()` order (outputs
+    /// then internals), so emitters don't rebuild the BDDs per call site.
+    pub regions: Vec<crate::logic::regions::StateRegions>,
 }
 
 impl AnalysedCell {
     /// Every state-bearing signal: outputs first, then internals, in declaration order.
     pub fn signals(&self) -> impl Iterator<Item = &AnalysedOutput> {
         self.outputs.iter().chain(self.internals.iter())
+    }
+
+    /// Each signal paired with its cached state-table regions, in `signals()` order (outputs then
+    /// internals).
+    pub fn signal_regions(
+        &self,
+    ) -> impl Iterator<Item = (&AnalysedOutput, &crate::logic::regions::StateRegions)> {
+        self.signals().zip(self.regions.iter())
     }
 }
 
@@ -222,24 +239,41 @@ impl Cell {
             outputs,
             internals,
             async_pins: self.async_pins.clone(),
+            arcs: Vec::new(),
             arbitration: Vec::new(),
             clock_pins: self.clock.clone(),
             constraints: Vec::new(),
             constraint_arcs_declared: self.constraint_arcs,
+            regions: Vec::new(),
         };
-        // Analyse hazards in one confluence pass over the reachable state machine, deriving the
-        // constraints (setup/hold, non_seq) that avoid them plus the arbitration annotations. Clock
-        // suppression and emission gating are applied downstream.
-        let analysis = confluence::analyse_hazards(&analysed);
+        // Build the cell's state machine once and derive both its transition arcs and its hazards (the
+        // constraints — setup/hold, non_seq — that avoid them plus the arbitration annotations) from the
+        // shared exploration. Clock suppression and emission gating are applied downstream.
+        let analysis = crate::logic::analysis::analyse_machine(&analysed);
+        analysed.arcs = analysis.arcs;
         analysed.constraints = analysis.constraints;
         analysed.arbitration = analysis.arbitration;
+        // Cache each signal's state-table regions once, in `signals()` order, so downstream emitters
+        // don't rebuild the BDDs per call site.
+        analysed.regions = analysed
+            .signals()
+            .map(|s| crate::logic::regions::state_regions(s, &analysed.inputs))
+            .collect();
         Ok(analysed)
     }
 }
 
 /// Parse a TOML spec into a [`Spec`].
-pub fn parse_spec(toml_src: &str) -> Result<Spec, toml::de::Error> {
-    toml::from_str(toml_src)
+pub fn parse_spec(toml_src: &str) -> Result<Spec, ModelError> {
+    Ok(toml::from_str(toml_src)?)
+}
+
+/// Parse a single-cell TOML `src` and return its analysed form. The one canonical test helper, shared
+/// by the in-crate `#[cfg(test)]` modules (`tests/golden.rs` keeps its own copy — a separate crate
+/// cannot see `pub(crate)`).
+#[cfg(test)]
+pub(crate) fn analyse_one(src: &str) -> AnalysedCell {
+    parse_spec(src).unwrap().cells.remove(0).analyse().unwrap()
 }
 
 #[cfg(test)]
@@ -301,6 +335,66 @@ Y = "A*Z"
 "#;
         let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
         assert!(matches!(err, ModelError::UnknownVar { .. }));
+    }
+
+    #[test]
+    fn rejects_unknown_var_in_internal() {
+        // An undefined variable is rejected wherever it appears — an internal function, not just an output.
+        let s = r#"
+[[cell]]
+name = "X"
+inputs = ["A"]
+[cell.internal]
+W = "A*Z"
+[cell.outputs]
+Y = "W"
+"#;
+        let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
+        assert!(matches!(err, ModelError::UnknownVar { var, .. } if var == "Z"));
+    }
+
+    #[test]
+    fn multiple_errors_report_the_first_deterministically() {
+        // Two outputs each reference an undefined variable. Analysis short-circuits on the first in a
+        // fixed traversal order (outputs in declaration order), so the reported error is stable across
+        // repeated parses — never dependent on hash-map iteration.
+        let s = r#"
+[[cell]]
+name = "MULTI"
+inputs = ["A"]
+[cell.outputs]
+Y1 = "A*Z1"
+Y2 = "A*Z2"
+"#;
+        let first = parse_spec(s).unwrap().cells[0]
+            .analyse()
+            .unwrap_err()
+            .to_string();
+        for _ in 0..8 {
+            let again = parse_spec(s).unwrap().cells[0]
+                .analyse()
+                .unwrap_err()
+                .to_string();
+            assert_eq!(again, first, "error reporting must be deterministic");
+        }
+        assert!(
+            first.contains("Z1") && !first.contains("Z2"),
+            "the first-declared offending output is reported first: {first}",
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_cell_key() {
+        // A misspelt or stale spec key must be a hard error, not silently ignored.
+        let s = r#"
+[[cell]]
+name = "X"
+inputs = ["A"]
+arbitrate = ["Q"]
+[cell.outputs]
+Y = "A"
+"#;
+        assert!(matches!(parse_spec(s), Err(ModelError::Spec(_))));
     }
 
     #[test]

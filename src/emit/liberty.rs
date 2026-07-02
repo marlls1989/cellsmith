@@ -14,7 +14,7 @@ use liberty_parse::{
     liberty::{Attribute, Group, Liberty},
 };
 
-use crate::logic::regions::{state_regions, StateCube, StateRegions};
+use crate::logic::regions::{StateCube, StateRegions};
 use crate::model::{AnalysedCell, AnalysedOutput};
 
 /// Add a simple `name : value;` attribute to a group.
@@ -51,11 +51,10 @@ fn cell_group(cell: &AnalysedCell) -> Group {
     for input in &cell.inputs {
         group.subgroups.push(input_pin(input));
     }
-    for output in &cell.outputs {
-        push_signal(&mut group, output, &cell.inputs, "output");
-    }
-    for internal in &cell.internals {
-        push_signal(&mut group, internal, &cell.inputs, "internal");
+    let n_out = cell.outputs.len();
+    for (i, (sig, sr)) in cell.signal_regions().enumerate() {
+        let direction = if i < n_out { "output" } else { "internal" };
+        push_signal(&mut group, sig, sr, direction);
     }
 
     group
@@ -64,10 +63,9 @@ fn cell_group(cell: &AnalysedCell) -> Group {
 /// Emit a signal's pin (and, if hysteretic, its `statetable`). `direction` is `"output"` for an
 /// external pin or `"internal"` for an internal state node — modelled in the state table exactly like
 /// an output, but with no external connection.
-fn push_signal(group: &mut Group, sig: &AnalysedOutput, inputs: &[String], direction: &str) {
-    let sr = state_regions(sig, inputs);
+fn push_signal(group: &mut Group, sig: &AnalysedOutput, sr: &StateRegions, direction: &str) {
     if sr.hysteretic {
-        group.subgroups.push(statetable_group(&sr, &sig.name));
+        group.subgroups.push(statetable_group(sr, &sig.name));
         // A hysteretic pin reads the state node of the same name defined by its statetable.
         group
             .subgroups
@@ -75,7 +73,7 @@ fn push_signal(group: &mut Group, sig: &AnalysedOutput, inputs: &[String], direc
     } else {
         group
             .subgroups
-            .push(signal_pin(&sig.name, direction, &function_sop(&sr)));
+            .push(signal_pin(&sig.name, direction, &function_sop(sr)));
     }
 }
 
@@ -175,11 +173,8 @@ fn function_sop(sr: &StateRegions) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::parse_spec;
-
-    fn analyse(src: &str) -> AnalysedCell {
-        parse_spec(src).unwrap().cells.remove(0).analyse().unwrap()
-    }
+    use crate::logic::regions::state_regions;
+    use crate::model::analyse_one as analyse;
 
     #[test]
     fn c_element_emits_statetable() {
@@ -256,8 +251,8 @@ Y = "!(A*B)"
         assert!(lib.contains("cell (ND2)"));
         assert!(!lib.contains("statetable"));
         assert!(lib.contains("pin (Y)"));
-        assert!(lib.contains("function :"));
-        // NAND on-set = !A + !B (as SOP over the two off/hold-free cubes).
+        // NAND on-set = !(A*B), Espresso-minimised to the two-cube SOP !B + !A.
+        assert!(lib.contains("function : \"!B + !A\";"));
         assert!(lib.contains("direction : output;"));
     }
 

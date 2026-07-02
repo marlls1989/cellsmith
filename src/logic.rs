@@ -1,5 +1,6 @@
 //! The logic core: signal resolution, the state machine, region derivation, and arc derivation.
 
+pub mod analysis;
 pub mod arcs;
 pub mod confluence;
 pub mod interlock;
@@ -19,6 +20,46 @@ pub fn assignment(m: &Minterm<Symbol>) -> BTreeMap<String, bool> {
         .zip(m.iter())
         .filter_map(|(var, val)| val.map(|b| (var.as_str().to_string(), b)))
         .collect()
+}
+
+/// A minterm's fixed values as a product of literals: `A*B`, `!R*S` (in the minterm's variable order).
+/// No fixed value ⇒ the tautology `1`.
+pub(crate) fn literals_str(m: &Minterm<Symbol>) -> String {
+    let pairs: Vec<(String, bool)> = m
+        .vars()
+        .iter()
+        .zip(m.iter())
+        .filter_map(|(n, v)| v.map(|b| (n.as_str().to_string(), b)))
+        .collect();
+    if pairs.is_empty() {
+        "1".to_owned()
+    } else {
+        literal_product(&pairs)
+    }
+}
+
+/// A minterm's fixed values as `name=1`/`name=0` strings (minterm variable order), skipping any name
+/// in `skip`. Used to render competing states and hazard conditions.
+pub(crate) fn fixed_pairs(m: &Minterm<Symbol>, skip: &[&str]) -> Vec<String> {
+    m.vars()
+        .iter()
+        .zip(m.iter())
+        .filter_map(|(n, v)| {
+            let name = n.as_str();
+            if skip.contains(&name) {
+                return None;
+            }
+            v.map(|b| format!("{name}={}", if b { 1 } else { 0 }))
+        })
+        .collect()
+}
+
+/// A product of literals `k`/`!k` joined by `*` (no tautology fallback, no sorting — the caller decides).
+pub(crate) fn literal_product(lits: &[(String, bool)]) -> String {
+    lits.iter()
+        .map(|(k, v)| if *v { k.clone() } else { format!("!{k}") })
+        .collect::<Vec<_>>()
+        .join("*")
 }
 
 #[cfg(test)]

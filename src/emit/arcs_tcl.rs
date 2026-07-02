@@ -4,7 +4,7 @@
 //! arcs place `-type` first while fall arcs place it after the prevector. Pins are emitted in
 //! declaration order (lobsterate's deliberate divergence from hsNCL's alphabetical sort).
 
-use crate::logic::arcs::{cell_arcs, Arc, Edge};
+use crate::logic::arcs::{Arc, Edge};
 use crate::logic::assignment;
 use crate::logic::confluence::{Constraint, ConstraintKind};
 use crate::logic::interlock::Arbitration;
@@ -41,11 +41,10 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     // are the *same* arc — one prevector is enough to exercise it, so collapse them (keeping the
     // shortest prevector). With `-when` each held context is a distinct characterisation condition and
     // is kept.
-    let arcs = cell_arcs(cell);
     let arcs = if opts.emit_when {
-        arcs
+        cell.arcs.clone()
     } else {
-        collapse_conditions(arcs)
+        collapse_conditions(&cell.arcs)
     };
     for arc in &arcs {
         out.push_str(&format_arc(cell, arc, opts));
@@ -102,32 +101,25 @@ fn constraint_block(cell: &AnalysedCell, c: &Constraint, arc_type: &str) -> Stri
 /// as their `R`/`F` edges, every other input at its held value in the pre-toggle state (the prevector's
 /// last step), and every output as `X` (a constraint arc measures no output transition).
 fn constraint_vector_str(cell: &AnalysedCell, c: &Constraint) -> String {
-    let edge = |e: Edge| match e {
-        Edge::Rise => "R",
-        Edge::Fall => "F",
-    };
     let held = c.prevector.last().map(assignment).unwrap_or_default();
-    let mut parts = Vec::with_capacity(cell.inputs.len() + cell.outputs.len());
-    for input in &cell.inputs {
-        if *input == c.related {
-            parts.push(edge(c.related_edge).to_string());
-        } else if *input == c.pin {
-            parts.push(edge(c.pin_edge).to_string());
-        } else {
-            parts.push(
+    vector(
+        cell,
+        |input| {
+            if input == c.related {
+                c.related_edge.rf().to_string()
+            } else if input == c.pin {
+                c.pin_edge.rf().to_string()
+            } else {
                 if *held.get(input).unwrap_or(&false) {
                     "1"
                 } else {
                     "0"
                 }
-                .to_string(),
-            );
-        }
-    }
-    for _ in &cell.outputs {
-        parts.push("X".to_string());
-    }
-    parts.join(" ")
+                .to_string()
+            }
+        },
+        |_| "X".to_string(),
+    )
 }
 
 /// A `#` comment block describing each detected arbitration condition (empty for ordinary cells).
@@ -148,10 +140,11 @@ fn arbitration_comment(cell: &AnalysedCell) -> String {
 /// Collapse arcs that share a `(pin, related, edge)` — the same physical transition reached under
 /// different held-input contexts — to one, keeping the shortest prevector. Used when `-when` is off,
 /// where the held context is not emitted, so a single prevector suffices to exercise the arc.
-fn collapse_conditions(arcs: Vec<Arc>) -> Vec<Arc> {
+fn collapse_conditions(arcs: &[Arc]) -> Vec<Arc> {
     use std::collections::btree_map::Entry;
     use std::collections::BTreeMap;
-    let mut best: BTreeMap<(String, String, bool), Arc> = BTreeMap::new();
+    // Keep references while deduping so only the surviving arcs are cloned.
+    let mut best: BTreeMap<(String, String, bool), &Arc> = BTreeMap::new();
     for arc in arcs {
         let key = (
             arc.output.clone(),
@@ -169,7 +162,7 @@ fn collapse_conditions(arcs: Vec<Arc>) -> Vec<Arc> {
             }
         }
     }
-    best.into_values().collect()
+    best.into_values().cloned().collect()
 }
 
 fn format_arc(cell: &AnalysedCell, arc: &Arc, opts: ArcsTclOptions) -> String {
@@ -250,33 +243,46 @@ fn prevector_str(
         .join(" ")
 }
 
+/// One symbol per input (cell.inputs order), then one per output (cell.outputs order), joined by " ".
+fn vector(
+    cell: &AnalysedCell,
+    input_sym: impl Fn(&str) -> String,
+    output_sym: impl Fn(&str) -> String,
+) -> String {
+    let mut parts = Vec::with_capacity(cell.inputs.len() + cell.outputs.len());
+    for input in &cell.inputs {
+        parts.push(input_sym(input));
+    }
+    for output in &cell.outputs {
+        parts.push(output_sym(&output.name));
+    }
+    parts.join(" ")
+}
+
 /// The measured vector: the related input pin and the measured output as `R`/`F`, the other inputs
 /// as their `1`/`0` value in the end state, and the other outputs as `X`.
 fn vector_str(cell: &AnalysedCell, arc: &Arc) -> String {
     let end = assignment(&arc.end);
-    let mut parts = Vec::with_capacity(cell.inputs.len() + cell.outputs.len());
-    for input in &cell.inputs {
-        let value = *end.get(input).unwrap_or(&false);
-        if *input == arc.related {
-            parts.push(if value { "R" } else { "F" }.to_string());
-        } else {
-            parts.push(if value { "1" } else { "0" }.to_string());
-        }
-    }
-    for output in &cell.outputs {
-        if output.name == arc.output {
-            parts.push(
-                match arc.edge {
-                    Edge::Rise => "R",
-                    Edge::Fall => "F",
-                }
-                .to_string(),
-            );
-        } else {
-            parts.push("X".to_string());
-        }
-    }
-    parts.join(" ")
+    vector(
+        cell,
+        |input| {
+            let value = *end.get(input).unwrap_or(&false);
+            if input == arc.related {
+                (if value { Edge::Rise } else { Edge::Fall })
+                    .rf()
+                    .to_string()
+            } else {
+                if value { "1" } else { "0" }.to_string()
+            }
+        },
+        |name| {
+            if name == arc.output {
+                arc.edge.rf().to_string()
+            } else {
+                "X".to_string()
+            }
+        },
+    )
 }
 
 /// The `-when` condition: the other inputs' fixed values in the end state, as a product of literals
@@ -290,22 +296,13 @@ fn when_str(arc: &Arc) -> Option<String> {
         return None;
     }
     lits.sort();
-    Some(
-        lits.iter()
-            .map(|(k, v)| if *v { k.clone() } else { format!("!{k}") })
-            .collect::<Vec<_>>()
-            .join("*"),
-    )
+    Some(crate::logic::literal_product(&lits))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::parse_spec;
-
-    fn analyse(src: &str) -> AnalysedCell {
-        parse_spec(src).unwrap().cells.remove(0).analyse().unwrap()
-    }
+    use crate::model::analyse_one as analyse;
 
     #[test]
     fn c_element_emits_well_formed_arcs() {
@@ -365,6 +362,47 @@ Q = "A*B + Q*(A+B)"
         );
         assert!(!off.contains("-when"));
         assert!(on.contains("-when"));
+    }
+
+    #[test]
+    fn collapse_conditions_reduces_shared_context_arcs() {
+        // A 3-input majority gate: its output rises via one pin under two distinct held contexts (the
+        // other two inputs at 10 or 01). With `-when` off those share a (output, related, edge) and
+        // collapse to one representative, so the collapsed set has strictly fewer arcs than the raw set.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "MAJ3"
+inputs = ["A", "B", "C"]
+[cell.outputs]
+Y = "A*B + B*C + A*C"
+"#,
+        );
+        let collapsed = collapse_conditions(&cell.arcs);
+        assert!(
+            collapsed.len() < cell.arcs.len(),
+            "collapse should drop redundant held-context duplicates: {} vs {}",
+            collapsed.len(),
+            cell.arcs.len(),
+        );
+        // The emitter reflects the collapse: fewer `define_arc` blocks once `-when` is suppressed.
+        let with_when = cell_arcs_tcl(
+            &cell,
+            ArcsTclOptions {
+                emit_when: true,
+                ..Default::default()
+            },
+        );
+        let without_when = cell_arcs_tcl(
+            &cell,
+            ArcsTclOptions {
+                emit_when: false,
+                ..Default::default()
+            },
+        );
+        assert!(
+            without_when.matches("define_arc").count() < with_when.matches("define_arc").count()
+        );
     }
 
     #[test]

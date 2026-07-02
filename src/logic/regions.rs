@@ -13,7 +13,10 @@
 //! - `off  = ∀self. ¬f`  — forced low,
 //! - `hold = ¬(on ∨ off)` — state-dependent (hysteretic); a `-`/`N` no-change entry.
 
-use espresso_logic::{bdd_builder, Anonymous, Cover, Symbol};
+use std::sync::Arc;
+
+use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
+use espresso_logic::{bdd_builder, Anonymous, Cover, Symbol, Symbols};
 
 use crate::logic::machine;
 use crate::model::AnalysedOutput;
@@ -65,18 +68,20 @@ pub fn state_regions(output: &AnalysedOutput, inputs: &[String]) -> StateRegions
 
     let builder = bdd_builder!();
     let f = builder.build(&output.expr);
-    let not_f = builder.build(&!output.expr.clone());
+    let not_f = !f.clone();
 
     // Project out only the pin's *own* feedback (its current state); other signals stay as columns.
     let on_bdd = f.forall(&self_state);
     let off_bdd = not_f.forall(&self_state);
     let hold_bdd = !on_bdd.or(&off_bdd);
 
-    // Extract each region's prime-path cubes and realign them onto the `cols` header.
+    // Minimise each disjoint region with Espresso and realign the cubes onto the `cols` header.
+    // The three regions partition the input space, so minimising each independently keeps the
+    // emitted statetable/UDP rows mutually consistent.
     let cols_header = machine::header(&cols);
-    let on = realign(&on_bdd.to_cubes(), &cols_header);
-    let off = realign(&off_bdd.to_cubes(), &cols_header);
-    let hold = realign(&hold_bdd.to_cubes(), &cols_header);
+    let on = minimised(&on_bdd, &cols_header);
+    let off = minimised(&off_bdd, &cols_header);
+    let hold = minimised(&hold_bdd, &cols_header);
     let hysteretic = !hold.is_empty();
 
     StateRegions {
@@ -86,6 +91,18 @@ pub fn state_regions(output: &AnalysedOutput, inputs: &[String]) -> StateRegions
         hold,
         hysteretic,
     }
+}
+
+/// Minimise a region's function with Espresso and realign the resulting cover onto `cols`. Falls back
+/// to the (non-minimised) prime-path cubes if the minimiser errors. Because `minimize` of a false
+/// function yields an empty cover, region emptiness — and thus the hysteretic flag and the emitters'
+/// constant-detection — is preserved.
+fn minimised<B: Brand, C: ManagerCell>(
+    bdd: &Bdd<B, C>,
+    cols: &Arc<Symbols<Symbol>>,
+) -> Vec<StateCube> {
+    let cover = bdd.minimize().unwrap_or_else(|_| bdd.to_cubes());
+    realign(&cover, cols)
 }
 
 /// Realign a cover's cubes onto the `cols` header: for each cube, one `Option<bool>` per column
@@ -105,11 +122,7 @@ fn realign(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{parse_spec, AnalysedCell};
-
-    fn analyse(src: &str) -> AnalysedCell {
-        parse_spec(src).unwrap().cells.remove(0).analyse().unwrap()
-    }
+    use crate::model::analyse_one as analyse;
 
     #[test]
     fn state_regions_c_element_self_holds() {
@@ -167,6 +180,103 @@ Q = "CLK*M + !CLK*Q"
         let q = state_regions(&cell.outputs[0], &cell.inputs);
         assert_eq!(q.cols, ["CLK", "D", "M"]); // internal M kept as a column, Q (self) projected
         assert!(q.hysteretic);
+    }
+
+    /// The crux of the minimisation step: for every region of every signal, the BDD reconstructed
+    /// from the emitted (minimised) cubes must be *logically equivalent* to the reference region BDD
+    /// computed exactly as [`state_regions`] does. This proves minimisation preserved every region's
+    /// function even though the cube set changed.
+    #[test]
+    fn minimised_regions_are_equivalent_to_functions() {
+        use espresso_logic::bdd::BddBuilder;
+
+        // Rebuild a region BDD from its emitted cubes: OR of cubes, each cube the AND of its fixed
+        // literals. An empty cube list is the constant `false`; a cube with no fixed literal (all
+        // don't-care) is the constant `true`.
+        fn reconstruct<B: Brand, C: ManagerCell>(
+            builder: &BddBuilder<B, C>,
+            cols: &[String],
+            cubes: &[StateCube],
+        ) -> Bdd<B, C> {
+            let mut cover = builder.constant(false);
+            for cube in cubes {
+                let mut product = builder.constant(true);
+                for (col, val) in cols.iter().zip(cube.iter()) {
+                    match val {
+                        Some(true) => product = product.and(&builder.var(col)),
+                        Some(false) => product = product.and(&!builder.var(col)),
+                        None => {}
+                    }
+                }
+                cover = cover.or(&product);
+            }
+            cover
+        }
+
+        let cells = [
+            r#"
+[[cell]]
+name = "C2"
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+"#,
+            r#"
+[[cell]]
+name = "ND2"
+inputs = ["A", "B"]
+[cell.outputs]
+Y = "!(A*B)"
+"#,
+            r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#,
+        ];
+
+        for src in cells {
+            let cell = analyse(src);
+            for sig in cell.signals() {
+                let sr = state_regions(sig, &cell.inputs);
+
+                // Reference region BDDs, built exactly as `state_regions` does. One builder for both
+                // the references and the reconstruction so `equivalent_to` shares a manager.
+                let builder = bdd_builder!();
+                let f = builder.build(&sig.expr);
+                let self_state: Vec<&str> = if sig.feedback.contains(&sig.name) {
+                    vec![sig.name.as_str()]
+                } else {
+                    vec![]
+                };
+                let on_bdd = f.forall(&self_state);
+                let off_bdd = (!f.clone()).forall(&self_state);
+                let hold_bdd = !on_bdd.or(&off_bdd);
+
+                assert!(
+                    reconstruct(&builder, &sr.cols, &sr.on).equivalent_to(&on_bdd),
+                    "on region mismatch for {}.{}",
+                    cell.name,
+                    sig.name
+                );
+                assert!(
+                    reconstruct(&builder, &sr.cols, &sr.off).equivalent_to(&off_bdd),
+                    "off region mismatch for {}.{}",
+                    cell.name,
+                    sig.name
+                );
+                assert!(
+                    reconstruct(&builder, &sr.cols, &sr.hold).equivalent_to(&hold_bdd),
+                    "hold region mismatch for {}.{}",
+                    cell.name,
+                    sig.name
+                );
+            }
+        }
     }
 
     #[test]
