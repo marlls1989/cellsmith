@@ -39,8 +39,8 @@ pub struct Cell {
     /// so their arcs are emitted as `-type async` rather than combinational.
     #[serde(rename = "async", default)]
     pub async_pins: Vec<String>,
-    /// Optional: input pins that are clocks. A hazard on a pin pair holding a declared clock is a
-    /// directed setup/hold (clock ← data); any other pair is a symmetric non_seq. See
+    /// Optional: input pins that are clocks. A hazard on a pin pair holding a declared clock yields a
+    /// directed setup/hold constraint (clock ← data); any other pair yields a symmetric non_seq. See
     /// [`crate::logic::confluence`].
     #[serde(default)]
     pub clock: Vec<String>,
@@ -108,8 +108,9 @@ pub struct AnalysedCell {
     pub arbitration: Vec<Arbitration>,
     /// Declared clock input pins (`clock = [...]`). See [`crate::logic::confluence`].
     pub clock_pins: Vec<String>,
-    /// All detected constraint hazards (setup/hold and non_seq). Emission is gated by the CLI flag or
-    /// `constraint_arcs_declared`; the kind of each hazard follows the declared clock.
+    /// The constraints derived to avoid the cell's hazards (setup/hold and non_seq). Emission is gated
+    /// by the CLI flag or `constraint_arcs_declared`; the kind of each constraint follows the declared
+    /// clock.
     pub constraints: Vec<Constraint>,
     /// Whether the cell opted in to constraint-arc emission (`constraint_arcs = true`).
     pub constraint_arcs_declared: bool,
@@ -226,11 +227,12 @@ impl Cell {
             constraints: Vec::new(),
             constraint_arcs_declared: self.constraint_arcs,
         };
-        // Derive all hazards (setup/hold, non_seq, arbitration) from one confluence pass over the
-        // reachable state machine. Clock suppression and emission gating are applied downstream.
-        let hazards = confluence::cell_hazards(&analysed);
-        analysed.constraints = hazards.constraints;
-        analysed.arbitration = hazards.arbitration;
+        // Analyse hazards in one confluence pass over the reachable state machine, deriving the
+        // constraints (setup/hold, non_seq) that avoid them plus the arbitration annotations. Clock
+        // suppression and emission gating are applied downstream.
+        let analysis = confluence::analyse_hazards(&analysed);
+        analysed.constraints = analysis.constraints;
+        analysed.arbitration = analysis.arbitration;
         Ok(analysed)
     }
 }

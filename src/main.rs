@@ -77,12 +77,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // Diagnose every detected constraint hazard, for any cell, listing the conditions under which each
-    // occurs. Each input pin pair is uniformly one kind (setup/hold if it holds a declared clock, else
+    // Diagnose every derived constraint, for any cell, listing the hazard conditions that require it.
+    // Each input pin pair is uniformly one kind (setup/hold if it holds a declared clock, else
     // non_seq), so its conditions are gathered and reported once.
-    type HazardPairs<'a> = BTreeMap<(&'a str, &'a str), (&'static str, Vec<String>)>;
+    type ConstraintPairs<'a> = BTreeMap<(&'a str, &'a str), (&'static str, Vec<String>)>;
     for c in &cells {
-        let mut pairs: HazardPairs = BTreeMap::new();
+        let mut pairs: ConstraintPairs = BTreeMap::new();
         for con in &c.constraints {
             let (a, b) = (con.related.as_str(), con.pin.as_str());
             let key = if a <= b { (a, b) } else { (b, a) };
@@ -98,7 +98,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         }
         for ((a, b), (kind, conditions)) in &pairs {
             eprintln!(
-                "lobsterate: warning: cell {:?}: {kind} hazard on inputs ({a}, {b}) when {}.",
+                "lobsterate: warning: cell {:?}: inputs ({a}, {b}) need a {kind} constraint — hazard when {}.",
                 c.name,
                 conditions.join("; "),
             );

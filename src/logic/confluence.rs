@@ -30,7 +30,7 @@
 //! whose order-divergence the combinational-neighbourhood filter above discards — the grant latches that
 //! diverge do not have both racing pins in their own `δ`'s direct support.
 //!
-//! A hazard's **kind is decided solely by the declared clock**, not by the geometry of the race: a pair
+//! A constraint's **kind is decided solely by the declared clock**, not by the geometry of the race: a pair
 //! containing exactly one declared clock is a directed **setup/hold** (clock ← data — the DFF's `D`
 //! around `CLK`); any other pair is a symmetric **non_seq** (a mutex's `A`/`B`, a C-element's `A↓`/`B↑`,
 //! an SR latch's simultaneous release). Clocks are *declared*, never inferred: inferring one from the
@@ -72,7 +72,8 @@ pub struct Constraint {
 }
 
 impl Constraint {
-    /// The input condition under which this hazard occurs: the two switching edges, plus any other
+    /// The input condition under which the hazard this constraint avoids occurs: the two switching
+    /// edges, plus any other
     /// inputs held at a fixed value in the pre-toggle state (e.g. `A↓ & B↑ with R=0`).
     pub fn condition(&self) -> String {
         let arrow = |e: Edge| {
@@ -145,10 +146,11 @@ fn constraint_key(c: &Constraint) -> String {
     }
 }
 
-/// The hazards of a cell from one confluence pass over the reachable state machine: order-dependence
-/// constraints and simultaneity arbitrations.
+/// The outcome of one hazard-analysis pass over the reachable state machine: the constraints derived
+/// to avoid the cell's hazards (order-dependence and oscillation), and the arbitrations annotating its
+/// metastable oscillations.
 #[derive(Debug, Default)]
-pub struct Hazards {
+pub struct HazardAnalysis {
     pub constraints: Vec<Constraint>,
     pub arbitration: Vec<Arbitration>,
 }
@@ -167,14 +169,14 @@ fn oscillating_group(cycle: &[Minterm<Symbol>], state_vars: &[String]) -> Vec<St
         .collect()
 }
 
-/// Derive every hazard for a cell — constraints and arbitrations — by testing pairwise input-order
-/// confluence of its state machine. Empty for confluent cells (ordinary combinational / self-holding
-/// gates without arbitration).
-pub fn cell_hazards(cell: &AnalysedCell) -> Hazards {
+/// Analyse a cell's hazards by testing pairwise input-order confluence of its state machine, deriving
+/// the constraints that avoid them and the arbitration annotations. Empty for confluent cells (ordinary
+/// combinational / self-holding gates without arbitration).
+pub fn analyse_hazards(cell: &AnalysedCell) -> HazardAnalysis {
     let inputs = &cell.inputs;
     let n = inputs.len();
     if n < 2 {
-        return Hazards::default(); // a hazard relates two inputs
+        return HazardAnalysis::default(); // a hazard relates two inputs
     }
 
     let signals: Vec<&AnalysedOutput> = cell.signals().collect();
@@ -187,10 +189,10 @@ pub fn cell_hazards(cell: &AnalysedCell) -> Hazards {
         .collect();
     let k = state_vars.len();
     if k == 0 {
-        return Hazards::default(); // no state to latch ⇒ always confluent
+        return HazardAnalysis::default(); // no state to latch ⇒ always confluent
     }
     if n + k > 22 {
-        return Hazards::default(); // combinatorial blow-up guard (matches arcs::cell_arcs)
+        return HazardAnalysis::default(); // combinatorial blow-up guard (matches arcs::cell_arcs)
     }
 
     let builder = bdd_builder!();
@@ -389,9 +391,10 @@ pub fn cell_hazards(cell: &AnalysedCell) -> Hazards {
                     continue; // divergence real but latch-mediated — no constraint
                 }
 
-                // Non-confluent ⇒ a hazard. Its kind is decided solely by the declared clock: a pair
-                // containing exactly one clock is a directed setup/hold (clock ← data); any other pair is
-                // a symmetric non_seq. The order-lock geometry is deliberately not used — it is
+                // Non-confluent and interacting ⇒ order-dependence: file the constraint that avoids it.
+                // The constraint's kind is decided solely by the declared clock: a pair containing
+                // exactly one clock is a directed setup/hold (clock ← data); any other pair is a
+                // symmetric non_seq. The order-lock geometry is deliberately not used — it is
                 // state-dependent (the same pins/edges read asymmetric from one held state and symmetric
                 // from another), so it is not an invariant of the hazard and distinguishes nothing.
                 let cons = if is_clock(x) ^ is_clock(y) {
@@ -426,7 +429,7 @@ pub fn cell_hazards(cell: &AnalysedCell) -> Hazards {
         }
     }
 
-    Hazards {
+    HazardAnalysis {
         constraints: found.into_values().collect(),
         arbitration: arbitration.into_values().collect(),
     }
@@ -443,9 +446,9 @@ mod tests {
 
     #[test]
     fn dff_with_declared_clock_yields_only_setup_hold() {
-        // Rising-edge DFF with CLK declared a clock: the CLK↔D hazard is a setup/hold of D w.r.t. CLK,
-        // and — because the kind follows the declared clock, not the geometry — nothing on the pair is
-        // reported as non_seq.
+        // Rising-edge DFF with CLK declared a clock: the CLK↔D hazard yields a setup/hold constraint of
+        // D w.r.t. CLK, and — because the kind follows the declared clock, not the geometry — nothing on
+        // the pair is reported as non_seq.
         let cell = analyse(
             r#"
 [[cell]]
@@ -458,7 +461,7 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 "#,
         );
-        let cons = cell_hazards(&cell).constraints;
+        let cons = analyse_hazards(&cell).constraints;
         eprintln!("DFF constraints: {cons:#?}");
         assert!(
             cons.iter().all(|c| c.kind == ConstraintKind::SetupHold),
@@ -474,7 +477,8 @@ Q = "CLK*M + !CLK*Q"
     #[test]
     fn dff_without_declared_clock_is_non_seq() {
         // The same DFF with no clock declared: the hazard is real but, with no clock to designate a data
-        // pin, it is a symmetric non_seq — the kind is a property of the declaration, not the cell.
+        // pin, its constraint is a symmetric non_seq — the kind is a property of the declaration, not
+        // the cell.
         let cell = analyse(
             r#"
 [[cell]]
@@ -486,7 +490,7 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 "#,
         );
-        let cons = cell_hazards(&cell).constraints;
+        let cons = analyse_hazards(&cell).constraints;
         assert!(!cons.is_empty());
         assert!(
             cons.iter().all(|c| c.kind == ConstraintKind::NonSeq),
@@ -511,7 +515,7 @@ Qa = "!Qb * A"
 Qb = "!Qa * B"
 "#,
         );
-        let cons = cell_hazards(&cell).constraints;
+        let cons = analyse_hazards(&cell).constraints;
         eprintln!("MUT constraints: {cons:#?}");
         assert!(
             cons.iter().any(|c| c.kind == ConstraintKind::NonSeq
@@ -527,7 +531,7 @@ Qb = "!Qa * B"
     }
 
     #[test]
-    fn c_element_has_non_seq_hazard() {
+    fn c_element_has_non_seq_constraint() {
         // A C-element is order-sensitive: A↓ racing B↑ leaves Q history-dependent. That is a real timing
         // hazard, filed as a non_seq constraint between A and B (not an arbitration, but a genuine one).
         let cell = analyse(
@@ -539,19 +543,19 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        let cons = cell_hazards(&cell).constraints;
+        let cons = analyse_hazards(&cell).constraints;
         eprintln!("C2 constraints: {cons:#?}");
         assert!(
             cons.iter().any(|c| c.kind == ConstraintKind::NonSeq
                 && [c.related.as_str(), c.pin.as_str()]
                     .iter()
                     .all(|p| *p == "A" || *p == "B")),
-            "expected a non_seq hazard between A and B, got {cons:?}"
+            "expected a non_seq constraint between A and B, got {cons:?}"
         );
     }
 
     #[test]
-    fn sr_latch_has_non_seq_hazard() {
+    fn sr_latch_has_non_seq_constraint() {
         // The SR latch's simultaneous release (11→00) is a real order-hazard, filed as a non_seq S↔R.
         let cell = analyse(
             r#"
@@ -563,18 +567,18 @@ Q = "S + Q*!R"
 Qn = "R + Qn*!S"
 "#,
         );
-        let cons = cell_hazards(&cell).constraints;
+        let cons = analyse_hazards(&cell).constraints;
         eprintln!("SR constraints: {cons:#?}");
         assert!(
             cons.iter().any(|c| c.kind == ConstraintKind::NonSeq),
-            "expected a non_seq hazard between S and R, got {cons:?}"
+            "expected a non_seq constraint between S and R, got {cons:?}"
         );
     }
 
     #[test]
     fn latch_mediated_divergence_is_not_a_constraint() {
         // Two-domain sampling chain: M1 (transparent when C1 is low) samples D; Q (transparent when C2
-        // is low) samples M1. No clocks declared, so every real hazard here is NonSeq. A (C1, C2)
+        // is low) samples M1. No clocks declared, so every derived constraint here is NonSeq. A (C1, C2)
         // order-divergence is real (e.g. whether Q ends up latching M1's old value or D's new one
         // depends on whether C2 or C1 closes first) but is mediated only across the M1↔Q latch
         // boundary: neither δ_M1 (support {C1, D, M1}) nor δ_Q (support {C2, M1, Q}) has both C1 and C2
@@ -591,7 +595,7 @@ M1 = "!C1*D + C1*M1"
 Q = "!C2*M1 + C2*Q"
 "#,
         );
-        let cons = cell_hazards(&cell).constraints;
+        let cons = analyse_hazards(&cell).constraints;
         eprintln!("SYNC2 constraints: {cons:#?}");
         assert!(
             !cons.iter().any(|c| [c.related.as_str(), c.pin.as_str()]
@@ -603,7 +607,7 @@ Q = "!C2*M1 + C2*Q"
             cons.iter().any(|c| [c.related.as_str(), c.pin.as_str()]
                 .iter()
                 .all(|p| *p == "C1" || *p == "D")),
-            "expected a genuine C1/D hazard (direct support of δ_M1), got {cons:?}"
+            "expected a constraint for the genuine C1/D hazard (direct support of δ_M1), got {cons:?}"
         );
     }
 
@@ -618,6 +622,6 @@ inputs = ["A", "B"]
 Y = "!(A*B)"
 "#,
         );
-        assert!(cell_hazards(&cell).constraints.is_empty());
+        assert!(analyse_hazards(&cell).constraints.is_empty());
     }
 }

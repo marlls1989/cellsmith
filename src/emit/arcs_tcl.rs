@@ -387,7 +387,7 @@ Q = "CLK*M + !CLK*Q"
         assert!(!off.contains("-type hold"));
 
         // Enabled: separate setup and hold blocks of D w.r.t. CLK. With CLK declared a clock the CLK/D
-        // hazard is a setup/hold, so no non_seq is produced for the pair.
+        // constraint is a setup/hold, so no non_seq is produced for the pair.
         let on = cell_arcs_tcl(
             &cell,
             ArcsTclOptions {
