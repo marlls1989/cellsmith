@@ -72,12 +72,20 @@ fn dfs_post(
 /// `order` is a [`substitution_order`] for `target`. Each signal named in `order` that is still present
 /// in the working function is composed in **once** via `f[v:=g] = g.ite(f|v=1, f|v=0)`; a signal that
 /// reappears after being substituted (or `target` itself) is a state variable and is left in the result.
+///
+/// # Panics
+///
+/// Panics if `bdds` has no entry for `target` — the caller must ensure `target` names a signal already
+/// present in `bdds`.
 pub fn resolve<B: Brand, C: ManagerCell>(
     target: &str,
     bdds: &BTreeMap<String, Bdd<B, C>>,
     order: &[String],
 ) -> Bdd<B, C> {
-    let mut f = bdds[target].clone();
+    let mut f = bdds
+        .get(target)
+        .unwrap_or_else(|| panic!("resolve: target signal {target:?} absent from bdds map"))
+        .clone();
     let mut visited: BTreeSet<&str> = BTreeSet::new();
     visited.insert(target);
     loop {
@@ -88,6 +96,7 @@ pub fn resolve<B: Brand, C: ManagerCell>(
                 && f.variables().any(|v| v.as_str() == name.as_str())
         });
         let Some(name) = next else { break };
+        // Cannot panic: `next` (above) only yields names for which `bdds.contains_key` just held.
         let g = bdds[name].clone();
         let f1 = f.restrict(name.as_str(), true);
         let f0 = f.restrict(name.as_str(), false);

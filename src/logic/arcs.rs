@@ -84,6 +84,12 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> Vec<Arc> {
         if state_set.contains(name) {
             node.value_of(name)
         } else {
+            // Every non-state output has a δ in `out_deltas` (one is computed for each of `cell.outputs`
+            // when the machine is built), so this lookup cannot miss.
+            debug_assert!(
+                out_delta.contains_key(name),
+                "derive: output {name:?} has no entry in out_deltas"
+            );
             out_delta[name].evaluate(node).ok()
         }
     };
