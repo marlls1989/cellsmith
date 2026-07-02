@@ -191,6 +191,28 @@ table
 	? ? ? ? ? 0 0 : ? : 0;
 endtable
 endprimitive
+primitive ICM_enA(enA, CLKA, CLKB, RA, RB, S, sela2);
+output enA;
+input  CLKA, CLKB, RA, RB, S, sela2;
+reg    enA;
+table
+	0 ? 0 ? ? 1 : ? : 1;
+	0 ? ? ? ? 0 : ? : 0;
+	1 ? 0 ? ? ? : ? : -;
+	? ? 1 ? ? ? : ? : 0;
+endtable
+endprimitive
+primitive ICM_enB(enB, CLKA, CLKB, RA, RB, S, selb2);
+output enB;
+input  CLKA, CLKB, RA, RB, S, selb2;
+reg    enB;
+table
+	? 0 ? 0 ? 1 : ? : 1;
+	? 0 ? ? ? 0 : ? : 0;
+	? 1 ? 0 ? ? : ? : -;
+	? ? ? 1 ? ? : ? : 0;
+endtable
+endprimitive
 primitive ICM_sela(sela, CLKA, CLKB, RA, RB, S, enB);
 output sela;
 input  CLKA, CLKB, RA, RB, S, enB;
@@ -198,16 +220,6 @@ reg    sela;
 table
 	? ? ? ? 0 0 : ? : 1;
 	? ? ? ? 1 ? : ? : 0;
-	? ? ? ? ? 1 : ? : 0;
-endtable
-endprimitive
-primitive ICM_selb(selb, CLKA, CLKB, RA, RB, S, enA);
-output selb;
-input  CLKA, CLKB, RA, RB, S, enA;
-reg    selb;
-table
-	? ? ? ? 0 ? : ? : 0;
-	? ? ? ? 1 0 : ? : 1;
 	? ? ? ? ? 1 : ? : 0;
 endtable
 endprimitive
@@ -233,15 +245,14 @@ table
 	? ? 1 ? ? ? : ? : 0;
 endtable
 endprimitive
-primitive ICM_enA(enA, CLKA, CLKB, RA, RB, S, sela2);
-output enA;
-input  CLKA, CLKB, RA, RB, S, sela2;
-reg    enA;
+primitive ICM_selb(selb, CLKA, CLKB, RA, RB, S, enA);
+output selb;
+input  CLKA, CLKB, RA, RB, S, enA;
+reg    selb;
 table
-	0 ? 0 ? ? 1 : ? : 1;
-	0 ? ? ? ? 0 : ? : 0;
-	1 ? 0 ? ? ? : ? : -;
-	? ? 1 ? ? ? : ? : 0;
+	? ? ? ? 0 ? : ? : 0;
+	? ? ? ? 1 0 : ? : 1;
+	? ? ? ? ? 1 : ? : 0;
 endtable
 endprimitive
 primitive ICM_selb1(selb1, CLKA, CLKB, RA, RB, S, selb);
@@ -266,22 +277,11 @@ table
 	? ? ? 1 ? ? : ? : 0;
 endtable
 endprimitive
-primitive ICM_enB(enB, CLKA, CLKB, RA, RB, S, selb2);
-output enB;
-input  CLKA, CLKB, RA, RB, S, selb2;
-reg    enB;
-table
-	? 0 ? 0 ? 1 : ? : 1;
-	? 0 ? ? ? 0 : ? : 0;
-	? 1 ? 0 ? ? : ? : -;
-	? ? ? 1 ? ? : ? : 0;
-endtable
-endprimitive
 `celldefine
 module ICM(GCLK, CLKA, CLKB, RA, RB, S);
 output GCLK;
 input  CLKA, CLKB, RA, RB, S;
-wire   sela, selb, sela1, sela2, enA, selb1, selb2, enB;
+wire   enA, enB, sela, sela1, sela2, selb, selb1, selb2;
 specify
 	(CLKA => GCLK) = (0.1, 0.1);
 	(CLKB => GCLK) = (0.1, 0.1);
@@ -290,13 +290,13 @@ specify
 	(S => GCLK) = (0.1, 0.1);
 endspecify
 ICM_GCLK u_ICM_GCLK (GCLK, CLKA, CLKB, RA, RB, S, enA, enB);
+ICM_enA u_ICM_enA (enA, CLKA, CLKB, RA, RB, S, sela2);
+ICM_enB u_ICM_enB (enB, CLKA, CLKB, RA, RB, S, selb2);
 ICM_sela u_ICM_sela (sela, CLKA, CLKB, RA, RB, S, enB);
-ICM_selb u_ICM_selb (selb, CLKA, CLKB, RA, RB, S, enA);
 ICM_sela1 u_ICM_sela1 (sela1, CLKA, CLKB, RA, RB, S, sela);
 ICM_sela2 u_ICM_sela2 (sela2, CLKA, CLKB, RA, RB, S, sela1);
-ICM_enA u_ICM_enA (enA, CLKA, CLKB, RA, RB, S, sela2);
+ICM_selb u_ICM_selb (selb, CLKA, CLKB, RA, RB, S, enA);
 ICM_selb1 u_ICM_selb1 (selb1, CLKA, CLKB, RA, RB, S, selb);
 ICM_selb2 u_ICM_selb2 (selb2, CLKA, CLKB, RA, RB, S, selb1);
-ICM_enB u_ICM_enB (enB, CLKA, CLKB, RA, RB, S, selb2);
 endmodule
 `endcelldefine

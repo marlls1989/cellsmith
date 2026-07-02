@@ -72,7 +72,7 @@ mod tests {
         // A single full minterm over A,B from a maximal cover.
         let builder = bdd_builder!();
         let f = builder.parse("A*!B").unwrap();
-        let cover = f.maximize(&["A", "B"]);
+        let cover = f.maximize();
         let m = cover.cubes().next().unwrap().inputs().clone();
         let a = assignment(&m);
         assert_eq!(a.get("A"), Some(&true));

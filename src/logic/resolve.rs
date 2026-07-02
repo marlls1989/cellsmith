@@ -100,7 +100,7 @@ pub fn resolve<B: Brand, C: ManagerCell>(
         let g = bdds[name].clone();
         let f1 = f.restrict(name.as_str(), true);
         let f0 = f.restrict(name.as_str(), false);
-        f = g.ite(f1, f0); // f[name := g]
+        f = g.ite(&f1, &f0); // f[name := g]
         visited.insert(name.as_str());
     }
     f

@@ -9,8 +9,9 @@
 //! returns `Ok(v)` only when they force it — an absent state variable stays absent (it provably does not
 //! influence that δ yet). A node is *stable* when it is its own next-state.
 //!
-//! Start states are not assumed: [`explore`] discovers them from the on/off covers of the signal
-//! functions over the cell inputs ([`Bdd::maximize`]), so a state-holding cell whose state is undefined
+//! Start states are not assumed: [`explore`] discovers them from the forced on/off covers of the signal
+//! functions over the cell inputs ([`Bdd::cover_over_fr`]) — input vectors that force a signal
+//! regardless of the undefined power-on state — so a state-holding cell whose state is undefined
 //! at the all-zero input (its reset is an input sequence, not a level) is initialised by the sequence
 //! that actually resolves it — the async pins, a clock edge, both requests high — rather than by an
 //! arbitrary held combination.
@@ -168,7 +169,8 @@ impl Explored {
 ///
 /// `state_deltas` are the state variables' δ (used to settle and to build each state variable's on/off
 /// sets); `seed_funcs` are the characteristic functions whose on/off covers over the inputs seed the
-/// candidate pool (the state δ plus the combinational outputs, so combinational cells seed too).
+/// candidate pool (the state δ plus the combinational outputs, so combinational cells seed too). Both
+/// on- and off-set candidates come from a single FR extraction per seed (see `cover_inputs`).
 ///
 /// Pre-step: for each candidate input `x` — an input minterm drawn from the pooled on/off covers — its
 /// **settlement map** records, per state variable `w`, the value the fixed inputs force on `w`'s δ via
@@ -194,21 +196,26 @@ pub fn explore<B: Brand, C: ManagerCell>(
         .map(|(i, n)| (n.as_str(), i))
         .collect();
 
-    // On/off cover of a function over the inputs, as a set of full input minterms (maximize expands
-    // every don't-care, so each cube is a complete input assignment). Projected onto the shared input
-    // header so membership tests compare canonically.
+    // Forced on/off cover of a function over the inputs. `cover_over_fr(input_names)` re-bases the
+    // function onto the inputs by universal projection — each cube is an input assignment that forces
+    // the function's value regardless of the (undefined) power-on state — yielding both the on-set (F)
+    // and off-set (R) in one FR cover. `.maximize()` expands every don't-care, so each cube is a
+    // complete input assignment; `project_onto` aligns onto the shared input header for canonical
+    // membership tests.
     let cover_inputs = |f: &Bdd<B, C>| -> BTreeSet<Minterm<Symbol>> {
-        f.maximize(input_names)
+        f.cover_over_fr(input_names)
+            .maximize()
             .cubes()
             .map(|c| c.inputs().project_onto(&input_header))
             .collect()
     };
 
-    // Candidate pool: on and off cover minterms of every seed function.
+    // Candidate pool: the forced on/off input minterms of every seed function (one FR extraction each).
     let mut pool: BTreeSet<Minterm<Symbol>> = BTreeSet::new();
     for f in seed_funcs {
+        // ¬f's FR cover is f's with the F/R sides swapped, and `cover_inputs` pools `.cubes()`
+        // type-blind, so `cover_inputs(&!f) == cover_inputs(f)` as a minterm set — no complement call.
         pool.extend(cover_inputs(f));
-        pool.extend(cover_inputs(&!f));
     }
 
     // Depth of each state variable from the inputs (shallowest dependency chain), for the ranking

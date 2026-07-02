@@ -139,13 +139,23 @@ cell (ICM) {
     direction : output;
     function : "CLKB*enB + CLKA*enA";
   }
+  statetable ("CLKA CLKB RA RB S sela2", "enA") {
+    table : "- - H - - - : - : L , H - L - - - : - : N , L - - - - L : - : L , L - L - - H : - : H";
+  }
+  pin (enA) {
+    direction : internal;
+    function : "enA";
+  }
+  statetable ("CLKA CLKB RA RB S selb2", "enB") {
+    table : "- - - H - - : - : L , - H - L - - : - : N , - L - - - L : - : L , - L - L - H : - : H";
+  }
+  pin (enB) {
+    direction : internal;
+    function : "enB";
+  }
   pin (sela) {
     direction : internal;
     function : "!S*!enB";
-  }
-  pin (selb) {
-    direction : internal;
-    function : "S*!enA";
   }
   statetable ("CLKA CLKB RA RB S sela", "sela1") {
     table : "- - H - - - : - : L , H - L - - - : - : N , L - - - - L : - : L , L - L - - H : - : H";
@@ -161,12 +171,9 @@ cell (ICM) {
     direction : internal;
     function : "sela2";
   }
-  statetable ("CLKA CLKB RA RB S sela2", "enA") {
-    table : "- - H - - - : - : L , H - L - - - : - : N , L - - - - L : - : L , L - L - - H : - : H";
-  }
-  pin (enA) {
+  pin (selb) {
     direction : internal;
-    function : "enA";
+    function : "S*!enA";
   }
   statetable ("CLKA CLKB RA RB S selb", "selb1") {
     table : "- - - H - - : - : L , - H - L - - : - : N , - L - - - L : - : L , - L - L - H : - : H";
@@ -181,12 +188,5 @@ cell (ICM) {
   pin (selb2) {
     direction : internal;
     function : "selb2";
-  }
-  statetable ("CLKA CLKB RA RB S selb2", "enB") {
-    table : "- - - H - - : - : L , - H - L - - : - : N , - L - - - L : - : L , - L - L - H : - : H";
-  }
-  pin (enB) {
-    direction : internal;
-    function : "enB";
   }
 }

@@ -9,14 +9,19 @@
 //! which becomes the sequential element's current-state (`reg`) column. This mirrors hsNCL
 //! `outPinUDP`, whose column set is `(inPins ∪ otherStateSignals) \ {self}`:
 //!
-//! - `on   = ∀self. f`   — forced high regardless of held self-state,
-//! - `off  = ∀self. ¬f`  — forced low,
+//! For a hysteretic pin the `on`/`off` sets come from a single `Bdd::cover_over_fr` extraction that
+//! re-bases `f` onto the column set by **universal** projection of the pin's own self-feedback: the
+//! two-sided FR cover's `F` cubes are forced-high (`∀self. f`) and its `R` cubes forced-low
+//! (`∀self. ¬f`), both already self-projected. `hold` is the undef gap those two leave behind:
+//!
+//! - `on   = ∀self. f`   — FR `F` cubes; forced high regardless of held self-state,
+//! - `off  = ∀self. ¬f`  — FR `R` cubes; forced low,
 //! - `hold = ¬(on ∨ off)` — state-dependent (hysteretic); a `-`/`N` no-change entry.
 
 use std::sync::Arc;
 
 use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
-use espresso_logic::{bdd_builder, Anonymous, Cover, Symbol, Symbols};
+use espresso_logic::{bdd_builder, Anonymous, Cube, CubeType, Symbol, Symbols};
 
 use crate::logic::machine;
 use crate::model::AnalysedOutput;
@@ -69,19 +74,34 @@ pub fn state_regions(output: &AnalysedOutput, inputs: &[String]) -> StateRegions
     let builder = bdd_builder!();
     let f = builder.build(&output.expr);
     let not_f = !f.clone();
-
-    // Project out only the pin's *own* feedback (its current state); other signals stay as columns.
-    let on_bdd = f.forall(&self_state);
-    let off_bdd = not_f.forall(&self_state);
-    let hold_bdd = !on_bdd.or(&off_bdd);
-
-    // Minimise each disjoint region with Espresso and realign the cubes onto the `cols` header.
-    // The three regions partition the input space, so minimising each independently keeps the
-    // emitted statetable/UDP rows mutually consistent.
     let cols_header = machine::header(&cols);
-    let on = minimised(&on_bdd, &cols_header);
-    let off = minimised(&off_bdd, &cols_header);
-    let hold = minimised(&hold_bdd, &cols_header);
+
+    // Cross-region disjointness holds by construction: for a hysteretic pin the `on`/`off` sets are the
+    // `F`/`R` sides of one `cover_over_fr` extraction (mutually exclusive by definition), and `hold` is
+    // their complement. Only `hold` is Espresso-minimised — the FR cubes are already in prime form and
+    // must *not* be minimised, or the hold gap would be absorbed as don't-care into the on-set.
+    let (on, off, hold) = if self_state.is_empty() {
+        // Combinational: no self-feedback to project, so `on`/`off` are just `f`/`¬f` minimised.
+        let on = minimised(&f, &cols_header);
+        let off = minimised(&not_f, &cols_header);
+        (on, off, Vec::new())
+    } else {
+        // Hysteretic: one FR extraction re-bases `f` onto `cols` by universal projection of `self_state`
+        // (the only support outside `cols`), so `F ≡ ∀self. f` and `R ≡ ∀self. ¬f`.
+        let fr = f.cover_over_fr(&cols);
+        let on = realign_cubes(
+            fr.cubes().filter(|c| c.cube_type() == CubeType::F),
+            &cols_header,
+        );
+        let off = realign_cubes(
+            fr.cubes().filter(|c| c.cube_type() == CubeType::R),
+            &cols_header,
+        );
+        // The undef/hold gap is what `F ∪ R` leaves uncovered; compute it on the BDD and minimise that.
+        let hold_bdd = !(f.forall(&self_state).or(&not_f.forall(&self_state)));
+        let hold = minimised(&hold_bdd, &cols_header);
+        (on, off, hold)
+    };
     let hysteretic = !hold.is_empty();
 
     StateRegions {
@@ -101,20 +121,20 @@ fn minimised<B: Brand, C: ManagerCell>(
     bdd: &Bdd<B, C>,
     cols: &Arc<Symbols<Symbol>>,
 ) -> Vec<StateCube> {
-    let cover = bdd.minimize().unwrap_or_else(|_| bdd.to_cubes());
-    realign(&cover, cols)
+    let cover = bdd.minimize().unwrap_or_else(|_| bdd.cover());
+    realign_cubes(cover.cubes(), cols)
 }
 
 /// Realign a cover's cubes onto the `cols` header: for each cube, one `Option<bool>` per column
 /// (a column the cube does not constrain — a don't-care or a variable outside its support — is `None`).
 /// [`Minterm::project_onto`] re-expresses each cube's minterm over `cols`, so the values are already in
 /// column order with the absent columns filled as don't-care.
-fn realign(
-    cover: &Cover<Symbol, Anonymous>,
-    cols: &std::sync::Arc<espresso_logic::Symbols<Symbol>>,
+fn realign_cubes<'a>(
+    cubes: impl IntoIterator<Item = &'a Cube<Symbol, Anonymous>>,
+    cols: &Arc<Symbols<Symbol>>,
 ) -> Vec<StateCube> {
-    cover
-        .cubes()
+    cubes
+        .into_iter()
         .map(|cube| cube.inputs().project_onto(cols).iter().collect())
         .collect()
 }
