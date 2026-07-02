@@ -56,8 +56,20 @@ mod smoke {
                 .map(|c| (c.inputs().value_of("a"), c.inputs().value_of("b")))
                 .collect()
         };
-        assert_eq!(side(CubeType::F), vec![(Some(true), Some(true))], "on-set must be a=b=1");
-        assert_eq!(side(CubeType::R), vec![(Some(false), Some(false))], "off-set must be a=b=0");
-        assert_eq!(fr.num_cubes(), 2, "a≠b must land in neither set (the undef/hold gap)");
+        assert_eq!(
+            side(CubeType::F),
+            vec![(Some(true), Some(true))],
+            "on-set must be a=b=1"
+        );
+        assert_eq!(
+            side(CubeType::R),
+            vec![(Some(false), Some(false))],
+            "off-set must be a=b=0"
+        );
+        assert_eq!(
+            fr.num_cubes(),
+            2,
+            "a≠b must land in neither set (the undef/hold gap)"
+        );
     }
 }

@@ -168,19 +168,23 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
     // combinational-neighbourhood divergence filter below (see the module doc).
     let support: BTreeMap<String, BTreeSet<String>> = deltas
         .iter()
-        .map(|(n, d)| (n.clone(), d.variables().map(|v| v.as_str().to_string()).collect()))
+        .map(|(n, d)| {
+            (
+                n.clone(),
+                d.variables().map(|v| v.as_str().to_string()).collect(),
+            )
+        })
         .collect();
 
     let full_header = &m.full_header;
     let input_header = &m.input_header;
     let ex = &m.explored;
 
-    let settle_toggle = |node: &Minterm<Symbol>,
-                          names: &[&str]|
-     -> Result<Minterm<Symbol>, Vec<Minterm<Symbol>>> {
-        let toggled = machine::toggle(full_header, node, names);
-        machine::settle_or_cycle(deltas, full_header, &toggled)
-    };
+    let settle_toggle =
+        |node: &Minterm<Symbol>, names: &[&str]| -> Result<Minterm<Symbol>, Vec<Minterm<Symbol>>> {
+            let toggled = machine::toggle(full_header, node, names);
+            machine::settle_or_cycle(deltas, full_header, &toggled)
+        };
 
     // Dedup by canonical key, keeping the shortest prevector; BTreeMap gives deterministic output order.
     let mut found: BTreeMap<String, Constraint> = BTreeMap::new();
@@ -188,19 +192,23 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
     // Dedup by `group|condition`, keeping the FIRST insertion (BFS order over `ex.order` → the earliest
     // reachable state at which the arbitration is observed).
     let mut arbitration: BTreeMap<String, Arbitration> = BTreeMap::new();
-    let mut record_arbitration =
-        |node: &Minterm<Symbol>, names: &[&str], group: Vec<String>, stable: Vec<Minterm<Symbol>>| {
-            let toggled = machine::toggle(full_header, node, names);
-            let condition = toggled.project_onto(input_header);
-            let key = format!("{}|{}", group.join(","), crate::logic::literals_str(&condition));
-            arbitration
-                .entry(key)
-                .or_insert_with(|| Arbitration {
-                    group,
-                    condition,
-                    stable,
-                });
-        };
+    let mut record_arbitration = |node: &Minterm<Symbol>,
+                                  names: &[&str],
+                                  group: Vec<String>,
+                                  stable: Vec<Minterm<Symbol>>| {
+        let toggled = machine::toggle(full_header, node, names);
+        let condition = toggled.project_onto(input_header);
+        let key = format!(
+            "{}|{}",
+            group.join(","),
+            crate::logic::literals_str(&condition)
+        );
+        arbitration.entry(key).or_insert_with(|| Arbitration {
+            group,
+            condition,
+            stable,
+        });
+    };
 
     for s in &ex.order {
         // `path_to` depends only on `s`: compute the prevector into `s` once and clone it per constraint.
@@ -208,8 +216,10 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
 
         // Each input's single-toggle settle, computed once per state (O(n) instead of O(n²)): reused as
         // `r_x`/`r_y` across every pair and as the base of the `s_xy`/`s_yx` compositions below.
-        let single: Vec<Result<Minterm<Symbol>, Vec<Minterm<Symbol>>>> =
-            inputs.iter().map(|x| settle_toggle(s, &[x.as_str()])).collect();
+        let single: Vec<Result<Minterm<Symbol>, Vec<Minterm<Symbol>>>> = inputs
+            .iter()
+            .map(|x| settle_toggle(s, &[x.as_str()]))
+            .collect();
 
         // Single-toggle oscillation capture: a lone input toggle that never settles is itself an
         // arbitration (no competing order to report — `stable` is empty). Recorded once per input per
@@ -233,8 +243,14 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
                 // Compose both settle orders once per pair: x-then-y (`s_xy`) and y-then-x (`s_yx`). Each
                 // is `Some` only when its base single settles and the second toggle settles too. Reused by
                 // the simultaneous-oscillation stable-set and the divergence check.
-                let s_xy = r_x.as_ref().ok().and_then(|sx| settle_toggle(sx, &[y.as_str()]).ok());
-                let s_yx = r_y.as_ref().ok().and_then(|sy| settle_toggle(sy, &[x.as_str()]).ok());
+                let s_xy = r_x
+                    .as_ref()
+                    .ok()
+                    .and_then(|sx| settle_toggle(sx, &[y.as_str()]).ok());
+                let s_yx = r_y
+                    .as_ref()
+                    .ok()
+                    .and_then(|sy| settle_toggle(sy, &[x.as_str()]).ok());
 
                 // Simultaneous probe: x and y toggled together. Oscillation here is the mutex/arbiter
                 // case proper — the pair asserted at once, driving the state into a periodic cycle.
@@ -344,7 +360,10 @@ fn make_constraint(
 /// Record a constraint into the dedup map, keeping the shortest-prevector representative per canonical key.
 fn record_constraint(found: &mut BTreeMap<String, Constraint>, cons: Constraint) {
     let key = constraint_key(&cons);
-    if found.get(&key).is_none_or(|e| cons.prevector.len() < e.prevector.len()) {
+    if found
+        .get(&key)
+        .is_none_or(|e| cons.prevector.len() < e.prevector.len())
+    {
         found.insert(key, cons);
     }
 }
