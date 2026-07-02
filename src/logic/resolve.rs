@@ -109,9 +109,7 @@ pub fn resolve<B: Brand, C: ManagerCell>(
 /// The ≥1-step reachability relation of a directed graph: `node → the nodes reachable from it in one
 /// or more edges`. Computed by relaxation (the graphs are tiny). Used by [`state_variables`] to find
 /// the signals that reach themselves (the state variables).
-fn transitive_closure(
-    edges: &BTreeMap<String, Vec<String>>,
-) -> BTreeMap<String, BTreeSet<String>> {
+fn transitive_closure(edges: &BTreeMap<String, Vec<String>>) -> BTreeMap<String, BTreeSet<String>> {
     let mut reach: BTreeMap<String, BTreeSet<String>> = edges
         .iter()
         .map(|(k, vs)| (k.clone(), vs.iter().cloned().collect()))

@@ -183,8 +183,14 @@ mod tests {
             format!("[[cell]]\nname = \"WIDE\"\ninputs = [{list}]\n[cell.outputs]\nY = \"I0\"\n");
         let cell = analyse_one(&src);
         assert!(cell.arcs.is_empty(), "guard must suppress arcs");
-        assert!(cell.constraints.is_empty(), "guard must suppress constraints");
-        assert!(cell.arbitration.is_empty(), "guard must suppress arbitration");
+        assert!(
+            cell.constraints.is_empty(),
+            "guard must suppress constraints"
+        );
+        assert!(
+            cell.arbitration.is_empty(),
+            "guard must suppress arbitration"
+        );
         // Emission still succeeds (no panic); the artifacts are simply arc-free.
         let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         let _ = cell_verilog(&cell);
@@ -242,7 +248,10 @@ Q = "!R*(CLK*M + !CLK*Q)"
         // Two state signals (output Q, internal M) ⇒ one region entry per signal.
         assert_eq!(cell.regions.len(), cell.signals().count());
         assert_eq!(cell.regions.len(), 2);
-        assert!(!cell.arcs.is_empty(), "a clocked DFF produces transition arcs");
+        assert!(
+            !cell.arcs.is_empty(),
+            "a clocked DFF produces transition arcs"
+        );
         assert!(
             cell.arcs.iter().any(|a| a.is_async),
             "R is a declared async pin, so its arcs are async-typed",

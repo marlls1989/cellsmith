@@ -77,7 +77,9 @@ mod tests {
         let want = builder.build(&expr!(("a" & "b") | (!"c" ^ "d")));
         assert!(got.equivalent_to(&want));
         assert!(builder.build(&parse("true").unwrap().expr).is_tautology());
-        assert!(builder.build(&parse("false").unwrap().expr).is_contradiction());
+        assert!(builder
+            .build(&parse("false").unwrap().expr)
+            .is_contradiction());
     }
 
     #[test]

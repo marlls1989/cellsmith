@@ -195,7 +195,8 @@ mod tests {
 
     #[test]
     fn read_spec_reads_a_file() {
-        let path = std::env::temp_dir().join(format!("lobsterate_read_spec_{}.toml", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("lobsterate_read_spec_{}.toml", std::process::id()));
         fs::write(&path, "hello = 1\n").unwrap();
         let got = read_spec(path.to_str().unwrap()).unwrap();
         assert_eq!(got, "hello = 1\n");

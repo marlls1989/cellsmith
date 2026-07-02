@@ -54,7 +54,11 @@ pub fn node_from_opt<F: Fn(&str) -> Option<bool>>(
 
 /// `node` with each name in `names` flipped in value (an absent field stays absent); everything else
 /// keeps its current field.
-pub fn toggle(header: &Arc<Symbols<Symbol>>, node: &Minterm<Symbol>, names: &[&str]) -> Minterm<Symbol> {
+pub fn toggle(
+    header: &Arc<Symbols<Symbol>>,
+    node: &Minterm<Symbol>,
+    names: &[&str],
+) -> Minterm<Symbol> {
     node_from_opt(header, |nm| {
         let cur = node.value_of(nm);
         if names.contains(&nm) {
@@ -152,7 +156,11 @@ pub struct Explored {
 impl Explored {
     /// The input-projected BFS path into `node` (the prevector): walk predecessors back to a start,
     /// reverse, and project each step onto `input_header`.
-    pub fn path_to(&self, node: &Minterm<Symbol>, input_header: &Arc<Symbols<Symbol>>) -> Vec<Minterm<Symbol>> {
+    pub fn path_to(
+        &self,
+        node: &Minterm<Symbol>,
+        input_header: &Arc<Symbols<Symbol>>,
+    ) -> Vec<Minterm<Symbol>> {
         let mut chain = vec![node.clone()];
         let mut cur = node.clone();
         while let Some(Some(p)) = self.prev.get(&cur) {
@@ -251,7 +259,10 @@ pub fn explore<B: Brand, C: ManagerCell>(
     // inputs already determine it (evaluate → `Ok`), or absent when the δ still depends on unresolved
     // state (`Err`). This is the membership test on(w)/off(w) done directly against each δ.
     let settlement = |x: &Minterm<Symbol>| -> Vec<Option<bool>> {
-        state_deltas.iter().map(|(_, d)| d.evaluate(x).ok()).collect()
+        state_deltas
+            .iter()
+            .map(|(_, d)| d.evaluate(x).ok())
+            .collect()
     };
     let settle_count = |m: &[Option<bool>]| m.iter().filter(|o| o.is_some()).count();
     let depth_sum = |m: &[Option<bool>]| -> u64 {
@@ -384,7 +395,15 @@ mod tests {
 
         let qa_values: BTreeSet<_> = cycle.iter().map(|m| m.value_of("Qa")).collect();
         let qb_values: BTreeSet<_> = cycle.iter().map(|m| m.value_of("Qb")).collect();
-        assert_eq!(qa_values.len(), 2, "Qa should differ across the cycle, got {cycle:?}");
-        assert_eq!(qb_values.len(), 2, "Qb should differ across the cycle, got {cycle:?}");
+        assert_eq!(
+            qa_values.len(),
+            2,
+            "Qa should differ across the cycle, got {cycle:?}"
+        );
+        assert_eq!(
+            qb_values.len(),
+            2,
+            "Qb should differ across the cycle, got {cycle:?}"
+        );
     }
 }
