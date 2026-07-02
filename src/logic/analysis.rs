@@ -35,6 +35,12 @@ pub struct MachineAnalysis {
 
 /// The single home for the combinatorial blow-up guard: a cell whose machine header (inputs + state
 /// variables) exceeds this width is not explored at all — both arcs and hazards come back empty.
+///
+/// The bound is on `inputs + state variables`, and 22 is a deliberate memory/time ceiling: exploration
+/// materialises candidate pools by expanding the signal covers into full input minterms (via
+/// [`maximize`](espresso_logic::bdd::Bdd::maximize)), so a header of width `w` can seed on the order of
+/// `2^w` minterms. At 22 that worst case is ~4M candidates — the largest pool we accept — and each extra
+/// variable *doubles* it, so raising the constant grows the pool (and the exploration cost) exponentially.
 pub(crate) const MAX_MACHINE_VARS: usize = 22;
 
 /// A cell's asynchronous state machine, built once and shared by the arc and confluence derivations. The

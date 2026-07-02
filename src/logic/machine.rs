@@ -168,9 +168,10 @@ impl Explored {
 /// sets); `seed_funcs` are the characteristic functions whose on/off covers over the inputs seed the
 /// candidate pool (the state δ plus the combinational outputs, so combinational cells seed too).
 ///
-/// Pre-step (no `evaluate`): for each candidate input `x` — an input minterm drawn from the pooled
-/// on/off covers — its **settlement map** records, per state variable `w`, `Some(true)` if `x` forces
-/// `w=1` (in on(w), not off(w)), `Some(false)` if it forces `w=0`, else absent. Candidates are ranked by
+/// Pre-step: for each candidate input `x` — an input minterm drawn from the pooled on/off covers — its
+/// **settlement map** records, per state variable `w`, the value the fixed inputs force on `w`'s δ via
+/// [`Bdd::evaluate`]: `Some(true)` if they force `w=1`, `Some(false)` if `w=0`, else absent (the δ still
+/// depends on unresolved state). Candidates are ranked by
 /// how many state variables they settle, ties broken toward state nearest the inputs. Exploration then
 /// seeds the BFS from the ranked candidates in parallel, each start being the candidate's inputs plus
 /// its settled state, and refines further state with [`settle`] as inputs toggle.
@@ -208,13 +209,6 @@ pub fn explore<B: Brand, C: ManagerCell>(
         pool.extend(cover_inputs(&!f));
     }
 
-    // Per-state-variable on/off sets, for settlement by membership.
-    type InputSet = BTreeSet<Minterm<Symbol>>;
-    let on_off: Vec<(InputSet, InputSet)> = state_deltas
-        .iter()
-        .map(|(_, d)| (cover_inputs(d), cover_inputs(&!d)))
-        .collect();
-
     // Depth of each state variable from the inputs (shallowest dependency chain), for the ranking
     // tie-break. A variable driven purely by inputs is depth 1; others are 1 + the shallowest state
     // variable they reference. Pure cycles (no input-only base) stay at the max.
@@ -244,16 +238,11 @@ pub fn explore<B: Brand, C: ManagerCell>(
         }
     }
 
-    // Settlement map of a candidate input: per state variable, the value it forces (or absent).
+    // Settlement map of a candidate input: per state variable, the value its δ takes when the fixed
+    // inputs already determine it (evaluate → `Ok`), or absent when the δ still depends on unresolved
+    // state (`Err`). This is the membership test on(w)/off(w) done directly against each δ.
     let settlement = |x: &Minterm<Symbol>| -> Vec<Option<bool>> {
-        on_off
-            .iter()
-            .map(|(on, off)| match (on.contains(x), off.contains(x)) {
-                (true, false) => Some(true),
-                (false, true) => Some(false),
-                _ => None,
-            })
-            .collect()
+        state_deltas.iter().map(|(_, d)| d.evaluate(x).ok()).collect()
     };
     let settle_count = |m: &[Option<bool>]| m.iter().filter(|o| o.is_some()).count();
     let depth_sum = |m: &[Option<bool>]| -> u64 {
