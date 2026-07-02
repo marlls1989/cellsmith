@@ -1,5 +1,6 @@
 //! The logic core: signal resolution, the state machine, region derivation, and arc derivation.
 
+pub mod analysis;
 pub mod arcs;
 pub mod confluence;
 pub mod interlock;

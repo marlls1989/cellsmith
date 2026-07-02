@@ -4,7 +4,7 @@
 //! arcs place `-type` first while fall arcs place it after the prevector. Pins are emitted in
 //! declaration order (lobsterate's deliberate divergence from hsNCL's alphabetical sort).
 
-use crate::logic::arcs::{cell_arcs, Arc, Edge};
+use crate::logic::arcs::{Arc, Edge};
 use crate::logic::assignment;
 use crate::logic::confluence::{Constraint, ConstraintKind};
 use crate::logic::interlock::Arbitration;
@@ -41,11 +41,10 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     // are the *same* arc — one prevector is enough to exercise it, so collapse them (keeping the
     // shortest prevector). With `-when` each held context is a distinct characterisation condition and
     // is kept.
-    let arcs = cell_arcs(cell);
     let arcs = if opts.emit_when {
-        arcs
+        cell.arcs.clone()
     } else {
-        collapse_conditions(arcs)
+        collapse_conditions(&cell.arcs)
     };
     for arc in &arcs {
         out.push_str(&format_arc(cell, arc, opts));
@@ -141,10 +140,11 @@ fn arbitration_comment(cell: &AnalysedCell) -> String {
 /// Collapse arcs that share a `(pin, related, edge)` — the same physical transition reached under
 /// different held-input contexts — to one, keeping the shortest prevector. Used when `-when` is off,
 /// where the held context is not emitted, so a single prevector suffices to exercise the arc.
-fn collapse_conditions(arcs: Vec<Arc>) -> Vec<Arc> {
+fn collapse_conditions(arcs: &[Arc]) -> Vec<Arc> {
     use std::collections::btree_map::Entry;
     use std::collections::BTreeMap;
-    let mut best: BTreeMap<(String, String, bool), Arc> = BTreeMap::new();
+    // Keep references while deduping so only the surviving arcs are cloned.
+    let mut best: BTreeMap<(String, String, bool), &Arc> = BTreeMap::new();
     for arc in arcs {
         let key = (
             arc.output.clone(),
@@ -162,7 +162,7 @@ fn collapse_conditions(arcs: Vec<Arc>) -> Vec<Arc> {
             }
         }
     }
-    best.into_values().collect()
+    best.into_values().cloned().collect()
 }
 
 fn format_arc(cell: &AnalysedCell, arc: &Arc, opts: ArcsTclOptions) -> String {

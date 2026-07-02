@@ -12,7 +12,8 @@ use thiserror::Error;
 use espresso_logic::expression::ParseBoolExprError;
 
 use crate::expr;
-use crate::logic::confluence::{self, Constraint};
+use crate::logic::arcs::Arc;
+use crate::logic::confluence::Constraint;
 use crate::logic::interlock::Arbitration;
 
 /// The whole input file: a list of `[[cell]]` tables.
@@ -105,6 +106,9 @@ pub struct AnalysedCell {
     /// function; never an arc source or target.
     pub internals: Vec<AnalysedOutput>,
     pub async_pins: Vec<String>,
+    /// The transition arcs derived for the cell's outputs, precomputed once by the shared machine pass
+    /// ([`crate::logic::analysis::analyse_machine`]) and consumed by the arcs emitter.
+    pub arcs: Vec<Arc>,
     /// Detected arbitration/metastability conditions (empty for ordinary combinational or
     /// self-holding cells). See [`crate::logic::interlock`].
     pub arbitration: Vec<Arbitration>,
@@ -224,15 +228,17 @@ impl Cell {
             outputs,
             internals,
             async_pins: self.async_pins.clone(),
+            arcs: Vec::new(),
             arbitration: Vec::new(),
             clock_pins: self.clock.clone(),
             constraints: Vec::new(),
             constraint_arcs_declared: self.constraint_arcs,
         };
-        // Analyse hazards in one confluence pass over the reachable state machine, deriving the
-        // constraints (setup/hold, non_seq) that avoid them plus the arbitration annotations. Clock
-        // suppression and emission gating are applied downstream.
-        let analysis = confluence::analyse_hazards(&analysed);
+        // Build the cell's state machine once and derive both its transition arcs and its hazards (the
+        // constraints — setup/hold, non_seq — that avoid them plus the arbitration annotations) from the
+        // shared exploration. Clock suppression and emission gating are applied downstream.
+        let analysis = crate::logic::analysis::analyse_machine(&analysed);
+        analysed.arcs = analysis.arcs;
         analysed.constraints = analysis.constraints;
         analysed.arbitration = analysis.arbitration;
         Ok(analysed)

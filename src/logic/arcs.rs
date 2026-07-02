@@ -17,10 +17,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use espresso_logic::{bdd_builder, Minterm, Symbol};
+use espresso_logic::bdd::{Brand, ManagerCell};
+use espresso_logic::{Minterm, Symbol};
 
-use crate::logic::{machine, resolve};
-use crate::model::AnalysedCell;
+use crate::logic::analysis::Machine;
+use crate::logic::machine;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Edge {
@@ -62,57 +63,18 @@ pub struct Arc {
     pub is_async: bool,
 }
 
-/// Derive transition arcs for every output of a cell by exploring its asynchronous state machine
-/// (see [`machine`]). A machine node is a fully-fixed [`Minterm<Symbol>`] over `[inputs…, state_vars…]`.
-pub fn cell_arcs(cell: &AnalysedCell) -> Vec<Arc> {
+/// Derive transition arcs for every output of a cell by re-walking its shared asynchronous state machine
+/// (see [`machine`] and [`Machine`]). A machine node is a fully-fixed [`Minterm<Symbol>`] over
+/// `[inputs…, state_vars…]`.
+pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> Vec<Arc> {
+    let cell = m.cell;
     let inputs = &cell.inputs;
-    let n = inputs.len();
-
-    let signals: Vec<&crate::model::AnalysedOutput> = cell.signals().collect();
-    let deps = resolve::dependency_map(&signals);
-    let state_set = resolve::state_variables(&signals);
-    // State variables in signal order (outputs first, then internals).
-    let state_vars: Vec<String> = signals
-        .iter()
-        .map(|s| s.name.clone())
-        .filter(|nm| state_set.contains(nm))
-        .collect();
-    let k = state_vars.len();
-
-    // Guard against a combinatorial blow-up on pathologically wide cells.
-    if n + k > 22 {
-        return Vec::new();
-    }
-
-    let builder = bdd_builder!();
-    let bdds: BTreeMap<String, _> = signals
-        .iter()
-        .map(|s| (s.name.clone(), builder.build(&s.expr)))
-        .collect();
-
-    // δ of each state variable (the machine's transition functions), and of each *combinational*
-    // output (a state output instead reads its own state field of the node).
-    let deltas: Vec<machine::Delta<_, _>> = state_vars
-        .iter()
-        .map(|v| (v.clone(), resolve::delta(v, &bdds, &deps, &state_set)))
-        .collect();
-    let out_delta: BTreeMap<String, _> = cell
-        .outputs
-        .iter()
-        .filter(|o| !state_set.contains(&o.name))
-        .map(|o| {
-            (
-                o.name.clone(),
-                resolve::delta(&o.name, &bdds, &deps, &state_set),
-            )
-        })
-        .collect();
-
-    // The shared headers: the full node header (inputs + state variables) and the input-only header the
-    // arcs are expressed over.
-    let full_names: Vec<String> = inputs.iter().cloned().chain(state_vars.clone()).collect();
-    let full_header = machine::header(&full_names);
-    let input_header = machine::header(inputs);
+    let state_set = &m.state_set;
+    let deltas = &m.deltas;
+    let out_delta = &m.out_deltas;
+    let full_header = &m.full_header;
+    let input_header = &m.input_header;
+    let ex = &m.explored;
 
     // The value of `output` at a node, or `None` when the node does not define it: a state output reads
     // its state field (absent ⇒ undefined); a combinational output is its δ evaluated at the node
@@ -126,17 +88,6 @@ pub fn cell_arcs(cell: &AnalysedCell) -> Vec<Arc> {
         }
     };
 
-    // Explore the reachable stable states once. Candidates are seeded from the on/off covers of every
-    // signal function (state δ plus the combinational outputs, so combinational cells seed too);
-    // [`machine::explore`] records the visitation order and predecessors, shared with
-    // [`super::confluence`].
-    let seed_funcs: Vec<_> = deltas
-        .iter()
-        .map(|(_, d)| d.clone())
-        .chain(out_delta.values().cloned())
-        .collect();
-    let ex = machine::explore(&deltas, &seed_funcs, &full_header, inputs, &state_vars);
-
     let async_set: BTreeSet<&str> = cell.async_pins.iter().map(String::as_str).collect();
     // The same arc can be reached from several start candidates; keep the one with the shortest
     // prevector. Keyed by (output, related, edge-direction, start over the inputs).
@@ -147,14 +98,14 @@ pub fn cell_arcs(cell: &AnalysedCell) -> Vec<Arc> {
     for node in &ex.order {
         for related in inputs {
             // Toggle one input, hold the (partial) state, and let the state settle.
-            let toggled = machine::toggle(&full_header, node, &[related.as_str()]);
-            let Some(np) = machine::settle(&deltas, &full_header, &toggled) else {
+            let toggled = machine::toggle(full_header, node, &[related.as_str()]);
+            let Some(np) = machine::settle(deltas, full_header, &toggled) else {
                 continue;
             };
             // An arc for every output that is defined at both ends and flips across this input toggle.
-            let start = node.project_onto(&input_header);
-            let end = np.project_onto(&input_header);
-            let prevector = ex.path_to(node, &input_header);
+            let start = node.project_onto(input_header);
+            let end = np.project_onto(input_header);
+            let prevector = ex.path_to(node, input_header);
             for o in &cell.outputs {
                 let (Some(before), Some(after)) =
                     (output_value(&o.name, node), output_value(&o.name, &np))
@@ -197,7 +148,7 @@ pub fn cell_arcs(cell: &AnalysedCell) -> Vec<Arc> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::parse_spec;
+    use crate::model::{parse_spec, AnalysedCell};
 
     fn analyse(src: &str) -> AnalysedCell {
         parse_spec(src).unwrap().cells.remove(0).analyse().unwrap()
@@ -214,7 +165,7 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        let arcs = cell_arcs(&cell);
+        let arcs = cell.arcs.clone();
         // A rise on A (from hold 01) and on B (from hold 10); likewise two falls. Plus any from the
         // off/on flat states adjacent to a hold state.
         assert!(arcs
@@ -253,7 +204,7 @@ Qa = "!Qb * A"
 Qb = "!Qa * B"
 "#,
         );
-        let arcs = cell_arcs(&cell);
+        let arcs = cell.arcs.clone();
         assert!(!arcs.is_empty());
         // No output is ever a related pin.
         assert!(
@@ -284,7 +235,7 @@ Qa = "!Qb * A"
 Qb = "Sb + !Qa * B"
 "#,
         );
-        let arcs = cell_arcs(&cell);
+        let arcs = cell.arcs.clone();
         // Related pins are still inputs only.
         assert!(arcs
             .iter()
@@ -315,7 +266,7 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 "#,
         );
-        let arcs = cell_arcs(&cell);
+        let arcs = cell.arcs.clone();
         assert!(!arcs.is_empty());
         // Internal M is never an arc source or target; only Q is a target, only CLK/D are sources.
         assert!(arcs.iter().all(|a| a.output == "Q"));
@@ -357,7 +308,7 @@ inputs = ["A", "B"]
 Y = "!(A*B)"
 "#,
         );
-        let arcs = cell_arcs(&cell);
+        let arcs = cell.arcs.clone();
         assert!(!arcs.is_empty());
         assert!(arcs.iter().all(|a| !a.is_async));
     }
@@ -374,7 +325,7 @@ async = ["R"]
 Q = "(A*B + Q*(A+B))*!R"
 "#,
         );
-        let arcs = cell_arcs(&cell);
+        let arcs = cell.arcs.clone();
         assert!(arcs.iter().any(|a| a.related == "R" && a.is_async));
         assert!(arcs
             .iter()
