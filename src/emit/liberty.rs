@@ -27,6 +27,27 @@ fn set_attr(group: &mut Group, name: &str, value: Value) {
         .insert(name.to_owned(), vec![Attribute::Simple(value)]);
 }
 
+/// Wrap every cell's Liberty fragment in a single `library (<name>) { ... }` group so the output is a
+/// self-contained `.lib` that Liberate can consume directly as `user_data` — no external harness
+/// needed. Each cell fragment (arbitration comments included) is indented one level inside the
+/// library.
+pub fn library_liberty(name: &str, cells: &[AnalysedCell]) -> String {
+    let mut out = format!("library ({name}) {{\n");
+    for cell in cells {
+        for line in cell_liberty(cell).lines() {
+            if line.is_empty() {
+                out.push('\n');
+            } else {
+                out.push_str("  ");
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    out.push_str("}\n");
+    out
+}
+
 /// The Liberty `cell (...) { ... }` fragment for a cell, as text (newline-terminated so fragments
 /// concatenate cleanly). Interlocked (mutex/arbiter) cells are prefixed with a comment recording the
 /// metastable condition and the mutually-exclusive (forbidden-both-high) grants.
