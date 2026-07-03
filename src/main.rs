@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 
 use lobsterate::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
-use lobsterate::emit::liberty::cell_liberty;
+use lobsterate::emit::liberty::library_liberty;
 use lobsterate::emit::verilog::cell_verilog;
 use lobsterate::logic::confluence;
 use lobsterate::model::{parse_spec, AnalysedCell};
@@ -109,9 +109,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         emit_when: !cli.no_when,
         emit_constraints: cli.constraints,
     };
+    let base = cli.name.unwrap_or_else(|| base_name(&cli.spec));
     let arcs = render(&cells, |c| cell_arcs_tcl(c, arc_opts));
     let verilog = render(&cells, cell_verilog);
-    let liberty = render(&cells, cell_liberty);
+    let liberty = library_liberty(&base, &cells);
 
     if cli.stdout {
         let mut out = io::stdout().lock();
@@ -121,7 +122,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let base = cli.name.unwrap_or_else(|| base_name(&cli.spec));
     fs::create_dir_all(&cli.outdir)?;
     write_file(&cli.outdir, &format!("{base}_arcs.tcl"), &arcs)?;
     write_file(&cli.outdir, &format!("{base}.v"), &verilog)?;
