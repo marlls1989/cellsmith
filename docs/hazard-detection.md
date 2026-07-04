@@ -165,12 +165,21 @@ pair in the immediate combinational neighbourhood**:
 > Divergence yields a constraint only if some state variable `w` that actually differs between `s_xy`
 > and `s_yx` has **both** `x` and `y` in the **direct support of its own δ_w**.
 
-Why direct support is the right notion of "immediate neighbourhood": `resolve::delta` composes through
-*combinational* logic only — a state variable is kept as a variable, never substituted through. So both
-pins appearing in `δ_w`'s support means they meet within one combinational cone in front of a single
-latch: the race is physically present at that latch's input. If no diverging `w` sees both pins, the
-divergence was mediated **across a latch boundary** — what crossed the boundary is a *settled snapshot*
-of the earlier domain, not the live race — and the pin pair is not at fault.
+Why direct support is the right notion of "immediate neighbourhood": the model minimisation composes
+through *combinational* logic only — a state variable is kept as a variable, never substituted through.
+So both pins appearing in `δ_w`'s support means they meet within one combinational cone in front of a
+single latch: the race is physically present at that latch's input. If no diverging `w` sees both pins,
+the divergence was mediated **across a latch boundary** — what crossed the boundary is a *settled
+snapshot* of the earlier domain, not the live race — and the pin pair is not at fault.
+
+Declassifying a relay can legitimately **surface** a hazard that used to be latch-masked. Once
+`logic::minimise` folds a combinational relay into its consumer, that consumer's δ directly incorporates
+the relay's former support — so a pin pair that used to meet only across a latch boundary can now land in
+the same direct support. On the real `ICM` cell this is exactly what happens: folding the selection-
+interlock relays `sela`/`selb` into `sela1`/`selb1` extends each synchroniser's direct support, so the
+cell gains the derived setup/hold pairs `(CLKA, S)` and `(CLKB, S)` alongside its existing `(CLKA, RA)`
+and `(CLKB, RB)` constraints — a genuine gain, never a loss, and consistent with the fold's own soundness
+(`minimise.rs` I1–I2).
 
 Worked example — a two-domain sampling chain (the `SYNC2` test fixture; the `ICM` dual-clock
 synchroniser in `examples/cells.toml` is the same shape at scale):
