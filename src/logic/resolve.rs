@@ -6,11 +6,10 @@
 //! the referenced signals into it so the result is a function of primary inputs plus the *residual*
 //! **state variables** only.
 //!
-//! The one rule (and the reason the earlier fixpoint collapse was wrong): **substitute each signal at
-//! most once.** A signal whose name *reappears* after it was already substituted — or the target itself,
-//! when self-referential — is a genuine state variable that does not resolve, and is left in the result.
-//! Substituting a cross-coupled peer **once** is essential, not something to avoid: it is what surfaces a
-//! signal's dependence on a seemingly-unrelated input (substituting `Qb = !Qa·B` into `Qa = !Qb·A` is how
+//! The one rule: **substitute each signal at most once.** A signal whose name *reappears* after it was
+//! already substituted — or the target itself, when self-referential — is a genuine state variable that
+//! does not resolve, and is left in the result. Substituting a cross-coupled peer **once** is what surfaces
+//! a signal's dependence on a seemingly-unrelated input (substituting `Qb = !Qa·B` into `Qa = !Qb·A` is how
 //! `B` appears in `Qa` at all, giving the `B↓ → Qa↑` cascade).
 //!
 //! Substitution order matters only for the **combinational** (acyclic) part: a dependee must never be
