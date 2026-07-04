@@ -3,8 +3,8 @@
 //! same exploration.
 //!
 //! A cell is a state machine over `inputs × state-variables` (see [`machine`] and [`resolve`]). Building
-//! it — every signal's BDD, each state variable's next-state δ, the combinational outputs' δ, the shared
-//! headers, and the one [`machine::explore`] BFS — is the same setup for both derivations, so it is done
+//! it — every signal's BDD, each state variable's next-state δ, the combinational outputs' δ, and the
+//! one [`machine::explore`] BFS — is the same setup for both derivations, so it is done
 //! **once** here and shared through [`Machine`]. Only plain data ([`Arc`], [`Constraint`],
 //! [`Arbitration`]) escapes into [`MachineAnalysis`]; the live BDD handles never leave this pass.
 //!
@@ -15,7 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
-use espresso_logic::{bdd_builder, Symbol, Symbols};
+use espresso_logic::bdd_builder;
 
 use crate::logic::arcs::{self, Arc};
 use crate::logic::confluence::{self, Constraint};
@@ -57,10 +57,6 @@ pub(crate) struct Machine<'c, B: Brand, C: ManagerCell> {
     /// The combinational outputs' δ, built **once** (an output's value at a node is read from its δ; a
     /// state output instead reads its own state field).
     pub(crate) out_deltas: BTreeMap<String, Bdd<B, C>>,
-    /// The full node header (inputs + state variables).
-    pub(crate) full_header: std::sync::Arc<Symbols<Symbol>>,
-    /// The input-only header the arcs and constraints are expressed over.
-    pub(crate) input_header: std::sync::Arc<Symbols<Symbol>>,
     /// The reachable stable states, discovered by one [`machine::explore`] BFS.
     pub(crate) explored: machine::Explored,
 }
@@ -115,12 +111,6 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             })
             .collect();
 
-        // The shared headers: the full node header (inputs + state variables) and the input-only header
-        // the arcs and constraints are expressed over.
-        let full_names: Vec<String> = inputs.iter().cloned().chain(state_vars.clone()).collect();
-        let full_header = machine::header(&full_names);
-        let input_header = machine::header(inputs);
-
         // Explore the reachable stable states once. Candidates are seeded from the on/off covers of every
         // signal function (state δ plus the combinational outputs, so combinational cells seed too);
         // [`machine::explore`] records the visitation order and predecessors, shared by both derivations.
@@ -129,7 +119,7 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             .map(|(_, d)| d.clone())
             .chain(out_deltas.values().cloned())
             .collect();
-        let explored = machine::explore(&deltas, &seed_funcs, &full_header, inputs, &state_vars);
+        let explored = machine::explore(&deltas, &seed_funcs, inputs, &state_vars);
 
         Some(Machine {
             cell,
@@ -137,8 +127,6 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             state_set,
             deltas,
             out_deltas,
-            full_header,
-            input_header,
             explored,
         })
     }
