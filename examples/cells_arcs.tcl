@@ -48,7 +48,7 @@ define_arc \
 	-prevector {10} \
 	-pinlist {A B Y} \
 	-vector {F 0 0} \
-	-when "!B" \
+	-when "!B*!Y" \
 	-pin A \
 	{ AND2 }
 
@@ -58,7 +58,7 @@ define_arc \
 	-prevector {00} \
 	-pinlist {A B Y} \
 	-vector {R 0 0} \
-	-when "!B" \
+	-when "!B*!Y" \
 	-pin A \
 	{ AND2 }
 
@@ -68,7 +68,7 @@ define_arc \
 	-prevector {01} \
 	-pinlist {A B Y} \
 	-vector {0 F 0} \
-	-when "!A" \
+	-when "!A*!Y" \
 	-pin B \
 	{ AND2 }
 
@@ -78,7 +78,7 @@ define_arc \
 	-prevector {00} \
 	-pinlist {A B Y} \
 	-vector {0 R 0} \
-	-when "!A" \
+	-when "!A*!Y" \
 	-pin B \
 	{ AND2 }
 
@@ -132,7 +132,7 @@ define_arc \
 	-prevector {00 10} \
 	-pinlist {A B Q} \
 	-vector {F 0 0} \
-	-when "!B" \
+	-when "!B*!Q" \
 	-pin A \
 	{ C2 }
 
@@ -142,7 +142,7 @@ define_arc \
 	-prevector {11} \
 	-pinlist {A B Q} \
 	-vector {F 1 1} \
-	-when "B" \
+	-when "B*Q" \
 	-pin A \
 	{ C2 }
 
@@ -152,7 +152,7 @@ define_arc \
 	-prevector {00} \
 	-pinlist {A B Q} \
 	-vector {R 0 0} \
-	-when "!B" \
+	-when "!B*!Q" \
 	-pin A \
 	{ C2 }
 
@@ -162,7 +162,7 @@ define_arc \
 	-prevector {11 01} \
 	-pinlist {A B Q} \
 	-vector {R 1 1} \
-	-when "B" \
+	-when "B*Q" \
 	-pin A \
 	{ C2 }
 
@@ -172,7 +172,7 @@ define_arc \
 	-prevector {00 01} \
 	-pinlist {A B Q} \
 	-vector {0 F 0} \
-	-when "!A" \
+	-when "!A*!Q" \
 	-pin B \
 	{ C2 }
 
@@ -182,7 +182,7 @@ define_arc \
 	-prevector {11} \
 	-pinlist {A B Q} \
 	-vector {1 F 1} \
-	-when "A" \
+	-when "A*Q" \
 	-pin B \
 	{ C2 }
 
@@ -192,7 +192,7 @@ define_arc \
 	-prevector {00} \
 	-pinlist {A B Q} \
 	-vector {0 R 0} \
-	-when "!A" \
+	-when "!A*!Q" \
 	-pin B \
 	{ C2 }
 
@@ -202,7 +202,7 @@ define_arc \
 	-prevector {11 10} \
 	-pinlist {A B Q} \
 	-vector {1 R 1} \
-	-when "A" \
+	-when "A*Q" \
 	-pin B \
 	{ C2 }
 
@@ -300,7 +300,7 @@ define_arc \
 	-prevector {000 100} \
 	-pinlist {A B R Q} \
 	-vector {F 0 0 0} \
-	-when "!B*!R" \
+	-when "!B*!Q*!R" \
 	-pin A \
 	{ RCELEM2 }
 
@@ -310,7 +310,7 @@ define_arc \
 	-prevector {101} \
 	-pinlist {A B R Q} \
 	-vector {F 0 1 0} \
-	-when "!B*R" \
+	-when "!B*!Q*R" \
 	-pin A \
 	{ RCELEM2 }
 
@@ -320,7 +320,7 @@ define_arc \
 	-prevector {110} \
 	-pinlist {A B R Q} \
 	-vector {F 1 0 1} \
-	-when "B*!R" \
+	-when "B*Q*!R" \
 	-pin A \
 	{ RCELEM2 }
 
@@ -330,7 +330,7 @@ define_arc \
 	-prevector {111} \
 	-pinlist {A B R Q} \
 	-vector {F 1 1 0} \
-	-when "B*R" \
+	-when "B*!Q*R" \
 	-pin A \
 	{ RCELEM2 }
 
@@ -340,7 +340,7 @@ define_arc \
 	-prevector {000} \
 	-pinlist {A B R Q} \
 	-vector {R 0 0 0} \
-	-when "!B*!R" \
+	-when "!B*!Q*!R" \
 	-pin A \
 	{ RCELEM2 }
 
@@ -350,7 +350,7 @@ define_arc \
 	-prevector {001} \
 	-pinlist {A B R Q} \
 	-vector {R 0 1 0} \
-	-when "!B*R" \
+	-when "!B*!Q*R" \
 	-pin A \
 	{ RCELEM2 }
 
@@ -360,7 +360,7 @@ define_arc \
 	-prevector {110 010} \
 	-pinlist {A B R Q} \
 	-vector {R 1 0 1} \
-	-when "B*!R" \
+	-when "B*Q*!R" \
 	-pin A \
 	{ RCELEM2 }
 
@@ -370,7 +370,7 @@ define_arc \
 	-prevector {011} \
 	-pinlist {A B R Q} \
 	-vector {R 1 1 0} \
-	-when "B*R" \
+	-when "B*!Q*R" \
 	-pin A \
 	{ RCELEM2 }
 
@@ -380,7 +380,7 @@ define_arc \
 	-prevector {000 010} \
 	-pinlist {A B R Q} \
 	-vector {0 F 0 0} \
-	-when "!A*!R" \
+	-when "!A*!Q*!R" \
 	-pin B \
 	{ RCELEM2 }
 
@@ -390,7 +390,7 @@ define_arc \
 	-prevector {011} \
 	-pinlist {A B R Q} \
 	-vector {0 F 1 0} \
-	-when "!A*R" \
+	-when "!A*!Q*R" \
 	-pin B \
 	{ RCELEM2 }
 
@@ -400,7 +400,7 @@ define_arc \
 	-prevector {110} \
 	-pinlist {A B R Q} \
 	-vector {1 F 0 1} \
-	-when "A*!R" \
+	-when "A*Q*!R" \
 	-pin B \
 	{ RCELEM2 }
 
@@ -410,7 +410,7 @@ define_arc \
 	-prevector {111} \
 	-pinlist {A B R Q} \
 	-vector {1 F 1 0} \
-	-when "A*R" \
+	-when "A*!Q*R" \
 	-pin B \
 	{ RCELEM2 }
 
@@ -420,7 +420,7 @@ define_arc \
 	-prevector {000} \
 	-pinlist {A B R Q} \
 	-vector {0 R 0 0} \
-	-when "!A*!R" \
+	-when "!A*!Q*!R" \
 	-pin B \
 	{ RCELEM2 }
 
@@ -430,7 +430,7 @@ define_arc \
 	-prevector {001} \
 	-pinlist {A B R Q} \
 	-vector {0 R 1 0} \
-	-when "!A*R" \
+	-when "!A*!Q*R" \
 	-pin B \
 	{ RCELEM2 }
 
@@ -440,7 +440,7 @@ define_arc \
 	-prevector {110 100} \
 	-pinlist {A B R Q} \
 	-vector {1 R 0 1} \
-	-when "A*!R" \
+	-when "A*Q*!R" \
 	-pin B \
 	{ RCELEM2 }
 
@@ -450,7 +450,7 @@ define_arc \
 	-prevector {101} \
 	-pinlist {A B R Q} \
 	-vector {1 R 1 0} \
-	-when "A*R" \
+	-when "A*!Q*R" \
 	-pin B \
 	{ RCELEM2 }
 
@@ -460,7 +460,7 @@ define_arc \
 	-prevector {001} \
 	-pinlist {A B R Q} \
 	-vector {0 0 F 0} \
-	-when "!A*!B" \
+	-when "!A*!B*!Q" \
 	-pin R \
 	{ RCELEM2 }
 
@@ -470,7 +470,7 @@ define_arc \
 	-prevector {011} \
 	-pinlist {A B R Q} \
 	-vector {0 1 F 0} \
-	-when "!A*B" \
+	-when "!A*B*!Q" \
 	-pin R \
 	{ RCELEM2 }
 
@@ -480,7 +480,7 @@ define_arc \
 	-prevector {101} \
 	-pinlist {A B R Q} \
 	-vector {1 0 F 0} \
-	-when "A*!B" \
+	-when "A*!B*!Q" \
 	-pin R \
 	{ RCELEM2 }
 
@@ -490,7 +490,7 @@ define_arc \
 	-prevector {000} \
 	-pinlist {A B R Q} \
 	-vector {0 0 R 0} \
-	-when "!A*!B" \
+	-when "!A*!B*!Q" \
 	-pin R \
 	{ RCELEM2 }
 
@@ -500,7 +500,7 @@ define_arc \
 	-prevector {000 010} \
 	-pinlist {A B R Q} \
 	-vector {0 1 R 0} \
-	-when "!A*B" \
+	-when "!A*B*!Q" \
 	-pin R \
 	{ RCELEM2 }
 
@@ -510,7 +510,7 @@ define_arc \
 	-prevector {000 100} \
 	-pinlist {A B R Q} \
 	-vector {1 0 R 0} \
-	-when "A*!B" \
+	-when "A*!B*!Q" \
 	-pin R \
 	{ RCELEM2 }
 
@@ -1136,7 +1136,7 @@ define_arc \
 	-prevector {000000 000010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 0 F 0 0} \
-	-when "!M1*!M2*!P1*!P2*!R" \
+	-when "!M1*!M2*!P1*!P2*!Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1146,7 +1146,7 @@ define_arc \
 	-prevector {000011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 0 F 1 0} \
-	-when "!M1*!M2*!P1*!P2*R" \
+	-when "!M1*!M2*!P1*!P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1156,7 +1156,7 @@ define_arc \
 	-prevector {000100 000110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 1 F 0 0} \
-	-when "!M1*!M2*!P1*P2*!R" \
+	-when "!M1*!M2*!P1*P2*!Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1166,7 +1166,7 @@ define_arc \
 	-prevector {000111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 1 F 1 0} \
-	-when "!M1*!M2*!P1*P2*R" \
+	-when "!M1*!M2*!P1*P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1176,7 +1176,7 @@ define_arc \
 	-prevector {001000 001010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 0 F 0 0} \
-	-when "!M1*!M2*P1*!P2*!R" \
+	-when "!M1*!M2*P1*!P2*!Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1186,7 +1186,7 @@ define_arc \
 	-prevector {001011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 0 F 1 0} \
-	-when "!M1*!M2*P1*!P2*R" \
+	-when "!M1*!M2*P1*!P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1196,7 +1196,7 @@ define_arc \
 	-prevector {001111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 1 F 1 0} \
-	-when "!M1*!M2*P1*P2*R" \
+	-when "!M1*!M2*P1*P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1206,7 +1206,17 @@ define_arc \
 	-prevector {010011 010010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 0 F 0 0} \
-	-when "!M1*M2*!P1*!P2*!R" \
+	-when "!M1*M2*!P1*!P2*!Q*!R" \
+	-pin C \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 010110 010010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 1 0 0 F 0 1} \
+	-when "!M1*M2*!P1*!P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1216,7 +1226,7 @@ define_arc \
 	-prevector {010011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 0 F 1 0} \
-	-when "!M1*M2*!P1*!P2*R" \
+	-when "!M1*M2*!P1*!P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1226,7 +1236,17 @@ define_arc \
 	-prevector {010111 010110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 1 F 0 0} \
-	-when "!M1*M2*!P1*P2*!R" \
+	-when "!M1*M2*!P1*P2*!Q*!R" \
+	-pin C \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 010110} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 1 0 1 F 0 1} \
+	-when "!M1*M2*!P1*P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1236,7 +1256,7 @@ define_arc \
 	-prevector {010111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 1 F 1 0} \
-	-when "!M1*M2*!P1*P2*R" \
+	-when "!M1*M2*!P1*P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1246,7 +1266,17 @@ define_arc \
 	-prevector {011011 011010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 0 F 0 0} \
-	-when "!M1*M2*P1*!P2*!R" \
+	-when "!M1*M2*P1*!P2*!Q*!R" \
+	-pin C \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 011010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 1 1 0 F 0 1} \
+	-when "!M1*M2*P1*!P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1256,7 +1286,7 @@ define_arc \
 	-prevector {011011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 0 F 1 0} \
-	-when "!M1*M2*P1*!P2*R" \
+	-when "!M1*M2*P1*!P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1266,7 +1296,7 @@ define_arc \
 	-prevector {011110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 1 F 0 1} \
-	-when "!M1*M2*P1*P2*!R" \
+	-when "!M1*M2*P1*P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1276,7 +1306,7 @@ define_arc \
 	-prevector {011111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 1 F 1 0} \
-	-when "!M1*M2*P1*P2*R" \
+	-when "!M1*M2*P1*P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1286,7 +1316,17 @@ define_arc \
 	-prevector {100011 100010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 0 F 0 0} \
-	-when "M1*!M2*!P1*!P2*!R" \
+	-when "M1*!M2*!P1*!P2*!Q*!R" \
+	-pin C \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 100110 100010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 0 0 0 F 0 1} \
+	-when "M1*!M2*!P1*!P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1296,7 +1336,7 @@ define_arc \
 	-prevector {100011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 0 F 1 0} \
-	-when "M1*!M2*!P1*!P2*R" \
+	-when "M1*!M2*!P1*!P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1306,7 +1346,17 @@ define_arc \
 	-prevector {100111 100110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 1 F 0 0} \
-	-when "M1*!M2*!P1*P2*!R" \
+	-when "M1*!M2*!P1*P2*!Q*!R" \
+	-pin C \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 100110} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 0 0 1 F 0 1} \
+	-when "M1*!M2*!P1*P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1316,7 +1366,7 @@ define_arc \
 	-prevector {100111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 1 F 1 0} \
-	-when "M1*!M2*!P1*P2*R" \
+	-when "M1*!M2*!P1*P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1326,7 +1376,17 @@ define_arc \
 	-prevector {101011 101010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 0 F 0 0} \
-	-when "M1*!M2*P1*!P2*!R" \
+	-when "M1*!M2*P1*!P2*!Q*!R" \
+	-pin C \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 101010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 0 1 0 F 0 1} \
+	-when "M1*!M2*P1*!P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1336,7 +1396,7 @@ define_arc \
 	-prevector {101011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 0 F 1 0} \
-	-when "M1*!M2*P1*!P2*R" \
+	-when "M1*!M2*P1*!P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1346,7 +1406,7 @@ define_arc \
 	-prevector {101110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 1 F 0 1} \
-	-when "M1*!M2*P1*P2*!R" \
+	-when "M1*!M2*P1*P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1356,7 +1416,7 @@ define_arc \
 	-prevector {101111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 1 F 1 0} \
-	-when "M1*!M2*P1*P2*R" \
+	-when "M1*!M2*P1*P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1366,7 +1426,17 @@ define_arc \
 	-prevector {110011 110010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 0 F 0 0} \
-	-when "M1*M2*!P1*!P2*!R" \
+	-when "M1*M2*!P1*!P2*!Q*!R" \
+	-pin C \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 110110 110010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 1 0 0 F 0 1} \
+	-when "M1*M2*!P1*!P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1376,7 +1446,7 @@ define_arc \
 	-prevector {110011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 0 F 1 0} \
-	-when "M1*M2*!P1*!P2*R" \
+	-when "M1*M2*!P1*!P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1386,7 +1456,17 @@ define_arc \
 	-prevector {110111 110110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 1 F 0 0} \
-	-when "M1*M2*!P1*P2*!R" \
+	-when "M1*M2*!P1*P2*!Q*!R" \
+	-pin C \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 110110} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 1 0 1 F 0 1} \
+	-when "M1*M2*!P1*P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1396,7 +1476,7 @@ define_arc \
 	-prevector {110111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 1 F 1 0} \
-	-when "M1*M2*!P1*P2*R" \
+	-when "M1*M2*!P1*P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1406,7 +1486,17 @@ define_arc \
 	-prevector {111011 111010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 0 F 0 0} \
-	-when "M1*M2*P1*!P2*!R" \
+	-when "M1*M2*P1*!P2*!Q*!R" \
+	-pin C \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 111010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 1 1 0 F 0 1} \
+	-when "M1*M2*P1*!P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1416,7 +1506,7 @@ define_arc \
 	-prevector {111011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 0 F 1 0} \
-	-when "M1*M2*P1*!P2*R" \
+	-when "M1*M2*P1*!P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1426,7 +1516,7 @@ define_arc \
 	-prevector {111110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 1 F 0 1} \
-	-when "M1*M2*P1*P2*!R" \
+	-when "M1*M2*P1*P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1436,7 +1526,7 @@ define_arc \
 	-prevector {111111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 1 F 1 0} \
-	-when "M1*M2*P1*P2*R" \
+	-when "M1*M2*P1*P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1446,7 +1536,7 @@ define_arc \
 	-prevector {000000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 0 R 0 0} \
-	-when "!M1*!M2*!P1*!P2*!R" \
+	-when "!M1*!M2*!P1*!P2*!Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1456,7 +1546,7 @@ define_arc \
 	-prevector {000001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 0 R 1 0} \
-	-when "!M1*!M2*!P1*!P2*R" \
+	-when "!M1*!M2*!P1*!P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1466,7 +1556,7 @@ define_arc \
 	-prevector {000100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 1 R 0 0} \
-	-when "!M1*!M2*!P1*P2*!R" \
+	-when "!M1*!M2*!P1*P2*!Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1476,7 +1566,7 @@ define_arc \
 	-prevector {000101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 1 R 1 0} \
-	-when "!M1*!M2*!P1*P2*R" \
+	-when "!M1*!M2*!P1*P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1486,7 +1576,7 @@ define_arc \
 	-prevector {001000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 0 R 0 0} \
-	-when "!M1*!M2*P1*!P2*!R" \
+	-when "!M1*!M2*P1*!P2*!Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1496,7 +1586,7 @@ define_arc \
 	-prevector {001001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 0 R 1 0} \
-	-when "!M1*!M2*P1*!P2*R" \
+	-when "!M1*!M2*P1*!P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1506,7 +1596,7 @@ define_arc \
 	-prevector {001101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 1 R 1 0} \
-	-when "!M1*!M2*P1*P2*R" \
+	-when "!M1*!M2*P1*P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1516,7 +1606,17 @@ define_arc \
 	-prevector {000000 010000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 0 R 0 0} \
-	-when "!M1*M2*!P1*!P2*!R" \
+	-when "!M1*M2*!P1*!P2*!Q*!R" \
+	-pin C \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 010110 010010 010000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 1 0 0 R 0 1} \
+	-when "!M1*M2*!P1*!P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1526,7 +1626,7 @@ define_arc \
 	-prevector {010001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 0 R 1 0} \
-	-when "!M1*M2*!P1*!P2*R" \
+	-when "!M1*M2*!P1*!P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1536,7 +1636,17 @@ define_arc \
 	-prevector {000100 010100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 1 R 0 0} \
-	-when "!M1*M2*!P1*P2*!R" \
+	-when "!M1*M2*!P1*P2*!Q*!R" \
+	-pin C \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 010110 010100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 1 0 1 R 0 1} \
+	-when "!M1*M2*!P1*P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1546,7 +1656,7 @@ define_arc \
 	-prevector {010101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 1 R 1 0} \
-	-when "!M1*M2*!P1*P2*R" \
+	-when "!M1*M2*!P1*P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1556,7 +1666,17 @@ define_arc \
 	-prevector {001000 011000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 0 R 0 0} \
-	-when "!M1*M2*P1*!P2*!R" \
+	-when "!M1*M2*P1*!P2*!Q*!R" \
+	-pin C \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 011010 011000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 1 1 0 R 0 1} \
+	-when "!M1*M2*P1*!P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1566,7 +1686,7 @@ define_arc \
 	-prevector {011001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 0 R 1 0} \
-	-when "!M1*M2*P1*!P2*R" \
+	-when "!M1*M2*P1*!P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1576,7 +1696,7 @@ define_arc \
 	-prevector {011110 011100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 1 R 0 1} \
-	-when "!M1*M2*P1*P2*!R" \
+	-when "!M1*M2*P1*P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1586,7 +1706,7 @@ define_arc \
 	-prevector {011101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 1 R 1 0} \
-	-when "!M1*M2*P1*P2*R" \
+	-when "!M1*M2*P1*P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1596,7 +1716,17 @@ define_arc \
 	-prevector {000000 100000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 0 R 0 0} \
-	-when "M1*!M2*!P1*!P2*!R" \
+	-when "M1*!M2*!P1*!P2*!Q*!R" \
+	-pin C \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 100110 100010 100000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 0 0 0 R 0 1} \
+	-when "M1*!M2*!P1*!P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1606,7 +1736,7 @@ define_arc \
 	-prevector {100001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 0 R 1 0} \
-	-when "M1*!M2*!P1*!P2*R" \
+	-when "M1*!M2*!P1*!P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1616,7 +1746,17 @@ define_arc \
 	-prevector {000100 100100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 1 R 0 0} \
-	-when "M1*!M2*!P1*P2*!R" \
+	-when "M1*!M2*!P1*P2*!Q*!R" \
+	-pin C \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 100110 100100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 0 0 1 R 0 1} \
+	-when "M1*!M2*!P1*P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1626,7 +1766,7 @@ define_arc \
 	-prevector {100101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 1 R 1 0} \
-	-when "M1*!M2*!P1*P2*R" \
+	-when "M1*!M2*!P1*P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1636,7 +1776,17 @@ define_arc \
 	-prevector {001000 101000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 0 R 0 0} \
-	-when "M1*!M2*P1*!P2*!R" \
+	-when "M1*!M2*P1*!P2*!Q*!R" \
+	-pin C \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 101010 101000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 0 1 0 R 0 1} \
+	-when "M1*!M2*P1*!P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1646,7 +1796,7 @@ define_arc \
 	-prevector {101001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 0 R 1 0} \
-	-when "M1*!M2*P1*!P2*R" \
+	-when "M1*!M2*P1*!P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1656,7 +1806,7 @@ define_arc \
 	-prevector {101110 101100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 1 R 0 1} \
-	-when "M1*!M2*P1*P2*!R" \
+	-when "M1*!M2*P1*P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1666,7 +1816,7 @@ define_arc \
 	-prevector {101101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 1 R 1 0} \
-	-when "M1*!M2*P1*P2*R" \
+	-when "M1*!M2*P1*P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1676,7 +1826,17 @@ define_arc \
 	-prevector {110001 110000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 0 R 0 0} \
-	-when "M1*M2*!P1*!P2*!R" \
+	-when "M1*M2*!P1*!P2*!Q*!R" \
+	-pin C \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 110110 110010 110000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 1 0 0 R 0 1} \
+	-when "M1*M2*!P1*!P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1686,7 +1846,7 @@ define_arc \
 	-prevector {110001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 0 R 1 0} \
-	-when "M1*M2*!P1*!P2*R" \
+	-when "M1*M2*!P1*!P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1696,7 +1856,17 @@ define_arc \
 	-prevector {110101 110100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 1 R 0 0} \
-	-when "M1*M2*!P1*P2*!R" \
+	-when "M1*M2*!P1*P2*!Q*!R" \
+	-pin C \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 110110 110100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 1 0 1 R 0 1} \
+	-when "M1*M2*!P1*P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1706,7 +1876,7 @@ define_arc \
 	-prevector {110101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 1 R 1 0} \
-	-when "M1*M2*!P1*P2*R" \
+	-when "M1*M2*!P1*P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1716,7 +1886,17 @@ define_arc \
 	-prevector {111001 111000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 0 R 0 0} \
-	-when "M1*M2*P1*!P2*!R" \
+	-when "M1*M2*P1*!P2*!Q*!R" \
+	-pin C \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 111010 111000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 1 1 0 R 0 1} \
+	-when "M1*M2*P1*!P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1726,7 +1906,7 @@ define_arc \
 	-prevector {111001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 0 R 1 0} \
-	-when "M1*M2*P1*!P2*R" \
+	-when "M1*M2*P1*!P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1736,7 +1916,7 @@ define_arc \
 	-prevector {111110 111100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 1 R 0 1} \
-	-when "M1*M2*P1*P2*!R" \
+	-when "M1*M2*P1*P2*Q*!R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1746,7 +1926,7 @@ define_arc \
 	-prevector {111101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 1 R 1 0} \
-	-when "M1*M2*P1*P2*R" \
+	-when "M1*M2*P1*P2*!Q*R" \
 	-pin C \
 	{ RACELEM21 }
 
@@ -1756,7 +1936,7 @@ define_arc \
 	-prevector {000000 100000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 0 0 0 0 0 0} \
-	-when "!C*!M2*!P1*!P2*!R" \
+	-when "!C*!M2*!P1*!P2*!Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1766,7 +1946,7 @@ define_arc \
 	-prevector {100001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 0 0 0 0 1 0} \
-	-when "!C*!M2*!P1*!P2*R" \
+	-when "!C*!M2*!P1*!P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1776,7 +1956,7 @@ define_arc \
 	-prevector {000100 100100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 0 0 1 0 0 0} \
-	-when "!C*!M2*!P1*P2*!R" \
+	-when "!C*!M2*!P1*P2*!Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1786,7 +1966,7 @@ define_arc \
 	-prevector {100101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 0 0 1 0 1 0} \
-	-when "!C*!M2*!P1*P2*R" \
+	-when "!C*!M2*!P1*P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1796,7 +1976,7 @@ define_arc \
 	-prevector {001000 101000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 0 1 0 0 0 0} \
-	-when "!C*!M2*P1*!P2*!R" \
+	-when "!C*!M2*P1*!P2*!Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1806,7 +1986,7 @@ define_arc \
 	-prevector {101001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 0 1 0 0 1 0} \
-	-when "!C*!M2*P1*!P2*R" \
+	-when "!C*!M2*P1*!P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1816,7 +1996,7 @@ define_arc \
 	-prevector {001100 101100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 0 1 1 0 0 0} \
-	-when "!C*!M2*P1*P2*!R" \
+	-when "!C*!M2*P1*P2*!Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1826,7 +2006,7 @@ define_arc \
 	-prevector {101101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 0 1 1 0 1 0} \
-	-when "!C*!M2*P1*P2*R" \
+	-when "!C*!M2*P1*P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1836,7 +2016,17 @@ define_arc \
 	-prevector {110001 110000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 1 0 0 0 0 0} \
-	-when "!C*M2*!P1*!P2*!R" \
+	-when "!C*M2*!P1*!P2*!Q*!R" \
+	-pin M1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 110110 110010 110000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {F 1 0 0 0 0 1} \
+	-when "!C*M2*!P1*!P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1846,7 +2036,7 @@ define_arc \
 	-prevector {110001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 1 0 0 0 1 0} \
-	-when "!C*M2*!P1*!P2*R" \
+	-when "!C*M2*!P1*!P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1856,7 +2046,17 @@ define_arc \
 	-prevector {110101 110100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 1 0 1 0 0 0} \
-	-when "!C*M2*!P1*P2*!R" \
+	-when "!C*M2*!P1*P2*!Q*!R" \
+	-pin M1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 110110 110100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {F 1 0 1 0 0 1} \
+	-when "!C*M2*!P1*P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1866,7 +2066,7 @@ define_arc \
 	-prevector {110101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 1 0 1 0 1 0} \
-	-when "!C*M2*!P1*P2*R" \
+	-when "!C*M2*!P1*P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1876,7 +2076,17 @@ define_arc \
 	-prevector {111001 111000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 1 1 0 0 0 0} \
-	-when "!C*M2*P1*!P2*!R" \
+	-when "!C*M2*P1*!P2*!Q*!R" \
+	-pin M1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 111010 111000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {F 1 1 0 0 0 1} \
+	-when "!C*M2*P1*!P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1886,7 +2096,7 @@ define_arc \
 	-prevector {111001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 1 1 0 0 1 0} \
-	-when "!C*M2*P1*!P2*R" \
+	-when "!C*M2*P1*!P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1896,7 +2106,17 @@ define_arc \
 	-prevector {111101 111100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 1 1 1 0 0 0} \
-	-when "!C*M2*P1*P2*!R" \
+	-when "!C*M2*P1*P2*!Q*!R" \
+	-pin M1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 111100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {F 1 1 1 0 0 1} \
+	-when "!C*M2*P1*P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1906,7 +2126,7 @@ define_arc \
 	-prevector {111101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 1 1 1 0 1 0} \
-	-when "!C*M2*P1*P2*R" \
+	-when "!C*M2*P1*P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1916,7 +2136,17 @@ define_arc \
 	-prevector {100011 100010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 0 0 0 1 0 0} \
-	-when "C*!M2*!P1*!P2*!R" \
+	-when "C*!M2*!P1*!P2*!Q*!R" \
+	-pin M1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 100110 100010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {F 0 0 0 1 0 1} \
+	-when "C*!M2*!P1*!P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1926,7 +2156,7 @@ define_arc \
 	-prevector {100011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 0 0 0 1 1 0} \
-	-when "C*!M2*!P1*!P2*R" \
+	-when "C*!M2*!P1*!P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1936,7 +2166,17 @@ define_arc \
 	-prevector {100111 100110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 0 0 1 1 0 0} \
-	-when "C*!M2*!P1*P2*!R" \
+	-when "C*!M2*!P1*P2*!Q*!R" \
+	-pin M1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 100110} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {F 0 0 1 1 0 1} \
+	-when "C*!M2*!P1*P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1946,7 +2186,7 @@ define_arc \
 	-prevector {100111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 0 0 1 1 1 0} \
-	-when "C*!M2*!P1*P2*R" \
+	-when "C*!M2*!P1*P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1956,7 +2196,17 @@ define_arc \
 	-prevector {101011 101010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 0 1 0 1 0 0} \
-	-when "C*!M2*P1*!P2*!R" \
+	-when "C*!M2*P1*!P2*!Q*!R" \
+	-pin M1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 101010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {F 0 1 0 1 0 1} \
+	-when "C*!M2*P1*!P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1966,7 +2216,7 @@ define_arc \
 	-prevector {101011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 0 1 0 1 1 0} \
-	-when "C*!M2*P1*!P2*R" \
+	-when "C*!M2*P1*!P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1976,7 +2226,7 @@ define_arc \
 	-prevector {101110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 0 1 1 1 0 1} \
-	-when "C*!M2*P1*P2*!R" \
+	-when "C*!M2*P1*P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1986,7 +2236,7 @@ define_arc \
 	-prevector {101111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 0 1 1 1 1 0} \
-	-when "C*!M2*P1*P2*R" \
+	-when "C*!M2*P1*P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -1996,7 +2246,17 @@ define_arc \
 	-prevector {110011 110010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 1 0 0 1 0 0} \
-	-when "C*M2*!P1*!P2*!R" \
+	-when "C*M2*!P1*!P2*!Q*!R" \
+	-pin M1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 110110 110010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {F 1 0 0 1 0 1} \
+	-when "C*M2*!P1*!P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2006,7 +2266,7 @@ define_arc \
 	-prevector {110011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 1 0 0 1 1 0} \
-	-when "C*M2*!P1*!P2*R" \
+	-when "C*M2*!P1*!P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2016,7 +2276,17 @@ define_arc \
 	-prevector {110111 110110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 1 0 1 1 0 0} \
-	-when "C*M2*!P1*P2*!R" \
+	-when "C*M2*!P1*P2*!Q*!R" \
+	-pin M1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 110110} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {F 1 0 1 1 0 1} \
+	-when "C*M2*!P1*P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2026,7 +2296,7 @@ define_arc \
 	-prevector {110111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 1 0 1 1 1 0} \
-	-when "C*M2*!P1*P2*R" \
+	-when "C*M2*!P1*P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2036,7 +2306,17 @@ define_arc \
 	-prevector {111011 111010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 1 1 0 1 0 0} \
-	-when "C*M2*P1*!P2*!R" \
+	-when "C*M2*P1*!P2*!Q*!R" \
+	-pin M1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 111010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {F 1 1 0 1 0 1} \
+	-when "C*M2*P1*!P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2046,7 +2326,7 @@ define_arc \
 	-prevector {111011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 1 1 0 1 1 0} \
-	-when "C*M2*P1*!P2*R" \
+	-when "C*M2*P1*!P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2056,7 +2336,7 @@ define_arc \
 	-prevector {111110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 1 1 1 1 0 1} \
-	-when "C*M2*P1*P2*!R" \
+	-when "C*M2*P1*P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2066,7 +2346,7 @@ define_arc \
 	-prevector {111111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {F 1 1 1 1 1 0} \
-	-when "C*M2*P1*P2*R" \
+	-when "C*M2*P1*P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2076,7 +2356,7 @@ define_arc \
 	-prevector {000000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 0 0 0 0 0 0} \
-	-when "!C*!M2*!P1*!P2*!R" \
+	-when "!C*!M2*!P1*!P2*!Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2086,7 +2366,7 @@ define_arc \
 	-prevector {000001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 0 0 0 0 1 0} \
-	-when "!C*!M2*!P1*!P2*R" \
+	-when "!C*!M2*!P1*!P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2096,7 +2376,7 @@ define_arc \
 	-prevector {000100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 0 0 1 0 0 0} \
-	-when "!C*!M2*!P1*P2*!R" \
+	-when "!C*!M2*!P1*P2*!Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2106,7 +2386,7 @@ define_arc \
 	-prevector {000101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 0 0 1 0 1 0} \
-	-when "!C*!M2*!P1*P2*R" \
+	-when "!C*!M2*!P1*P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2116,7 +2396,7 @@ define_arc \
 	-prevector {001000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 0 1 0 0 0 0} \
-	-when "!C*!M2*P1*!P2*!R" \
+	-when "!C*!M2*P1*!P2*!Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2126,7 +2406,7 @@ define_arc \
 	-prevector {001001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 0 1 0 0 1 0} \
-	-when "!C*!M2*P1*!P2*R" \
+	-when "!C*!M2*P1*!P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2136,7 +2416,7 @@ define_arc \
 	-prevector {001100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 0 1 1 0 0 0} \
-	-when "!C*!M2*P1*P2*!R" \
+	-when "!C*!M2*P1*P2*!Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2146,7 +2426,7 @@ define_arc \
 	-prevector {001101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 0 1 1 0 1 0} \
-	-when "!C*!M2*P1*P2*R" \
+	-when "!C*!M2*P1*P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2156,7 +2436,17 @@ define_arc \
 	-prevector {000000 010000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 1 0 0 0 0 0} \
-	-when "!C*M2*!P1*!P2*!R" \
+	-when "!C*M2*!P1*!P2*!Q*!R" \
+	-pin M1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 010110 010010 010000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {R 1 0 0 0 0 1} \
+	-when "!C*M2*!P1*!P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2166,7 +2456,7 @@ define_arc \
 	-prevector {010001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 1 0 0 0 1 0} \
-	-when "!C*M2*!P1*!P2*R" \
+	-when "!C*M2*!P1*!P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2176,7 +2466,17 @@ define_arc \
 	-prevector {000100 010100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 1 0 1 0 0 0} \
-	-when "!C*M2*!P1*P2*!R" \
+	-when "!C*M2*!P1*P2*!Q*!R" \
+	-pin M1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 010110 010100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {R 1 0 1 0 0 1} \
+	-when "!C*M2*!P1*P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2186,7 +2486,7 @@ define_arc \
 	-prevector {010101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 1 0 1 0 1 0} \
-	-when "!C*M2*!P1*P2*R" \
+	-when "!C*M2*!P1*P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2196,7 +2496,17 @@ define_arc \
 	-prevector {001000 011000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 1 1 0 0 0 0} \
-	-when "!C*M2*P1*!P2*!R" \
+	-when "!C*M2*P1*!P2*!Q*!R" \
+	-pin M1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 011010 011000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {R 1 1 0 0 0 1} \
+	-when "!C*M2*P1*!P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2206,7 +2516,7 @@ define_arc \
 	-prevector {011001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 1 1 0 0 1 0} \
-	-when "!C*M2*P1*!P2*R" \
+	-when "!C*M2*P1*!P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2216,7 +2526,17 @@ define_arc \
 	-prevector {001100 011100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 1 1 1 0 0 0} \
-	-when "!C*M2*P1*P2*!R" \
+	-when "!C*M2*P1*P2*!Q*!R" \
+	-pin M1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 011100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {R 1 1 1 0 0 1} \
+	-when "!C*M2*P1*P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2226,7 +2546,7 @@ define_arc \
 	-prevector {011101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 1 1 1 0 1 0} \
-	-when "!C*M2*P1*P2*R" \
+	-when "!C*M2*P1*P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2236,7 +2556,17 @@ define_arc \
 	-prevector {000000 000010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 0 0 0 1 0 0} \
-	-when "C*!M2*!P1*!P2*!R" \
+	-when "C*!M2*!P1*!P2*!Q*!R" \
+	-pin M1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {001110 000110 000010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {R 0 0 0 1 0 1} \
+	-when "C*!M2*!P1*!P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2246,7 +2576,7 @@ define_arc \
 	-prevector {000011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 0 0 0 1 1 0} \
-	-when "C*!M2*!P1*!P2*R" \
+	-when "C*!M2*!P1*!P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2256,7 +2586,17 @@ define_arc \
 	-prevector {000100 000110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 0 0 1 1 0 0} \
-	-when "C*!M2*!P1*P2*!R" \
+	-when "C*!M2*!P1*P2*!Q*!R" \
+	-pin M1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {001110 000110} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {R 0 0 1 1 0 1} \
+	-when "C*!M2*!P1*P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2266,7 +2606,7 @@ define_arc \
 	-prevector {000111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 0 0 1 1 1 0} \
-	-when "C*!M2*!P1*P2*R" \
+	-when "C*!M2*!P1*P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2276,7 +2616,17 @@ define_arc \
 	-prevector {001000 001010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 0 1 0 1 0 0} \
-	-when "C*!M2*P1*!P2*!R" \
+	-when "C*!M2*P1*!P2*!Q*!R" \
+	-pin M1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {001110 001010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {R 0 1 0 1 0 1} \
+	-when "C*!M2*P1*!P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2286,7 +2636,7 @@ define_arc \
 	-prevector {001011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 0 1 0 1 1 0} \
-	-when "C*!M2*P1*!P2*R" \
+	-when "C*!M2*P1*!P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2296,7 +2646,7 @@ define_arc \
 	-prevector {001110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 0 1 1 1 0 1} \
-	-when "C*!M2*P1*P2*!R" \
+	-when "C*!M2*P1*P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2306,7 +2656,7 @@ define_arc \
 	-prevector {001111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 0 1 1 1 1 0} \
-	-when "C*!M2*P1*P2*R" \
+	-when "C*!M2*P1*P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2316,7 +2666,17 @@ define_arc \
 	-prevector {010011 010010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 1 0 0 1 0 0} \
-	-when "C*M2*!P1*!P2*!R" \
+	-when "C*M2*!P1*!P2*!Q*!R" \
+	-pin M1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 010110 010010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {R 1 0 0 1 0 1} \
+	-when "C*M2*!P1*!P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2326,7 +2686,7 @@ define_arc \
 	-prevector {010011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 1 0 0 1 1 0} \
-	-when "C*M2*!P1*!P2*R" \
+	-when "C*M2*!P1*!P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2336,7 +2696,17 @@ define_arc \
 	-prevector {010111 010110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 1 0 1 1 0 0} \
-	-when "C*M2*!P1*P2*!R" \
+	-when "C*M2*!P1*P2*!Q*!R" \
+	-pin M1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 010110} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {R 1 0 1 1 0 1} \
+	-when "C*M2*!P1*P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2346,7 +2716,7 @@ define_arc \
 	-prevector {010111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 1 0 1 1 1 0} \
-	-when "C*M2*!P1*P2*R" \
+	-when "C*M2*!P1*P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2356,7 +2726,17 @@ define_arc \
 	-prevector {011011 011010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 1 1 0 1 0 0} \
-	-when "C*M2*P1*!P2*!R" \
+	-when "C*M2*P1*!P2*!Q*!R" \
+	-pin M1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 011010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {R 1 1 0 1 0 1} \
+	-when "C*M2*P1*!P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2366,7 +2746,7 @@ define_arc \
 	-prevector {011011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 1 1 0 1 1 0} \
-	-when "C*M2*P1*!P2*R" \
+	-when "C*M2*P1*!P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2376,7 +2756,7 @@ define_arc \
 	-prevector {011110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 1 1 1 1 0 1} \
-	-when "C*M2*P1*P2*!R" \
+	-when "C*M2*P1*P2*Q*!R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2386,7 +2766,7 @@ define_arc \
 	-prevector {011111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {R 1 1 1 1 1 0} \
-	-when "C*M2*P1*P2*R" \
+	-when "C*M2*P1*P2*!Q*R" \
 	-pin M1 \
 	{ RACELEM21 }
 
@@ -2396,7 +2776,7 @@ define_arc \
 	-prevector {000000 010000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 F 0 0 0 0 0} \
-	-when "!C*!M1*!P1*!P2*!R" \
+	-when "!C*!M1*!P1*!P2*!Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2406,7 +2786,7 @@ define_arc \
 	-prevector {010001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 F 0 0 0 1 0} \
-	-when "!C*!M1*!P1*!P2*R" \
+	-when "!C*!M1*!P1*!P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2416,7 +2796,7 @@ define_arc \
 	-prevector {000100 010100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 F 0 1 0 0 0} \
-	-when "!C*!M1*!P1*P2*!R" \
+	-when "!C*!M1*!P1*P2*!Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2426,7 +2806,7 @@ define_arc \
 	-prevector {010101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 F 0 1 0 1 0} \
-	-when "!C*!M1*!P1*P2*R" \
+	-when "!C*!M1*!P1*P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2436,7 +2816,7 @@ define_arc \
 	-prevector {001000 011000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 F 1 0 0 0 0} \
-	-when "!C*!M1*P1*!P2*!R" \
+	-when "!C*!M1*P1*!P2*!Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2446,7 +2826,7 @@ define_arc \
 	-prevector {011001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 F 1 0 0 1 0} \
-	-when "!C*!M1*P1*!P2*R" \
+	-when "!C*!M1*P1*!P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2456,7 +2836,7 @@ define_arc \
 	-prevector {001100 011100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 F 1 1 0 0 0} \
-	-when "!C*!M1*P1*P2*!R" \
+	-when "!C*!M1*P1*P2*!Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2466,7 +2846,7 @@ define_arc \
 	-prevector {011101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 F 1 1 0 1 0} \
-	-when "!C*!M1*P1*P2*R" \
+	-when "!C*!M1*P1*P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2476,7 +2856,17 @@ define_arc \
 	-prevector {110001 110000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 F 0 0 0 0 0} \
-	-when "!C*M1*!P1*!P2*!R" \
+	-when "!C*M1*!P1*!P2*!Q*!R" \
+	-pin M2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 110110 110010 110000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 F 0 0 0 0 1} \
+	-when "!C*M1*!P1*!P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2486,7 +2876,7 @@ define_arc \
 	-prevector {110001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 F 0 0 0 1 0} \
-	-when "!C*M1*!P1*!P2*R" \
+	-when "!C*M1*!P1*!P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2496,7 +2886,17 @@ define_arc \
 	-prevector {110101 110100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 F 0 1 0 0 0} \
-	-when "!C*M1*!P1*P2*!R" \
+	-when "!C*M1*!P1*P2*!Q*!R" \
+	-pin M2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 110110 110100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 F 0 1 0 0 1} \
+	-when "!C*M1*!P1*P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2506,7 +2906,7 @@ define_arc \
 	-prevector {110101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 F 0 1 0 1 0} \
-	-when "!C*M1*!P1*P2*R" \
+	-when "!C*M1*!P1*P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2516,7 +2916,17 @@ define_arc \
 	-prevector {111001 111000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 F 1 0 0 0 0} \
-	-when "!C*M1*P1*!P2*!R" \
+	-when "!C*M1*P1*!P2*!Q*!R" \
+	-pin M2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 111010 111000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 F 1 0 0 0 1} \
+	-when "!C*M1*P1*!P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2526,7 +2936,7 @@ define_arc \
 	-prevector {111001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 F 1 0 0 1 0} \
-	-when "!C*M1*P1*!P2*R" \
+	-when "!C*M1*P1*!P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2536,7 +2946,17 @@ define_arc \
 	-prevector {111101 111100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 F 1 1 0 0 0} \
-	-when "!C*M1*P1*P2*!R" \
+	-when "!C*M1*P1*P2*!Q*!R" \
+	-pin M2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 111100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 F 1 1 0 0 1} \
+	-when "!C*M1*P1*P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2546,7 +2966,7 @@ define_arc \
 	-prevector {111101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 F 1 1 0 1 0} \
-	-when "!C*M1*P1*P2*R" \
+	-when "!C*M1*P1*P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2556,7 +2976,17 @@ define_arc \
 	-prevector {010011 010010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 F 0 0 1 0 0} \
-	-when "C*!M1*!P1*!P2*!R" \
+	-when "C*!M1*!P1*!P2*!Q*!R" \
+	-pin M2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 010110 010010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 F 0 0 1 0 1} \
+	-when "C*!M1*!P1*!P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2566,7 +2996,7 @@ define_arc \
 	-prevector {010011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 F 0 0 1 1 0} \
-	-when "C*!M1*!P1*!P2*R" \
+	-when "C*!M1*!P1*!P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2576,7 +3006,17 @@ define_arc \
 	-prevector {010111 010110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 F 0 1 1 0 0} \
-	-when "C*!M1*!P1*P2*!R" \
+	-when "C*!M1*!P1*P2*!Q*!R" \
+	-pin M2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 010110} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 F 0 1 1 0 1} \
+	-when "C*!M1*!P1*P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2586,7 +3026,7 @@ define_arc \
 	-prevector {010111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 F 0 1 1 1 0} \
-	-when "C*!M1*!P1*P2*R" \
+	-when "C*!M1*!P1*P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2596,7 +3036,17 @@ define_arc \
 	-prevector {011011 011010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 F 1 0 1 0 0} \
-	-when "C*!M1*P1*!P2*!R" \
+	-when "C*!M1*P1*!P2*!Q*!R" \
+	-pin M2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 011010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 F 1 0 1 0 1} \
+	-when "C*!M1*P1*!P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2606,7 +3056,7 @@ define_arc \
 	-prevector {011011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 F 1 0 1 1 0} \
-	-when "C*!M1*P1*!P2*R" \
+	-when "C*!M1*P1*!P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2616,7 +3066,7 @@ define_arc \
 	-prevector {011110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 F 1 1 1 0 1} \
-	-when "C*!M1*P1*P2*!R" \
+	-when "C*!M1*P1*P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2626,7 +3076,7 @@ define_arc \
 	-prevector {011111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 F 1 1 1 1 0} \
-	-when "C*!M1*P1*P2*R" \
+	-when "C*!M1*P1*P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2636,7 +3086,17 @@ define_arc \
 	-prevector {110011 110010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 F 0 0 1 0 0} \
-	-when "C*M1*!P1*!P2*!R" \
+	-when "C*M1*!P1*!P2*!Q*!R" \
+	-pin M2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 110110 110010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 F 0 0 1 0 1} \
+	-when "C*M1*!P1*!P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2646,7 +3106,7 @@ define_arc \
 	-prevector {110011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 F 0 0 1 1 0} \
-	-when "C*M1*!P1*!P2*R" \
+	-when "C*M1*!P1*!P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2656,7 +3116,17 @@ define_arc \
 	-prevector {110111 110110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 F 0 1 1 0 0} \
-	-when "C*M1*!P1*P2*!R" \
+	-when "C*M1*!P1*P2*!Q*!R" \
+	-pin M2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 110110} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 F 0 1 1 0 1} \
+	-when "C*M1*!P1*P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2666,7 +3136,7 @@ define_arc \
 	-prevector {110111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 F 0 1 1 1 0} \
-	-when "C*M1*!P1*P2*R" \
+	-when "C*M1*!P1*P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2676,7 +3146,17 @@ define_arc \
 	-prevector {111011 111010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 F 1 0 1 0 0} \
-	-when "C*M1*P1*!P2*!R" \
+	-when "C*M1*P1*!P2*!Q*!R" \
+	-pin M2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 111010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 F 1 0 1 0 1} \
+	-when "C*M1*P1*!P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2686,7 +3166,7 @@ define_arc \
 	-prevector {111011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 F 1 0 1 1 0} \
-	-when "C*M1*P1*!P2*R" \
+	-when "C*M1*P1*!P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2696,7 +3176,7 @@ define_arc \
 	-prevector {111110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 F 1 1 1 0 1} \
-	-when "C*M1*P1*P2*!R" \
+	-when "C*M1*P1*P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2706,7 +3186,7 @@ define_arc \
 	-prevector {111111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 F 1 1 1 1 0} \
-	-when "C*M1*P1*P2*R" \
+	-when "C*M1*P1*P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2716,7 +3196,7 @@ define_arc \
 	-prevector {000000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 R 0 0 0 0 0} \
-	-when "!C*!M1*!P1*!P2*!R" \
+	-when "!C*!M1*!P1*!P2*!Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2726,7 +3206,7 @@ define_arc \
 	-prevector {000001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 R 0 0 0 1 0} \
-	-when "!C*!M1*!P1*!P2*R" \
+	-when "!C*!M1*!P1*!P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2736,7 +3216,7 @@ define_arc \
 	-prevector {000100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 R 0 1 0 0 0} \
-	-when "!C*!M1*!P1*P2*!R" \
+	-when "!C*!M1*!P1*P2*!Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2746,7 +3226,7 @@ define_arc \
 	-prevector {000101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 R 0 1 0 1 0} \
-	-when "!C*!M1*!P1*P2*R" \
+	-when "!C*!M1*!P1*P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2756,7 +3236,7 @@ define_arc \
 	-prevector {001000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 R 1 0 0 0 0} \
-	-when "!C*!M1*P1*!P2*!R" \
+	-when "!C*!M1*P1*!P2*!Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2766,7 +3246,7 @@ define_arc \
 	-prevector {001001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 R 1 0 0 1 0} \
-	-when "!C*!M1*P1*!P2*R" \
+	-when "!C*!M1*P1*!P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2776,7 +3256,7 @@ define_arc \
 	-prevector {001100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 R 1 1 0 0 0} \
-	-when "!C*!M1*P1*P2*!R" \
+	-when "!C*!M1*P1*P2*!Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2786,7 +3266,7 @@ define_arc \
 	-prevector {001101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 R 1 1 0 1 0} \
-	-when "!C*!M1*P1*P2*R" \
+	-when "!C*!M1*P1*P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2796,7 +3276,17 @@ define_arc \
 	-prevector {000000 100000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 R 0 0 0 0 0} \
-	-when "!C*M1*!P1*!P2*!R" \
+	-when "!C*M1*!P1*!P2*!Q*!R" \
+	-pin M2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 100110 100010 100000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 R 0 0 0 0 1} \
+	-when "!C*M1*!P1*!P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2806,7 +3296,7 @@ define_arc \
 	-prevector {100001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 R 0 0 0 1 0} \
-	-when "!C*M1*!P1*!P2*R" \
+	-when "!C*M1*!P1*!P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2816,7 +3306,17 @@ define_arc \
 	-prevector {000100 100100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 R 0 1 0 0 0} \
-	-when "!C*M1*!P1*P2*!R" \
+	-when "!C*M1*!P1*P2*!Q*!R" \
+	-pin M2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 100110 100100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 R 0 1 0 0 1} \
+	-when "!C*M1*!P1*P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2826,7 +3326,7 @@ define_arc \
 	-prevector {100101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 R 0 1 0 1 0} \
-	-when "!C*M1*!P1*P2*R" \
+	-when "!C*M1*!P1*P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2836,7 +3336,17 @@ define_arc \
 	-prevector {001000 101000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 R 1 0 0 0 0} \
-	-when "!C*M1*P1*!P2*!R" \
+	-when "!C*M1*P1*!P2*!Q*!R" \
+	-pin M2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 101010 101000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 R 1 0 0 0 1} \
+	-when "!C*M1*P1*!P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2846,7 +3356,7 @@ define_arc \
 	-prevector {101001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 R 1 0 0 1 0} \
-	-when "!C*M1*P1*!P2*R" \
+	-when "!C*M1*P1*!P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2856,7 +3366,17 @@ define_arc \
 	-prevector {001100 101100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 R 1 1 0 0 0} \
-	-when "!C*M1*P1*P2*!R" \
+	-when "!C*M1*P1*P2*!Q*!R" \
+	-pin M2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 101100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 R 1 1 0 0 1} \
+	-when "!C*M1*P1*P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2866,7 +3386,7 @@ define_arc \
 	-prevector {101101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 R 1 1 0 1 0} \
-	-when "!C*M1*P1*P2*R" \
+	-when "!C*M1*P1*P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2876,7 +3396,17 @@ define_arc \
 	-prevector {000000 000010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 R 0 0 1 0 0} \
-	-when "C*!M1*!P1*!P2*!R" \
+	-when "C*!M1*!P1*!P2*!Q*!R" \
+	-pin M2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {001110 000110 000010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 R 0 0 1 0 1} \
+	-when "C*!M1*!P1*!P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2886,7 +3416,7 @@ define_arc \
 	-prevector {000011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 R 0 0 1 1 0} \
-	-when "C*!M1*!P1*!P2*R" \
+	-when "C*!M1*!P1*!P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2896,7 +3426,17 @@ define_arc \
 	-prevector {000100 000110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 R 0 1 1 0 0} \
-	-when "C*!M1*!P1*P2*!R" \
+	-when "C*!M1*!P1*P2*!Q*!R" \
+	-pin M2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {001110 000110} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 R 0 1 1 0 1} \
+	-when "C*!M1*!P1*P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2906,7 +3446,7 @@ define_arc \
 	-prevector {000111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 R 0 1 1 1 0} \
-	-when "C*!M1*!P1*P2*R" \
+	-when "C*!M1*!P1*P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2916,7 +3456,17 @@ define_arc \
 	-prevector {001000 001010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 R 1 0 1 0 0} \
-	-when "C*!M1*P1*!P2*!R" \
+	-when "C*!M1*P1*!P2*!Q*!R" \
+	-pin M2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {001110 001010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 R 1 0 1 0 1} \
+	-when "C*!M1*P1*!P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2926,7 +3476,7 @@ define_arc \
 	-prevector {001011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 R 1 0 1 1 0} \
-	-when "C*!M1*P1*!P2*R" \
+	-when "C*!M1*P1*!P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2936,7 +3486,7 @@ define_arc \
 	-prevector {001110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 R 1 1 1 0 1} \
-	-when "C*!M1*P1*P2*!R" \
+	-when "C*!M1*P1*P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2946,7 +3496,7 @@ define_arc \
 	-prevector {001111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 R 1 1 1 1 0} \
-	-when "C*!M1*P1*P2*R" \
+	-when "C*!M1*P1*P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2956,7 +3506,17 @@ define_arc \
 	-prevector {100011 100010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 R 0 0 1 0 0} \
-	-when "C*M1*!P1*!P2*!R" \
+	-when "C*M1*!P1*!P2*!Q*!R" \
+	-pin M2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 100110 100010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 R 0 0 1 0 1} \
+	-when "C*M1*!P1*!P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2966,7 +3526,7 @@ define_arc \
 	-prevector {100011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 R 0 0 1 1 0} \
-	-when "C*M1*!P1*!P2*R" \
+	-when "C*M1*!P1*!P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2976,7 +3536,17 @@ define_arc \
 	-prevector {100111 100110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 R 0 1 1 0 0} \
-	-when "C*M1*!P1*P2*!R" \
+	-when "C*M1*!P1*P2*!Q*!R" \
+	-pin M2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 100110} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 R 0 1 1 0 1} \
+	-when "C*M1*!P1*P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2986,7 +3556,7 @@ define_arc \
 	-prevector {100111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 R 0 1 1 1 0} \
-	-when "C*M1*!P1*P2*R" \
+	-when "C*M1*!P1*P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -2996,7 +3566,17 @@ define_arc \
 	-prevector {101011 101010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 R 1 0 1 0 0} \
-	-when "C*M1*P1*!P2*!R" \
+	-when "C*M1*P1*!P2*!Q*!R" \
+	-pin M2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 101010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 R 1 0 1 0 1} \
+	-when "C*M1*P1*!P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -3006,7 +3586,7 @@ define_arc \
 	-prevector {101011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 R 1 0 1 1 0} \
-	-when "C*M1*P1*!P2*R" \
+	-when "C*M1*P1*!P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -3016,7 +3596,7 @@ define_arc \
 	-prevector {101110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 R 1 1 1 0 1} \
-	-when "C*M1*P1*P2*!R" \
+	-when "C*M1*P1*P2*Q*!R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -3026,7 +3606,7 @@ define_arc \
 	-prevector {101111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 R 1 1 1 1 0} \
-	-when "C*M1*P1*P2*R" \
+	-when "C*M1*P1*P2*!Q*R" \
 	-pin M2 \
 	{ RACELEM21 }
 
@@ -3036,7 +3616,7 @@ define_arc \
 	-prevector {001000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 F 0 0 0 0} \
-	-when "!C*!M1*!M2*!P2*!R" \
+	-when "!C*!M1*!M2*!P2*!Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3046,7 +3626,7 @@ define_arc \
 	-prevector {001001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 F 0 0 1 0} \
-	-when "!C*!M1*!M2*!P2*R" \
+	-when "!C*!M1*!M2*!P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3056,7 +3636,7 @@ define_arc \
 	-prevector {001100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 F 1 0 0 0} \
-	-when "!C*!M1*!M2*P2*!R" \
+	-when "!C*!M1*!M2*P2*!Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3066,7 +3646,7 @@ define_arc \
 	-prevector {001101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 F 1 0 1 0} \
-	-when "!C*!M1*!M2*P2*R" \
+	-when "!C*!M1*!M2*P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3076,7 +3656,17 @@ define_arc \
 	-prevector {001000 011000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 F 0 0 0 0} \
-	-when "!C*!M1*M2*!P2*!R" \
+	-when "!C*!M1*M2*!P2*!Q*!R" \
+	-pin P1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 011010 011000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 1 F 0 0 0 1} \
+	-when "!C*!M1*M2*!P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3086,7 +3676,7 @@ define_arc \
 	-prevector {011001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 F 0 0 1 0} \
-	-when "!C*!M1*M2*!P2*R" \
+	-when "!C*!M1*M2*!P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3096,7 +3686,17 @@ define_arc \
 	-prevector {001100 011100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 F 1 0 0 0} \
-	-when "!C*!M1*M2*P2*!R" \
+	-when "!C*!M1*M2*P2*!Q*!R" \
+	-pin P1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 011100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 1 F 1 0 0 1} \
+	-when "!C*!M1*M2*P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3106,7 +3706,7 @@ define_arc \
 	-prevector {011101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 F 1 0 1 0} \
-	-when "!C*!M1*M2*P2*R" \
+	-when "!C*!M1*M2*P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3116,7 +3716,17 @@ define_arc \
 	-prevector {001000 101000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 F 0 0 0 0} \
-	-when "!C*M1*!M2*!P2*!R" \
+	-when "!C*M1*!M2*!P2*!Q*!R" \
+	-pin P1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 101010 101000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 0 F 0 0 0 1} \
+	-when "!C*M1*!M2*!P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3126,7 +3736,7 @@ define_arc \
 	-prevector {101001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 F 0 0 1 0} \
-	-when "!C*M1*!M2*!P2*R" \
+	-when "!C*M1*!M2*!P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3136,7 +3746,17 @@ define_arc \
 	-prevector {001100 101100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 F 1 0 0 0} \
-	-when "!C*M1*!M2*P2*!R" \
+	-when "!C*M1*!M2*P2*!Q*!R" \
+	-pin P1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 101100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 0 F 1 0 0 1} \
+	-when "!C*M1*!M2*P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3146,7 +3766,7 @@ define_arc \
 	-prevector {101101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 F 1 0 1 0} \
-	-when "!C*M1*!M2*P2*R" \
+	-when "!C*M1*!M2*P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3156,7 +3776,17 @@ define_arc \
 	-prevector {111001 111000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 F 0 0 0 0} \
-	-when "!C*M1*M2*!P2*!R" \
+	-when "!C*M1*M2*!P2*!Q*!R" \
+	-pin P1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 111010 111000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 1 F 0 0 0 1} \
+	-when "!C*M1*M2*!P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3166,7 +3796,7 @@ define_arc \
 	-prevector {111001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 F 0 0 1 0} \
-	-when "!C*M1*M2*!P2*R" \
+	-when "!C*M1*M2*!P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3176,7 +3806,17 @@ define_arc \
 	-prevector {111101 111100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 F 1 0 0 0} \
-	-when "!C*M1*M2*P2*!R" \
+	-when "!C*M1*M2*P2*!Q*!R" \
+	-pin P1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 111100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 1 F 1 0 0 1} \
+	-when "!C*M1*M2*P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3186,7 +3826,7 @@ define_arc \
 	-prevector {111101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 F 1 0 1 0} \
-	-when "!C*M1*M2*P2*R" \
+	-when "!C*M1*M2*P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3196,7 +3836,17 @@ define_arc \
 	-prevector {001000 001010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 F 0 1 0 0} \
-	-when "C*!M1*!M2*!P2*!R" \
+	-when "C*!M1*!M2*!P2*!Q*!R" \
+	-pin P1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {001110 001010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 0 F 0 1 0 1} \
+	-when "C*!M1*!M2*!P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3206,7 +3856,7 @@ define_arc \
 	-prevector {001011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 F 0 1 1 0} \
-	-when "C*!M1*!M2*!P2*R" \
+	-when "C*!M1*!M2*!P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3216,7 +3866,7 @@ define_arc \
 	-prevector {001110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 F 1 1 0 1} \
-	-when "C*!M1*!M2*P2*!R" \
+	-when "C*!M1*!M2*P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3226,7 +3876,7 @@ define_arc \
 	-prevector {001111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 F 1 1 1 0} \
-	-when "C*!M1*!M2*P2*R" \
+	-when "C*!M1*!M2*P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3236,7 +3886,17 @@ define_arc \
 	-prevector {011011 011010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 F 0 1 0 0} \
-	-when "C*!M1*M2*!P2*!R" \
+	-when "C*!M1*M2*!P2*!Q*!R" \
+	-pin P1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 011010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 1 F 0 1 0 1} \
+	-when "C*!M1*M2*!P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3246,7 +3906,7 @@ define_arc \
 	-prevector {011011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 F 0 1 1 0} \
-	-when "C*!M1*M2*!P2*R" \
+	-when "C*!M1*M2*!P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3256,7 +3916,7 @@ define_arc \
 	-prevector {011110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 F 1 1 0 1} \
-	-when "C*!M1*M2*P2*!R" \
+	-when "C*!M1*M2*P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3266,7 +3926,7 @@ define_arc \
 	-prevector {011111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 F 1 1 1 0} \
-	-when "C*!M1*M2*P2*R" \
+	-when "C*!M1*M2*P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3276,7 +3936,17 @@ define_arc \
 	-prevector {101011 101010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 F 0 1 0 0} \
-	-when "C*M1*!M2*!P2*!R" \
+	-when "C*M1*!M2*!P2*!Q*!R" \
+	-pin P1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 101010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 0 F 0 1 0 1} \
+	-when "C*M1*!M2*!P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3286,7 +3956,7 @@ define_arc \
 	-prevector {101011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 F 0 1 1 0} \
-	-when "C*M1*!M2*!P2*R" \
+	-when "C*M1*!M2*!P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3296,7 +3966,7 @@ define_arc \
 	-prevector {101110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 F 1 1 0 1} \
-	-when "C*M1*!M2*P2*!R" \
+	-when "C*M1*!M2*P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3306,7 +3976,7 @@ define_arc \
 	-prevector {101111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 F 1 1 1 0} \
-	-when "C*M1*!M2*P2*R" \
+	-when "C*M1*!M2*P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3316,7 +3986,17 @@ define_arc \
 	-prevector {111011 111010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 F 0 1 0 0} \
-	-when "C*M1*M2*!P2*!R" \
+	-when "C*M1*M2*!P2*!Q*!R" \
+	-pin P1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 111010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 1 F 0 1 0 1} \
+	-when "C*M1*M2*!P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3326,7 +4006,7 @@ define_arc \
 	-prevector {111011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 F 0 1 1 0} \
-	-when "C*M1*M2*!P2*R" \
+	-when "C*M1*M2*!P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3336,7 +4016,7 @@ define_arc \
 	-prevector {111110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 F 1 1 0 1} \
-	-when "C*M1*M2*P2*!R" \
+	-when "C*M1*M2*P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3346,7 +4026,7 @@ define_arc \
 	-prevector {111111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 F 1 1 1 0} \
-	-when "C*M1*M2*P2*R" \
+	-when "C*M1*M2*P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3356,7 +4036,7 @@ define_arc \
 	-prevector {000000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 R 0 0 0 0} \
-	-when "!C*!M1*!M2*!P2*!R" \
+	-when "!C*!M1*!M2*!P2*!Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3366,7 +4046,7 @@ define_arc \
 	-prevector {000001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 R 0 0 1 0} \
-	-when "!C*!M1*!M2*!P2*R" \
+	-when "!C*!M1*!M2*!P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3376,7 +4056,7 @@ define_arc \
 	-prevector {000100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 R 1 0 0 0} \
-	-when "!C*!M1*!M2*P2*!R" \
+	-when "!C*!M1*!M2*P2*!Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3386,7 +4066,7 @@ define_arc \
 	-prevector {000101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 R 1 0 1 0} \
-	-when "!C*!M1*!M2*P2*R" \
+	-when "!C*!M1*!M2*P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3396,7 +4076,17 @@ define_arc \
 	-prevector {000000 010000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 R 0 0 0 0} \
-	-when "!C*!M1*M2*!P2*!R" \
+	-when "!C*!M1*M2*!P2*!Q*!R" \
+	-pin P1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 010110 010010 010000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 1 R 0 0 0 1} \
+	-when "!C*!M1*M2*!P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3406,7 +4096,7 @@ define_arc \
 	-prevector {010001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 R 0 0 1 0} \
-	-when "!C*!M1*M2*!P2*R" \
+	-when "!C*!M1*M2*!P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3416,7 +4106,17 @@ define_arc \
 	-prevector {000100 010100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 R 1 0 0 0} \
-	-when "!C*!M1*M2*P2*!R" \
+	-when "!C*!M1*M2*P2*!Q*!R" \
+	-pin P1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 010110 010100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 1 R 1 0 0 1} \
+	-when "!C*!M1*M2*P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3426,7 +4126,7 @@ define_arc \
 	-prevector {010101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 R 1 0 1 0} \
-	-when "!C*!M1*M2*P2*R" \
+	-when "!C*!M1*M2*P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3436,7 +4136,17 @@ define_arc \
 	-prevector {000000 100000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 R 0 0 0 0} \
-	-when "!C*M1*!M2*!P2*!R" \
+	-when "!C*M1*!M2*!P2*!Q*!R" \
+	-pin P1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 100110 100010 100000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 0 R 0 0 0 1} \
+	-when "!C*M1*!M2*!P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3446,7 +4156,7 @@ define_arc \
 	-prevector {100001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 R 0 0 1 0} \
-	-when "!C*M1*!M2*!P2*R" \
+	-when "!C*M1*!M2*!P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3456,7 +4166,17 @@ define_arc \
 	-prevector {000100 100100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 R 1 0 0 0} \
-	-when "!C*M1*!M2*P2*!R" \
+	-when "!C*M1*!M2*P2*!Q*!R" \
+	-pin P1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 100110 100100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 0 R 1 0 0 1} \
+	-when "!C*M1*!M2*P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3466,7 +4186,7 @@ define_arc \
 	-prevector {100101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 R 1 0 1 0} \
-	-when "!C*M1*!M2*P2*R" \
+	-when "!C*M1*!M2*P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3476,7 +4196,17 @@ define_arc \
 	-prevector {110001 110000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 R 0 0 0 0} \
-	-when "!C*M1*M2*!P2*!R" \
+	-when "!C*M1*M2*!P2*!Q*!R" \
+	-pin P1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 110110 110010 110000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 1 R 0 0 0 1} \
+	-when "!C*M1*M2*!P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3486,7 +4216,7 @@ define_arc \
 	-prevector {110001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 R 0 0 1 0} \
-	-when "!C*M1*M2*!P2*R" \
+	-when "!C*M1*M2*!P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3496,7 +4226,17 @@ define_arc \
 	-prevector {110101 110100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 R 1 0 0 0} \
-	-when "!C*M1*M2*P2*!R" \
+	-when "!C*M1*M2*P2*!Q*!R" \
+	-pin P1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 110110 110100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 1 R 1 0 0 1} \
+	-when "!C*M1*M2*P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3506,7 +4246,7 @@ define_arc \
 	-prevector {110101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 R 1 0 1 0} \
-	-when "!C*M1*M2*P2*R" \
+	-when "!C*M1*M2*P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3516,7 +4256,17 @@ define_arc \
 	-prevector {000000 000010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 R 0 1 0 0} \
-	-when "C*!M1*!M2*!P2*!R" \
+	-when "C*!M1*!M2*!P2*!Q*!R" \
+	-pin P1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {001110 000110 000010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 0 R 0 1 0 1} \
+	-when "C*!M1*!M2*!P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3526,7 +4276,7 @@ define_arc \
 	-prevector {000011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 R 0 1 1 0} \
-	-when "C*!M1*!M2*!P2*R" \
+	-when "C*!M1*!M2*!P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3536,7 +4286,7 @@ define_arc \
 	-prevector {001110 000110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 R 1 1 0 1} \
-	-when "C*!M1*!M2*P2*!R" \
+	-when "C*!M1*!M2*P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3546,7 +4296,7 @@ define_arc \
 	-prevector {000111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 R 1 1 1 0} \
-	-when "C*!M1*!M2*P2*R" \
+	-when "C*!M1*!M2*P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3556,7 +4306,17 @@ define_arc \
 	-prevector {010011 010010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 R 0 1 0 0} \
-	-when "C*!M1*M2*!P2*!R" \
+	-when "C*!M1*M2*!P2*!Q*!R" \
+	-pin P1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 010110 010010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 1 R 0 1 0 1} \
+	-when "C*!M1*M2*!P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3566,7 +4326,7 @@ define_arc \
 	-prevector {010011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 R 0 1 1 0} \
-	-when "C*!M1*M2*!P2*R" \
+	-when "C*!M1*M2*!P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3576,7 +4336,7 @@ define_arc \
 	-prevector {011110 010110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 R 1 1 0 1} \
-	-when "C*!M1*M2*P2*!R" \
+	-when "C*!M1*M2*P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3586,7 +4346,7 @@ define_arc \
 	-prevector {010111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 R 1 1 1 0} \
-	-when "C*!M1*M2*P2*R" \
+	-when "C*!M1*M2*P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3596,7 +4356,17 @@ define_arc \
 	-prevector {100011 100010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 R 0 1 0 0} \
-	-when "C*M1*!M2*!P2*!R" \
+	-when "C*M1*!M2*!P2*!Q*!R" \
+	-pin P1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 100110 100010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 0 R 0 1 0 1} \
+	-when "C*M1*!M2*!P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3606,7 +4376,7 @@ define_arc \
 	-prevector {100011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 R 0 1 1 0} \
-	-when "C*M1*!M2*!P2*R" \
+	-when "C*M1*!M2*!P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3616,7 +4386,7 @@ define_arc \
 	-prevector {101110 100110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 R 1 1 0 1} \
-	-when "C*M1*!M2*P2*!R" \
+	-when "C*M1*!M2*P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3626,7 +4396,7 @@ define_arc \
 	-prevector {100111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 R 1 1 1 0} \
-	-when "C*M1*!M2*P2*R" \
+	-when "C*M1*!M2*P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3636,7 +4406,17 @@ define_arc \
 	-prevector {110011 110010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 R 0 1 0 0} \
-	-when "C*M1*M2*!P2*!R" \
+	-when "C*M1*M2*!P2*!Q*!R" \
+	-pin P1 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 110110 110010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 1 R 0 1 0 1} \
+	-when "C*M1*M2*!P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3646,7 +4426,7 @@ define_arc \
 	-prevector {110011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 R 0 1 1 0} \
-	-when "C*M1*M2*!P2*R" \
+	-when "C*M1*M2*!P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3656,7 +4436,7 @@ define_arc \
 	-prevector {111110 110110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 R 1 1 0 1} \
-	-when "C*M1*M2*P2*!R" \
+	-when "C*M1*M2*P2*Q*!R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3666,7 +4446,7 @@ define_arc \
 	-prevector {110111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 R 1 1 1 0} \
-	-when "C*M1*M2*P2*R" \
+	-when "C*M1*M2*P2*!Q*R" \
 	-pin P1 \
 	{ RACELEM21 }
 
@@ -3676,7 +4456,7 @@ define_arc \
 	-prevector {000100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 F 0 0 0} \
-	-when "!C*!M1*!M2*!P1*!R" \
+	-when "!C*!M1*!M2*!P1*!Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3686,7 +4466,7 @@ define_arc \
 	-prevector {000101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 F 0 1 0} \
-	-when "!C*!M1*!M2*!P1*R" \
+	-when "!C*!M1*!M2*!P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3696,7 +4476,7 @@ define_arc \
 	-prevector {001100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 F 0 0 0} \
-	-when "!C*!M1*!M2*P1*!R" \
+	-when "!C*!M1*!M2*P1*!Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3706,7 +4486,7 @@ define_arc \
 	-prevector {001101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 F 0 1 0} \
-	-when "!C*!M1*!M2*P1*R" \
+	-when "!C*!M1*!M2*P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3716,7 +4496,17 @@ define_arc \
 	-prevector {000100 010100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 F 0 0 0} \
-	-when "!C*!M1*M2*!P1*!R" \
+	-when "!C*!M1*M2*!P1*!Q*!R" \
+	-pin P2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 010110 010100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 1 0 F 0 0 1} \
+	-when "!C*!M1*M2*!P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3726,7 +4516,7 @@ define_arc \
 	-prevector {010101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 F 0 1 0} \
-	-when "!C*!M1*M2*!P1*R" \
+	-when "!C*!M1*M2*!P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3736,7 +4526,17 @@ define_arc \
 	-prevector {001100 011100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 F 0 0 0} \
-	-when "!C*!M1*M2*P1*!R" \
+	-when "!C*!M1*M2*P1*!Q*!R" \
+	-pin P2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 011100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 1 1 F 0 0 1} \
+	-when "!C*!M1*M2*P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3746,7 +4546,7 @@ define_arc \
 	-prevector {011101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 F 0 1 0} \
-	-when "!C*!M1*M2*P1*R" \
+	-when "!C*!M1*M2*P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3756,7 +4556,17 @@ define_arc \
 	-prevector {000100 100100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 F 0 0 0} \
-	-when "!C*M1*!M2*!P1*!R" \
+	-when "!C*M1*!M2*!P1*!Q*!R" \
+	-pin P2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 100110 100100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 0 0 F 0 0 1} \
+	-when "!C*M1*!M2*!P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3766,7 +4576,7 @@ define_arc \
 	-prevector {100101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 F 0 1 0} \
-	-when "!C*M1*!M2*!P1*R" \
+	-when "!C*M1*!M2*!P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3776,7 +4586,17 @@ define_arc \
 	-prevector {001100 101100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 F 0 0 0} \
-	-when "!C*M1*!M2*P1*!R" \
+	-when "!C*M1*!M2*P1*!Q*!R" \
+	-pin P2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 101100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 0 1 F 0 0 1} \
+	-when "!C*M1*!M2*P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3786,7 +4606,7 @@ define_arc \
 	-prevector {101101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 F 0 1 0} \
-	-when "!C*M1*!M2*P1*R" \
+	-when "!C*M1*!M2*P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3796,7 +4616,17 @@ define_arc \
 	-prevector {110101 110100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 F 0 0 0} \
-	-when "!C*M1*M2*!P1*!R" \
+	-when "!C*M1*M2*!P1*!Q*!R" \
+	-pin P2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 110110 110100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 1 0 F 0 0 1} \
+	-when "!C*M1*M2*!P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3806,7 +4636,7 @@ define_arc \
 	-prevector {110101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 F 0 1 0} \
-	-when "!C*M1*M2*!P1*R" \
+	-when "!C*M1*M2*!P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3816,7 +4646,17 @@ define_arc \
 	-prevector {111101 111100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 F 0 0 0} \
-	-when "!C*M1*M2*P1*!R" \
+	-when "!C*M1*M2*P1*!Q*!R" \
+	-pin P2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 111100} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 1 1 F 0 0 1} \
+	-when "!C*M1*M2*P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3826,7 +4666,7 @@ define_arc \
 	-prevector {111101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 F 0 1 0} \
-	-when "!C*M1*M2*P1*R" \
+	-when "!C*M1*M2*P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3836,7 +4676,17 @@ define_arc \
 	-prevector {000100 000110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 F 1 0 0} \
-	-when "C*!M1*!M2*!P1*!R" \
+	-when "C*!M1*!M2*!P1*!Q*!R" \
+	-pin P2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {001110 000110} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 0 0 F 1 0 1} \
+	-when "C*!M1*!M2*!P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3846,7 +4696,7 @@ define_arc \
 	-prevector {000111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 F 1 1 0} \
-	-when "C*!M1*!M2*!P1*R" \
+	-when "C*!M1*!M2*!P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3856,7 +4706,7 @@ define_arc \
 	-prevector {001110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 F 1 0 1} \
-	-when "C*!M1*!M2*P1*!R" \
+	-when "C*!M1*!M2*P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3866,7 +4716,7 @@ define_arc \
 	-prevector {001111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 F 1 1 0} \
-	-when "C*!M1*!M2*P1*R" \
+	-when "C*!M1*!M2*P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3876,7 +4726,17 @@ define_arc \
 	-prevector {010111 010110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 F 1 0 0} \
-	-when "C*!M1*M2*!P1*!R" \
+	-when "C*!M1*M2*!P1*!Q*!R" \
+	-pin P2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 010110} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 1 0 F 1 0 1} \
+	-when "C*!M1*M2*!P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3886,7 +4746,7 @@ define_arc \
 	-prevector {010111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 F 1 1 0} \
-	-when "C*!M1*M2*!P1*R" \
+	-when "C*!M1*M2*!P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3896,7 +4756,7 @@ define_arc \
 	-prevector {011110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 F 1 0 1} \
-	-when "C*!M1*M2*P1*!R" \
+	-when "C*!M1*M2*P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3906,7 +4766,7 @@ define_arc \
 	-prevector {011111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 F 1 1 0} \
-	-when "C*!M1*M2*P1*R" \
+	-when "C*!M1*M2*P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3916,7 +4776,17 @@ define_arc \
 	-prevector {100111 100110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 F 1 0 0} \
-	-when "C*M1*!M2*!P1*!R" \
+	-when "C*M1*!M2*!P1*!Q*!R" \
+	-pin P2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 100110} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 0 0 F 1 0 1} \
+	-when "C*M1*!M2*!P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3926,7 +4796,7 @@ define_arc \
 	-prevector {100111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 F 1 1 0} \
-	-when "C*M1*!M2*!P1*R" \
+	-when "C*M1*!M2*!P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3936,7 +4806,7 @@ define_arc \
 	-prevector {101110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 F 1 0 1} \
-	-when "C*M1*!M2*P1*!R" \
+	-when "C*M1*!M2*P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3946,7 +4816,7 @@ define_arc \
 	-prevector {101111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 F 1 1 0} \
-	-when "C*M1*!M2*P1*R" \
+	-when "C*M1*!M2*P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3956,7 +4826,17 @@ define_arc \
 	-prevector {110111 110110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 F 1 0 0} \
-	-when "C*M1*M2*!P1*!R" \
+	-when "C*M1*M2*!P1*!Q*!R" \
+	-pin P2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 110110} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 1 0 F 1 0 1} \
+	-when "C*M1*M2*!P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3966,7 +4846,7 @@ define_arc \
 	-prevector {110111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 F 1 1 0} \
-	-when "C*M1*M2*!P1*R" \
+	-when "C*M1*M2*!P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3976,7 +4856,7 @@ define_arc \
 	-prevector {111110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 F 1 0 1} \
-	-when "C*M1*M2*P1*!R" \
+	-when "C*M1*M2*P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3986,7 +4866,7 @@ define_arc \
 	-prevector {111111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 F 1 1 0} \
-	-when "C*M1*M2*P1*R" \
+	-when "C*M1*M2*P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -3996,7 +4876,7 @@ define_arc \
 	-prevector {000000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 R 0 0 0} \
-	-when "!C*!M1*!M2*!P1*!R" \
+	-when "!C*!M1*!M2*!P1*!Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4006,7 +4886,7 @@ define_arc \
 	-prevector {000001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 R 0 1 0} \
-	-when "!C*!M1*!M2*!P1*R" \
+	-when "!C*!M1*!M2*!P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4016,7 +4896,7 @@ define_arc \
 	-prevector {001000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 R 0 0 0} \
-	-when "!C*!M1*!M2*P1*!R" \
+	-when "!C*!M1*!M2*P1*!Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4026,7 +4906,7 @@ define_arc \
 	-prevector {001001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 R 0 1 0} \
-	-when "!C*!M1*!M2*P1*R" \
+	-when "!C*!M1*!M2*P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4036,7 +4916,17 @@ define_arc \
 	-prevector {000000 010000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 R 0 0 0} \
-	-when "!C*!M1*M2*!P1*!R" \
+	-when "!C*!M1*M2*!P1*!Q*!R" \
+	-pin P2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 010110 010010 010000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 1 0 R 0 0 1} \
+	-when "!C*!M1*M2*!P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4046,7 +4936,7 @@ define_arc \
 	-prevector {010001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 R 0 1 0} \
-	-when "!C*!M1*M2*!P1*R" \
+	-when "!C*!M1*M2*!P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4056,7 +4946,17 @@ define_arc \
 	-prevector {001000 011000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 R 0 0 0} \
-	-when "!C*!M1*M2*P1*!R" \
+	-when "!C*!M1*M2*P1*!Q*!R" \
+	-pin P2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 011010 011000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 1 1 R 0 0 1} \
+	-when "!C*!M1*M2*P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4066,7 +4966,7 @@ define_arc \
 	-prevector {011001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 R 0 1 0} \
-	-when "!C*!M1*M2*P1*R" \
+	-when "!C*!M1*M2*P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4076,7 +4976,17 @@ define_arc \
 	-prevector {000000 100000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 R 0 0 0} \
-	-when "!C*M1*!M2*!P1*!R" \
+	-when "!C*M1*!M2*!P1*!Q*!R" \
+	-pin P2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 100110 100010 100000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 0 0 R 0 0 1} \
+	-when "!C*M1*!M2*!P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4086,7 +4996,7 @@ define_arc \
 	-prevector {100001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 R 0 1 0} \
-	-when "!C*M1*!M2*!P1*R" \
+	-when "!C*M1*!M2*!P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4096,7 +5006,17 @@ define_arc \
 	-prevector {001000 101000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 R 0 0 0} \
-	-when "!C*M1*!M2*P1*!R" \
+	-when "!C*M1*!M2*P1*!Q*!R" \
+	-pin P2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 101010 101000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 0 1 R 0 0 1} \
+	-when "!C*M1*!M2*P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4106,7 +5026,7 @@ define_arc \
 	-prevector {101001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 R 0 1 0} \
-	-when "!C*M1*!M2*P1*R" \
+	-when "!C*M1*!M2*P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4116,7 +5036,17 @@ define_arc \
 	-prevector {110001 110000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 R 0 0 0} \
-	-when "!C*M1*M2*!P1*!R" \
+	-when "!C*M1*M2*!P1*!Q*!R" \
+	-pin P2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 110110 110010 110000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 1 0 R 0 0 1} \
+	-when "!C*M1*M2*!P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4126,7 +5056,7 @@ define_arc \
 	-prevector {110001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 R 0 1 0} \
-	-when "!C*M1*M2*!P1*R" \
+	-when "!C*M1*M2*!P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4136,7 +5066,17 @@ define_arc \
 	-prevector {111001 111000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 R 0 0 0} \
-	-when "!C*M1*M2*P1*!R" \
+	-when "!C*M1*M2*P1*!Q*!R" \
+	-pin P2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 111010 111000} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 1 1 R 0 0 1} \
+	-when "!C*M1*M2*P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4146,7 +5086,7 @@ define_arc \
 	-prevector {111001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 R 0 1 0} \
-	-when "!C*M1*M2*P1*R" \
+	-when "!C*M1*M2*P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4156,7 +5096,17 @@ define_arc \
 	-prevector {000000 000010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 R 1 0 0} \
-	-when "C*!M1*!M2*!P1*!R" \
+	-when "C*!M1*!M2*!P1*!Q*!R" \
+	-pin P2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {001110 000110 000010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 0 0 R 1 0 1} \
+	-when "C*!M1*!M2*!P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4166,7 +5116,7 @@ define_arc \
 	-prevector {000011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 R 1 1 0} \
-	-when "C*!M1*!M2*!P1*R" \
+	-when "C*!M1*!M2*!P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4176,7 +5126,7 @@ define_arc \
 	-prevector {001110 001010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 R 1 0 1} \
-	-when "C*!M1*!M2*P1*!R" \
+	-when "C*!M1*!M2*P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4186,7 +5136,7 @@ define_arc \
 	-prevector {001011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 R 1 1 0} \
-	-when "C*!M1*!M2*P1*R" \
+	-when "C*!M1*!M2*P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4196,7 +5146,17 @@ define_arc \
 	-prevector {010011 010010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 R 1 0 0} \
-	-when "C*!M1*M2*!P1*!R" \
+	-when "C*!M1*M2*!P1*!Q*!R" \
+	-pin P2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 010110 010010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 1 0 R 1 0 1} \
+	-when "C*!M1*M2*!P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4206,7 +5166,7 @@ define_arc \
 	-prevector {010011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 R 1 1 0} \
-	-when "C*!M1*M2*!P1*R" \
+	-when "C*!M1*M2*!P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4216,7 +5176,7 @@ define_arc \
 	-prevector {011110 011010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 R 1 0 1} \
-	-when "C*!M1*M2*P1*!R" \
+	-when "C*!M1*M2*P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4226,7 +5186,7 @@ define_arc \
 	-prevector {011011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 R 1 1 0} \
-	-when "C*!M1*M2*P1*R" \
+	-when "C*!M1*M2*P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4236,7 +5196,17 @@ define_arc \
 	-prevector {100011 100010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 R 1 0 0} \
-	-when "C*M1*!M2*!P1*!R" \
+	-when "C*M1*!M2*!P1*!Q*!R" \
+	-pin P2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 100110 100010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 0 0 R 1 0 1} \
+	-when "C*M1*!M2*!P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4246,7 +5216,7 @@ define_arc \
 	-prevector {100011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 R 1 1 0} \
-	-when "C*M1*!M2*!P1*R" \
+	-when "C*M1*!M2*!P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4256,7 +5226,7 @@ define_arc \
 	-prevector {101110 101010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 R 1 0 1} \
-	-when "C*M1*!M2*P1*!R" \
+	-when "C*M1*!M2*P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4266,7 +5236,7 @@ define_arc \
 	-prevector {101011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 R 1 1 0} \
-	-when "C*M1*!M2*P1*R" \
+	-when "C*M1*!M2*P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4276,7 +5246,17 @@ define_arc \
 	-prevector {110011 110010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 R 1 0 0} \
-	-when "C*M1*M2*!P1*!R" \
+	-when "C*M1*M2*!P1*!Q*!R" \
+	-pin P2 \
+	{ RACELEM21 }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 110110 110010} \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {1 1 0 R 1 0 1} \
+	-when "C*M1*M2*!P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4286,7 +5266,7 @@ define_arc \
 	-prevector {110011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 R 1 1 0} \
-	-when "C*M1*M2*!P1*R" \
+	-when "C*M1*M2*!P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4296,7 +5276,7 @@ define_arc \
 	-prevector {111110 111010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 R 1 0 1} \
-	-when "C*M1*M2*P1*!R" \
+	-when "C*M1*M2*P1*Q*!R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4306,7 +5286,7 @@ define_arc \
 	-prevector {111011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 R 1 1 0} \
-	-when "C*M1*M2*P1*R" \
+	-when "C*M1*M2*P1*!Q*R" \
 	-pin P2 \
 	{ RACELEM21 }
 
@@ -4316,7 +5296,7 @@ define_arc \
 	-prevector {000001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 0 0 F 0} \
-	-when "!C*!M1*!M2*!P1*!P2" \
+	-when "!C*!M1*!M2*!P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4326,7 +5306,7 @@ define_arc \
 	-prevector {000101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 1 0 F 0} \
-	-when "!C*!M1*!M2*!P1*P2" \
+	-when "!C*!M1*!M2*!P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4336,7 +5316,7 @@ define_arc \
 	-prevector {001001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 0 0 F 0} \
-	-when "!C*!M1*!M2*P1*!P2" \
+	-when "!C*!M1*!M2*P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4346,7 +5326,7 @@ define_arc \
 	-prevector {001101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 1 0 F 0} \
-	-when "!C*!M1*!M2*P1*P2" \
+	-when "!C*!M1*!M2*P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4356,7 +5336,7 @@ define_arc \
 	-prevector {010001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 0 0 F 0} \
-	-when "!C*!M1*M2*!P1*!P2" \
+	-when "!C*!M1*M2*!P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4366,7 +5346,7 @@ define_arc \
 	-prevector {010101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 1 0 F 0} \
-	-when "!C*!M1*M2*!P1*P2" \
+	-when "!C*!M1*M2*!P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4376,7 +5356,7 @@ define_arc \
 	-prevector {011001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 0 0 F 0} \
-	-when "!C*!M1*M2*P1*!P2" \
+	-when "!C*!M1*M2*P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4386,7 +5366,7 @@ define_arc \
 	-prevector {011101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 1 0 F 0} \
-	-when "!C*!M1*M2*P1*P2" \
+	-when "!C*!M1*M2*P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4396,7 +5376,7 @@ define_arc \
 	-prevector {100001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 0 0 F 0} \
-	-when "!C*M1*!M2*!P1*!P2" \
+	-when "!C*M1*!M2*!P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4406,7 +5386,7 @@ define_arc \
 	-prevector {100101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 1 0 F 0} \
-	-when "!C*M1*!M2*!P1*P2" \
+	-when "!C*M1*!M2*!P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4416,7 +5396,7 @@ define_arc \
 	-prevector {101001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 0 0 F 0} \
-	-when "!C*M1*!M2*P1*!P2" \
+	-when "!C*M1*!M2*P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4426,7 +5406,7 @@ define_arc \
 	-prevector {101101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 1 0 F 0} \
-	-when "!C*M1*!M2*P1*P2" \
+	-when "!C*M1*!M2*P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4436,7 +5416,7 @@ define_arc \
 	-prevector {110001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 0 0 F 0} \
-	-when "!C*M1*M2*!P1*!P2" \
+	-when "!C*M1*M2*!P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4446,7 +5426,7 @@ define_arc \
 	-prevector {110101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 1 0 F 0} \
-	-when "!C*M1*M2*!P1*P2" \
+	-when "!C*M1*M2*!P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4456,7 +5436,7 @@ define_arc \
 	-prevector {111001} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 0 0 F 0} \
-	-when "!C*M1*M2*P1*!P2" \
+	-when "!C*M1*M2*P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4466,7 +5446,7 @@ define_arc \
 	-prevector {111101} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 1 0 F 0} \
-	-when "!C*M1*M2*P1*P2" \
+	-when "!C*M1*M2*P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4476,7 +5456,7 @@ define_arc \
 	-prevector {000011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 0 1 F 0} \
-	-when "C*!M1*!M2*!P1*!P2" \
+	-when "C*!M1*!M2*!P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4486,7 +5466,7 @@ define_arc \
 	-prevector {000111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 1 1 F 0} \
-	-when "C*!M1*!M2*!P1*P2" \
+	-when "C*!M1*!M2*!P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4496,7 +5476,7 @@ define_arc \
 	-prevector {001011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 0 1 F 0} \
-	-when "C*!M1*!M2*P1*!P2" \
+	-when "C*!M1*!M2*P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4506,7 +5486,7 @@ define_arc \
 	-prevector {010011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 0 1 F 0} \
-	-when "C*!M1*M2*!P1*!P2" \
+	-when "C*!M1*M2*!P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4516,7 +5496,7 @@ define_arc \
 	-prevector {010111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 1 1 F 0} \
-	-when "C*!M1*M2*!P1*P2" \
+	-when "C*!M1*M2*!P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4526,7 +5506,7 @@ define_arc \
 	-prevector {011011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 0 1 F 0} \
-	-when "C*!M1*M2*P1*!P2" \
+	-when "C*!M1*M2*P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4536,7 +5516,7 @@ define_arc \
 	-prevector {100011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 0 1 F 0} \
-	-when "C*M1*!M2*!P1*!P2" \
+	-when "C*M1*!M2*!P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4546,7 +5526,7 @@ define_arc \
 	-prevector {100111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 1 1 F 0} \
-	-when "C*M1*!M2*!P1*P2" \
+	-when "C*M1*!M2*!P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4556,7 +5536,7 @@ define_arc \
 	-prevector {101011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 0 1 F 0} \
-	-when "C*M1*!M2*P1*!P2" \
+	-when "C*M1*!M2*P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4566,7 +5546,7 @@ define_arc \
 	-prevector {110011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 0 1 F 0} \
-	-when "C*M1*M2*!P1*!P2" \
+	-when "C*M1*M2*!P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4576,7 +5556,7 @@ define_arc \
 	-prevector {110111} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 1 1 F 0} \
-	-when "C*M1*M2*!P1*P2" \
+	-when "C*M1*M2*!P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4586,7 +5566,7 @@ define_arc \
 	-prevector {111011} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 0 1 F 0} \
-	-when "C*M1*M2*P1*!P2" \
+	-when "C*M1*M2*P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4596,7 +5576,7 @@ define_arc \
 	-prevector {000000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 0 0 R 0} \
-	-when "!C*!M1*!M2*!P1*!P2" \
+	-when "!C*!M1*!M2*!P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4606,7 +5586,7 @@ define_arc \
 	-prevector {000100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 1 0 R 0} \
-	-when "!C*!M1*!M2*!P1*P2" \
+	-when "!C*!M1*!M2*!P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4616,7 +5596,7 @@ define_arc \
 	-prevector {001000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 0 0 R 0} \
-	-when "!C*!M1*!M2*P1*!P2" \
+	-when "!C*!M1*!M2*P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4626,7 +5606,7 @@ define_arc \
 	-prevector {001100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 1 0 R 0} \
-	-when "!C*!M1*!M2*P1*P2" \
+	-when "!C*!M1*!M2*P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4636,7 +5616,7 @@ define_arc \
 	-prevector {000000 010000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 0 0 R 0} \
-	-when "!C*!M1*M2*!P1*!P2" \
+	-when "!C*!M1*M2*!P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4646,7 +5626,7 @@ define_arc \
 	-prevector {000100 010100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 1 0 R 0} \
-	-when "!C*!M1*M2*!P1*P2" \
+	-when "!C*!M1*M2*!P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4656,7 +5636,7 @@ define_arc \
 	-prevector {001000 011000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 0 0 R 0} \
-	-when "!C*!M1*M2*P1*!P2" \
+	-when "!C*!M1*M2*P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4666,7 +5646,7 @@ define_arc \
 	-prevector {001100 011100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 1 0 R 0} \
-	-when "!C*!M1*M2*P1*P2" \
+	-when "!C*!M1*M2*P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4676,7 +5656,7 @@ define_arc \
 	-prevector {000000 100000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 0 0 R 0} \
-	-when "!C*M1*!M2*!P1*!P2" \
+	-when "!C*M1*!M2*!P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4686,7 +5666,7 @@ define_arc \
 	-prevector {000100 100100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 1 0 R 0} \
-	-when "!C*M1*!M2*!P1*P2" \
+	-when "!C*M1*!M2*!P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4696,7 +5676,7 @@ define_arc \
 	-prevector {001000 101000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 0 0 R 0} \
-	-when "!C*M1*!M2*P1*!P2" \
+	-when "!C*M1*!M2*P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4706,7 +5686,7 @@ define_arc \
 	-prevector {001100 101100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 1 0 R 0} \
-	-when "!C*M1*!M2*P1*P2" \
+	-when "!C*M1*!M2*P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4716,7 +5696,7 @@ define_arc \
 	-prevector {110001 110000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 0 0 R 0} \
-	-when "!C*M1*M2*!P1*!P2" \
+	-when "!C*M1*M2*!P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4726,7 +5706,7 @@ define_arc \
 	-prevector {110101 110100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 1 0 R 0} \
-	-when "!C*M1*M2*!P1*P2" \
+	-when "!C*M1*M2*!P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4736,7 +5716,7 @@ define_arc \
 	-prevector {111001 111000} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 0 0 R 0} \
-	-when "!C*M1*M2*P1*!P2" \
+	-when "!C*M1*M2*P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4746,7 +5726,7 @@ define_arc \
 	-prevector {111101 111100} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 1 0 R 0} \
-	-when "!C*M1*M2*P1*P2" \
+	-when "!C*M1*M2*P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4756,7 +5736,7 @@ define_arc \
 	-prevector {000000 000010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 0 1 R 0} \
-	-when "C*!M1*!M2*!P1*!P2" \
+	-when "C*!M1*!M2*!P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4766,7 +5746,7 @@ define_arc \
 	-prevector {000100 000110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 0 1 1 R 0} \
-	-when "C*!M1*!M2*!P1*P2" \
+	-when "C*!M1*!M2*!P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4776,7 +5756,7 @@ define_arc \
 	-prevector {001000 001010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 0 1 R 0} \
-	-when "C*!M1*!M2*P1*!P2" \
+	-when "C*!M1*!M2*P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4786,7 +5766,7 @@ define_arc \
 	-prevector {010011 010010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 0 1 R 0} \
-	-when "C*!M1*M2*!P1*!P2" \
+	-when "C*!M1*M2*!P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4796,7 +5776,7 @@ define_arc \
 	-prevector {010111 010110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 0 1 1 R 0} \
-	-when "C*!M1*M2*!P1*P2" \
+	-when "C*!M1*M2*!P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4806,7 +5786,7 @@ define_arc \
 	-prevector {011011 011010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 0 1 R 0} \
-	-when "C*!M1*M2*P1*!P2" \
+	-when "C*!M1*M2*P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4816,7 +5796,7 @@ define_arc \
 	-prevector {100011 100010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 0 1 R 0} \
-	-when "C*M1*!M2*!P1*!P2" \
+	-when "C*M1*!M2*!P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4826,7 +5806,7 @@ define_arc \
 	-prevector {100111 100110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 0 1 1 R 0} \
-	-when "C*M1*!M2*!P1*P2" \
+	-when "C*M1*!M2*!P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4836,7 +5816,7 @@ define_arc \
 	-prevector {101011 101010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 0 1 R 0} \
-	-when "C*M1*!M2*P1*!P2" \
+	-when "C*M1*!M2*P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4846,7 +5826,7 @@ define_arc \
 	-prevector {110011 110010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 0 1 R 0} \
-	-when "C*M1*M2*!P1*!P2" \
+	-when "C*M1*M2*!P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4856,7 +5836,7 @@ define_arc \
 	-prevector {110111 110110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 0 1 1 R 0} \
-	-when "C*M1*M2*!P1*P2" \
+	-when "C*M1*M2*!P1*P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4866,7 +5846,7 @@ define_arc \
 	-prevector {111011 111010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 0 1 R 0} \
-	-when "C*M1*M2*P1*!P2" \
+	-when "C*M1*M2*P1*!P2*!Q" \
 	-pin R \
 	{ RACELEM21 }
 
@@ -4965,7 +5945,7 @@ define_arc \
 	-prevector {01} \
 	-pinlist {S R Q Qn} \
 	-vector {0 F 0 1} \
-	-when "!S" \
+	-when "!Q*Qn*!S" \
 	-pin R \
 	{ SR }
 
@@ -4975,7 +5955,7 @@ define_arc \
 	-prevector {01 00} \
 	-pinlist {S R Q Qn} \
 	-vector {0 R 0 1} \
-	-when "!S" \
+	-when "!Q*Qn*!S" \
 	-pin R \
 	{ SR }
 
@@ -4985,7 +5965,7 @@ define_arc \
 	-prevector {10} \
 	-pinlist {S R Q Qn} \
 	-vector {F 0 1 0} \
-	-when "!R" \
+	-when "Q*!Qn*!R" \
 	-pin S \
 	{ SR }
 
@@ -4995,7 +5975,7 @@ define_arc \
 	-prevector {10 00} \
 	-pinlist {S R Q Qn} \
 	-vector {R 0 1 0} \
-	-when "!R" \
+	-when "Q*!Qn*!R" \
 	-pin S \
 	{ SR }
 
@@ -5094,7 +6074,7 @@ define_arc \
 	-prevector {01 11} \
 	-pinlist {A B Qa Qb} \
 	-vector {F 1 0 1} \
-	-when "B" \
+	-when "B*!Qa*Qb" \
 	-pin A \
 	{ MUT }
 
@@ -5104,7 +6084,7 @@ define_arc \
 	-prevector {01} \
 	-pinlist {A B Qa Qb} \
 	-vector {R 1 0 1} \
-	-when "B" \
+	-when "B*!Qa*Qb" \
 	-pin A \
 	{ MUT }
 
@@ -5114,7 +6094,7 @@ define_arc \
 	-prevector {10 11} \
 	-pinlist {A B Qa Qb} \
 	-vector {1 F 1 0} \
-	-when "A" \
+	-when "A*Qa*!Qb" \
 	-pin B \
 	{ MUT }
 
@@ -5124,7 +6104,7 @@ define_arc \
 	-prevector {10} \
 	-pinlist {A B Qa Qb} \
 	-vector {1 R 1 0} \
-	-when "A" \
+	-when "A*Qa*!Qb" \
 	-pin B \
 	{ MUT }
 
@@ -5156,7 +6136,27 @@ define_arc \
 	-prevector {00 10} \
 	-pinlist {CLK D Q} \
 	-vector {F 0 0} \
-	-when "!D" \
+	-when "!D*!Q" \
+	-pin CLK \
+	{ DFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D} \
+	-prevector {01 11 10} \
+	-pinlist {CLK D Q} \
+	-vector {F 0 1} \
+	-when "!D*Q" \
+	-pin CLK \
+	{ DFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D} \
+	-prevector {00 10 11} \
+	-pinlist {CLK D Q} \
+	-vector {F 1 0} \
+	-when "D*!Q" \
 	-pin CLK \
 	{ DFF }
 
@@ -5166,7 +6166,7 @@ define_arc \
 	-prevector {01 11} \
 	-pinlist {CLK D Q} \
 	-vector {F 1 1} \
-	-when "D" \
+	-when "D*Q" \
 	-pin CLK \
 	{ DFF }
 
@@ -5176,7 +6176,7 @@ define_arc \
 	-prevector {00 10 00} \
 	-pinlist {CLK D Q} \
 	-vector {R 0 0} \
-	-when "!D" \
+	-when "!D*!Q" \
 	-pin CLK \
 	{ DFF }
 
@@ -5186,8 +6186,18 @@ define_arc \
 	-prevector {01 11 01} \
 	-pinlist {CLK D Q} \
 	-vector {R 1 1} \
-	-when "D" \
+	-when "D*Q" \
 	-pin CLK \
+	{ DFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D} \
+	-prevector {00 10 00 01} \
+	-pinlist {CLK D Q} \
+	-vector {0 F 0} \
+	-when "!CLK*!Q" \
+	-pin D \
 	{ DFF }
 
 define_arc \
@@ -5196,7 +6206,17 @@ define_arc \
 	-prevector {01 11 01} \
 	-pinlist {CLK D Q} \
 	-vector {0 F 1} \
-	-when "!CLK" \
+	-when "!CLK*Q" \
+	-pin D \
+	{ DFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D} \
+	-prevector {00 10 11} \
+	-pinlist {CLK D Q} \
+	-vector {1 F 0} \
+	-when "CLK*!Q" \
 	-pin D \
 	{ DFF }
 
@@ -5206,7 +6226,7 @@ define_arc \
 	-prevector {01 11} \
 	-pinlist {CLK D Q} \
 	-vector {1 F 1} \
-	-when "CLK" \
+	-when "CLK*Q" \
 	-pin D \
 	{ DFF }
 
@@ -5216,7 +6236,17 @@ define_arc \
 	-prevector {00 10 00} \
 	-pinlist {CLK D Q} \
 	-vector {0 R 0} \
-	-when "!CLK" \
+	-when "!CLK*!Q" \
+	-pin D \
+	{ DFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D} \
+	-prevector {01 11 01 00} \
+	-pinlist {CLK D Q} \
+	-vector {0 R 1} \
+	-when "!CLK*Q" \
 	-pin D \
 	{ DFF }
 
@@ -5226,7 +6256,17 @@ define_arc \
 	-prevector {00 10} \
 	-pinlist {CLK D Q} \
 	-vector {1 R 0} \
-	-when "CLK" \
+	-when "CLK*!Q" \
+	-pin D \
+	{ DFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D} \
+	-prevector {01 11 10} \
+	-pinlist {CLK D Q} \
+	-vector {1 R 1} \
+	-when "CLK*Q" \
 	-pin D \
 	{ DFF }
 
@@ -5764,7 +6804,7 @@ define_arc \
 	-prevector {10100 10000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 0 0 0 0 0} \
-	-when "!CLKB*!RA*!RB*!S" \
+	-when "!CLKB*!GCLK*!RA*!RB*!S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5774,7 +6814,7 @@ define_arc \
 	-prevector {10101 10001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 0 0 0 1 0} \
-	-when "!CLKB*!RA*!RB*S" \
+	-when "!CLKB*!GCLK*!RA*!RB*S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5784,7 +6824,7 @@ define_arc \
 	-prevector {10110 10010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 0 0 1 0 0} \
-	-when "!CLKB*!RA*RB*!S" \
+	-when "!CLKB*!GCLK*!RA*RB*!S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5794,7 +6834,7 @@ define_arc \
 	-prevector {10111 10011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 0 0 1 1 0} \
-	-when "!CLKB*!RA*RB*S" \
+	-when "!CLKB*!GCLK*!RA*RB*S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5804,7 +6844,7 @@ define_arc \
 	-prevector {10100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 0 1 0 0 0} \
-	-when "!CLKB*RA*!RB*!S" \
+	-when "!CLKB*!GCLK*RA*!RB*!S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5814,7 +6854,7 @@ define_arc \
 	-prevector {10101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 0 1 0 1 0} \
-	-when "!CLKB*RA*!RB*S" \
+	-when "!CLKB*!GCLK*RA*!RB*S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5824,7 +6864,7 @@ define_arc \
 	-prevector {10110} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 0 1 1 0 0} \
-	-when "!CLKB*RA*RB*!S" \
+	-when "!CLKB*!GCLK*RA*RB*!S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5834,7 +6874,7 @@ define_arc \
 	-prevector {10111} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 0 1 1 1 0} \
-	-when "!CLKB*RA*RB*S" \
+	-when "!CLKB*!GCLK*RA*RB*S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5844,7 +6884,17 @@ define_arc \
 	-prevector {11110 11010 11000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 1 0 0 0 0} \
-	-when "CLKB*!RA*!RB*!S" \
+	-when "CLKB*!GCLK*!RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 11101 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 0 1} \
+	-when "CLKB*GCLK*!RA*!RB*!S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5854,7 +6904,17 @@ define_arc \
 	-prevector {11111 11011 11001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 1 0 0 1 0} \
-	-when "CLKB*!RA*!RB*S" \
+	-when "CLKB*!GCLK*!RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 11101 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 1 1} \
+	-when "CLKB*GCLK*!RA*!RB*S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5864,7 +6924,7 @@ define_arc \
 	-prevector {11110 11010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 1 0 1 0 0} \
-	-when "CLKB*!RA*RB*!S" \
+	-when "CLKB*!GCLK*!RA*RB*!S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5874,7 +6934,7 @@ define_arc \
 	-prevector {11111 11011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 1 0 1 1 0} \
-	-when "CLKB*!RA*RB*S" \
+	-when "CLKB*!GCLK*!RA*RB*S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5884,7 +6944,17 @@ define_arc \
 	-prevector {11110 11100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 1 1 0 0 0} \
-	-when "CLKB*RA*!RB*!S" \
+	-when "CLKB*!GCLK*RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 11101 11100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 1 0 0 1} \
+	-when "CLKB*GCLK*RA*!RB*!S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5894,7 +6964,17 @@ define_arc \
 	-prevector {11111 11101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 1 1 0 1 0} \
-	-when "CLKB*RA*!RB*S" \
+	-when "CLKB*!GCLK*RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 11101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 1 0 1 1} \
+	-when "CLKB*GCLK*RA*!RB*S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5904,7 +6984,7 @@ define_arc \
 	-prevector {11110} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 1 1 1 0 0} \
-	-when "CLKB*RA*RB*!S" \
+	-when "CLKB*!GCLK*RA*RB*!S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5914,7 +6994,7 @@ define_arc \
 	-prevector {11111} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 1 1 1 1 0} \
-	-when "CLKB*RA*RB*S" \
+	-when "CLKB*!GCLK*RA*RB*S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5924,7 +7004,7 @@ define_arc \
 	-prevector {00100 00000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 0 0 0 0 0} \
-	-when "!CLKB*!RA*!RB*!S" \
+	-when "!CLKB*!GCLK*!RA*!RB*!S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5934,7 +7014,7 @@ define_arc \
 	-prevector {00101 00001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 0 0 0 1 0} \
-	-when "!CLKB*!RA*!RB*S" \
+	-when "!CLKB*!GCLK*!RA*!RB*S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5944,7 +7024,7 @@ define_arc \
 	-prevector {00110 00010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 0 0 1 0 0} \
-	-when "!CLKB*!RA*RB*!S" \
+	-when "!CLKB*!GCLK*!RA*RB*!S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5954,7 +7034,7 @@ define_arc \
 	-prevector {00111 00011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 0 0 1 1 0} \
-	-when "!CLKB*!RA*RB*S" \
+	-when "!CLKB*!GCLK*!RA*RB*S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5964,7 +7044,7 @@ define_arc \
 	-prevector {00100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 0 1 0 0 0} \
-	-when "!CLKB*RA*!RB*!S" \
+	-when "!CLKB*!GCLK*RA*!RB*!S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5974,7 +7054,7 @@ define_arc \
 	-prevector {00101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 0 1 0 1 0} \
-	-when "!CLKB*RA*!RB*S" \
+	-when "!CLKB*!GCLK*RA*!RB*S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5984,7 +7064,7 @@ define_arc \
 	-prevector {00110} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 0 1 1 0 0} \
-	-when "!CLKB*RA*RB*!S" \
+	-when "!CLKB*!GCLK*RA*RB*!S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -5994,7 +7074,7 @@ define_arc \
 	-prevector {00111} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 0 1 1 1 0} \
-	-when "!CLKB*RA*RB*S" \
+	-when "!CLKB*!GCLK*RA*RB*S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -6004,7 +7084,17 @@ define_arc \
 	-prevector {01110 01010 01000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 1 0 0 0 0} \
-	-when "CLKB*!RA*!RB*!S" \
+	-when "CLKB*!GCLK*!RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 01101 01001 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 1 0 0 0 1} \
+	-when "CLKB*GCLK*!RA*!RB*!S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -6014,7 +7104,17 @@ define_arc \
 	-prevector {01111 01011 01001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 1 0 0 1 0} \
-	-when "CLKB*!RA*!RB*S" \
+	-when "CLKB*!GCLK*!RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 01101 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 1 0 0 1 1} \
+	-when "CLKB*GCLK*!RA*!RB*S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -6024,7 +7124,7 @@ define_arc \
 	-prevector {01110 01010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 1 0 1 0 0} \
-	-when "CLKB*!RA*RB*!S" \
+	-when "CLKB*!GCLK*!RA*RB*!S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -6034,7 +7134,7 @@ define_arc \
 	-prevector {01111 01011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 1 0 1 1 0} \
-	-when "CLKB*!RA*RB*S" \
+	-when "CLKB*!GCLK*!RA*RB*S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -6044,7 +7144,17 @@ define_arc \
 	-prevector {01110 01100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 1 1 0 0 0} \
-	-when "CLKB*RA*!RB*!S" \
+	-when "CLKB*!GCLK*RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 01101 01100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 1 1 0 0 1} \
+	-when "CLKB*GCLK*RA*!RB*!S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -6054,7 +7164,17 @@ define_arc \
 	-prevector {01111 01101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 1 1 0 1 0} \
-	-when "CLKB*RA*!RB*S" \
+	-when "CLKB*!GCLK*RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 01101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 1 1 0 1 1} \
+	-when "CLKB*GCLK*RA*!RB*S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -6064,7 +7184,7 @@ define_arc \
 	-prevector {01110} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 1 1 1 0 0} \
-	-when "CLKB*RA*RB*!S" \
+	-when "CLKB*!GCLK*RA*RB*!S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -6074,7 +7194,7 @@ define_arc \
 	-prevector {01111} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 1 1 1 1 0} \
-	-when "CLKB*RA*RB*S" \
+	-when "CLKB*!GCLK*RA*RB*S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -6084,7 +7204,7 @@ define_arc \
 	-prevector {01010 01000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 F 0 0 0 0} \
-	-when "!CLKA*!RA*!RB*!S" \
+	-when "!CLKA*!GCLK*!RA*!RB*!S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6094,7 +7214,7 @@ define_arc \
 	-prevector {01011 01001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 F 0 0 1 0} \
-	-when "!CLKA*!RA*!RB*S" \
+	-when "!CLKA*!GCLK*!RA*!RB*S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6104,7 +7224,7 @@ define_arc \
 	-prevector {01010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 F 0 1 0 0} \
-	-when "!CLKA*!RA*RB*!S" \
+	-when "!CLKA*!GCLK*!RA*RB*!S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6114,7 +7234,7 @@ define_arc \
 	-prevector {01011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 F 0 1 1 0} \
-	-when "!CLKA*!RA*RB*S" \
+	-when "!CLKA*!GCLK*!RA*RB*S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6124,7 +7244,7 @@ define_arc \
 	-prevector {01110 01100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 F 1 0 0 0} \
-	-when "!CLKA*RA*!RB*!S" \
+	-when "!CLKA*!GCLK*RA*!RB*!S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6134,7 +7254,7 @@ define_arc \
 	-prevector {01111 01101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 F 1 0 1 0} \
-	-when "!CLKA*RA*!RB*S" \
+	-when "!CLKA*!GCLK*RA*!RB*S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6144,7 +7264,7 @@ define_arc \
 	-prevector {01110} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 F 1 1 0 0} \
-	-when "!CLKA*RA*RB*!S" \
+	-when "!CLKA*!GCLK*RA*RB*!S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6154,7 +7274,7 @@ define_arc \
 	-prevector {01111} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 F 1 1 1 0} \
-	-when "!CLKA*RA*RB*S" \
+	-when "!CLKA*!GCLK*RA*RB*S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6164,7 +7284,17 @@ define_arc \
 	-prevector {11110 11010 11000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 F 0 0 0 0} \
-	-when "CLKA*!RA*!RB*!S" \
+	-when "CLKA*!GCLK*!RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 11010 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 0 1} \
+	-when "CLKA*GCLK*!RA*!RB*!S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6174,7 +7304,17 @@ define_arc \
 	-prevector {11111 11011 11001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 F 0 0 1 0} \
-	-when "CLKA*!RA*!RB*S" \
+	-when "CLKA*!GCLK*!RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 11010 11000 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 1 1} \
+	-when "CLKA*GCLK*!RA*!RB*S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6184,7 +7324,17 @@ define_arc \
 	-prevector {11110 11010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 F 0 1 0 0} \
-	-when "CLKA*!RA*RB*!S" \
+	-when "CLKA*!GCLK*!RA*RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 11010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 1 0 1} \
+	-when "CLKA*GCLK*!RA*RB*!S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6194,7 +7344,17 @@ define_arc \
 	-prevector {11111 11011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 F 0 1 1 0} \
-	-when "CLKA*!RA*RB*S" \
+	-when "CLKA*!GCLK*!RA*RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 11010 11011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 1 1 1} \
+	-when "CLKA*GCLK*!RA*RB*S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6204,7 +7364,7 @@ define_arc \
 	-prevector {11110 11100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 F 1 0 0 0} \
-	-when "CLKA*RA*!RB*!S" \
+	-when "CLKA*!GCLK*RA*!RB*!S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6214,7 +7374,7 @@ define_arc \
 	-prevector {11111 11101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 F 1 0 1 0} \
-	-when "CLKA*RA*!RB*S" \
+	-when "CLKA*!GCLK*RA*!RB*S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6224,7 +7384,7 @@ define_arc \
 	-prevector {11110} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 F 1 1 0 0} \
-	-when "CLKA*RA*RB*!S" \
+	-when "CLKA*!GCLK*RA*RB*!S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6234,7 +7394,7 @@ define_arc \
 	-prevector {11111} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 F 1 1 1 0} \
-	-when "CLKA*RA*RB*S" \
+	-when "CLKA*!GCLK*RA*RB*S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6244,7 +7404,7 @@ define_arc \
 	-prevector {00010 00000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 R 0 0 0 0} \
-	-when "!CLKA*!RA*!RB*!S" \
+	-when "!CLKA*!GCLK*!RA*!RB*!S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6254,7 +7414,7 @@ define_arc \
 	-prevector {00011 00001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 R 0 0 1 0} \
-	-when "!CLKA*!RA*!RB*S" \
+	-when "!CLKA*!GCLK*!RA*!RB*S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6264,7 +7424,7 @@ define_arc \
 	-prevector {00010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 R 0 1 0 0} \
-	-when "!CLKA*!RA*RB*!S" \
+	-when "!CLKA*!GCLK*!RA*RB*!S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6274,7 +7434,7 @@ define_arc \
 	-prevector {00011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 R 0 1 1 0} \
-	-when "!CLKA*!RA*RB*S" \
+	-when "!CLKA*!GCLK*!RA*RB*S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6284,7 +7444,7 @@ define_arc \
 	-prevector {00110 00100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 R 1 0 0 0} \
-	-when "!CLKA*RA*!RB*!S" \
+	-when "!CLKA*!GCLK*RA*!RB*!S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6294,7 +7454,7 @@ define_arc \
 	-prevector {00111 00101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 R 1 0 1 0} \
-	-when "!CLKA*RA*!RB*S" \
+	-when "!CLKA*!GCLK*RA*!RB*S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6304,7 +7464,7 @@ define_arc \
 	-prevector {00110} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 R 1 1 0 0} \
-	-when "!CLKA*RA*RB*!S" \
+	-when "!CLKA*!GCLK*RA*RB*!S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6314,7 +7474,7 @@ define_arc \
 	-prevector {00111} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 R 1 1 1 0} \
-	-when "!CLKA*RA*RB*S" \
+	-when "!CLKA*!GCLK*RA*RB*S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6324,7 +7484,17 @@ define_arc \
 	-prevector {10110 10010 10000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 R 0 0 0 0} \
-	-when "CLKA*!RA*!RB*!S" \
+	-when "CLKA*!GCLK*!RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 10010 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 R 0 0 0 1} \
+	-when "CLKA*GCLK*!RA*!RB*!S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6334,7 +7504,17 @@ define_arc \
 	-prevector {10111 10011 10001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 R 0 0 1 0} \
-	-when "CLKA*!RA*!RB*S" \
+	-when "CLKA*!GCLK*!RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 10010 10000 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 R 0 0 1 1} \
+	-when "CLKA*GCLK*!RA*!RB*S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6344,7 +7524,17 @@ define_arc \
 	-prevector {10110 10010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 R 0 1 0 0} \
-	-when "CLKA*!RA*RB*!S" \
+	-when "CLKA*!GCLK*!RA*RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 10010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 R 0 1 0 1} \
+	-when "CLKA*GCLK*!RA*RB*!S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6354,7 +7544,17 @@ define_arc \
 	-prevector {10111 10011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 R 0 1 1 0} \
-	-when "CLKA*!RA*RB*S" \
+	-when "CLKA*!GCLK*!RA*RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 10010 10011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 R 0 1 1 1} \
+	-when "CLKA*GCLK*!RA*RB*S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6364,7 +7564,7 @@ define_arc \
 	-prevector {10110 10100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 R 1 0 0 0} \
-	-when "CLKA*RA*!RB*!S" \
+	-when "CLKA*!GCLK*RA*!RB*!S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6374,7 +7574,7 @@ define_arc \
 	-prevector {10111 10101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 R 1 0 1 0} \
-	-when "CLKA*RA*!RB*S" \
+	-when "CLKA*!GCLK*RA*!RB*S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6384,7 +7584,7 @@ define_arc \
 	-prevector {10110} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 R 1 1 0 0} \
-	-when "CLKA*RA*RB*!S" \
+	-when "CLKA*!GCLK*RA*RB*!S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6394,7 +7594,7 @@ define_arc \
 	-prevector {10111} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 R 1 1 1 0} \
-	-when "CLKA*RA*RB*S" \
+	-when "CLKA*!GCLK*RA*RB*S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -6404,7 +7604,7 @@ define_arc \
 	-prevector {00100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 F 0 0 0} \
-	-when "!CLKA*!CLKB*!RB*!S" \
+	-when "!CLKA*!CLKB*!GCLK*!RB*!S" \
 	-pin RA \
 	{ ICM }
 
@@ -6414,7 +7614,7 @@ define_arc \
 	-prevector {00101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 F 0 1 0} \
-	-when "!CLKA*!CLKB*!RB*S" \
+	-when "!CLKA*!CLKB*!GCLK*!RB*S" \
 	-pin RA \
 	{ ICM }
 
@@ -6424,7 +7624,7 @@ define_arc \
 	-prevector {00110} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 F 1 0 0} \
-	-when "!CLKA*!CLKB*RB*!S" \
+	-when "!CLKA*!CLKB*!GCLK*RB*!S" \
 	-pin RA \
 	{ ICM }
 
@@ -6434,7 +7634,7 @@ define_arc \
 	-prevector {00111} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 F 1 1 0} \
-	-when "!CLKA*!CLKB*RB*S" \
+	-when "!CLKA*!CLKB*!GCLK*RB*S" \
 	-pin RA \
 	{ ICM }
 
@@ -6444,7 +7644,17 @@ define_arc \
 	-prevector {01110 01100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 F 0 0 0} \
-	-when "!CLKA*CLKB*!RB*!S" \
+	-when "!CLKA*CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 01101 01100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 F 0 0 1} \
+	-when "!CLKA*CLKB*GCLK*!RB*!S" \
 	-pin RA \
 	{ ICM }
 
@@ -6454,7 +7664,17 @@ define_arc \
 	-prevector {01111 01101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 F 0 1 0} \
-	-when "!CLKA*CLKB*!RB*S" \
+	-when "!CLKA*CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 01101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 F 0 1 1} \
+	-when "!CLKA*CLKB*GCLK*!RB*S" \
 	-pin RA \
 	{ ICM }
 
@@ -6464,7 +7684,7 @@ define_arc \
 	-prevector {01110} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 F 1 0 0} \
-	-when "!CLKA*CLKB*RB*!S" \
+	-when "!CLKA*CLKB*!GCLK*RB*!S" \
 	-pin RA \
 	{ ICM }
 
@@ -6474,7 +7694,7 @@ define_arc \
 	-prevector {01111} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 F 1 1 0} \
-	-when "!CLKA*CLKB*RB*S" \
+	-when "!CLKA*CLKB*!GCLK*RB*S" \
 	-pin RA \
 	{ ICM }
 
@@ -6484,7 +7704,7 @@ define_arc \
 	-prevector {10100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 F 0 0 0} \
-	-when "CLKA*!CLKB*!RB*!S" \
+	-when "CLKA*!CLKB*!GCLK*!RB*!S" \
 	-pin RA \
 	{ ICM }
 
@@ -6494,7 +7714,7 @@ define_arc \
 	-prevector {10101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 F 0 1 0} \
-	-when "CLKA*!CLKB*!RB*S" \
+	-when "CLKA*!CLKB*!GCLK*!RB*S" \
 	-pin RA \
 	{ ICM }
 
@@ -6504,7 +7724,7 @@ define_arc \
 	-prevector {10110} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 F 1 0 0} \
-	-when "CLKA*!CLKB*RB*!S" \
+	-when "CLKA*!CLKB*!GCLK*RB*!S" \
 	-pin RA \
 	{ ICM }
 
@@ -6514,7 +7734,7 @@ define_arc \
 	-prevector {10111} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 F 1 1 0} \
-	-when "CLKA*!CLKB*RB*S" \
+	-when "CLKA*!CLKB*!GCLK*RB*S" \
 	-pin RA \
 	{ ICM }
 
@@ -6524,7 +7744,17 @@ define_arc \
 	-prevector {11110 11100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 F 0 0 0} \
-	-when "CLKA*CLKB*!RB*!S" \
+	-when "CLKA*CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 11101 11100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 F 0 0 1} \
+	-when "CLKA*CLKB*GCLK*!RB*!S" \
 	-pin RA \
 	{ ICM }
 
@@ -6534,7 +7764,17 @@ define_arc \
 	-prevector {11111 11101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 F 0 1 0} \
-	-when "CLKA*CLKB*!RB*S" \
+	-when "CLKA*CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 11101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 F 0 1 1} \
+	-when "CLKA*CLKB*GCLK*!RB*S" \
 	-pin RA \
 	{ ICM }
 
@@ -6544,7 +7784,7 @@ define_arc \
 	-prevector {11110} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 F 1 0 0} \
-	-when "CLKA*CLKB*RB*!S" \
+	-when "CLKA*CLKB*!GCLK*RB*!S" \
 	-pin RA \
 	{ ICM }
 
@@ -6554,7 +7794,7 @@ define_arc \
 	-prevector {11111} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 F 1 1 0} \
-	-when "CLKA*CLKB*RB*S" \
+	-when "CLKA*CLKB*!GCLK*RB*S" \
 	-pin RA \
 	{ ICM }
 
@@ -6564,7 +7804,7 @@ define_arc \
 	-prevector {00000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 R 0 0 0} \
-	-when "!CLKA*!CLKB*!RB*!S" \
+	-when "!CLKA*!CLKB*!GCLK*!RB*!S" \
 	-pin RA \
 	{ ICM }
 
@@ -6574,7 +7814,7 @@ define_arc \
 	-prevector {00001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 R 0 1 0} \
-	-when "!CLKA*!CLKB*!RB*S" \
+	-when "!CLKA*!CLKB*!GCLK*!RB*S" \
 	-pin RA \
 	{ ICM }
 
@@ -6584,7 +7824,7 @@ define_arc \
 	-prevector {00010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 R 1 0 0} \
-	-when "!CLKA*!CLKB*RB*!S" \
+	-when "!CLKA*!CLKB*!GCLK*RB*!S" \
 	-pin RA \
 	{ ICM }
 
@@ -6594,7 +7834,7 @@ define_arc \
 	-prevector {00011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 R 1 1 0} \
-	-when "!CLKA*!CLKB*RB*S" \
+	-when "!CLKA*!CLKB*!GCLK*RB*S" \
 	-pin RA \
 	{ ICM }
 
@@ -6604,7 +7844,17 @@ define_arc \
 	-prevector {01010 01000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 R 0 0 0} \
-	-when "!CLKA*CLKB*!RB*!S" \
+	-when "!CLKA*CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 01101 01001 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 R 0 0 1} \
+	-when "!CLKA*CLKB*GCLK*!RB*!S" \
 	-pin RA \
 	{ ICM }
 
@@ -6614,7 +7864,17 @@ define_arc \
 	-prevector {01011 01001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 R 0 1 0} \
-	-when "!CLKA*CLKB*!RB*S" \
+	-when "!CLKA*CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 01101 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 R 0 1 1} \
+	-when "!CLKA*CLKB*GCLK*!RB*S" \
 	-pin RA \
 	{ ICM }
 
@@ -6624,7 +7884,7 @@ define_arc \
 	-prevector {01010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 R 1 0 0} \
-	-when "!CLKA*CLKB*RB*!S" \
+	-when "!CLKA*CLKB*!GCLK*RB*!S" \
 	-pin RA \
 	{ ICM }
 
@@ -6634,7 +7894,7 @@ define_arc \
 	-prevector {01011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 R 1 1 0} \
-	-when "!CLKA*CLKB*RB*S" \
+	-when "!CLKA*CLKB*!GCLK*RB*S" \
 	-pin RA \
 	{ ICM }
 
@@ -6644,7 +7904,7 @@ define_arc \
 	-prevector {10100 10000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 R 0 0 0} \
-	-when "CLKA*!CLKB*!RB*!S" \
+	-when "CLKA*!CLKB*!GCLK*!RB*!S" \
 	-pin RA \
 	{ ICM }
 
@@ -6654,7 +7914,7 @@ define_arc \
 	-prevector {10101 10001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 R 0 1 0} \
-	-when "CLKA*!CLKB*!RB*S" \
+	-when "CLKA*!CLKB*!GCLK*!RB*S" \
 	-pin RA \
 	{ ICM }
 
@@ -6664,7 +7924,7 @@ define_arc \
 	-prevector {10110 10010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 R 1 0 0} \
-	-when "CLKA*!CLKB*RB*!S" \
+	-when "CLKA*!CLKB*!GCLK*RB*!S" \
 	-pin RA \
 	{ ICM }
 
@@ -6674,7 +7934,7 @@ define_arc \
 	-prevector {10111 10011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 R 1 1 0} \
-	-when "CLKA*!CLKB*RB*S" \
+	-when "CLKA*!CLKB*!GCLK*RB*S" \
 	-pin RA \
 	{ ICM }
 
@@ -6684,7 +7944,17 @@ define_arc \
 	-prevector {11110 11010 11000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 R 0 0 0} \
-	-when "CLKA*CLKB*!RB*!S" \
+	-when "CLKA*CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 11101 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 0 1} \
+	-when "CLKA*CLKB*GCLK*!RB*!S" \
 	-pin RA \
 	{ ICM }
 
@@ -6694,7 +7964,17 @@ define_arc \
 	-prevector {11111 11011 11001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 R 0 1 0} \
-	-when "CLKA*CLKB*!RB*S" \
+	-when "CLKA*CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 11101 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 1 1} \
+	-when "CLKA*CLKB*GCLK*!RB*S" \
 	-pin RA \
 	{ ICM }
 
@@ -6704,7 +7984,7 @@ define_arc \
 	-prevector {11110 11010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 R 1 0 0} \
-	-when "CLKA*CLKB*RB*!S" \
+	-when "CLKA*CLKB*!GCLK*RB*!S" \
 	-pin RA \
 	{ ICM }
 
@@ -6714,7 +7994,7 @@ define_arc \
 	-prevector {11111 11011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 R 1 1 0} \
-	-when "CLKA*CLKB*RB*S" \
+	-when "CLKA*CLKB*!GCLK*RB*S" \
 	-pin RA \
 	{ ICM }
 
@@ -6724,7 +8004,7 @@ define_arc \
 	-prevector {00010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 0 F 0 0} \
-	-when "!CLKA*!CLKB*!RA*!S" \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!S" \
 	-pin RB \
 	{ ICM }
 
@@ -6734,7 +8014,7 @@ define_arc \
 	-prevector {00011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 0 F 1 0} \
-	-when "!CLKA*!CLKB*!RA*S" \
+	-when "!CLKA*!CLKB*!GCLK*!RA*S" \
 	-pin RB \
 	{ ICM }
 
@@ -6744,7 +8024,7 @@ define_arc \
 	-prevector {00110} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 1 F 0 0} \
-	-when "!CLKA*!CLKB*RA*!S" \
+	-when "!CLKA*!CLKB*!GCLK*RA*!S" \
 	-pin RB \
 	{ ICM }
 
@@ -6754,7 +8034,7 @@ define_arc \
 	-prevector {00111} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 1 F 1 0} \
-	-when "!CLKA*!CLKB*RA*S" \
+	-when "!CLKA*!CLKB*!GCLK*RA*S" \
 	-pin RB \
 	{ ICM }
 
@@ -6764,7 +8044,7 @@ define_arc \
 	-prevector {01010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 0 F 0 0} \
-	-when "!CLKA*CLKB*!RA*!S" \
+	-when "!CLKA*CLKB*!GCLK*!RA*!S" \
 	-pin RB \
 	{ ICM }
 
@@ -6774,7 +8054,7 @@ define_arc \
 	-prevector {01011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 0 F 1 0} \
-	-when "!CLKA*CLKB*!RA*S" \
+	-when "!CLKA*CLKB*!GCLK*!RA*S" \
 	-pin RB \
 	{ ICM }
 
@@ -6784,7 +8064,7 @@ define_arc \
 	-prevector {01110} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 1 F 0 0} \
-	-when "!CLKA*CLKB*RA*!S" \
+	-when "!CLKA*CLKB*!GCLK*RA*!S" \
 	-pin RB \
 	{ ICM }
 
@@ -6794,7 +8074,7 @@ define_arc \
 	-prevector {01111} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 1 F 1 0} \
-	-when "!CLKA*CLKB*RA*S" \
+	-when "!CLKA*CLKB*!GCLK*RA*S" \
 	-pin RB \
 	{ ICM }
 
@@ -6804,7 +8084,17 @@ define_arc \
 	-prevector {10110 10010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 0 F 0 0} \
-	-when "CLKA*!CLKB*!RA*!S" \
+	-when "CLKA*!CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 10010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 F 0 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*!S" \
 	-pin RB \
 	{ ICM }
 
@@ -6814,7 +8104,17 @@ define_arc \
 	-prevector {10111 10011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 0 F 1 0} \
-	-when "CLKA*!CLKB*!RA*S" \
+	-when "CLKA*!CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 10010 10011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 F 1 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*S" \
 	-pin RB \
 	{ ICM }
 
@@ -6824,7 +8124,7 @@ define_arc \
 	-prevector {10110} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 1 F 0 0} \
-	-when "CLKA*!CLKB*RA*!S" \
+	-when "CLKA*!CLKB*!GCLK*RA*!S" \
 	-pin RB \
 	{ ICM }
 
@@ -6834,7 +8134,7 @@ define_arc \
 	-prevector {10111} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 1 F 1 0} \
-	-when "CLKA*!CLKB*RA*S" \
+	-when "CLKA*!CLKB*!GCLK*RA*S" \
 	-pin RB \
 	{ ICM }
 
@@ -6844,7 +8144,17 @@ define_arc \
 	-prevector {11110 11010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 0 F 0 0} \
-	-when "CLKA*CLKB*!RA*!S" \
+	-when "CLKA*CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 11010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 F 0 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!S" \
 	-pin RB \
 	{ ICM }
 
@@ -6854,7 +8164,17 @@ define_arc \
 	-prevector {11111 11011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 0 F 1 0} \
-	-when "CLKA*CLKB*!RA*S" \
+	-when "CLKA*CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 11010 11011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 F 1 1} \
+	-when "CLKA*CLKB*GCLK*!RA*S" \
 	-pin RB \
 	{ ICM }
 
@@ -6864,7 +8184,7 @@ define_arc \
 	-prevector {11110} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 1 F 0 0} \
-	-when "CLKA*CLKB*RA*!S" \
+	-when "CLKA*CLKB*!GCLK*RA*!S" \
 	-pin RB \
 	{ ICM }
 
@@ -6874,7 +8194,7 @@ define_arc \
 	-prevector {11111} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 1 F 1 0} \
-	-when "CLKA*CLKB*RA*S" \
+	-when "CLKA*CLKB*!GCLK*RA*S" \
 	-pin RB \
 	{ ICM }
 
@@ -6884,7 +8204,7 @@ define_arc \
 	-prevector {00000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 0 R 0 0} \
-	-when "!CLKA*!CLKB*!RA*!S" \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!S" \
 	-pin RB \
 	{ ICM }
 
@@ -6894,7 +8214,7 @@ define_arc \
 	-prevector {00001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 0 R 1 0} \
-	-when "!CLKA*!CLKB*!RA*S" \
+	-when "!CLKA*!CLKB*!GCLK*!RA*S" \
 	-pin RB \
 	{ ICM }
 
@@ -6904,7 +8224,7 @@ define_arc \
 	-prevector {00100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 1 R 0 0} \
-	-when "!CLKA*!CLKB*RA*!S" \
+	-when "!CLKA*!CLKB*!GCLK*RA*!S" \
 	-pin RB \
 	{ ICM }
 
@@ -6914,7 +8234,7 @@ define_arc \
 	-prevector {00101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 1 R 1 0} \
-	-when "!CLKA*!CLKB*RA*S" \
+	-when "!CLKA*!CLKB*!GCLK*RA*S" \
 	-pin RB \
 	{ ICM }
 
@@ -6924,7 +8244,7 @@ define_arc \
 	-prevector {01010 01000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 0 R 0 0} \
-	-when "!CLKA*CLKB*!RA*!S" \
+	-when "!CLKA*CLKB*!GCLK*!RA*!S" \
 	-pin RB \
 	{ ICM }
 
@@ -6934,7 +8254,7 @@ define_arc \
 	-prevector {01011 01001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 0 R 1 0} \
-	-when "!CLKA*CLKB*!RA*S" \
+	-when "!CLKA*CLKB*!GCLK*!RA*S" \
 	-pin RB \
 	{ ICM }
 
@@ -6944,7 +8264,7 @@ define_arc \
 	-prevector {01110 01100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 1 R 0 0} \
-	-when "!CLKA*CLKB*RA*!S" \
+	-when "!CLKA*CLKB*!GCLK*RA*!S" \
 	-pin RB \
 	{ ICM }
 
@@ -6954,7 +8274,7 @@ define_arc \
 	-prevector {01111 01101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 1 R 1 0} \
-	-when "!CLKA*CLKB*RA*S" \
+	-when "!CLKA*CLKB*!GCLK*RA*S" \
 	-pin RB \
 	{ ICM }
 
@@ -6964,7 +8284,17 @@ define_arc \
 	-prevector {10100 10000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 0 R 0 0} \
-	-when "CLKA*!CLKB*!RA*!S" \
+	-when "CLKA*!CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 10010 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 R 0 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*!S" \
 	-pin RB \
 	{ ICM }
 
@@ -6974,7 +8304,17 @@ define_arc \
 	-prevector {10101 10001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 0 R 1 0} \
-	-when "CLKA*!CLKB*!RA*S" \
+	-when "CLKA*!CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 10010 10000 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 R 1 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*S" \
 	-pin RB \
 	{ ICM }
 
@@ -6984,7 +8324,7 @@ define_arc \
 	-prevector {10100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 1 R 0 0} \
-	-when "CLKA*!CLKB*RA*!S" \
+	-when "CLKA*!CLKB*!GCLK*RA*!S" \
 	-pin RB \
 	{ ICM }
 
@@ -6994,7 +8334,7 @@ define_arc \
 	-prevector {10101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 1 R 1 0} \
-	-when "CLKA*!CLKB*RA*S" \
+	-when "CLKA*!CLKB*!GCLK*RA*S" \
 	-pin RB \
 	{ ICM }
 
@@ -7004,7 +8344,17 @@ define_arc \
 	-prevector {11110 11010 11000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 0 R 0 0} \
-	-when "CLKA*CLKB*!RA*!S" \
+	-when "CLKA*CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 11010 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 0 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!S" \
 	-pin RB \
 	{ ICM }
 
@@ -7014,7 +8364,17 @@ define_arc \
 	-prevector {11111 11011 11001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 0 R 1 0} \
-	-when "CLKA*CLKB*!RA*S" \
+	-when "CLKA*CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 11010 11000 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 1 1} \
+	-when "CLKA*CLKB*GCLK*!RA*S" \
 	-pin RB \
 	{ ICM }
 
@@ -7024,7 +8384,7 @@ define_arc \
 	-prevector {11110 11100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 1 R 0 0} \
-	-when "CLKA*CLKB*RA*!S" \
+	-when "CLKA*CLKB*!GCLK*RA*!S" \
 	-pin RB \
 	{ ICM }
 
@@ -7034,7 +8394,7 @@ define_arc \
 	-prevector {11111 11101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 1 R 1 0} \
-	-when "CLKA*CLKB*RA*S" \
+	-when "CLKA*CLKB*!GCLK*RA*S" \
 	-pin RB \
 	{ ICM }
 
@@ -7044,7 +8404,7 @@ define_arc \
 	-prevector {00001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 0 0 F 0} \
-	-when "!CLKA*!CLKB*!RA*!RB" \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -7054,7 +8414,7 @@ define_arc \
 	-prevector {00011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 0 1 F 0} \
-	-when "!CLKA*!CLKB*!RA*RB" \
+	-when "!CLKA*!CLKB*!GCLK*!RA*RB" \
 	-pin S \
 	{ ICM }
 
@@ -7064,7 +8424,7 @@ define_arc \
 	-prevector {00101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 1 0 F 0} \
-	-when "!CLKA*!CLKB*RA*!RB" \
+	-when "!CLKA*!CLKB*!GCLK*RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -7074,7 +8434,7 @@ define_arc \
 	-prevector {00111} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 1 1 F 0} \
-	-when "!CLKA*!CLKB*RA*RB" \
+	-when "!CLKA*!CLKB*!GCLK*RA*RB" \
 	-pin S \
 	{ ICM }
 
@@ -7084,7 +8444,17 @@ define_arc \
 	-prevector {01011 01001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 0 0 F 0} \
-	-when "!CLKA*CLKB*!RA*!RB" \
+	-when "!CLKA*CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 01101 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 0 F 1} \
+	-when "!CLKA*CLKB*GCLK*!RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -7094,7 +8464,7 @@ define_arc \
 	-prevector {01011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 0 1 F 0} \
-	-when "!CLKA*CLKB*!RA*RB" \
+	-when "!CLKA*CLKB*!GCLK*!RA*RB" \
 	-pin S \
 	{ ICM }
 
@@ -7104,7 +8474,17 @@ define_arc \
 	-prevector {01111 01101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 1 0 F 0} \
-	-when "!CLKA*CLKB*RA*!RB" \
+	-when "!CLKA*CLKB*!GCLK*RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 01101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 1 0 F 1} \
+	-when "!CLKA*CLKB*GCLK*RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -7114,7 +8494,7 @@ define_arc \
 	-prevector {01111} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 1 1 F 0} \
-	-when "!CLKA*CLKB*RA*RB" \
+	-when "!CLKA*CLKB*!GCLK*RA*RB" \
 	-pin S \
 	{ ICM }
 
@@ -7124,7 +8504,17 @@ define_arc \
 	-prevector {10101 10001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 0 0 F 0} \
-	-when "CLKA*!CLKB*!RA*!RB" \
+	-when "CLKA*!CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 10010 10000 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 0 F 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -7134,7 +8524,17 @@ define_arc \
 	-prevector {10111 10011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 0 1 F 0} \
-	-when "CLKA*!CLKB*!RA*RB" \
+	-when "CLKA*!CLKB*!GCLK*!RA*RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 10010 10011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 1 F 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*RB" \
 	-pin S \
 	{ ICM }
 
@@ -7144,7 +8544,7 @@ define_arc \
 	-prevector {10101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 1 0 F 0} \
-	-when "CLKA*!CLKB*RA*!RB" \
+	-when "CLKA*!CLKB*!GCLK*RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -7154,7 +8554,7 @@ define_arc \
 	-prevector {10111} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 1 1 F 0} \
-	-when "CLKA*!CLKB*RA*RB" \
+	-when "CLKA*!CLKB*!GCLK*RA*RB" \
 	-pin S \
 	{ ICM }
 
@@ -7164,7 +8564,17 @@ define_arc \
 	-prevector {11111 11011 11001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 0 0 F 0} \
-	-when "CLKA*CLKB*!RA*!RB" \
+	-when "CLKA*CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 11101 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 F 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -7174,7 +8584,17 @@ define_arc \
 	-prevector {11111 11011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 0 1 F 0} \
-	-when "CLKA*CLKB*!RA*RB" \
+	-when "CLKA*CLKB*!GCLK*!RA*RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 11010 11011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 1 F 1} \
+	-when "CLKA*CLKB*GCLK*!RA*RB" \
 	-pin S \
 	{ ICM }
 
@@ -7184,7 +8604,17 @@ define_arc \
 	-prevector {11111 11101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 1 0 F 0} \
-	-when "CLKA*CLKB*RA*!RB" \
+	-when "CLKA*CLKB*!GCLK*RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 11101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 1 0 F 1} \
+	-when "CLKA*CLKB*GCLK*RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -7194,7 +8624,7 @@ define_arc \
 	-prevector {11111} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 1 1 F 0} \
-	-when "CLKA*CLKB*RA*RB" \
+	-when "CLKA*CLKB*!GCLK*RA*RB" \
 	-pin S \
 	{ ICM }
 
@@ -7204,7 +8634,7 @@ define_arc \
 	-prevector {00000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 0 0 R 0} \
-	-when "!CLKA*!CLKB*!RA*!RB" \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -7214,7 +8644,7 @@ define_arc \
 	-prevector {00010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 0 1 R 0} \
-	-when "!CLKA*!CLKB*!RA*RB" \
+	-when "!CLKA*!CLKB*!GCLK*!RA*RB" \
 	-pin S \
 	{ ICM }
 
@@ -7224,7 +8654,7 @@ define_arc \
 	-prevector {00100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 1 0 R 0} \
-	-when "!CLKA*!CLKB*RA*!RB" \
+	-when "!CLKA*!CLKB*!GCLK*RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -7234,7 +8664,7 @@ define_arc \
 	-prevector {00110} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 1 1 R 0} \
-	-when "!CLKA*!CLKB*RA*RB" \
+	-when "!CLKA*!CLKB*!GCLK*RA*RB" \
 	-pin S \
 	{ ICM }
 
@@ -7244,7 +8674,17 @@ define_arc \
 	-prevector {01010 01000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 0 0 R 0} \
-	-when "!CLKA*CLKB*!RA*!RB" \
+	-when "!CLKA*CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 01101 01001 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 0 R 1} \
+	-when "!CLKA*CLKB*GCLK*!RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -7254,7 +8694,7 @@ define_arc \
 	-prevector {01010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 0 1 R 0} \
-	-when "!CLKA*CLKB*!RA*RB" \
+	-when "!CLKA*CLKB*!GCLK*!RA*RB" \
 	-pin S \
 	{ ICM }
 
@@ -7264,7 +8704,17 @@ define_arc \
 	-prevector {01110 01100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 1 0 R 0} \
-	-when "!CLKA*CLKB*RA*!RB" \
+	-when "!CLKA*CLKB*!GCLK*RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 01101 01100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 1 0 R 1} \
+	-when "!CLKA*CLKB*GCLK*RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -7274,7 +8724,7 @@ define_arc \
 	-prevector {01110} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 1 1 R 0} \
-	-when "!CLKA*CLKB*RA*RB" \
+	-when "!CLKA*CLKB*!GCLK*RA*RB" \
 	-pin S \
 	{ ICM }
 
@@ -7284,7 +8734,17 @@ define_arc \
 	-prevector {10100 10000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 0 0 R 0} \
-	-when "CLKA*!CLKB*!RA*!RB" \
+	-when "CLKA*!CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 10010 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 0 R 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -7294,7 +8754,17 @@ define_arc \
 	-prevector {10110 10010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 0 1 R 0} \
-	-when "CLKA*!CLKB*!RA*RB" \
+	-when "CLKA*!CLKB*!GCLK*!RA*RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 10010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 1 R 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*RB" \
 	-pin S \
 	{ ICM }
 
@@ -7304,7 +8774,7 @@ define_arc \
 	-prevector {10100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 1 0 R 0} \
-	-when "CLKA*!CLKB*RA*!RB" \
+	-when "CLKA*!CLKB*!GCLK*RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -7314,7 +8784,7 @@ define_arc \
 	-prevector {10110} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 1 1 R 0} \
-	-when "CLKA*!CLKB*RA*RB" \
+	-when "CLKA*!CLKB*!GCLK*RA*RB" \
 	-pin S \
 	{ ICM }
 
@@ -7324,7 +8794,17 @@ define_arc \
 	-prevector {11110 11010 11000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 0 0 R 0} \
-	-when "CLKA*CLKB*!RA*!RB" \
+	-when "CLKA*CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 11010 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 R 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -7334,7 +8814,17 @@ define_arc \
 	-prevector {11110 11010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 0 1 R 0} \
-	-when "CLKA*CLKB*!RA*RB" \
+	-when "CLKA*CLKB*!GCLK*!RA*RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 11010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 1 R 1} \
+	-when "CLKA*CLKB*GCLK*!RA*RB" \
 	-pin S \
 	{ ICM }
 
@@ -7344,7 +8834,17 @@ define_arc \
 	-prevector {11110 11100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 1 0 R 0} \
-	-when "CLKA*CLKB*RA*!RB" \
+	-when "CLKA*CLKB*!GCLK*RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 11101 11100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 1 0 R 1} \
+	-when "CLKA*CLKB*GCLK*RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -7354,7 +8854,7 @@ define_arc \
 	-prevector {11110} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 1 1 R 0} \
-	-when "CLKA*CLKB*RA*RB" \
+	-when "CLKA*CLKB*!GCLK*RA*RB" \
 	-pin S \
 	{ ICM }
 
