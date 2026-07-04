@@ -208,97 +208,79 @@ table
 	? ? 1 1 : ? : 1;
 endtable
 endprimitive
-primitive ICM_enA(enA, RA, CLKA, sela2);
+primitive ICM_enA(enA, CLKA, RA, sela2);
 output enA;
-input  RA, CLKA, sela2;
+input  CLKA, RA, sela2;
 reg    enA;
 table
 	0 0 1 : ? : 1;
-	0 1 ? : ? : -;
-	1 ? ? : ? : 0;
-	? 0 0 : ? : 0;
+	0 ? 0 : ? : 0;
+	1 0 ? : ? : -;
+	? 1 ? : ? : 0;
 endtable
 endprimitive
-primitive ICM_enB(enB, RB, CLKB, selb2);
+primitive ICM_enB(enB, CLKB, RB, selb2);
 output enB;
-input  RB, CLKB, selb2;
+input  CLKB, RB, selb2;
 reg    enB;
 table
 	0 0 1 : ? : 1;
-	0 1 ? : ? : -;
-	1 ? ? : ? : 0;
-	? 0 0 : ? : 0;
+	0 ? 0 : ? : 0;
+	1 0 ? : ? : -;
+	? 1 ? : ? : 0;
 endtable
 endprimitive
-primitive ICM_sela(sela, enB, S);
-output sela;
-input  enB, S;
-reg    sela;
-table
-	0 0 : ? : 1;
-	1 ? : ? : 0;
-	? 1 : ? : 0;
-endtable
-endprimitive
-primitive ICM_sela1(sela1, RA, CLKA, sela);
+primitive ICM_sela1(sela1, CLKA, RA, enB, S);
 output sela1;
-input  RA, CLKA, sela;
+input  CLKA, RA, enB, S;
 reg    sela1;
 table
-	0 0 1 : ? : 1;
-	0 1 ? : ? : -;
-	1 ? ? : ? : 0;
-	? 0 0 : ? : 0;
+	0 0 0 0 : ? : 1;
+	0 ? 1 ? : ? : 0;
+	0 ? ? 1 : ? : 0;
+	1 0 ? ? : ? : -;
+	? 1 ? ? : ? : 0;
 endtable
 endprimitive
-primitive ICM_sela2(sela2, RA, CLKA, sela1);
+primitive ICM_sela2(sela2, CLKA, RA, sela1);
 output sela2;
-input  RA, CLKA, sela1;
+input  CLKA, RA, sela1;
 reg    sela2;
 table
 	0 0 ? : ? : -;
-	0 1 1 : ? : 1;
-	1 ? ? : ? : 0;
-	? 1 0 : ? : 0;
+	1 0 1 : ? : 1;
+	1 ? 0 : ? : 0;
+	? 1 ? : ? : 0;
 endtable
 endprimitive
-primitive ICM_selb(selb, enA, S);
-output selb;
-input  enA, S;
-reg    selb;
-table
-	0 1 : ? : 1;
-	1 ? : ? : 0;
-	? 0 : ? : 0;
-endtable
-endprimitive
-primitive ICM_selb1(selb1, RB, CLKB, selb);
+primitive ICM_selb1(selb1, enA, CLKB, RB, S);
 output selb1;
-input  RB, CLKB, selb;
+input  enA, CLKB, RB, S;
 reg    selb1;
 table
-	0 0 1 : ? : 1;
-	0 1 ? : ? : -;
-	1 ? ? : ? : 0;
-	? 0 0 : ? : 0;
+	0 0 0 1 : ? : 1;
+	1 0 ? ? : ? : 0;
+	? 0 ? 0 : ? : 0;
+	? 1 0 ? : ? : -;
+	? ? 1 ? : ? : 0;
 endtable
 endprimitive
-primitive ICM_selb2(selb2, RB, CLKB, selb1);
+primitive ICM_selb2(selb2, CLKB, RB, selb1);
 output selb2;
-input  RB, CLKB, selb1;
+input  CLKB, RB, selb1;
 reg    selb2;
 table
 	0 0 ? : ? : -;
-	0 1 1 : ? : 1;
-	1 ? ? : ? : 0;
-	? 1 0 : ? : 0;
+	1 0 1 : ? : 1;
+	1 ? 0 : ? : 0;
+	? 1 ? : ? : 0;
 endtable
 endprimitive
 `celldefine
 module ICM(GCLK, CLKA, CLKB, RA, RB, S);
 output GCLK;
 input  CLKA, CLKB, RA, RB, S;
-wire   enA, enB, sela, sela1, sela2, selb, selb1, selb2;
+wire   enA, enB, sela1, sela2, selb1, selb2;
 specify
 	(CLKA => GCLK) = (0.1, 0.1);
 	(CLKB => GCLK) = (0.1, 0.1);
@@ -307,13 +289,33 @@ specify
 	(S => GCLK) = (0.1, 0.1);
 endspecify
 ICM_GCLK u_ICM_GCLK (GCLK, enA, CLKA, enB, CLKB);
-ICM_enA u_ICM_enA (enA, RA, CLKA, sela2);
-ICM_enB u_ICM_enB (enB, RB, CLKB, selb2);
-ICM_sela u_ICM_sela (sela, enB, S);
-ICM_sela1 u_ICM_sela1 (sela1, RA, CLKA, sela);
-ICM_sela2 u_ICM_sela2 (sela2, RA, CLKA, sela1);
-ICM_selb u_ICM_selb (selb, enA, S);
-ICM_selb1 u_ICM_selb1 (selb1, RB, CLKB, selb);
-ICM_selb2 u_ICM_selb2 (selb2, RB, CLKB, selb1);
+ICM_enA u_ICM_enA (enA, CLKA, RA, sela2);
+ICM_enB u_ICM_enB (enB, CLKB, RB, selb2);
+ICM_sela1 u_ICM_sela1 (sela1, CLKA, RA, enB, S);
+ICM_sela2 u_ICM_sela2 (sela2, CLKA, RA, sela1);
+ICM_selb1 u_ICM_selb1 (selb1, enA, CLKB, RB, S);
+ICM_selb2 u_ICM_selb2 (selb2, CLKB, RB, selb1);
+endmodule
+`endcelldefine
+primitive C2GATE_Q(Q, A, B);
+output Q;
+input  A, B;
+reg    Q;
+table
+	0 0 : ? : 0;
+	0 1 : ? : -;
+	1 0 : ? : -;
+	1 1 : ? : 1;
+endtable
+endprimitive
+`celldefine
+module C2GATE(Q, A, B);
+output Q;
+input  A, B;
+specify
+	(A => Q) = (0.1, 0.1);
+	(B => Q) = (0.1, 0.1);
+endspecify
+C2GATE_Q u_C2GATE_Q (Q, A, B);
 endmodule
 `endcelldefine
