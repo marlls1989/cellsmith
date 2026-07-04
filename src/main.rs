@@ -37,14 +37,14 @@ struct Cli {
     #[arg(long)]
     no_when: bool,
 
+    /// Suppress hidden (internal-power) arcs — input toggles where no output changes (emitted by default).
+    #[arg(long)]
+    no_internal: bool,
+
     /// Emit derived setup/hold & non_seq constraint arcs (off by default; a cell can opt in with
     /// `constraint_arcs = true`).
     #[arg(long)]
     constraints: bool,
-
-    /// Suppress hidden (internal-power) arcs — input toggles where no output changes (emitted by default).
-    #[arg(long)]
-    no_internal: bool,
 
     /// Write all three artifacts to stdout (with banners) instead of writing files.
     #[arg(long)]

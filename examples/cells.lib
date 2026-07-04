@@ -1,4 +1,16 @@
 library (cells) {
+  cell (AND2) {
+    pin (A) {
+      direction : input;
+    }
+    pin (B) {
+      direction : input;
+    }
+    pin (Y) {
+      direction : output;
+      function : "A*B";
+    }
+  }
   cell (C2) {
     pin (A) {
       direction : input;
@@ -59,6 +71,7 @@ library (cells) {
       function : "Q";
     }
   }
+  /* arbitration: !S*!R metastable; grants Q, Qn mutually exclusive (both-high forbidden) */
   cell (SR) {
     pin (S) {
       direction : input;
@@ -66,19 +79,13 @@ library (cells) {
     pin (R) {
       direction : input;
     }
-    statetable ("S R", "Q") {
-      table : "H - : - : H , L H : - : L , L L : - : N";
-    }
     pin (Q) {
       direction : output;
-      function : "Q";
-    }
-    statetable ("R S", "Qn") {
-      table : "H - : - : H , L H : - : L , L L : - : N";
+      function : "!R*!Qn";
     }
     pin (Qn) {
       direction : output;
-      function : "Qn";
+      function : "!S*!Q";
     }
   }
   /* arbitration: A*B metastable; grants Qa, Qb mutually exclusive (both-high forbidden) */
