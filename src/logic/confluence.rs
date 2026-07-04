@@ -176,14 +176,12 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
         })
         .collect();
 
-    let full_header = &m.full_header;
-    let input_header = &m.input_header;
     let ex = &m.explored;
 
     let settle_toggle =
         |node: &Minterm<Symbol>, names: &[&str]| -> Result<Minterm<Symbol>, Vec<Minterm<Symbol>>> {
-            let toggled = machine::toggle(full_header, node, names);
-            machine::settle_or_cycle(deltas, full_header, &toggled)
+            let toggled = machine::toggle(node, names);
+            machine::settle_or_cycle(deltas, &toggled)
         };
 
     // Dedup by canonical key, keeping the shortest prevector; BTreeMap gives deterministic output order.
@@ -196,8 +194,8 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
                                   names: &[&str],
                                   group: Vec<String>,
                                   stable: Vec<Minterm<Symbol>>| {
-        let toggled = machine::toggle(full_header, node, names);
-        let condition = toggled.project_onto(input_header);
+        let toggled = machine::toggle(node, names);
+        let condition = toggled.project_to(inputs);
         let key = format!(
             "{}|{}",
             group.join(","),
@@ -212,7 +210,7 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
 
     for s in &ex.order {
         // `path_to` depends only on `s`: compute the prevector into `s` once and clone it per constraint.
-        let prevector_s = ex.path_to(s, input_header);
+        let prevector_s = ex.path_to(s, inputs);
 
         // Each input's single-toggle settle, computed once per state (O(n) instead of O(n²)): reused as
         // `r_x`/`r_y` across every pair and as the base of the `s_xy`/`s_yx` compositions below.
@@ -257,13 +255,12 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
                 let r_sim = settle_toggle(s, &[x.as_str(), y.as_str()]);
                 if let Err(cycle) = &r_sim {
                     let group = oscillating_group(cycle, state_vars);
-                    let group_header = machine::header(&group);
                     let mut stable_set: BTreeSet<Minterm<Symbol>> = BTreeSet::new();
                     if let Some(sxy) = &s_xy {
-                        stable_set.insert(sxy.project_onto(&group_header));
+                        stable_set.insert(sxy.project_to(&group));
                     }
                     if let Some(syx) = &s_yx {
-                        stable_set.insert(syx.project_onto(&group_header));
+                        stable_set.insert(syx.project_to(&group));
                     }
                     record_arbitration(
                         s,
