@@ -10,11 +10,15 @@
 //! The rewrite is two staged, structural discriminators run to a fixpoint over the signals in
 //! `signals()` order (outputs first, then internals as parsed):
 //!
-//! * **M1 — alias/complement collapse.** A signal whose function is *exactly* another signal or its
-//!   negation carries no memory of its own; it is the same coordinate as that signal. A chain of such
-//!   wires is walked (tracking the accumulated complement parity) to its **definer root**, and the whole
-//!   class collapses onto one representative — preferring an external output so a pin is never lost. All
-//!   references are renamed onto the representative via [`Bdd::compose_map`].
+//! * **M1 — alias/complement collapse.** A signal whose function is *exactly* another signal (a map key)
+//!   or its negation carries no memory of its own; it is the same coordinate as that signal. A chain of
+//!   such wires is walked (tracking the accumulated complement parity) to its **definer root** — the
+//!   first non-wire signal reached, which may itself be a wire-of-input (its own function targets a
+//!   primary input, not a signal) — and the whole class, root included, collapses onto one
+//!   representative — preferring an external output so a pin is never lost. All references are renamed
+//!   onto the representative via [`Bdd::compose_map`]. This is M1's job even when the class's root is not
+//!   itself a wire (e.g. `W="A"`, `Y="W"`: `Y` is the M1 wire, `W` is only its non-wire root, and both are
+//!   retired by this pass — M2 never sees either).
 //! * **M2 — guarded relay elimination.** A signal `s` that does not appear in its own support is a
 //!   combinational relay: at every stable state `s = δ_s(state)` with `s ∉ support(δ_s)`, so it can be
 //!   composed into each of its consumers via [`Bdd::compose`] and dropped — *unless* the fold would merge
@@ -499,8 +503,10 @@ mod tests {
 
     #[test]
     fn wire_of_input_folds_through() {
-        // W="A" is a wire-of-input (not an M1 wire); Y="W" is an alias of W. The class {Y,W} collapses
-        // onto the output Y, purging W, and Y resolves to A.
+        // W="A" is a wire-of-input: its own function targets a primary input, not a signal, so W is not
+        // itself an M1 wire. But Y="W" *is* an M1 wire (its target W is a map key), so the whole {Y, W}
+        // class — root W included — is collapsed and purged by m1_pass, not m2_pass: it resolves onto
+        // the output Y, purging W, and Y resolves to A.
         let (b, mut bdds, order, outputs) = system! {
             outputs: ["Y"],
             "W" = "A",
