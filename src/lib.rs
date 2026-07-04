@@ -49,7 +49,7 @@ mod smoke {
         // Universal projection onto the inputs as a two-sided FR cover: the on-set is a=b=1
         // (q⁺ forced high regardless of the held q), the off-set is a=b=0, and a≠b lands in
         // NEITHER side — the C-element hold gap is the absence of a cube, not a `D` cube.
-        let fr = f.cover_over_fr(&["a", "b"]).maximize();
+        let fr = f.cover_over_fr(["a", "b"]).maximize();
         let side = |t: CubeType| -> Vec<(Option<bool>, Option<bool>)> {
             fr.cubes()
                 .filter(|c| c.cube_type() == t)
