@@ -257,7 +257,7 @@ impl Cell {
         // don't rebuild the BDDs per call site.
         analysed.regions = analysed
             .signals()
-            .map(|s| crate::logic::regions::state_regions(s, &analysed.inputs))
+            .map(crate::logic::regions::state_regions)
             .collect();
         Ok(analysed)
     }

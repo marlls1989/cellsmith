@@ -51,8 +51,8 @@ library (cells) {
     pin (R) {
       direction : input;
     }
-    statetable ("M1 M2 P1 P2 C R", "Q") {
-      table : "- - - - - H : - : L , - - - L H L : - : N , - - H H H L : - : H , - - L - H L : - : N , - H - - L L : - : N , H - - - L L : - : N , L L - - L - : - : L";
+    statetable ("P1 P2 C R M1 M2", "Q") {
+      table : "- - - H - - : - : L , - - L - L L : - : L , - - L L - H : - : N , - - L L H - : - : N , - L H L - - : - : N , H H H L - - : - : H , L - H L - - : - : N";
     }
     pin (Q) {
       direction : output;
@@ -73,8 +73,8 @@ library (cells) {
       direction : output;
       function : "Q";
     }
-    statetable ("S R", "Qn") {
-      table : "- H : - : H , H L : - : L , L L : - : N";
+    statetable ("R S", "Qn") {
+      table : "H - : - : H , L H : - : L , L L : - : N";
     }
     pin (Qn) {
       direction : output;
@@ -91,11 +91,11 @@ library (cells) {
     }
     pin (Qa) {
       direction : output;
-      function : "A*!Qb";
+      function : "!Qb*A";
     }
     pin (Qb) {
       direction : output;
-      function : "B*!Qa";
+      function : "!Qa*B";
     }
   }
   cell (DFF) {
@@ -105,8 +105,8 @@ library (cells) {
     pin (D) {
       direction : input;
     }
-    statetable ("CLK D M", "Q") {
-      table : "H - H : - : H , H - L : - : L , L - - : - : N";
+    statetable ("CLK M", "Q") {
+      table : "H H : - : H , H L : - : L , L - : - : N";
     }
     pin (Q) {
       direction : output;
@@ -138,17 +138,17 @@ library (cells) {
     }
     pin (GCLK) {
       direction : output;
-      function : "CLKB*enB + CLKA*enA";
+      function : "enB*CLKB + enA*CLKA";
     }
-    statetable ("CLKA CLKB RA RB S sela2", "enA") {
-      table : "- - H - - - : - : L , H - L - - - : - : N , L - - - - L : - : L , L - L - - H : - : H";
+    statetable ("RA CLKA sela2", "enA") {
+      table : "- L L : - : L , H - - : - : L , L H - : - : N , L L H : - : H";
     }
     pin (enA) {
       direction : internal;
       function : "enA";
     }
-    statetable ("CLKA CLKB RA RB S selb2", "enB") {
-      table : "- - - H - - : - : L , - H - L - - : - : N , - L - - - L : - : L , - L - L - H : - : H";
+    statetable ("RB CLKB selb2", "enB") {
+      table : "- L L : - : L , H - - : - : L , L H - : - : N , L L H : - : H";
     }
     pin (enB) {
       direction : internal;
@@ -156,17 +156,17 @@ library (cells) {
     }
     pin (sela) {
       direction : internal;
-      function : "!S*!enB";
+      function : "!enB*!S";
     }
-    statetable ("CLKA CLKB RA RB S sela", "sela1") {
-      table : "- - H - - - : - : L , H - L - - - : - : N , L - - - - L : - : L , L - L - - H : - : H";
+    statetable ("RA CLKA sela", "sela1") {
+      table : "- L L : - : L , H - - : - : L , L H - : - : N , L L H : - : H";
     }
     pin (sela1) {
       direction : internal;
       function : "sela1";
     }
-    statetable ("CLKA CLKB RA RB S sela1", "sela2") {
-      table : "- - H - - - : - : L , H - - - - L : - : L , H - L - - H : - : H , L - L - - - : - : N";
+    statetable ("RA CLKA sela1", "sela2") {
+      table : "- H L : - : L , H - - : - : L , L H H : - : H , L L - : - : N";
     }
     pin (sela2) {
       direction : internal;
@@ -174,17 +174,17 @@ library (cells) {
     }
     pin (selb) {
       direction : internal;
-      function : "S*!enA";
+      function : "!enA*S";
     }
-    statetable ("CLKA CLKB RA RB S selb", "selb1") {
-      table : "- - - H - - : - : L , - H - L - - : - : N , - L - - - L : - : L , - L - L - H : - : H";
+    statetable ("RB CLKB selb", "selb1") {
+      table : "- L L : - : L , H - - : - : L , L H - : - : N , L L H : - : H";
     }
     pin (selb1) {
       direction : internal;
       function : "selb1";
     }
-    statetable ("CLKA CLKB RA RB S selb1", "selb2") {
-      table : "- - - H - - : - : L , - H - - - L : - : L , - H - L - H : - : H , - L - L - - : - : N";
+    statetable ("RB CLKB selb1", "selb2") {
+      table : "- H L : - : L , H - - : - : L , L H H : - : H , L L - : - : N";
     }
     pin (selb2) {
       direction : internal;

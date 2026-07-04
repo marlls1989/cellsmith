@@ -44,18 +44,18 @@ endspecify
 RCELEM2_Q u_RCELEM2_Q (Q, A, B, R);
 endmodule
 `endcelldefine
-primitive RACELEM21_Q(Q, M1, M2, P1, P2, C, R);
+primitive RACELEM21_Q(Q, P1, P2, C, R, M1, M2);
 output Q;
-input  M1, M2, P1, P2, C, R;
+input  P1, P2, C, R, M1, M2;
 reg    Q;
 table
-	0 0 ? ? 0 ? : ? : 0;
-	1 ? ? ? 0 0 : ? : -;
-	? 1 ? ? 0 0 : ? : -;
-	? ? 0 ? 1 0 : ? : -;
-	? ? 1 1 1 0 : ? : 1;
-	? ? ? 0 1 0 : ? : -;
-	? ? ? ? ? 1 : ? : 0;
+	0 ? 1 0 ? ? : ? : -;
+	1 1 1 0 ? ? : ? : 1;
+	? 0 1 0 ? ? : ? : -;
+	? ? 0 0 1 ? : ? : -;
+	? ? 0 0 ? 1 : ? : -;
+	? ? 0 ? 0 0 : ? : 0;
+	? ? ? 1 ? ? : ? : 0;
 endtable
 endprimitive
 `celldefine
@@ -70,7 +70,7 @@ specify
 	(C => Q) = (0.1, 0.1);
 	(R => Q) = (0.1, 0.1);
 endspecify
-RACELEM21_Q u_RACELEM21_Q (Q, M1, M2, P1, P2, C, R);
+RACELEM21_Q u_RACELEM21_Q (Q, P1, P2, C, R, M1, M2);
 endmodule
 `endcelldefine
 primitive SR_Q(Q, S, R);
@@ -83,14 +83,14 @@ table
 	1 ? : ? : 1;
 endtable
 endprimitive
-primitive SR_Qn(Qn, S, R);
+primitive SR_Qn(Qn, R, S);
 output Qn;
-input  S, R;
+input  R, S;
 reg    Qn;
 table
 	0 0 : ? : -;
-	1 0 : ? : 0;
-	? 1 : ? : 1;
+	0 1 : ? : 0;
+	1 ? : ? : 1;
 endtable
 endprimitive
 `celldefine
@@ -104,27 +104,27 @@ specify
 	(R => Qn) = (0.1, 0.1);
 endspecify
 SR_Q u_SR_Q (Q, S, R);
-SR_Qn u_SR_Qn (Qn, S, R);
+SR_Qn u_SR_Qn (Qn, R, S);
 endmodule
 `endcelldefine
-primitive MUT_Qa(Qa, A, B, Qb);
+primitive MUT_Qa(Qa, Qb, A);
 output Qa;
-input  A, B, Qb;
+input  Qb, A;
 reg    Qa;
 table
-	0 ? ? : ? : 0;
-	1 ? 0 : ? : 1;
-	? ? 1 : ? : 0;
+	0 1 : ? : 1;
+	1 ? : ? : 0;
+	? 0 : ? : 0;
 endtable
 endprimitive
-primitive MUT_Qb(Qb, A, B, Qa);
+primitive MUT_Qb(Qb, Qa, B);
 output Qb;
-input  A, B, Qa;
+input  Qa, B;
 reg    Qb;
 table
-	? 0 ? : ? : 0;
-	? 1 0 : ? : 1;
-	? ? 1 : ? : 0;
+	0 1 : ? : 1;
+	1 ? : ? : 0;
+	? 0 : ? : 0;
 endtable
 endprimitive
 `celldefine
@@ -137,18 +137,18 @@ specify
 	(B => Qa) = (0.1, 0.1);
 	(B => Qb) = (0.1, 0.1);
 endspecify
-MUT_Qa u_MUT_Qa (Qa, A, B, Qb);
-MUT_Qb u_MUT_Qb (Qb, A, B, Qa);
+MUT_Qa u_MUT_Qa (Qa, Qb, A);
+MUT_Qb u_MUT_Qb (Qb, Qa, B);
 endmodule
 `endcelldefine
-primitive DFF_Q(Q, CLK, D, M);
+primitive DFF_Q(Q, CLK, M);
 output Q;
-input  CLK, D, M;
+input  CLK, M;
 reg    Q;
 table
-	0 ? ? : ? : -;
-	1 ? 0 : ? : 0;
-	1 ? 1 : ? : 1;
+	0 ? : ? : -;
+	1 0 : ? : 0;
+	1 1 : ? : 1;
 endtable
 endprimitive
 primitive DFF_M(M, CLK, D);
@@ -170,107 +170,107 @@ specify
 	(CLK => Q) = (0.1, 0.1);
 	(D => Q) = (0.1, 0.1);
 endspecify
-DFF_Q u_DFF_Q (Q, CLK, D, M);
+DFF_Q u_DFF_Q (Q, CLK, M);
 DFF_M u_DFF_M (M, CLK, D);
 endmodule
 `endcelldefine
-primitive ICM_GCLK(GCLK, CLKA, CLKB, RA, RB, S, enA, enB);
+primitive ICM_GCLK(GCLK, enA, CLKA, enB, CLKB);
 output GCLK;
-input  CLKA, CLKB, RA, RB, S, enA, enB;
+input  enA, CLKA, enB, CLKB;
 reg    GCLK;
 table
-	0 0 ? ? ? ? ? : ? : 0;
-	0 ? ? ? ? ? 0 : ? : 0;
-	1 ? ? ? ? 1 ? : ? : 1;
-	? 0 ? ? ? 0 ? : ? : 0;
-	? 1 ? ? ? ? 1 : ? : 1;
-	? ? ? ? ? 0 0 : ? : 0;
+	0 ? 0 ? : ? : 0;
+	0 ? ? 0 : ? : 0;
+	1 1 ? ? : ? : 1;
+	? 0 0 ? : ? : 0;
+	? 0 ? 0 : ? : 0;
+	? ? 1 1 : ? : 1;
 endtable
 endprimitive
-primitive ICM_enA(enA, CLKA, CLKB, RA, RB, S, sela2);
+primitive ICM_enA(enA, RA, CLKA, sela2);
 output enA;
-input  CLKA, CLKB, RA, RB, S, sela2;
+input  RA, CLKA, sela2;
 reg    enA;
 table
-	0 ? 0 ? ? 1 : ? : 1;
-	0 ? ? ? ? 0 : ? : 0;
-	1 ? 0 ? ? ? : ? : -;
-	? ? 1 ? ? ? : ? : 0;
+	0 0 1 : ? : 1;
+	0 1 ? : ? : -;
+	1 ? ? : ? : 0;
+	? 0 0 : ? : 0;
 endtable
 endprimitive
-primitive ICM_enB(enB, CLKA, CLKB, RA, RB, S, selb2);
+primitive ICM_enB(enB, RB, CLKB, selb2);
 output enB;
-input  CLKA, CLKB, RA, RB, S, selb2;
+input  RB, CLKB, selb2;
 reg    enB;
 table
-	? 0 ? 0 ? 1 : ? : 1;
-	? 0 ? ? ? 0 : ? : 0;
-	? 1 ? 0 ? ? : ? : -;
-	? ? ? 1 ? ? : ? : 0;
+	0 0 1 : ? : 1;
+	0 1 ? : ? : -;
+	1 ? ? : ? : 0;
+	? 0 0 : ? : 0;
 endtable
 endprimitive
-primitive ICM_sela(sela, CLKA, CLKB, RA, RB, S, enB);
+primitive ICM_sela(sela, enB, S);
 output sela;
-input  CLKA, CLKB, RA, RB, S, enB;
+input  enB, S;
 reg    sela;
 table
-	? ? ? ? 0 0 : ? : 1;
-	? ? ? ? 1 ? : ? : 0;
-	? ? ? ? ? 1 : ? : 0;
+	0 0 : ? : 1;
+	1 ? : ? : 0;
+	? 1 : ? : 0;
 endtable
 endprimitive
-primitive ICM_sela1(sela1, CLKA, CLKB, RA, RB, S, sela);
+primitive ICM_sela1(sela1, RA, CLKA, sela);
 output sela1;
-input  CLKA, CLKB, RA, RB, S, sela;
+input  RA, CLKA, sela;
 reg    sela1;
 table
-	0 ? 0 ? ? 1 : ? : 1;
-	0 ? ? ? ? 0 : ? : 0;
-	1 ? 0 ? ? ? : ? : -;
-	? ? 1 ? ? ? : ? : 0;
+	0 0 1 : ? : 1;
+	0 1 ? : ? : -;
+	1 ? ? : ? : 0;
+	? 0 0 : ? : 0;
 endtable
 endprimitive
-primitive ICM_sela2(sela2, CLKA, CLKB, RA, RB, S, sela1);
+primitive ICM_sela2(sela2, RA, CLKA, sela1);
 output sela2;
-input  CLKA, CLKB, RA, RB, S, sela1;
+input  RA, CLKA, sela1;
 reg    sela2;
 table
-	0 ? 0 ? ? ? : ? : -;
-	1 ? 0 ? ? 1 : ? : 1;
-	1 ? ? ? ? 0 : ? : 0;
-	? ? 1 ? ? ? : ? : 0;
+	0 0 ? : ? : -;
+	0 1 1 : ? : 1;
+	1 ? ? : ? : 0;
+	? 1 0 : ? : 0;
 endtable
 endprimitive
-primitive ICM_selb(selb, CLKA, CLKB, RA, RB, S, enA);
+primitive ICM_selb(selb, enA, S);
 output selb;
-input  CLKA, CLKB, RA, RB, S, enA;
+input  enA, S;
 reg    selb;
 table
-	? ? ? ? 0 ? : ? : 0;
-	? ? ? ? 1 0 : ? : 1;
-	? ? ? ? ? 1 : ? : 0;
+	0 1 : ? : 1;
+	1 ? : ? : 0;
+	? 0 : ? : 0;
 endtable
 endprimitive
-primitive ICM_selb1(selb1, CLKA, CLKB, RA, RB, S, selb);
+primitive ICM_selb1(selb1, RB, CLKB, selb);
 output selb1;
-input  CLKA, CLKB, RA, RB, S, selb;
+input  RB, CLKB, selb;
 reg    selb1;
 table
-	? 0 ? 0 ? 1 : ? : 1;
-	? 0 ? ? ? 0 : ? : 0;
-	? 1 ? 0 ? ? : ? : -;
-	? ? ? 1 ? ? : ? : 0;
+	0 0 1 : ? : 1;
+	0 1 ? : ? : -;
+	1 ? ? : ? : 0;
+	? 0 0 : ? : 0;
 endtable
 endprimitive
-primitive ICM_selb2(selb2, CLKA, CLKB, RA, RB, S, selb1);
+primitive ICM_selb2(selb2, RB, CLKB, selb1);
 output selb2;
-input  CLKA, CLKB, RA, RB, S, selb1;
+input  RB, CLKB, selb1;
 reg    selb2;
 table
-	? 0 ? 0 ? ? : ? : -;
-	? 1 ? 0 ? 1 : ? : 1;
-	? 1 ? ? ? 0 : ? : 0;
-	? ? ? 1 ? ? : ? : 0;
+	0 0 ? : ? : -;
+	0 1 1 : ? : 1;
+	1 ? ? : ? : 0;
+	? 1 0 : ? : 0;
 endtable
 endprimitive
 `celldefine
@@ -285,14 +285,14 @@ specify
 	(RB => GCLK) = (0.1, 0.1);
 	(S => GCLK) = (0.1, 0.1);
 endspecify
-ICM_GCLK u_ICM_GCLK (GCLK, CLKA, CLKB, RA, RB, S, enA, enB);
-ICM_enA u_ICM_enA (enA, CLKA, CLKB, RA, RB, S, sela2);
-ICM_enB u_ICM_enB (enB, CLKA, CLKB, RA, RB, S, selb2);
-ICM_sela u_ICM_sela (sela, CLKA, CLKB, RA, RB, S, enB);
-ICM_sela1 u_ICM_sela1 (sela1, CLKA, CLKB, RA, RB, S, sela);
-ICM_sela2 u_ICM_sela2 (sela2, CLKA, CLKB, RA, RB, S, sela1);
-ICM_selb u_ICM_selb (selb, CLKA, CLKB, RA, RB, S, enA);
-ICM_selb1 u_ICM_selb1 (selb1, CLKA, CLKB, RA, RB, S, selb);
-ICM_selb2 u_ICM_selb2 (selb2, CLKA, CLKB, RA, RB, S, selb1);
+ICM_GCLK u_ICM_GCLK (GCLK, enA, CLKA, enB, CLKB);
+ICM_enA u_ICM_enA (enA, RA, CLKA, sela2);
+ICM_enB u_ICM_enB (enB, RB, CLKB, selb2);
+ICM_sela u_ICM_sela (sela, enB, S);
+ICM_sela1 u_ICM_sela1 (sela1, RA, CLKA, sela);
+ICM_sela2 u_ICM_sela2 (sela2, RA, CLKA, sela1);
+ICM_selb u_ICM_selb (selb, enA, S);
+ICM_selb1 u_ICM_selb1 (selb1, RB, CLKB, selb);
+ICM_selb2 u_ICM_selb2 (selb2, RB, CLKB, selb1);
 endmodule
 `endcelldefine

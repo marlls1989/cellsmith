@@ -42,8 +42,8 @@ fn primitive(name: &str, pin: &str, sr: &StateRegions) -> String {
         return constant_module(name, pin, false);
     }
 
-    let ports = std::iter::once(pin.to_string())
-        .chain(sr.cols.iter().cloned())
+    let ports = std::iter::once(pin)
+        .chain(sr.cols.iter().map(|s| s.as_str()))
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -136,8 +136,8 @@ fn wrapper_module(cell: &AnalysedCell) -> String {
         let args = if sr.hold.is_empty() && (sr.on.is_empty() || sr.off.is_empty()) {
             sig.name.clone()
         } else {
-            std::iter::once(sig.name.clone())
-                .chain(sr.cols.iter().cloned())
+            std::iter::once(sig.name.as_str())
+                .chain(sr.cols.iter().map(|s| s.as_str()))
                 .collect::<Vec<_>>()
                 .join(", ")
         };
@@ -215,14 +215,15 @@ Q = "CLK*M + !CLK*Q"
         );
         let v = cell_verilog(&cell);
         eprintln!("{v}");
-        // A UDP for the internal master and for the slave; the slave takes M as an input column.
+        // A UDP for the internal master and for the slave; the slave takes M as an input column. Q's
+        // function (CLK*M + !CLK*Q) does not depend on D, so D is not one of DFF_Q's columns.
         assert!(v.contains("primitive DFF_M(M, CLK, D);"));
-        assert!(v.contains("primitive DFF_Q(Q, CLK, D, M);"));
+        assert!(v.contains("primitive DFF_Q(Q, CLK, M);"));
         // Module ports are the external face only; M is an internal wire, both UDPs instantiated.
         assert!(v.contains("module DFF(Q, CLK, D);"));
         assert!(v.contains("wire   M;"));
         assert!(v.contains("DFF_M u_DFF_M (M, CLK, D);"));
-        assert!(v.contains("DFF_Q u_DFF_Q (Q, CLK, D, M);"));
+        assert!(v.contains("DFF_Q u_DFF_Q (Q, CLK, M);"));
         // M is never declared as a module output.
         assert!(!v.contains("output Q, M"));
         assert!(!v.contains("module DFF(Q, M,"));

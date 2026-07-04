@@ -171,7 +171,7 @@ fn function_sop(sr: &StateRegions) -> String {
                 .iter()
                 .zip(cube.iter())
                 .filter_map(|(col, val)| match val {
-                    Some(true) => Some(col.clone()),
+                    Some(true) => Some(col.to_string()),
                     Some(false) => Some(format!("!{col}")),
                     None => None,
                 })
@@ -236,8 +236,9 @@ Q = "CLK*M + !CLK*Q"
         );
         let frag = cell_liberty(&cell);
         eprintln!("{frag}");
-        // The slave Q's statetable carries the internal master M as an input node.
-        assert!(frag.contains("statetable (\"CLK D M\", \"Q\")"));
+        // The slave Q's statetable carries the internal master M as an input node — but not D, which
+        // Q's function (CLK*M + !CLK*Q) does not depend on.
+        assert!(frag.contains("statetable (\"CLK M\", \"Q\")"));
         // The master is an internal pin with its own statetable.
         assert!(frag.contains("statetable (\"CLK D\", \"M\")"));
         assert!(frag.contains("pin (M)"));
@@ -288,7 +289,7 @@ inputs = ["A", "B", "C"]
 Y = "A*B + !C"
 "#,
         );
-        let sr = state_regions(&cell.outputs[0], &cell.inputs);
+        let sr = state_regions(&cell.outputs[0]);
         let f = function_sop(&sr);
         // Must be a valid product-of-literals sum mentioning the pins.
         assert!(f.contains('+') || f.contains('*') || f.contains('!'));
