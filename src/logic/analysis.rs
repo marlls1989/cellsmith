@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
 use espresso_logic::bdd_builder;
 
-use crate::logic::arcs::{self, Arc};
+use crate::logic::arcs::{self, Arc, HiddenArc};
 use crate::logic::confluence::{self, Constraint};
 use crate::logic::interlock::Arbitration;
 use crate::logic::{machine, resolve};
@@ -29,6 +29,7 @@ use crate::model::AnalysedCell;
 #[derive(Debug, Default)]
 pub struct MachineAnalysis {
     pub arcs: Vec<Arc>,
+    pub hidden_arcs: Vec<HiddenArc>,
     pub constraints: Vec<Constraint>,
     pub arbitration: Vec<Arbitration>,
 }
@@ -140,10 +141,11 @@ pub fn analyse_machine(cell: &AnalysedCell) -> MachineAnalysis {
     let Some(m) = Machine::build(&builder, cell) else {
         return MachineAnalysis::default();
     };
-    let arcs = arcs::derive(&m);
+    let (arcs, hidden_arcs) = arcs::derive(&m);
     let hz = confluence::derive(&m);
     MachineAnalysis {
         arcs,
+        hidden_arcs,
         constraints: hz.constraints,
         arbitration: hz.arbitration,
     }

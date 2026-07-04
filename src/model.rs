@@ -12,7 +12,7 @@ use thiserror::Error;
 use espresso_logic::expression::ParseBoolExprError;
 
 use crate::expr;
-use crate::logic::arcs::Arc;
+use crate::logic::arcs::{Arc, HiddenArc};
 use crate::logic::confluence::Constraint;
 use crate::logic::interlock::Arbitration;
 
@@ -109,6 +109,10 @@ pub struct AnalysedCell {
     /// The transition arcs derived for the cell's outputs, precomputed once by the shared machine pass
     /// ([`crate::logic::analysis::analyse_machine`]) and consumed by the arcs emitter.
     pub arcs: Vec<Arc>,
+    /// The whole-cell internal-power ('hidden') arcs — single input toggles that settle but leave every
+    /// output unchanged — precomputed once by the shared machine pass
+    /// ([`crate::logic::analysis::analyse_machine`]) and consumed by the arcs emitter.
+    pub hidden_arcs: Vec<HiddenArc>,
     /// Detected arbitration/metastability conditions (empty for ordinary combinational or
     /// self-holding cells). See [`crate::logic::interlock`].
     pub arbitration: Vec<Arbitration>,
@@ -240,6 +244,7 @@ impl Cell {
             internals,
             async_pins: self.async_pins.clone(),
             arcs: Vec::new(),
+            hidden_arcs: Vec::new(),
             arbitration: Vec::new(),
             clock_pins: self.clock.clone(),
             constraints: Vec::new(),
@@ -251,6 +256,7 @@ impl Cell {
         // shared exploration. Clock suppression and emission gating are applied downstream.
         let analysis = crate::logic::analysis::analyse_machine(&analysed);
         analysed.arcs = analysis.arcs;
+        analysed.hidden_arcs = analysis.hidden_arcs;
         analysed.constraints = analysis.constraints;
         analysed.arbitration = analysis.arbitration;
         // Cache each signal's state-table regions once, in `signals()` order, so downstream emitters
