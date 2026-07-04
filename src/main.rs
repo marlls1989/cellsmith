@@ -41,6 +41,11 @@ struct Cli {
     #[arg(long)]
     no_internal: bool,
 
+    /// Suppress `define_leakage` blocks — static leakage states derived from the machine's settled seed
+    /// states (emitted by default).
+    #[arg(long)]
+    no_leakage: bool,
+
     /// Emit derived setup/hold & non_seq constraint arcs (off by default; a cell can opt in with
     /// `constraint_arcs = true`).
     #[arg(long)]
@@ -113,6 +118,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         emit_when: !cli.no_when,
         emit_constraints: cli.constraints,
         emit_internal: !cli.no_internal,
+        emit_leakage: !cli.no_leakage,
     };
     let base = cli.name.unwrap_or_else(|| base_name(&cli.spec));
     let arcs = render(&cells, |c| cell_arcs_tcl(c, arc_opts));

@@ -10,6 +10,8 @@ use crate::logic::arcs::{Arc, Edge, HiddenArc};
 use crate::logic::assignment;
 use crate::logic::confluence::{Constraint, ConstraintKind};
 use crate::logic::interlock::Arbitration;
+use crate::logic::leakage::LeakageState;
+use crate::logic::literal_product;
 use crate::model::AnalysedCell;
 
 /// Knobs for the arc emitter.
@@ -26,6 +28,9 @@ pub struct ArcsTclOptions {
     /// Emit hidden (whole-cell internal-power) arcs — an input toggles but no output changes — as
     /// `-type hidden` blocks. **On by default.**
     pub emit_internal: bool,
+    /// Emit `define_leakage` blocks — one per static leakage state (the settled seed states of the
+    /// machine exploration), conditioned on the cell's inputs and settled outputs. **On by default.**
+    pub emit_leakage: bool,
 }
 
 impl Default for ArcsTclOptions {
@@ -34,6 +39,7 @@ impl Default for ArcsTclOptions {
             emit_when: true,
             emit_constraints: false,
             emit_internal: true,
+            emit_leakage: true,
         }
     }
 }
@@ -63,6 +69,11 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
         };
         for h in &hidden {
             out.push_str(&format_hidden_arc(cell, h, opts));
+        }
+    }
+    if opts.emit_leakage {
+        for l in &cell.leakage {
+            out.push_str(&format_leakage(cell, l));
         }
     }
     if opts.emit_constraints || cell.constraint_arcs_declared {
@@ -412,6 +423,22 @@ fn hidden_when_str(h: &HiddenArc) -> Option<String> {
     Some(crate::logic::literal_product(&lits))
 }
 
+/// One-line `define_leakage` for a static leakage state: the stable condition over the cell's
+/// inputs and its settled (resolved) outputs. Mirrors hsNCL's genLeakage.
+fn format_leakage(cell: &AnalysedCell, l: &LeakageState) -> String {
+    let mut lits: Vec<(Symbol, bool)> = assignment(&l.inputs).into_iter().collect();
+    lits.extend(l.outputs.iter().cloned());
+    if lits.is_empty() {
+        return String::new();
+    }
+    lits.sort();
+    format!(
+        "define_leakage -when \"{}\" {}\n",
+        literal_product(&lits),
+        cell.name
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,6 +588,9 @@ Y = "A*B"
             &cell,
             ArcsTclOptions {
                 emit_when: false,
+                // define_leakage is inherently -when-conditioned; disabled here to isolate arc -when
+                // suppression.
+                emit_leakage: false,
                 ..Default::default()
             },
         );
@@ -587,6 +617,9 @@ Q = "A*B + Q*(A+B)"
             &cell,
             ArcsTclOptions {
                 emit_when: false,
+                // define_leakage is inherently -when-conditioned; disabled here to isolate arc -when
+                // suppression.
+                emit_leakage: false,
                 ..Default::default()
             },
         );
@@ -729,6 +762,80 @@ Qb = "!Qa * B"
         assert!(tcl.contains("-related_pin B"));
         assert!(tcl.contains("-prevector_pinlist {A B}"));
         assert!(tcl.contains("-pinlist {A B Qa Qb}"));
+    }
+
+    #[test]
+    fn c_element_emits_leakage_states() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "C2"
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+"#,
+        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        assert_eq!(tcl.matches("define_leakage").count(), 2);
+        assert!(tcl.contains("define_leakage -when \"A*B*Q\" C2"));
+        assert!(tcl.contains("define_leakage -when \"!A*!B*!Q\" C2"));
+    }
+
+    #[test]
+    fn and2_emits_leakage_states() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "AND2"
+inputs = ["A", "B"]
+[cell.outputs]
+Y = "A*B"
+"#,
+        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        assert_eq!(tcl.matches("define_leakage").count(), 4);
+        assert!(tcl.contains("-when \"A*B*Y\""));
+        assert!(tcl.contains("-when \"!A*!B*!Y\""));
+    }
+
+    #[test]
+    fn no_leakage_option_suppresses_leakage() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "C2"
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+"#,
+        );
+        let off = cell_arcs_tcl(
+            &cell,
+            ArcsTclOptions {
+                emit_leakage: false,
+                ..Default::default()
+            },
+        );
+        assert_eq!(off.matches("define_leakage").count(), 0);
+    }
+
+    #[test]
+    fn leakage_section_follows_hidden_arcs() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "AND2"
+inputs = ["A", "B"]
+[cell.outputs]
+Y = "A*B"
+"#,
+        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        let last_hidden = tcl.rfind("-type hidden").expect("hidden arc present");
+        let first_leakage = tcl.find("define_leakage").expect("leakage present");
+        assert!(first_leakage > last_hidden);
     }
 
     #[test]
