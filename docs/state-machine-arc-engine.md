@@ -210,7 +210,7 @@ Arc derivation does not run its own search. The reachable stable states are disc
 - **Prevector.** The arc's prevector is the BFS path from a start node to the source node, each node
   projected onto the inputs. It is reconstructed by `Explored::path_to` (`machine.rs:142-151`), which
   walks predecessors back to a start, reverses, and projects each step onto the input names via
-  `Minterm::project_to(input_names)` (`arcs.rs:111`). Since the path drives every state variable —
+  `Minterm::project_to(input_names)` (`machine.rs:150`). Since the path drives every state variable —
   internal ones included — into the measured start state, it establishes hidden state such as a flop's
   master before the clock edge.
 - **Dedup.** The same arc can be reached from several start candidates; `derive` keeps the one with the
@@ -235,18 +235,19 @@ when `inputs + state variables` exceeds it (`analysis.rs:86`).
 ## 6. Worked example: discovering `B↓ → Qa↑` on the mutex
 
 `MUT`: `Qa = !Qb·A`, `Qb = !Qa·B`. We trace the arc `-related_pin B -pin Qa` (rise), whose emitted block
-is `-prevector {00 01 11} -vector {1 F R X}`.
+is `-prevector {01 11} -vector {1 F R X}`.
 
-**Start.** Under `A=B=0`, both δ force `0`, so the only stable state is `S0 = (0 0 | 0 0)`.
-
-**Walk B in.** From `S0`, toggle `B`: `(0 1 | 0 0)` settles to `N_B = (0 1 | 0 1)` — *B holds the
-grant*. `prev[N_B] = S0`. (This step also emits the plain `B → Qb↑` arc.)
+**Start.** Start states are discovered from the signals' forced covers (§5), not from an all-zero reset.
+`δ_Qb = !Qa·B` is forced high by `B` alone, so `N_B = (0 1 | 0 1)` — *B holds the grant* — is one of the
+seeded start states, reached directly with `prev[N_B] = None`. (When the BFS later tries to enter it from
+another node the entry is already occupied, so it stays a start.) Seeding this state also emits the plain
+`B → Qb↑` arc.
 
 **Walk A in.** From `N_B`, toggle `A`: `(1 1 | 0 1)` is already stable, giving
 `N_AB2 = (1 1 | 0 1)` — *both requested, B still owns it*. No output flipped, so no arc, but it is a
 reachable state. `prev[N_AB2] = N_B`.
 
-The path `S0 → N_B → N_AB2` projected onto the inputs is the prevector **`00 01 11`**: it drives the
+The path `N_B → N_AB2` projected onto the inputs is the prevector **`01 11`**: it drives the
 machine into "B owns the grant, A contending" — the only precondition under which releasing B can hand
 the grant to A.
 
@@ -263,7 +264,7 @@ Settled `(1 0 | 1 0)`. The two micro-steps are the physical cascade: B drops →
 A=1, Qa rises.
 
 **Emit.** Across the toggle at `N_AB2 → (1 0 | 1 0)`, `Qa: 0 → 1` (rise). Arc: `related = B`, `pin = Qa`,
-edge Rise, `start = 11`, `end = 10`, `prevector = 00 01 11`, vector `{1 F R X}`. (The same step emits
+edge Rise, `start = 11`, `end = 10`, `prevector = 01 11`, vector `{1 F R X}`. (The same step emits
 `B → Qb↓`.)
 
 `B` does not appear in `Qa`'s own function. The `B↓ → Qa↑` dependence arises from *reaching* the state
@@ -271,4 +272,5 @@ where `B` holds the grant and *settling* through the transient `(Qa=0, Qb=0)`: t
 the parallel `settle` propagates `Qb↓ ⟹ Qa↑`. The dependence is an emergent property of the reachable
 state graph.
 
-The mirror arc `A↓ → Qb↑` is discovered symmetrically from `N_AB1 = (1 1 | 1 0)`.
+The mirror arc `A↓ → Qb↑` is discovered symmetrically: `N_A = (1 0 | 1 0)` is a seeded start, `A` walks in
+to `N_AB1 = (1 1 | 1 0)`, and dropping `A` there gives prevector `10 11`.

@@ -41,8 +41,8 @@ Timing arcs are derived by exploring that state machine:
 
 1. each state variable's next-state δ is built (folding away combinational signals but **keeping every
    state cycle** — a tight loop is legitimate held state, never substituted);
-2. a breadth-first search runs from the reset-stable states, stepping **one input at a time** and
-   letting the state settle;
+2. a breadth-first search runs from stable start states discovered from the signals' forced on/off
+   covers, stepping **one input at a time** and letting the state settle;
 3. wherever a single input toggle flips an **output**, an arc is emitted.
 
 Three properties follow from this construction:
@@ -126,21 +126,21 @@ signal of the cell.
 ## Usage
 
 ```
-cellsmith <SPEC> [OPTIONS]
+cellsmith [OPTIONS] <SPEC>
 
 Arguments:
   <SPEC>              TOML cell spec to read ("-" reads from stdin)
 
 Options:
-  -o, --outdir <DIR>  Directory for the generated files [default: .]
-  -n, --name <NAME>   Base name for the output files [default: spec file stem, or "cells" for stdin]
-      --no-when       Suppress the `-when` conditions on arcs (emitted by default); with them
-                      suppressed, arcs sharing a (related, pin, edge) collapse to one
-      --constraints   Emit derived setup/hold & non_seq constraint arcs (off by default; a cell can
-                      opt in with `constraint_arcs = true`)
-      --stdout        Write all three artifacts to stdout (with banners) instead of files
-  -h, --help          Print help
-  -V, --version       Print version
+  -o, --outdir <OUTDIR>  Directory for the generated files [default: .]
+  -n, --name <NAME>      Base name for the output files [default: spec file stem, or "cells" for stdin]
+      --no-when          Suppress the `-when` conditions on arcs (emitted by default); with them
+                         suppressed, arcs sharing a (related, pin, edge) collapse to one
+      --constraints      Emit derived setup/hold & non_seq constraint arcs (off by default; a cell can
+                         opt in with `constraint_arcs = true`)
+      --stdout           Write all three artifacts to stdout (with banners) instead of files
+  -h, --help             Print help
+  -V, --version          Print version
 ```
 
 Examples:

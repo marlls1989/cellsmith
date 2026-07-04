@@ -12,7 +12,7 @@ The code lives in one file:
 |------|------|
 | `src/logic/regions.rs` | `state_regions`: derive a signal's on/off/hold regions and column set (module doc `regions.rs:1-23`) |
 
-Downstream: `model.rs::analyse` calls `state_regions` once per signal and caches the result on
+Downstream: `Cell::analyse` calls `state_regions` once per signal and caches the result on
 `AnalysedCell::regions`, in `signals()` order — outputs then internals (`model.rs:123-125`,
 `model.rs:256-261`). The Verilog and Liberty emitters read that cache rather than rebuilding the BDDs
 (§7).
@@ -122,7 +122,7 @@ itself, so `Q` is projected out as the `reg` and `cols = [A, B]`. The regions ar
 - `off = !A*!B`       — one cube `[Some(false), Some(false)]`,
 - `hold = A xor B`    — two cubes,
 
-and `hysteretic` is true (`regions.rs:145-151`).
+and `hysteretic` is true (`regions.rs:144-151`).
 
 **Combinational ND2** — `Y = !(A*B)` (`regions.rs:314-329`). `Y` does not reference itself, so the
 onset and offset are complementary, the hold region is empty, and `hysteretic` is false. The onset is
