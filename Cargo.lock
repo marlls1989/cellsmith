@@ -274,9 +274,9 @@ dependencies = [
 
 [[package]]
 name = "espresso-logic"
-version = "5.2.0"
+version = "5.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "837dd858164dda8950cbef6932018adf69bb71ea5e3b35c985e7ef55c2533d4c"
+checksum = "5adf12d6ab1b422bf6162c8f0f3577eb2dbf56604bfdd1366e7e315803c17bca"
 dependencies = [
  "bindgen",
  "cc",
@@ -289,9 +289,9 @@ dependencies = [
 
 [[package]]
 name = "espresso-logic-macros"
-version = "5.2.0"
+version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f4d61ebe9053a825846d5bddbe9a0539b568459643a003ef6486187dc77ae42"
+checksum = "5a670090bad7452c65a9d051ea7584b345a19f47009a7c3c30f5a7b9c7d36767"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",

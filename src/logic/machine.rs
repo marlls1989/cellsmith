@@ -1,13 +1,14 @@
 //! The cell's asynchronous state machine, expressed natively over espresso-logic minterms.
 //!
-//! A cell is a state machine over `inputs × state-variables`. A **node** is a [`Minterm<Symbol>`] over
-//! the shared `[inputs…, state_vars…]` header in which every input carries a concrete value and each
-//! state variable is either **defined** (a concrete value) or **absent** — an unresolved state variable
-//! is simply not fixed in the minterm, never a placeholder value. Power-on is the inputs-only node: no
-//! state fixed. The next-state map settles the state fields (via each state variable's δ,
-//! [`super::resolve::delta`]) using [`Bdd::evaluate`], which reads a δ under the node's fixed fields and
-//! returns `Ok(v)` only when they force it — an absent state variable stays absent (it provably does not
-//! influence that δ yet). A node is *stable* when it is its own next-state.
+//! A cell is a state machine over `inputs × state-variables`. A **node** is a self-describing
+//! [`Minterm<Symbol>`] — it carries its own ordered columns ([`Minterm::vars`]), so there is no shared
+//! header object. Every input carries a concrete value and each state variable is either **defined** (a
+//! concrete `0`/`1`) or **absent** — encoded as the don't-care `-`, never a placeholder value. Power-on
+//! is the inputs-only node: no state fixed. The next-state map settles the state columns (via each state
+//! variable's δ, [`super::resolve::delta`]) using [`Bdd::evaluate`], which reads a δ under the node's
+//! fixed columns and returns `Ok(v)` only when they force it — an absent state variable stays absent
+//! (its δ provably does not depend on it yet, so `evaluate` returns `Err`). A node is *stable* when it
+//! is its own next-state.
 //!
 //! Start states are not assumed: [`explore`] discovers them from the forced on/off covers of the signal
 //! functions over the cell inputs ([`Bdd::cover_over_fr`]) — input vectors that force a signal
@@ -17,95 +18,79 @@
 //! arbitrary held combination.
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
-use std::sync::Arc;
 
 use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
-use espresso_logic::{Minterm, Symbol, Symbols};
+use espresso_logic::{Minterm, Symbol};
 
 /// A state variable paired with its next-state function δ (over inputs + state variables).
 pub type Delta<B, C> = (String, Bdd<B, C>);
 
-/// A shared symbol header from an ordered list of variable names.
-pub fn header(names: &[String]) -> Arc<Symbols<Symbol>> {
-    Symbols::new(names.iter().map(|n| Symbol::from(n.as_str())).collect())
-}
-
-/// Build a fully-fixed node over `header` from a `name -> value` lookup (called once per variable).
+/// Build a fully-fixed node over `names` from a `name -> value` lookup (called once per variable).
 #[cfg(test)]
-pub fn node_from<F: Fn(&str) -> bool>(header: &Arc<Symbols<Symbol>>, value: F) -> Minterm<Symbol> {
-    Minterm::from_symbols(
-        header.clone(),
-        header.labels().iter().map(|l| Some(value(l.as_str()))),
+pub fn node_from(names: &[&str], value: impl Fn(&str) -> bool) -> Minterm<Symbol> {
+    Minterm::with_labels(
+        &names
+            .iter()
+            .map(|n| (*n, Some(value(n))))
+            .collect::<Vec<_>>(),
     )
+    .expect("distinct labels")
 }
 
-/// Build a node over `header` from a `name -> Option<value>` lookup: `None` leaves that variable
-/// **absent** (unresolved), `Some(v)` fixes it. This is the general node constructor — inputs are
-/// always `Some`, state variables may be either.
-pub fn node_from_opt<F: Fn(&str) -> Option<bool>>(
-    header: &Arc<Symbols<Symbol>>,
-    value: F,
-) -> Minterm<Symbol> {
-    Minterm::from_symbols(
-        header.clone(),
-        header.labels().iter().map(|l| value(l.as_str())),
-    )
+/// Build a node over `names` from a `name -> Option<value>` lookup: `None` leaves that variable
+/// **absent** (unresolved, encoded `-`), `Some(v)` fixes it. Inputs are always `Some`, state variables
+/// may be either.
+#[cfg(test)]
+pub fn node_from_opt(names: &[&str], value: impl Fn(&str) -> Option<bool>) -> Minterm<Symbol> {
+    Minterm::with_labels(&names.iter().map(|n| (*n, value(n))).collect::<Vec<_>>())
+        .expect("distinct labels")
 }
 
-/// `node` with each name in `names` flipped in value (an absent field stays absent); everything else
-/// keeps its current field.
-pub fn toggle(
-    header: &Arc<Symbols<Symbol>>,
-    node: &Minterm<Symbol>,
-    names: &[&str],
-) -> Minterm<Symbol> {
-    node_from_opt(header, |nm| {
-        let cur = node.value_of(nm);
-        if names.contains(&nm) {
-            cur.map(|v| !v)
-        } else {
-            cur
+/// `node` with each name in `names` flipped in value; an absent field (`-`) stays absent, everything
+/// else keeps its current field. Clones the node and mutates the named columns in place.
+pub fn toggle(node: &Minterm<Symbol>, names: &[&str]) -> Minterm<Symbol> {
+    let mut next = node.clone();
+    for nm in names {
+        if let Some(v) = node.value_of(*nm) {
+            next.set_value_of(*nm, Some(!v)).expect("present label");
         }
-    })
+    }
+    next
 }
 
 /// One parallel next-state step: every state variable takes its δ evaluated at `node` — `Ok(v)` fixes
-/// it, `Err` (δ still depends on an absent variable) leaves it **absent**. Inputs (and anything else in
-/// the header) keep their current field.
+/// it, `Err` (δ still depends on an absent variable) leaves it **absent** (`-`). Inputs (and anything
+/// else in the node) keep their current field.
 fn step<B: Brand, C: ManagerCell>(
     deltas: &[Delta<B, C>],
-    header: &Arc<Symbols<Symbol>>,
     node: &Minterm<Symbol>,
 ) -> Minterm<Symbol> {
-    // The deltas are exactly the trailing state-variable columns of the header, in order (the header is
+    // The deltas are exactly the trailing state-variable columns of the node, in order (a node is
     // `[inputs…, state_vars…]`), so index them positionally rather than scanning by name on this hot path.
-    let labels = header.labels();
-    let split = labels.len() - deltas.len();
+    let vars = node.vars();
+    let split = vars.len() - deltas.len();
     debug_assert!(
-        labels[split..]
+        vars[split..]
             .iter()
             .zip(deltas)
             .all(|(l, (name, _))| l.as_str() == name.as_str()),
-        "step: deltas must be the trailing state-variable columns of the header, in order"
+        "step: deltas must be the trailing state-variable columns of the node, in order"
     );
-    Minterm::from_symbols(
-        header.clone(),
-        labels.iter().enumerate().map(|(i, l)| {
-            if i < split {
-                node.value_of(l.as_str())
-            } else {
-                deltas[i - split].1.evaluate(node).ok()
-            }
-        }),
-    )
+    // Each δ is evaluated against the pre-mutation `node` (a parallel next-state), and an absent
+    // dependency (`Err` → `None`) writes `-` = absent.
+    let mut next = node.clone();
+    for (j, (_, d)) in deltas.iter().enumerate() {
+        next.set_value_at(split + j, d.evaluate(node).ok())
+            .expect("state column in range");
+    }
+    next
 }
 
 /// Whether `node` is stable: one [`step`] leaves it unchanged (every defined state variable already
 /// equals its δ, and no absent one has become forced).
 #[cfg(test)]
 pub fn is_stable<B: Brand, C: ManagerCell>(deltas: &[Delta<B, C>], node: &Minterm<Symbol>) -> bool {
-    let header = node.symbols();
-    step(deltas, header, node) == *node
+    step(deltas, node) == *node
 }
 
 /// Settle the state under `node`'s fixed inputs: iterate [`step`] to a fixpoint. The fixpoint may still
@@ -113,17 +98,15 @@ pub fn is_stable<B: Brand, C: ManagerCell>(deltas: &[Delta<B, C>], node: &Minter
 /// if the state oscillates without settling (a metastable / arbitration condition).
 pub fn settle<B: Brand, C: ManagerCell>(
     deltas: &[Delta<B, C>],
-    header: &Arc<Symbols<Symbol>>,
     node: &Minterm<Symbol>,
 ) -> Option<Minterm<Symbol>> {
-    settle_or_cycle(deltas, header, node).ok()
+    settle_or_cycle(deltas, node).ok()
 }
 
 /// Like [`settle`], but on oscillation returns the periodic cycle itself — the sequence of states
 /// from the first repeated state back around — so callers can name the oscillating variables.
 pub fn settle_or_cycle<B: Brand, C: ManagerCell>(
     deltas: &[Delta<B, C>],
-    header: &Arc<Symbols<Symbol>>,
     node: &Minterm<Symbol>,
 ) -> Result<Minterm<Symbol>, Vec<Minterm<Symbol>>> {
     let mut trace: Vec<Minterm<Symbol>> = vec![node.clone()];
@@ -131,7 +114,7 @@ pub fn settle_or_cycle<B: Brand, C: ManagerCell>(
     pos.insert(node.clone(), 0);
     let mut cur = node.clone();
     loop {
-        let next = step(deltas, header, &cur);
+        let next = step(deltas, &cur);
         if next == cur {
             return Ok(cur); // fixpoint
         }
@@ -155,12 +138,8 @@ pub struct Explored {
 
 impl Explored {
     /// The input-projected BFS path into `node` (the prevector): walk predecessors back to a start,
-    /// reverse, and project each step onto `input_header`.
-    pub fn path_to(
-        &self,
-        node: &Minterm<Symbol>,
-        input_header: &Arc<Symbols<Symbol>>,
-    ) -> Vec<Minterm<Symbol>> {
+    /// reverse, and project each step onto `input_names`.
+    pub fn path_to(&self, node: &Minterm<Symbol>, input_names: &[String]) -> Vec<Minterm<Symbol>> {
         let mut chain = vec![node.clone()];
         let mut cur = node.clone();
         while let Some(Some(p)) = self.prev.get(&cur) {
@@ -168,7 +147,7 @@ impl Explored {
             cur = p.clone();
         }
         chain.reverse();
-        chain.iter().map(|m| m.project_onto(input_header)).collect()
+        chain.iter().map(|m| m.project_to(input_names)).collect()
     }
 }
 
@@ -185,18 +164,23 @@ impl Explored {
 /// [`Bdd::evaluate`]: `Some(true)` if they force `w=1`, `Some(false)` if `w=0`, else absent (the δ still
 /// depends on unresolved state). Candidates are ranked by
 /// how many state variables they settle, ties broken toward state nearest the inputs. Exploration then
-/// seeds the BFS from the ranked candidates in parallel, each start being the candidate's inputs plus
-/// its settled state, and refines further state with [`settle`] as inputs toggle.
+/// seeds the BFS from the ranked candidates in parallel: each candidate input is widened onto the full
+/// `[inputs…, state_vars…]` columns (the state columns come in absent) and settled with [`settle`],
+/// refining further state as inputs toggle.
 ///
 /// Shared by [`super::arcs`] and [`super::confluence`], which re-walk `order`.
 pub fn explore<B: Brand, C: ManagerCell>(
     state_deltas: &[Delta<B, C>],
     seed_funcs: &[Bdd<B, C>],
-    full_header: &Arc<Symbols<Symbol>>,
     input_names: &[String],
     state_names: &[String],
 ) -> Explored {
-    let input_header = header(input_names);
+    // The full node columns: inputs then state variables, in state-variable order (see analysis.rs).
+    let full_names: Vec<String> = input_names
+        .iter()
+        .cloned()
+        .chain(state_names.iter().cloned())
+        .collect();
     let k = state_names.len();
     let state_index: HashMap<&str, usize> = state_names
         .iter()
@@ -208,13 +192,13 @@ pub fn explore<B: Brand, C: ManagerCell>(
     // function onto the inputs by universal projection — each cube is an input assignment that forces
     // the function's value regardless of the (undefined) power-on state — yielding both the on-set (F)
     // and off-set (R) in one FR cover. `.maximize()` expands every don't-care, so each cube is a
-    // complete input assignment; `project_onto` aligns onto the shared input header for canonical
-    // membership tests.
+    // complete input assignment; `project_to` re-homes each cube's inputs onto the input columns for
+    // canonical membership tests.
     let cover_inputs = |f: &Bdd<B, C>| -> BTreeSet<Minterm<Symbol>> {
         f.cover_over_fr(input_names)
             .maximize()
             .cubes()
-            .map(|c| c.inputs().project_onto(&input_header))
+            .map(|c| c.inputs().project_to(input_names))
             .collect()
     };
 
@@ -257,7 +241,8 @@ pub fn explore<B: Brand, C: ManagerCell>(
 
     // Settlement map of a candidate input: per state variable, the value its δ takes when the fixed
     // inputs already determine it (evaluate → `Ok`), or absent when the δ still depends on unresolved
-    // state (`Err`). This is the membership test on(w)/off(w) done directly against each δ.
+    // state (`Err`). This is the membership test on(w)/off(w) done directly against each δ, and is used
+    // only to RANK the candidates below (the seed itself is extracted and widened, not rebuilt from it).
     let settlement = |x: &Minterm<Symbol>| -> Vec<Option<bool>> {
         state_deltas
             .iter()
@@ -286,16 +271,14 @@ pub fn explore<B: Brand, C: ManagerCell>(
             .then_with(|| a.0.cmp(&b.0))
     });
 
-    // Seed the BFS from the ranked candidates in parallel: each start is the candidate's inputs plus
-    // its settled state, then settled to a fixpoint. Metastable seeds (no fixpoint) are dropped.
+    // Seed the BFS from the ranked candidates in parallel: widen each candidate input onto the full
+    // columns (the state columns arrive absent) and settle to a fixpoint. Metastable seeds (no
+    // fixpoint) are dropped.
     let mut prev: HashMap<Minterm<Symbol>, Option<Minterm<Symbol>>> = HashMap::new();
     let mut queue: VecDeque<Minterm<Symbol>> = VecDeque::new();
-    for (x, map) in &ranked {
-        let seed = node_from_opt(full_header, |name| {
-            x.value_of(name)
-                .or_else(|| state_index.get(name).and_then(|i| map[*i]))
-        });
-        let Some(st) = settle(state_deltas, full_header, &seed) else {
+    for (x, _) in &ranked {
+        let seed = x.project_to(&full_names);
+        let Some(st) = settle(state_deltas, &seed) else {
             continue;
         };
         if let std::collections::hash_map::Entry::Vacant(e) = prev.entry(st.clone()) {
@@ -310,8 +293,8 @@ pub fn explore<B: Brand, C: ManagerCell>(
     while let Some(node) = queue.pop_front() {
         order.push(node.clone());
         for related in input_names {
-            let toggled = toggle(full_header, &node, &[related.as_str()]);
-            let Some(np) = settle(state_deltas, full_header, &toggled) else {
+            let toggled = toggle(&node, &[related.as_str()]);
+            let Some(np) = settle(state_deltas, &toggled) else {
                 continue;
             };
             if let std::collections::hash_map::Entry::Vacant(e) = prev.entry(np.clone()) {
@@ -331,21 +314,20 @@ mod tests {
 
     #[test]
     fn settles_a_c_element_hold() {
-        // Q = A*B + Q*(A+B). Over header [A, B, Q], hold state 01/10 keeps Q; 11 forces Q high.
+        // Q = A*B + Q*(A+B). Over columns [A, B, Q], hold state 01/10 keeps Q; 11 forces Q high.
         let builder = bdd_builder!();
         let dq = builder.parse("A*B + Q*(A+B)").unwrap();
         let deltas = vec![("Q".to_string(), dq)];
-        let hdr = header(&["A".into(), "B".into(), "Q".into()]);
 
         // A=1 B=0 Q=1 is a stable hold state.
-        let hold = node_from(&hdr, |n| matches!(n, "A" | "Q"));
+        let hold = node_from(&["A", "B", "Q"], |n| matches!(n, "A" | "Q"));
         assert!(is_stable(&deltas, &hold));
-        assert_eq!(settle(&deltas, &hdr, &hold).as_ref(), Some(&hold));
+        assert_eq!(settle(&deltas, &hold).as_ref(), Some(&hold));
 
         // A=1 B=1 Q=0 is not stable; it settles to Q=1.
-        let forcing = node_from(&hdr, |n| matches!(n, "A" | "B"));
+        let forcing = node_from(&["A", "B", "Q"], |n| matches!(n, "A" | "B"));
         assert!(!is_stable(&deltas, &forcing));
-        let settled = settle(&deltas, &hdr, &forcing).expect("settles");
+        let settled = settle(&deltas, &forcing).expect("settles");
         assert_eq!(settled.value_of("Q"), Some(true));
     }
 
@@ -355,13 +337,12 @@ mod tests {
         let builder = bdd_builder!();
         let dq = builder.parse("A*B + Q*(A+B)").unwrap();
         let deltas = vec![("Q".to_string(), dq)];
-        let hdr = header(&["A".into(), "B".into(), "Q".into()]);
-        let node = node_from_opt(&hdr, |n| match n {
+        let node = node_from_opt(&["A", "B", "Q"], |n| match n {
             "A" => Some(true),
             "B" => Some(false),
             _ => None,
         });
-        let settled = settle(&deltas, &hdr, &node).expect("settles");
+        let settled = settle(&deltas, &node).expect("settles");
         assert_eq!(settled.value_of("Q"), None);
     }
 
@@ -373,9 +354,8 @@ mod tests {
         let da = builder.parse("!Qb*A").unwrap();
         let db = builder.parse("!Qa*B").unwrap();
         let deltas = vec![("Qa".to_string(), da), ("Qb".to_string(), db)];
-        let hdr = header(&["A".into(), "B".into(), "Qa".into(), "Qb".into()]);
-        let both_low = node_from(&hdr, |n| matches!(n, "A" | "B"));
-        assert_eq!(settle(&deltas, &hdr, &both_low), None);
+        let both_low = node_from(&["A", "B", "Qa", "Qb"], |n| matches!(n, "A" | "B"));
+        assert_eq!(settle(&deltas, &both_low), None);
     }
 
     #[test]
@@ -387,10 +367,9 @@ mod tests {
         let da = builder.parse("!Qb*A").unwrap();
         let db = builder.parse("!Qa*B").unwrap();
         let deltas = vec![("Qa".to_string(), da), ("Qb".to_string(), db)];
-        let hdr = header(&["A".into(), "B".into(), "Qa".into(), "Qb".into()]);
-        let both_low = node_from(&hdr, |n| matches!(n, "A" | "B"));
+        let both_low = node_from(&["A", "B", "Qa", "Qb"], |n| matches!(n, "A" | "B"));
 
-        let cycle = settle_or_cycle(&deltas, &hdr, &both_low).expect_err("oscillates, no fixpoint");
+        let cycle = settle_or_cycle(&deltas, &both_low).expect_err("oscillates, no fixpoint");
         assert_eq!(cycle.len(), 2, "expected a length-2 cycle, got {cycle:?}");
 
         let qa_values: BTreeSet<_> = cycle.iter().map(|m| m.value_of("Qa")).collect();
