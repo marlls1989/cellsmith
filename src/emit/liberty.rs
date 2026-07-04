@@ -195,7 +195,6 @@ fn function_sop(sr: &StateRegions) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logic::regions::state_regions;
     use crate::model::analyse_one as analyse;
 
     #[test]
@@ -290,8 +289,8 @@ inputs = ["A", "B", "C"]
 Y = "A*B + !C"
 "#,
         );
-        let sr = state_regions(&cell.outputs[0]);
-        let f = function_sop(&sr);
+        let sr = &cell.regions[0];
+        let f = function_sop(sr);
         // Must be a valid product-of-literals sum mentioning the pins.
         assert!(f.contains('+') || f.contains('*') || f.contains('!'));
         assert!(f.contains('A') || f.contains('C'));
