@@ -33,12 +33,12 @@ pub struct MachineAnalysis {
     pub arbitration: Vec<Arbitration>,
 }
 
-/// The single home for the combinatorial blow-up guard: a cell whose machine header (inputs + state
-/// variables) exceeds this width is not explored at all — both arcs and hazards come back empty.
+/// The single home for the combinatorial blow-up guard: a cell whose machine width (inputs + state
+/// variables) exceeds this bound is not explored at all — both arcs and hazards come back empty.
 ///
 /// The bound is on `inputs + state variables`, and 22 is a deliberate memory/time ceiling: exploration
 /// materialises candidate pools by expanding the signals' input-projected FR covers (`cover_over_fr`)
-/// into full input minterms (via [`Cover::maximize`](espresso_logic::Cover::maximize)), so a header of
+/// into full input minterms (via [`Cover::maximize`](espresso_logic::Cover::maximize)), so a machine of
 /// width `w` can seed on the order of `2^w` minterms. At 22 that worst case is ~4M candidates — the
 /// largest pool we accept — and each extra variable *doubles* it, so raising the constant grows the pool
 /// (and the exploration cost) exponentially.
@@ -63,7 +63,7 @@ pub(crate) struct Machine<'c, B: Brand, C: ManagerCell> {
 
 impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
     /// Build the shared machine for `cell` using `builder`'s manager. Returns `None` — leaving the cell
-    /// unexplored — when the header would exceed [`MAX_MACHINE_VARS`] (the combinatorial blow-up guard).
+    /// unexplored — when the machine width would exceed [`MAX_MACHINE_VARS`] (the combinatorial blow-up guard).
     pub(crate) fn build(
         builder: &BddBuilder<B, C>,
         cell: &'c AnalysedCell,
@@ -162,7 +162,7 @@ mod tests {
         // inputs + state variables > MAX_MACHINE_VARS ⇒ the machine is left unexplored, so arcs,
         // constraints and arbitration all come back empty (the MachineAnalysis::default path) — yet the
         // emitters must still run without panicking.
-        let n = MAX_MACHINE_VARS + 1; // 23 primary inputs, 0 state variables ⇒ header width 23 > 22
+        let n = MAX_MACHINE_VARS + 1; // 23 primary inputs, 0 state variables ⇒ machine width 23 > 22
         let list = (0..n)
             .map(|i| format!("\"I{i}\""))
             .collect::<Vec<_>>()
