@@ -43,13 +43,6 @@ Before any construction detail, the whole pipeline in one view. For a cell, cell
 4. **explores** the reachable settled states, toggling one input at a time;
 5. **derives arcs** by re-walking that exploration and watching which input toggles flip an output.
 
-The load-bearing fact, stated up front so nothing below can suggest otherwise: **δ is built once per
-cell and thereafter only evaluated.** Steps 3–5 never rebuild it. Constructing δ (a BDD operation, §3) is
-a one-time setup; running the machine (§5) is a sequence of cheap *evaluations* of that fixed δ against
-concrete states. The two are easy to conflate because the constructor is named `resolve::delta` and its
-product is written δ — but δ_v is a value, computed once and stored in `Machine.deltas` (`analysis.rs:57`);
-`resolve::delta` is the function that computes it, called once per state variable (`analysis.rs:99-102`).
-
 ### 2.1 Definitions
 
 Every term the later sections lean on, pinned here before first use.
@@ -70,9 +63,8 @@ Every term the later sections lean on, pinned here before first use.
   a combinational signal may reference state variables and so depend on the current state — it simply is
   not itself a piece of held state (see `ICM.GCLK` in §3).
 - **State (of the machine)** — an assignment of a concrete `0`/`1` to every input and a concrete
-  `0`/`1`-or-**absent** to every state variable. It is represented directly as a `Minterm<Symbol>`, the
-  columns being `[inputs…, state-vars…]`; §4 details the encoding. "State" and "state minterm" refer to
-  this; the code parameter carrying one is named `node`.
+  `0`/`1`-or-**absent** to every state variable, represented as a `Minterm<Symbol>` over the columns
+  `[inputs…, state-vars…]` (§4).
 - **Transition function δ** — the machine's next-state map, given as one **component δ_v per state
   variable**: a fixed Boolean function of `inputs ∪ state-variables` yielding v's next value (§3). δ is
   the standard automata-theory transition function, not a difference/delta of states.
@@ -87,9 +79,6 @@ Every term the later sections lean on, pinned here before first use.
 
 ## 3. Constructing the transition function δ_v
 
-This section is *how the fixed δ from §2 is built* — a one-time setup, not something the running machine
-repeats.
-
 For each state variable `v`, the constructor `resolve::delta(v, …)` (`resolve.rs:148-159`) returns the
 BDD δ_v giving v's next value as a function of `inputs ∪ state-variables`. It starts from v's own function
 and **composes away only the combinational signals** it references (`Bdd::compose`, the substitution
@@ -97,16 +86,14 @@ and **composes away only the combinational signals** it references (`Bdd::compos
 coordinate rather than composed away. So a combinational signal on the path *disappears* into δ_v (its
 definition is inlined), while a state variable *remains* as a free variable of δ_v.
 
-Object vs. constructor, to head off the one confusion this naming invites: `resolve::delta` is the
-function; δ_v is its result. It is called **once per state variable** at machine-build time
-(`analysis.rs:99-102`), the results stored in `Machine.deltas`. Nothing afterward re-invokes it — §5
-only *evaluates* the stored δ_v.
+`resolve::delta` is the constructor; δ_v is the value it returns. It runs once per state variable at
+machine-build time (`analysis.rs:99-102`) and the results are stored in `Machine.deltas`; the settle and
+explore passes (§5–§6) only evaluate them.
 
 Three examples, each isolating one point.
 
 **A combinational signal is composed away.** Take a flop whose data is an internal AND cone (an
-illustrative cell — no repo fixture has this exact shape, because every stock helper is written as a
-self-holding latch and is therefore itself a state variable):
+illustrative cell):
 
 ```toml
 [[cell]]
@@ -151,20 +138,15 @@ its δ at a state (`arcs.rs:93`); a state output instead reads its own state coo
 
 ## 4. The machine's state as a minterm
 
-A machine state is a self-describing `Minterm<Symbol>`: it carries its own ordered columns
-(`Minterm::vars`), so **there is no shared header object** (`machine.rs:3-6`). Every input carries a
-concrete `0`/`1`, and each state variable is either **defined** (a concrete `0`/`1`) or **absent** —
-encoded as the don't-care `-`, never a placeholder value. The power-on state is the inputs-only state,
-with every state variable absent: no state fixed (`machine.rs:5-11`).
+A machine state assigns a concrete `0`/`1` to every input and, to every state variable, either a concrete
+`0`/`1` or **absent** — the don't-care `-`, an as-yet-undetermined coordinate. It is a `Minterm<Symbol>`
+over the columns `[inputs…, state-vars…]`. The power-on state fixes the inputs and leaves every state
+variable absent (`machine.rs:5-11`).
 
-Because a state is a plain `Minterm<Symbol>` (`Hash + Ord`), it can be used directly as a hash/tree key,
-and there is **no** integer bitmask and **no** precomputed next-state table. The transition *functions*
-δ_v are fixed (§3); what is computed lazily is the set of *transitions* — a state's successor is derived
-on demand by evaluating those fixed δ_v against it (§5), never by consulting a stored table.
+A state's successor is derived on demand by evaluating the fixed δ_v (§3) against it (§5).
 
 For the mutex a state is written here as `(A B | Qa Qb)`, e.g. `(1 1 | 0 1)`; an absent state variable is
-shown as `-`. (The test-only helpers `machine::node_from` / `node_from_opt`, `machine.rs:29-30,43-44`,
-build states in unit tests and are `#[cfg(test)]`, not a production API.)
+shown as `-`.
 
 ## 5. Settling a state, and how "stable" is decided
 
@@ -179,8 +161,7 @@ deterministic function `step : State → State`.**
 v' = δ_v.evaluate(node).ok()      // Some(true/false), or None
 ```
 
-and returns a new state with the inputs unchanged and each state field replaced by its `v'`. It only
-**evaluates** the fixed δ_v (§3) against the current state and clones a minterm — no BDD is built here.
+and returns a new state with the inputs unchanged and each state field replaced by its `v'`.
 
 Two properties make this well-defined:
 
@@ -288,7 +269,6 @@ Arc derivation does not run its own search. The reachable stable states are disc
 2. **BFS.** From each stable state, toggle **one input at a time** (`machine::toggle`), hold the state,
    and `settle`. A `None` (oscillation) transition is skipped. Newly reached settled states are enqueued,
    with the predecessor recorded in `Explored::prev` for path reconstruction (`machine.rs:292-305`).
-   States are keyed by their minterm.
 
 `explore` returns an `Explored { order, prev }`, shared by both `arcs::derive` and `confluence::derive`.
 
@@ -317,8 +297,8 @@ input-forced transitions cascade naturally through the multi-round settle.
 The whole setup happens once, in `analysis.rs`. `Machine::build` (`analysis.rs:67-132`) builds every
 signal's BDD, each state variable's δ, the combinational outputs' δ, and runs the **one**
 `machine::explore` BFS seeded from all of them. `analyse_machine` (`analysis.rs:138-150`) mints a
-per-cell BDD builder — a fresh brand for each cell, so handles from two cells cannot be mixed — and
-derives **both** `arcs::derive` and `confluence::derive` from the shared `Machine`.
+per-cell BDD builder and derives **both** `arcs::derive` and `confluence::derive` from the shared
+`Machine`.
 
 A combinatorial blow-up guard, `MAX_MACHINE_VARS = 22` (`analysis.rs:45`), gates the whole shared pass:
 `Machine::build` returns `None` — leaving the cell unexplored, so arcs *and* hazards come back empty —
