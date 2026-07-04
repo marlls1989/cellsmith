@@ -1,8 +1,8 @@
 //! Transition-arc derivation over the cell's **asynchronous state machine**.
 //!
 //! A cell is a state machine over `inputs × state-variables` (each output's own feedback and every
-//! internal state node; see [`resolve`]). A node is a fully-fixed [`Minterm<Symbol>`] over the shared
-//! `[inputs…, state_vars…]` header ([`machine`]). Arcs are derived by exploring it:
+//! internal state node; see [`resolve`]). A node is a fully-fixed [`Minterm<Symbol>`] over
+//! `inputs…, state_vars…` ([`machine`]). Arcs are derived by exploring it:
 //!
 //!   1. Build each state variable's next-state δ ([`resolve::delta`]); [`machine::settle`] applies them
 //!      via [`Bdd::evaluate`] until the state stops changing.
@@ -73,8 +73,6 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> Vec<Arc> {
     let state_set = &m.state_set;
     let deltas = &m.deltas;
     let out_delta = &m.out_deltas;
-    let full_header = &m.full_header;
-    let input_header = &m.input_header;
     let ex = &m.explored;
 
     // The value of `output` at a node, or `None` when the node does not define it: a state output reads
@@ -105,14 +103,14 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> Vec<Arc> {
     for node in &ex.order {
         for related in inputs {
             // Toggle one input, hold the (partial) state, and let the state settle.
-            let toggled = machine::toggle(full_header, node, &[related.as_str()]);
-            let Some(np) = machine::settle(deltas, full_header, &toggled) else {
+            let toggled = machine::toggle(node, &[related.as_str()]);
+            let Some(np) = machine::settle(deltas, &toggled) else {
                 continue;
             };
             // An arc for every output that is defined at both ends and flips across this input toggle.
-            let start = node.project_onto(input_header);
-            let end = np.project_onto(input_header);
-            let prevector = ex.path_to(node, input_header);
+            let start = node.project_to(inputs);
+            let end = np.project_to(inputs);
+            let prevector = ex.path_to(node, inputs);
             for o in &cell.outputs {
                 let (Some(before), Some(after)) =
                     (output_value(&o.name, node), output_value(&o.name, &np))
