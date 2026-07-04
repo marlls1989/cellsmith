@@ -6,6 +6,7 @@ pub mod confluence;
 pub mod interlock;
 pub mod leakage;
 pub mod machine;
+pub mod minimise;
 pub mod regions;
 pub mod resolve;
 
