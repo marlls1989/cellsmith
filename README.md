@@ -6,7 +6,7 @@ with internal state) that Liberate cannot auto-detect on non-standard nodes (e.g
 
 cellsmith is an arc **generator**, not a characteriser: it derives the arcs, the behavioural model
 and a Liberty stub; Liberate still does the actual characterisation inside your existing harness. It
-is a focused Rust rebuild of the valuable core of hsNCL's `genLiberateTemplate`, with the entire
+is a focused Rust rebuild of the core of hsNCL's `genLiberateTemplate`, with the entire
 YAML/library layer dropped in favour of a minimal, general (any-gate) TOML input.
 
 ## What it produces
