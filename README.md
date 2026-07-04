@@ -15,7 +15,7 @@ For every cell in the input spec, cellsmith emits three artifacts:
 
 | Artifact | File | Contents |
 |----------|------|----------|
-| Liberate arcs | `<name>_arcs.tcl` | `define_arc` blocks with prevector walks and `R/F/1/0/X` vectors |
+| Liberate arcs | `<name>_arcs.tcl` | `define_arc` blocks with prevector walks and `R/F/1/0/X` vectors, plus `define_leakage` blocks — one static leakage state per settled seed state, conditioned on inputs and settled outputs |
 | Behavioural Verilog | `<name>.v` | one sequential UDP `primitive` per signal (outputs + internal state nodes, three-valued next-state table) + a `celldefine`d wrapper `module` (internals as internal `wire`s) with a `specify` block |
 | Liberty stub | `<name>.lib` | a self-contained `library (<name>) { ... }` file (Liberate can consume it directly) wrapping one `cell (...)` per cell: input `pin`s, output/internal `pin`s (`direction : internal` for state nodes), each with a `statetable` (hysteretic) or a plain `function` (combinational) |
 
@@ -138,6 +138,8 @@ Options:
                          suppressed, arcs sharing a (related, pin, edge) collapse to one
       --no-internal      Suppress hidden (internal-power) arcs — input toggles where no output
                          changes (emitted by default)
+      --no-leakage       Suppress `define_leakage` blocks — static leakage states derived from the
+                         machine's settled seed states (emitted by default)
       --constraints      Emit derived setup/hold & non_seq constraint arcs (off by default; a cell can
                          opt in with `constraint_arcs = true`)
       --stdout           Write all three artifacts to stdout (with banners) instead of files
