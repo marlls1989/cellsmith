@@ -15,6 +15,7 @@ use crate::expr;
 use crate::logic::arcs::{Arc, HiddenArc};
 use crate::logic::confluence::Constraint;
 use crate::logic::interlock::Arbitration;
+use crate::logic::leakage::LeakageState;
 
 /// The whole input file: a list of `[[cell]]` tables.
 #[derive(Debug, Deserialize)]
@@ -136,6 +137,10 @@ pub struct AnalysedCell {
     /// output unchanged — precomputed once by the shared machine pass
     /// ([`crate::logic::analysis::analyse_machine`]) and consumed by the arcs emitter.
     pub hidden_arcs: Vec<HiddenArc>,
+    /// The cell's static leakage states — the settled seed states of the machine exploration —
+    /// precomputed once by the shared machine pass
+    /// ([`crate::logic::analysis::analyse_machine`]) and consumed by the arcs emitter.
+    pub leakage: Vec<LeakageState>,
     /// Detected arbitration/metastability conditions (empty for ordinary combinational or
     /// self-holding cells). See [`crate::logic::interlock`].
     pub arbitration: Vec<Arbitration>,
@@ -268,6 +273,7 @@ impl Cell {
             async_pins: self.async_pins.clone(),
             arcs: Vec::new(),
             hidden_arcs: Vec::new(),
+            leakage: Vec::new(),
             arbitration: Vec::new(),
             clock_pins: self.clock.clone(),
             constraints: Vec::new(),
@@ -280,6 +286,7 @@ impl Cell {
         let analysis = crate::logic::analysis::analyse_machine(&analysed);
         analysed.arcs = analysis.arcs;
         analysed.hidden_arcs = analysis.hidden_arcs;
+        analysed.leakage = analysis.leakage;
         analysed.constraints = analysis.constraints;
         analysed.arbitration = analysis.arbitration;
         // Cache each signal's state-table regions once, in `signals()` order, so downstream emitters

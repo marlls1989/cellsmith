@@ -15,11 +15,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
-use espresso_logic::{bdd_builder, Symbol};
+use espresso_logic::{bdd_builder, Minterm, Symbol};
 
 use crate::logic::arcs::{self, Arc, HiddenArc};
 use crate::logic::confluence::{self, Constraint};
 use crate::logic::interlock::Arbitration;
+use crate::logic::leakage::{self, LeakageState};
 use crate::logic::{machine, resolve};
 use crate::model::AnalysedCell;
 
@@ -32,6 +33,7 @@ pub struct MachineAnalysis {
     pub hidden_arcs: Vec<HiddenArc>,
     pub constraints: Vec<Constraint>,
     pub arbitration: Vec<Arbitration>,
+    pub leakage: Vec<LeakageState>,
 }
 
 /// The single home for the combinatorial blow-up guard: a cell whose machine width (inputs + state
@@ -131,6 +133,24 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             explored,
         })
     }
+
+    /// The value of `name` at a node, or `None` when the node does not define it: a state output reads
+    /// its state field (absent ⇒ undefined); a combinational output is its δ evaluated at the node
+    /// (`Err` ⇒ still depends on absent state ⇒ undefined). An arc is only measured where the output is
+    /// defined at both ends.
+    pub(crate) fn output_value(&self, name: &str, node: &Minterm<Symbol>) -> Option<bool> {
+        if self.state_set.contains(name) {
+            node.value_of(name)
+        } else {
+            // Every non-state output has a δ in `out_deltas` (one is computed for each of `cell.outputs`
+            // when the machine is built), so this lookup cannot miss.
+            debug_assert!(
+                self.out_deltas.contains_key(name),
+                "output_value: output {name:?} has no entry in out_deltas"
+            );
+            self.out_deltas[name].evaluate(node).ok()
+        }
+    }
 }
 
 /// Build the cell's state machine once and derive its arcs and hazards from the shared exploration. The
@@ -148,6 +168,7 @@ pub fn analyse_machine(cell: &AnalysedCell) -> MachineAnalysis {
         hidden_arcs,
         constraints: hz.constraints,
         arbitration: hz.arbitration,
+        leakage: leakage::derive(&m),
     }
 }
 
@@ -180,6 +201,10 @@ mod tests {
         assert!(
             cell.arbitration.is_empty(),
             "guard must suppress arbitration"
+        );
+        assert!(
+            cell.leakage.is_empty(),
+            "guard must suppress leakage states"
         );
         // Emission still succeeds (no panic); the artifacts are simply arc-free.
         let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());

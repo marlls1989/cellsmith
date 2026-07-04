@@ -84,28 +84,8 @@ pub struct HiddenArc {
 pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> (Vec<Arc>, Vec<HiddenArc>) {
     let cell = m.cell;
     let inputs = &cell.inputs;
-    let state_set = &m.state_set;
     let deltas = &m.deltas;
-    let out_delta = &m.out_deltas;
     let ex = &m.explored;
-
-    // The value of `output` at a node, or `None` when the node does not define it: a state output reads
-    // its state field (absent ⇒ undefined); a combinational output is its δ evaluated at the node
-    // (`Err` ⇒ still depends on absent state ⇒ undefined). An arc is only measured where the output is
-    // defined at both ends.
-    let output_value = |name: &str, node: &Minterm<Symbol>| -> Option<bool> {
-        if state_set.contains(name) {
-            node.value_of(name)
-        } else {
-            // Every non-state output has a δ in `out_deltas` (one is computed for each of `cell.outputs`
-            // when the machine is built), so this lookup cannot miss.
-            debug_assert!(
-                out_delta.contains_key(name),
-                "derive: output {name:?} has no entry in out_deltas"
-            );
-            out_delta[name].evaluate(node).ok()
-        }
-    };
 
     let async_set: BTreeSet<&str> = cell.async_pins.iter().map(|s| s.as_str()).collect();
     // The same arc can be reached from several start candidates; keep the one with the shortest
@@ -139,7 +119,13 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> (Vec<Arc>, 
             let vals: Vec<(&AnalysedOutput, Option<bool>, Option<bool>)> = cell
                 .outputs
                 .iter()
-                .map(|o| (o, output_value(&o.name, node), output_value(&o.name, &np)))
+                .map(|o| {
+                    (
+                        o,
+                        m.output_value(&o.name, node),
+                        m.output_value(&o.name, &np),
+                    )
+                })
                 .collect();
             for (o, before, after) in &vals {
                 let (Some(before), Some(after)) = (before, after) else {

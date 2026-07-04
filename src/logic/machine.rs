@@ -137,6 +137,16 @@ pub struct Explored {
 }
 
 impl Explored {
+    /// The settled BFS start states (the seeds), in discovery order: reachable stable nodes with no
+    /// predecessor. Seeds are inserted into `prev` with `None` before the BFS begins and entries are
+    /// never overwritten (Vacant-only insertion), so `prev[n] == None` identifies exactly the
+    /// deduplicated seed set.
+    pub fn seeds(&self) -> impl Iterator<Item = &Minterm<Symbol>> {
+        self.order
+            .iter()
+            .filter(|n| matches!(self.prev.get(*n), Some(None)))
+    }
+
     /// The input-projected BFS path into `node` (the prevector): walk predecessors back to a start,
     /// reverse, and project each step onto `input_names`.
     pub fn path_to(&self, node: &Minterm<Symbol>, input_names: &[Symbol]) -> Vec<Minterm<Symbol>> {
@@ -329,6 +339,25 @@ mod tests {
         assert!(!is_stable(&deltas, &forcing));
         let settled = settle(&deltas, &forcing).expect("settles");
         assert_eq!(settled.value_of("Q"), Some(true));
+    }
+
+    #[test]
+    fn seeds_are_the_forced_on_off_covers() {
+        // C2 (2-input Muller-C): Q = A*B + Q*(A+B). The settled BFS seeds are exactly the two forced
+        // covers — the on-set (A=1,B=1,Q=1) and the off-set (A=0,B=0,Q=0), both present.
+        let builder = bdd_builder!();
+        let dq = builder.parse("A*B + Q*(A+B)").unwrap();
+        let deltas = vec![(Symbol::from("Q"), dq.clone())];
+        let inputs = [Symbol::from("A"), Symbol::from("B")];
+        let state = [Symbol::from("Q")];
+        let explored = explore(&deltas, &[dq], &inputs, &state);
+
+        let seeds: Vec<Minterm<Symbol>> = explored.seeds().cloned().collect();
+        let on = node_from(&["A", "B", "Q"], |_| true);
+        let off = node_from(&["A", "B", "Q"], |_| false);
+        assert_eq!(seeds.len(), 2, "expected exactly two seeds, got {seeds:?}");
+        assert!(seeds.contains(&on), "on-set seed (A=1,B=1,Q=1) present");
+        assert!(seeds.contains(&off), "off-set seed (A=0,B=0,Q=0) present");
     }
 
     #[test]
