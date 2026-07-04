@@ -476,10 +476,12 @@ Y = "A*B"
         }
         // The A-falls-while-B=0 hidden arc: Y held 0. The held output is folded into `-when` (sorted
         // literals over inputs B and output Y).
-        assert!(tcl.split("define_arc").any(|frag| frag.contains("-type hidden")
-            && frag.contains("-vector {F 0 0}")
-            && frag.contains("-when \"!B*!Y\"")
-            && frag.contains("-pin A")));
+        assert!(tcl
+            .split("define_arc")
+            .any(|frag| frag.contains("-type hidden")
+                && frag.contains("-vector {F 0 0}")
+                && frag.contains("-when \"!B*!Y\"")
+                && frag.contains("-pin A")));
     }
 
     #[test]

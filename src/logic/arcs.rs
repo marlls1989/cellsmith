@@ -69,12 +69,12 @@ pub struct Arc {
 /// states and NO output changes. Used for internal-power characterisation.
 #[derive(Debug, Clone)]
 pub struct HiddenArc {
-    pub pin: Symbol,                    // the toggled primary input
-    pub edge: Edge,                     // that input's Rise/Fall
-    pub start: Minterm<Symbol>,         // input vector before the toggle
-    pub end: Minterm<Symbol>,           // input vector after the toggle
+    pub pin: Symbol,            // the toggled primary input
+    pub edge: Edge,             // that input's Rise/Fall
+    pub start: Minterm<Symbol>, // input vector before the toggle
+    pub end: Minterm<Symbol>,   // input vector after the toggle
     pub prevector: Vec<Minterm<Symbol>>,
-    pub outputs: Vec<(Symbol, bool)>,   // each output's HELD logic value, in cell.outputs order
+    pub outputs: Vec<(Symbol, bool)>, // each output's HELD logic value, in cell.outputs order
 }
 
 /// Derive transition arcs for every output of a cell by re-walking its shared asynchronous state machine
@@ -117,8 +117,10 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> (Vec<Arc>, 
     // stored output) are kept as separate arcs; only contexts that differ solely in an unobservable
     // internal-node value — which produce identical outputs — collapse to the shortest-prevector one.
     #[allow(clippy::type_complexity)]
-    let mut best_hidden: BTreeMap<(Symbol, bool, Minterm<Symbol>, Vec<(Symbol, bool)>), HiddenArc> =
-        BTreeMap::new();
+    let mut best_hidden: BTreeMap<
+        (Symbol, bool, Minterm<Symbol>, Vec<(Symbol, bool)>),
+        HiddenArc,
+    > = BTreeMap::new();
 
     // Re-walk the reachable stable states in BFS order; wherever a single input toggle flips an output,
     // emit an arc.
@@ -303,8 +305,17 @@ Q = "E*D + !E*Q"
             .iter()
             .filter(|h| h.pin.as_str() == "D" && h.edge == Edge::Rise)
             .collect();
-        assert!(d_rise.len() >= 2, "expected >=2 D-rise hidden arcs, got {}", d_rise.len());
-        let q_val = |h: &HiddenArc| h.outputs.iter().find(|(s, _)| s.as_str() == "Q").map(|(_, v)| *v);
+        assert!(
+            d_rise.len() >= 2,
+            "expected >=2 D-rise hidden arcs, got {}",
+            d_rise.len()
+        );
+        let q_val = |h: &HiddenArc| {
+            h.outputs
+                .iter()
+                .find(|(s, _)| s.as_str() == "Q")
+                .map(|(_, v)| *v)
+        };
         assert!(d_rise.iter().any(|h| q_val(h) == Some(false)));
         assert!(d_rise.iter().any(|h| q_val(h) == Some(true)));
     }
