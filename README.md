@@ -1,17 +1,17 @@
-# lobsterate
+# cellsmith
 
 Generate Cadence Liberate **transition arcs** (with prevectors) for logic cells — including
 state-holding / hysteretic cells (C-elements, latches, cross-coupled pairs, mutexes, and flip-flops
 with internal state) that Liberate cannot auto-detect on non-standard nodes (e.g. nMOS).
 
-lobsterate is an arc **generator**, not a characteriser: it derives the arcs, the behavioural model
+cellsmith is an arc **generator**, not a characteriser: it derives the arcs, the behavioural model
 and a Liberty stub; Liberate still does the actual characterisation inside your existing harness. It
 is a focused Rust rebuild of the valuable core of hsNCL's `genLiberateTemplate`, with the entire
 YAML/library layer dropped in favour of a minimal, general (any-gate) TOML input.
 
 ## What it produces
 
-For every cell in the input spec, lobsterate emits three artifacts:
+For every cell in the input spec, cellsmith emits three artifacts:
 
 | Artifact | File | Contents |
 |----------|------|----------|
@@ -31,7 +31,7 @@ some **internal** functions. Two rules make state-holding cells work with no spe
   functions may reference, but which has **no external pin** — it models hidden state like a
   flip-flop's master latch.
 
-lobsterate treats a cell as an **asynchronous state machine** over `inputs × state-variables`, where a
+cellsmith treats a cell as an **asynchronous state machine** over `inputs × state-variables`, where a
 *state variable* is any signal (output or internal) that sits on a feedback cycle. Combinational
 signals are folded away; only true state remains as machine state.
 
@@ -58,7 +58,7 @@ This gives exactly the right behaviour for free:
 
 A cross-coupled cell is also **bistable**: under some input condition (`A·B` for the plain mutex) the
 joint next-state has two stable states and the physical cell picks one non-deterministically
-(metastability). lobsterate **detects** this, annotates the arcs and Liberty stub with the metastable
+(metastability). cellsmith **detects** this, annotates the arcs and Liberty stub with the metastable
 condition and the mutually-exclusive grants, and warns if the cell did not declare it. Declare the
 grants with `arbitrate = ["Qa", "Qb"]` to acknowledge the interlock (validated against detection). The
 arbitration *choice* itself is a physical property Liberate characterises separately — it is not, and
@@ -118,7 +118,7 @@ function must be a declared input, an output, or an internal signal of the cell.
 ## Usage
 
 ```
-lobsterate <SPEC> [OPTIONS]
+cellsmith <SPEC> [OPTIONS]
 
 Arguments:
   <SPEC>              TOML cell spec to read ("-" reads from stdin)
@@ -136,13 +136,13 @@ Examples:
 
 ```sh
 # Write cells_arcs.tcl, cells.v, cells.lib into ./out
-lobsterate cells.toml -o out
+cellsmith cells.toml -o out
 
 # Preview everything on stdout
-lobsterate cells.toml --stdout
+cellsmith cells.toml --stdout
 
 # Pipe a spec in and name the outputs "mylib"
-cat cells.toml | lobsterate - -n mylib -o out
+cat cells.toml | cellsmith - -n mylib -o out
 ```
 
 Sample Verilog for the C-element above:
@@ -206,7 +206,7 @@ never by collapsing feedback — related pins are always primary inputs, impossi
 never reached, input-forced transitions cascade naturally, and a prevector drives every state
 variable (internal ones included) into the measured start state. The metastable arbitration point is
 detected and annotated; the arbitration *choice* is left to Liberate's physical characterisation —
-timing arcs cannot express a non-deterministic next-state, so lobsterate documents it rather than
+timing arcs cannot express a non-deterministic next-state, so cellsmith documents it rather than
 fabricating deterministic behaviour for it.
 
 ## Licence

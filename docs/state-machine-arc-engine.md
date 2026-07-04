@@ -1,6 +1,6 @@
 # The state-machine arc engine
 
-How lobsterate derives Liberate timing arcs for state-holding cells (C-elements, latches, SR pairs,
+How cellsmith derives Liberate timing arcs for state-holding cells (C-elements, latches, SR pairs,
 mutexes/arbiters, flip-flops with internal state). This document explains the model, the state machine,
 how a state is settled to a fixpoint, and how arcs are discovered — with a full worked example.
 

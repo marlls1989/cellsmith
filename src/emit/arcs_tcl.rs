@@ -2,7 +2,7 @@
 //!
 //! The layout mirrors hsNCL `genRiseTransition`/`genFallTransition`, including the quirk that rise
 //! arcs place `-type` first while fall arcs place it after the prevector. Pins are emitted in
-//! declaration order (lobsterate's deliberate divergence from hsNCL's alphabetical sort).
+//! declaration order (cellsmith's deliberate divergence from hsNCL's alphabetical sort).
 
 use crate::logic::arcs::{Arc, Edge};
 use crate::logic::assignment;
