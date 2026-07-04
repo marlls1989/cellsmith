@@ -19,7 +19,7 @@ Q = "(A*B + Q*(A+B))*!R"
 name = "RACELEM21"
 inputs = ["M1", "M2", "P1", "P2", "C", "R"]
 [cell.outputs]                 #   -> their arcs are emitted as `-type async`
-Q = "(P1*P2*C+Q*(M1+M2))*!R"
+Q = "(P1*P2*C+Q*(M1+M2+C))*!R"
 
 [[cell]]
 name = "SR"

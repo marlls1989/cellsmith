@@ -119,10 +119,12 @@ fn mutex_generates_all_three_artifacts() {
     assert!(tcl.contains("-related_pin B"));
     assert!(tcl.contains("-prevector_pinlist {A B}"));
 
-    // Verilog: each grant's UDP still keeps the other grant as an input column (functional model).
+    // Verilog: each grant's UDP still keeps the other grant as an input column (functional model), but
+    // only the primary input its own function depends on — Qa = !Qb*A drops B, Qb = !Qa*B drops A. The
+    // module still exposes both primary inputs as ports.
     let v = cell_verilog(&cell);
-    assert!(v.contains("primitive MUT_Qa(Qa, A, B, Qb);"));
-    assert!(v.contains("primitive MUT_Qb(Qb, A, B, Qa);"));
+    assert!(v.contains("primitive MUT_Qa(Qa, Qb, A);"));
+    assert!(v.contains("primitive MUT_Qb(Qb, Qa, B);"));
     assert!(v.contains("module MUT(Qa, Qb, A, B);"));
 
     // Liberty: annotated and still syntactically valid (round-trips through liberty-parse).

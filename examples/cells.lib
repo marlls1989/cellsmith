@@ -1,192 +1,194 @@
-cell (C2) {
-  pin (A) {
-    direction : input;
+library (cells) {
+  cell (C2) {
+    pin (A) {
+      direction : input;
+    }
+    pin (B) {
+      direction : input;
+    }
+    statetable ("A B", "Q") {
+      table : "H H : - : H , H L : - : N , L H : - : N , L L : - : L";
+    }
+    pin (Q) {
+      direction : output;
+      function : "Q";
+    }
   }
-  pin (B) {
-    direction : input;
+  cell (RCELEM2) {
+    pin (A) {
+      direction : input;
+    }
+    pin (B) {
+      direction : input;
+    }
+    pin (R) {
+      direction : input;
+    }
+    statetable ("A B R", "Q") {
+      table : "- - H : - : L , H H L : - : H , H L L : - : N , L H L : - : N , L L - : - : L";
+    }
+    pin (Q) {
+      direction : output;
+      function : "Q";
+    }
   }
-  statetable ("A B", "Q") {
-    table : "H H : - : H , H L : - : N , L H : - : N , L L : - : L";
+  cell (RACELEM21) {
+    pin (M1) {
+      direction : input;
+    }
+    pin (M2) {
+      direction : input;
+    }
+    pin (P1) {
+      direction : input;
+    }
+    pin (P2) {
+      direction : input;
+    }
+    pin (C) {
+      direction : input;
+    }
+    pin (R) {
+      direction : input;
+    }
+    statetable ("P1 P2 C R M1 M2", "Q") {
+      table : "- - - H - - : - : L , - - L - L L : - : L , - - L L - H : - : N , - - L L H - : - : N , - L H L - - : - : N , H H H L - - : - : H , L - H L - - : - : N";
+    }
+    pin (Q) {
+      direction : output;
+      function : "Q";
+    }
   }
-  pin (Q) {
-    direction : output;
-    function : "Q";
+  cell (SR) {
+    pin (S) {
+      direction : input;
+    }
+    pin (R) {
+      direction : input;
+    }
+    statetable ("S R", "Q") {
+      table : "H - : - : H , L H : - : L , L L : - : N";
+    }
+    pin (Q) {
+      direction : output;
+      function : "Q";
+    }
+    statetable ("R S", "Qn") {
+      table : "H - : - : H , L H : - : L , L L : - : N";
+    }
+    pin (Qn) {
+      direction : output;
+      function : "Qn";
+    }
   }
-}
-cell (RCELEM2) {
-  pin (A) {
-    direction : input;
+  /* arbitration: A*B metastable; grants Qa, Qb mutually exclusive (both-high forbidden) */
+  cell (MUT) {
+    pin (A) {
+      direction : input;
+    }
+    pin (B) {
+      direction : input;
+    }
+    pin (Qa) {
+      direction : output;
+      function : "!Qb*A";
+    }
+    pin (Qb) {
+      direction : output;
+      function : "!Qa*B";
+    }
   }
-  pin (B) {
-    direction : input;
+  cell (DFF) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("CLK M", "Q") {
+      table : "H H : - : H , H L : - : L , L - : - : N";
+    }
+    pin (Q) {
+      direction : output;
+      function : "Q";
+    }
+    statetable ("CLK D", "M") {
+      table : "H - : - : N , L H : - : H , L L : - : L";
+    }
+    pin (M) {
+      direction : internal;
+      function : "M";
+    }
   }
-  pin (R) {
-    direction : input;
-  }
-  statetable ("A B R", "Q") {
-    table : "- - H : - : L , H H L : - : H , H L L : - : N , L H L : - : N , L L - : - : L";
-  }
-  pin (Q) {
-    direction : output;
-    function : "Q";
-  }
-}
-cell (RACELEM21) {
-  pin (M1) {
-    direction : input;
-  }
-  pin (M2) {
-    direction : input;
-  }
-  pin (P1) {
-    direction : input;
-  }
-  pin (P2) {
-    direction : input;
-  }
-  pin (C) {
-    direction : input;
-  }
-  pin (R) {
-    direction : input;
-  }
-  statetable ("M1 M2 P1 P2 C R", "Q") {
-    table : "- - - - - H : - : L , - - H H H L : - : H , - H - - L L : - : N , - H - L - L : - : N , - H L - - L : - : N , H - - - L L : - : N , H - - L - L : - : N , H - L - - L : - : N , L L - - L - : - : L , L L - L - - : - : L , L L L - - - : - : L";
-  }
-  pin (Q) {
-    direction : output;
-    function : "Q";
-  }
-}
-cell (SR) {
-  pin (S) {
-    direction : input;
-  }
-  pin (R) {
-    direction : input;
-  }
-  statetable ("S R", "Q") {
-    table : "H - : - : H , L H : - : L , L L : - : N";
-  }
-  pin (Q) {
-    direction : output;
-    function : "Q";
-  }
-  statetable ("S R", "Qn") {
-    table : "- H : - : H , H L : - : L , L L : - : N";
-  }
-  pin (Qn) {
-    direction : output;
-    function : "Qn";
-  }
-}
-/* arbitration: A*B metastable; grants Qa, Qb mutually exclusive (both-high forbidden) */
-cell (MUT) {
-  pin (A) {
-    direction : input;
-  }
-  pin (B) {
-    direction : input;
-  }
-  pin (Qa) {
-    direction : output;
-    function : "A*!Qb";
-  }
-  pin (Qb) {
-    direction : output;
-    function : "B*!Qa";
-  }
-}
-cell (DFF) {
-  pin (CLK) {
-    direction : input;
-  }
-  pin (D) {
-    direction : input;
-  }
-  statetable ("CLK D M", "Q") {
-    table : "H - H : - : H , H - L : - : L , L - - : - : N";
-  }
-  pin (Q) {
-    direction : output;
-    function : "Q";
-  }
-  statetable ("CLK D", "M") {
-    table : "H - : - : N , L H : - : H , L L : - : L";
-  }
-  pin (M) {
-    direction : internal;
-    function : "M";
-  }
-}
-cell (ICM) {
-  pin (CLKA) {
-    direction : input;
-  }
-  pin (CLKB) {
-    direction : input;
-  }
-  pin (RA) {
-    direction : input;
-  }
-  pin (RB) {
-    direction : input;
-  }
-  pin (S) {
-    direction : input;
-  }
-  pin (GCLK) {
-    direction : output;
-    function : "CLKB*enB + CLKA*enA";
-  }
-  statetable ("CLKA CLKB RA RB S sela2", "enA") {
-    table : "- - H - - - : - : L , H - L - - - : - : N , L - - - - L : - : L , L - L - - H : - : H";
-  }
-  pin (enA) {
-    direction : internal;
-    function : "enA";
-  }
-  statetable ("CLKA CLKB RA RB S selb2", "enB") {
-    table : "- - - H - - : - : L , - H - L - - : - : N , - L - - - L : - : L , - L - L - H : - : H";
-  }
-  pin (enB) {
-    direction : internal;
-    function : "enB";
-  }
-  pin (sela) {
-    direction : internal;
-    function : "!S*!enB";
-  }
-  statetable ("CLKA CLKB RA RB S sela", "sela1") {
-    table : "- - H - - - : - : L , H - L - - - : - : N , L - - - - L : - : L , L - L - - H : - : H";
-  }
-  pin (sela1) {
-    direction : internal;
-    function : "sela1";
-  }
-  statetable ("CLKA CLKB RA RB S sela1", "sela2") {
-    table : "- - H - - - : - : L , H - - - - L : - : L , H - L - - H : - : H , L - L - - - : - : N";
-  }
-  pin (sela2) {
-    direction : internal;
-    function : "sela2";
-  }
-  pin (selb) {
-    direction : internal;
-    function : "S*!enA";
-  }
-  statetable ("CLKA CLKB RA RB S selb", "selb1") {
-    table : "- - - H - - : - : L , - H - L - - : - : N , - L - - - L : - : L , - L - L - H : - : H";
-  }
-  pin (selb1) {
-    direction : internal;
-    function : "selb1";
-  }
-  statetable ("CLKA CLKB RA RB S selb1", "selb2") {
-    table : "- - - H - - : - : L , - H - - - L : - : L , - H - L - H : - : H , - L - L - - : - : N";
-  }
-  pin (selb2) {
-    direction : internal;
-    function : "selb2";
+  cell (ICM) {
+    pin (CLKA) {
+      direction : input;
+    }
+    pin (CLKB) {
+      direction : input;
+    }
+    pin (RA) {
+      direction : input;
+    }
+    pin (RB) {
+      direction : input;
+    }
+    pin (S) {
+      direction : input;
+    }
+    pin (GCLK) {
+      direction : output;
+      function : "enB*CLKB + enA*CLKA";
+    }
+    statetable ("RA CLKA sela2", "enA") {
+      table : "- L L : - : L , H - - : - : L , L H - : - : N , L L H : - : H";
+    }
+    pin (enA) {
+      direction : internal;
+      function : "enA";
+    }
+    statetable ("RB CLKB selb2", "enB") {
+      table : "- L L : - : L , H - - : - : L , L H - : - : N , L L H : - : H";
+    }
+    pin (enB) {
+      direction : internal;
+      function : "enB";
+    }
+    pin (sela) {
+      direction : internal;
+      function : "!enB*!S";
+    }
+    statetable ("RA CLKA sela", "sela1") {
+      table : "- L L : - : L , H - - : - : L , L H - : - : N , L L H : - : H";
+    }
+    pin (sela1) {
+      direction : internal;
+      function : "sela1";
+    }
+    statetable ("RA CLKA sela1", "sela2") {
+      table : "- H L : - : L , H - - : - : L , L H H : - : H , L L - : - : N";
+    }
+    pin (sela2) {
+      direction : internal;
+      function : "sela2";
+    }
+    pin (selb) {
+      direction : internal;
+      function : "!enA*S";
+    }
+    statetable ("RB CLKB selb", "selb1") {
+      table : "- L L : - : L , H - - : - : L , L H - : - : N , L L H : - : H";
+    }
+    pin (selb1) {
+      direction : internal;
+      function : "selb1";
+    }
+    statetable ("RB CLKB selb1", "selb2") {
+      table : "- H L : - : L , H - - : - : L , L H H : - : H , L L - : - : N";
+    }
+    pin (selb2) {
+      direction : internal;
+      function : "selb2";
+    }
   }
 }

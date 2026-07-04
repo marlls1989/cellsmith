@@ -43,46 +43,6 @@ define_arc \
 	{ C2 }
 
 define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {A B} \
-	-prevector {00 10} \
-	-pinlist {A B Q} \
-	-vector {F R X} \
-	-related_pin A \
-	-pin B \
-	{ C2 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {A B} \
-	-prevector {00 10} \
-	-pinlist {A B Q} \
-	-vector {F R X} \
-	-related_pin A \
-	-pin B \
-	{ C2 }
-
-define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {A B} \
-	-prevector {00 01} \
-	-pinlist {A B Q} \
-	-vector {R F X} \
-	-related_pin A \
-	-pin B \
-	{ C2 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {A B} \
-	-prevector {00 01} \
-	-pinlist {A B Q} \
-	-vector {R F X} \
-	-related_pin A \
-	-pin B \
-	{ C2 }
-
-define_arc \
 	-prevector_pinlist {A B R} \
 	-prevector {110 100} \
 	-type combinational \
@@ -171,84 +131,37 @@ define_arc \
 	{ RCELEM2 }
 
 define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {A B R} \
-	-prevector {000 100} \
-	-pinlist {A B R Q} \
-	-vector {F R 0 X} \
-	-related_pin A \
-	-pin B \
-	{ RCELEM2 }
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {001110 000110 000010} \
+	-type combinational \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 0 0 0 F 0 F} \
+	-when "!M1*!M2*!P1*!P2*!R" \
+	-related_pin C \
+	-pin Q \
+	{ RACELEM21 }
 
 define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {A B R} \
-	-prevector {000 100} \
-	-pinlist {A B R Q} \
-	-vector {F R 0 X} \
-	-related_pin A \
-	-pin B \
-	{ RCELEM2 }
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {001110 000110} \
+	-type combinational \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 0 0 1 F 0 F} \
+	-when "!M1*!M2*!P1*P2*!R" \
+	-related_pin C \
+	-pin Q \
+	{ RACELEM21 }
 
 define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {A B R} \
-	-prevector {111} \
-	-pinlist {A B R Q} \
-	-vector {F 1 F X} \
-	-related_pin A \
-	-pin R \
-	{ RCELEM2 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {A B R} \
-	-prevector {111} \
-	-pinlist {A B R Q} \
-	-vector {F 1 F X} \
-	-related_pin A \
-	-pin R \
-	{ RCELEM2 }
-
-define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {A B R} \
-	-prevector {000 010} \
-	-pinlist {A B R Q} \
-	-vector {R F 0 X} \
-	-related_pin A \
-	-pin B \
-	{ RCELEM2 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {A B R} \
-	-prevector {000 010} \
-	-pinlist {A B R Q} \
-	-vector {R F 0 X} \
-	-related_pin A \
-	-pin B \
-	{ RCELEM2 }
-
-define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {A B R} \
-	-prevector {111} \
-	-pinlist {A B R Q} \
-	-vector {1 F F X} \
-	-related_pin B \
-	-pin R \
-	{ RCELEM2 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {A B R} \
-	-prevector {111} \
-	-pinlist {A B R Q} \
-	-vector {1 F F X} \
-	-related_pin B \
-	-pin R \
-	{ RCELEM2 }
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {001110 001010} \
+	-type combinational \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 0 1 0 F 0 F} \
+	-when "!M1*!M2*P1*!P2*!R" \
+	-related_pin C \
+	-pin Q \
+	{ RACELEM21 }
 
 define_arc \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
@@ -351,39 +264,6 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {101110 100110 100010} \
-	-type combinational \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {F 0 0 0 1 0 F} \
-	-when "C*!M2*!P1*!P2*!R" \
-	-related_pin M1 \
-	-pin Q \
-	{ RACELEM21 }
-
-define_arc \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {101110 100110} \
-	-type combinational \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {F 0 0 1 1 0 F} \
-	-when "C*!M2*!P1*P2*!R" \
-	-related_pin M1 \
-	-pin Q \
-	{ RACELEM21 }
-
-define_arc \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {101110 101010} \
-	-type combinational \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {F 0 1 0 1 0 F} \
-	-when "C*!M2*P1*!P2*!R" \
-	-related_pin M1 \
-	-pin Q \
-	{ RACELEM21 }
-
-define_arc \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
 	-prevector {011110 010110 010010 010000} \
 	-type combinational \
 	-pinlist {M1 M2 P1 P2 C R Q} \
@@ -427,53 +307,9 @@ define_arc \
 	{ RACELEM21 }
 
 define_arc \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {011110 010110 010010} \
-	-type combinational \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {0 F 0 0 1 0 F} \
-	-when "C*!M1*!P1*!P2*!R" \
-	-related_pin M2 \
-	-pin Q \
-	{ RACELEM21 }
-
-define_arc \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {011110 010110} \
-	-type combinational \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {0 F 0 1 1 0 F} \
-	-when "C*!M1*!P1*P2*!R" \
-	-related_pin M2 \
-	-pin Q \
-	{ RACELEM21 }
-
-define_arc \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {011110 011010} \
-	-type combinational \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {0 F 1 0 1 0 F} \
-	-when "C*!M1*P1*!P2*!R" \
-	-related_pin M2 \
-	-pin Q \
-	{ RACELEM21 }
-
-define_arc \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001110} \
-	-type combinational \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {0 0 F 1 1 0 F} \
-	-when "C*!M1*!M2*P2*!R" \
-	-related_pin P1 \
-	-pin Q \
-	{ RACELEM21 }
-
-define_arc \
 	-type combinational \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {000110} \
+	-prevector {000100 000110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 R 1 1 0 R} \
 	-when "C*!M1*!M2*P2*!R" \
@@ -484,7 +320,7 @@ define_arc \
 define_arc \
 	-type combinational \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {000110 010110} \
+	-prevector {010111 010110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 R 1 1 0 R} \
 	-when "C*!M1*M2*P2*!R" \
@@ -495,7 +331,7 @@ define_arc \
 define_arc \
 	-type combinational \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {000110 100110} \
+	-prevector {100111 100110} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 R 1 1 0 R} \
 	-when "C*M1*!M2*P2*!R" \
@@ -515,20 +351,9 @@ define_arc \
 	{ RACELEM21 }
 
 define_arc \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001110} \
-	-type combinational \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {0 0 1 F 1 0 F} \
-	-when "C*!M1*!M2*P1*!R" \
-	-related_pin P2 \
-	-pin Q \
-	{ RACELEM21 }
-
-define_arc \
 	-type combinational \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001010} \
+	-prevector {001000 001010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 0 1 R 1 0 R} \
 	-when "C*!M1*!M2*P1*!R" \
@@ -539,7 +364,7 @@ define_arc \
 define_arc \
 	-type combinational \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001010 011010} \
+	-prevector {011011 011010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {0 1 1 R 1 0 R} \
 	-when "C*!M1*M2*P1*!R" \
@@ -550,7 +375,7 @@ define_arc \
 define_arc \
 	-type combinational \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001010 101010} \
+	-prevector {101011 101010} \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 0 1 R 1 0 R} \
 	-when "C*M1*!M2*P1*!R" \
@@ -697,6 +522,39 @@ define_arc \
 	-pinlist {M1 M2 P1 P2 C R Q} \
 	-vector {1 1 1 1 0 R F} \
 	-when "!C*M1*M2*P1*P2" \
+	-related_pin R \
+	-pin Q \
+	{ RACELEM21 }
+
+define_arc \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {001110 000110 000010} \
+	-type combinational \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 0 0 0 1 R F} \
+	-when "C*!M1*!M2*!P1*!P2" \
+	-related_pin R \
+	-pin Q \
+	{ RACELEM21 }
+
+define_arc \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {001110 000110} \
+	-type combinational \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 0 0 1 1 R F} \
+	-when "C*!M1*!M2*!P1*P2" \
+	-related_pin R \
+	-pin Q \
+	{ RACELEM21 }
+
+define_arc \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {001110 001010} \
+	-type combinational \
+	-pinlist {M1 M2 P1 P2 C R Q} \
+	-vector {0 0 1 0 1 R F} \
+	-when "C*!M1*!M2*P1*!P2" \
 	-related_pin R \
 	-pin Q \
 	{ RACELEM21 }
@@ -889,346 +747,6 @@ define_arc \
 	{ RACELEM21 }
 
 define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001110} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {R 0 1 1 F 0 X} \
-	-related_pin M1 \
-	-pin C \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001110} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {R 0 1 1 F 0 X} \
-	-related_pin M1 \
-	-pin C \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001110} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {0 R 1 1 F 0 X} \
-	-related_pin M2 \
-	-pin C \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001110} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {0 R 1 1 F 0 X} \
-	-related_pin M2 \
-	-pin C \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {000110 100110} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {1 0 R 1 F 0 X} \
-	-related_pin P1 \
-	-pin C \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {000110 100110} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {1 0 R 1 F 0 X} \
-	-related_pin P1 \
-	-pin C \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001010 101010} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {1 0 1 R F 0 X} \
-	-related_pin P2 \
-	-pin C \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001010 101010} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {1 0 1 R F 0 X} \
-	-related_pin P2 \
-	-pin C \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {011111} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {0 1 1 1 F F X} \
-	-related_pin C \
-	-pin R \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {011111} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {0 1 1 1 F F X} \
-	-related_pin C \
-	-pin R \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001100 101100} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {1 0 F 1 R 0 X} \
-	-related_pin P1 \
-	-pin C \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001100 101100} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {1 0 F 1 R 0 X} \
-	-related_pin P1 \
-	-pin C \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001100 101100} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {1 0 1 F R 0 X} \
-	-related_pin P2 \
-	-pin C \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001100 101100} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {1 0 1 F R 0 X} \
-	-related_pin P2 \
-	-pin C \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {101110 100110} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {F R 0 1 1 0 X} \
-	-related_pin M1 \
-	-pin M2 \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {101110 100110} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {F R 0 1 1 0 X} \
-	-related_pin M1 \
-	-pin M2 \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {011110 010110} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {R F 0 1 1 0 X} \
-	-related_pin M1 \
-	-pin M2 \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {011110 010110} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {R F 0 1 1 0 X} \
-	-related_pin M1 \
-	-pin M2 \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001110} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {R 0 F 1 1 0 X} \
-	-related_pin M1 \
-	-pin P1 \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001110} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {R 0 F 1 1 0 X} \
-	-related_pin M1 \
-	-pin P1 \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001110} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {R 0 1 F 1 0 X} \
-	-related_pin M1 \
-	-pin P2 \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001110} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {R 0 1 F 1 0 X} \
-	-related_pin M1 \
-	-pin P2 \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001110} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {0 R F 1 1 0 X} \
-	-related_pin M2 \
-	-pin P1 \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001110} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {0 R F 1 1 0 X} \
-	-related_pin M2 \
-	-pin P1 \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001110} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {0 R 1 F 1 0 X} \
-	-related_pin M2 \
-	-pin P2 \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001110} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {0 R 1 F 1 0 X} \
-	-related_pin M2 \
-	-pin P2 \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001010 101010} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {1 0 F R 1 0 X} \
-	-related_pin P1 \
-	-pin P2 \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001010 101010} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {1 0 F R 1 0 X} \
-	-related_pin P1 \
-	-pin P2 \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {011111} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {0 1 F 1 1 F X} \
-	-related_pin P1 \
-	-pin R \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {011111} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {0 1 F 1 1 F X} \
-	-related_pin P1 \
-	-pin R \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {000110 100110} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {1 0 R F 1 0 X} \
-	-related_pin P1 \
-	-pin P2 \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {000110 100110} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {1 0 R F 1 0 X} \
-	-related_pin P1 \
-	-pin P2 \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {011111} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {0 1 1 F 1 F X} \
-	-related_pin P2 \
-	-pin R \
-	{ RACELEM21 }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {011111} \
-	-pinlist {M1 M2 P1 P2 C R Q} \
-	-vector {0 1 1 F 1 F X} \
-	-related_pin P2 \
-	-pin R \
-	{ RACELEM21 }
-
-define_arc \
 	-prevector_pinlist {S R} \
 	-prevector {10 00} \
 	-type combinational \
@@ -1314,26 +832,6 @@ define_arc \
 	-when "!R" \
 	-related_pin S \
 	-pin Qn \
-	{ SR }
-
-define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {S R} \
-	-prevector {11} \
-	-pinlist {S R Q Qn} \
-	-vector {F F X X} \
-	-related_pin S \
-	-pin R \
-	{ SR }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {S R} \
-	-prevector {11} \
-	-pinlist {S R Q Qn} \
-	-vector {F F X X} \
-	-related_pin S \
-	-pin R \
 	{ SR }
 
 # arbitration: A*B metastable; grants {Qa, Qb} mutually exclusive ({Qa=0, Qb=1} | {Qa=1, Qb=0})
@@ -1426,26 +924,6 @@ define_arc \
 	{ MUT }
 
 define_arc \
-	-type non_seq_setup \
-	-prevector_pinlist {A B} \
-	-prevector {00} \
-	-pinlist {A B Qa Qb} \
-	-vector {R R X X} \
-	-related_pin A \
-	-pin B \
-	{ MUT }
-
-define_arc \
-	-type non_seq_hold \
-	-prevector_pinlist {A B} \
-	-prevector {00} \
-	-pinlist {A B Qa Qb} \
-	-vector {R R X X} \
-	-related_pin A \
-	-pin B \
-	{ MUT }
-
-define_arc \
 	-prevector_pinlist {CLK D} \
 	-prevector {01 11 01 00} \
 	-type combinational \
@@ -1465,46 +943,6 @@ define_arc \
 	-when "D" \
 	-related_pin CLK \
 	-pin Q \
-	{ DFF }
-
-define_arc \
-	-type setup \
-	-prevector_pinlist {CLK D} \
-	-prevector {01} \
-	-pinlist {CLK D Q} \
-	-vector {R F X} \
-	-related_pin CLK \
-	-pin D \
-	{ DFF }
-
-define_arc \
-	-type hold \
-	-prevector_pinlist {CLK D} \
-	-prevector {01} \
-	-pinlist {CLK D Q} \
-	-vector {R F X} \
-	-related_pin CLK \
-	-pin D \
-	{ DFF }
-
-define_arc \
-	-type setup \
-	-prevector_pinlist {CLK D} \
-	-prevector {00} \
-	-pinlist {CLK D Q} \
-	-vector {R R X} \
-	-related_pin CLK \
-	-pin D \
-	{ DFF }
-
-define_arc \
-	-type hold \
-	-prevector_pinlist {CLK D} \
-	-prevector {00} \
-	-pinlist {CLK D Q} \
-	-vector {R R X} \
-	-related_pin CLK \
-	-pin D \
 	{ DFF }
 
 define_arc \
@@ -2033,45 +1471,5 @@ define_arc \
 	-when "CLKA*CLKB*RA*S" \
 	-related_pin RB \
 	-pin GCLK \
-	{ ICM }
-
-define_arc \
-	-type setup \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110} \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-vector {R 0 F 1 0 X} \
-	-related_pin CLKA \
-	-pin RA \
-	{ ICM }
-
-define_arc \
-	-type hold \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110} \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-vector {R 0 F 1 0 X} \
-	-related_pin CLKA \
-	-pin RA \
-	{ ICM }
-
-define_arc \
-	-type setup \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00111} \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-vector {0 R 1 F 1 X} \
-	-related_pin CLKB \
-	-pin RB \
-	{ ICM }
-
-define_arc \
-	-type hold \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00111} \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-vector {0 R 1 F 1 X} \
-	-related_pin CLKB \
-	-pin RB \
 	{ ICM }
 
