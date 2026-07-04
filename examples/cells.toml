@@ -70,3 +70,12 @@ selb2 = "!RB*(CLKB*selb1+!CLKB*selb2)"
 enB   = "!RB*(!CLKB*selb2+CLKB*enB)"
 [cell.outputs]
 GCLK = "enA*CLKA+enB*CLKB"
+
+[[cell]]
+name = "C2GATE"               # gate-level C-element: complementary internals collapse to one bit
+inputs = ["A", "B"]
+[cell.internal]
+IQ = "!QN"
+QN = "!(A*B + IQ*(A+B))"
+[cell.outputs]
+Q = "IQ"                      # must minimise to the single coordinate Q, delta_Q = A*B + Q*(A+B)
