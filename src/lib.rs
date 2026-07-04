@@ -1,8 +1,9 @@
 //! cellsmith — generate Cadence Liberate transition arcs (with prevectors) for logic cells,
 //! including state-holding/hysteretic cells (C-elements, latches, cross-coupled pairs).
 //!
-//! Modules are filled in per the implementation plan: input model + parser, region derivation
-//! (feedback projection), the prevector walk, and the arcs / Verilog / Liberty emitters.
+//! Modules: the input model and function parser ([`model`], [`expr`]), the logic core ([`logic`]:
+//! signal resolution, the state machine, arc and hazard derivation, and state-table regions), and
+//! the arcs / Verilog / Liberty emitters ([`emit`]).
 
 pub mod emit;
 pub mod expr;

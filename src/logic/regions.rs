@@ -2,7 +2,7 @@
 //!
 //! This is the **functional** view of an output, used by the Verilog UDP and the Liberty
 //! `statetable` — distinct from the timing-arc view, which is produced by the state machine in
-//! [`super::arcs`] and needs no region collapse.
+//! [`super::arcs`].
 //!
 //! The column set is exactly the pin function's **BDD support minus its own self-feedback** — every
 //! signal (primary input, other output, or internal state node) the function actually depends on, and
