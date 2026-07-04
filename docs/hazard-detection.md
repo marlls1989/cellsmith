@@ -3,19 +3,21 @@
 How cellsmith detects the hazard phenomena of a state-holding cell — **order-dependence** and
 **oscillation** (metastability) — and derives the timing **constraints** (setup/hold, non_seq) that
 avoid them, from the same reachable-state machine that drives arc discovery. This is a companion to `state-machine-arc-engine.md`, which covers the model,
-the next-state functions δ, settling, and the reachability BFS; everything here builds on those.
+the next-state functions δ, settling, and the reachability BFS; everything here builds on those. The
+functional state-table view of the same signals is documented separately in `state-table-regions.md`.
 
 The code lives in `src/logic/`:
 
 | File | Role |
 |------|------|
-| `confluence.rs` | `analyse_hazards`: one pass over the reachable states probing every input pair — produces both constraints and arbitrations |
+| `confluence.rs` | `confluence::derive`: one pass over the reachable states probing every input pair — produces both constraints and arbitrations |
 | `interlock.rs` | the `Arbitration` report type (and its string helpers); no detection logic |
 | `machine.rs` | `settle_or_cycle`, the settle variant that returns the periodic cycle instead of discarding it |
 
-Downstream: `model.rs::analyse` calls `analyse_hazards` once per cell and stores the results on
-`AnalysedCell` (`constraints`, `arbitration`); `main.rs` prints one stderr warning per hazard;
-`emit/arcs_tcl.rs` renders constraints as Liberate `define_arc` blocks when enabled.
+Downstream: `Cell::analyse` calls `analysis::analyse_machine`, which calls `confluence::derive` once
+per cell, and stores the results on `AnalysedCell` (`constraints`, `arbitration`); `main.rs` prints one
+stderr warning per hazard; `emit/arcs_tcl.rs` renders constraints as Liberate `define_arc` blocks when
+enabled.
 
 ## 1. Phenomena and remedy: what is a hazard, what is a constraint
 
@@ -45,16 +47,16 @@ Two things are deliberately **not** hazards:
 
 ## 2. Everything starts from the reachable states
 
-`analyse_hazards` runs `machine::explore` — the *same* exploration the arc BFS uses, with the same on/off
-cover seeding and the same single-input-toggle edges (the QDI assumption) — and probes hazards **only
-from the reachable stable states** in `ex.order`.
+`confluence::derive` does not run `machine::explore` itself — it re-walks the *shared* exploration
+(`let ex = &m.explored;`), the same one the arc BFS uses, built once by `Machine::build` with the same
+on/off cover seeding and the same single-input-toggle edges (the QDI assumption). It probes hazards
+**only from the reachable stable states** in `ex.order`.
 
 That anchoring is the load-bearing design decision. Held state is the product of the cell's own
 sequential behaviour; the only joint assignments that mean anything are the ones the dynamics can
-actually produce. Enumerating input × state combinations freely — as a since-removed detector once did —
-coerces state variables to fabricated values and manufactures hazards on states the cell can never
-occupy (the same mistake fixed on the arc side in commit `5a7c302`). Here reachability is intrinsic:
-every probe starts from a state the walk arrived at, so nothing is ever coerced.
+actually produce. Reachability here is intrinsic: every probe starts only from a state the exploration
+actually reached, so state variables are never coerced to fabricated values and no hazard is
+manufactured on a state the cell can never occupy.
 
 The BFS itself, however, never *reports* metastability: when a toggle fails to settle it silently drops
 that transition (no impossible arc is fabricated) and moves on. More importantly, it never presents the
@@ -63,16 +65,20 @@ arbitration is precisely the violation of that single-change assumption — **tw
 simultaneously** (a mutex's requests co-asserting). So the detector must apply that change itself, as a
 probe from each reachable state, which is what the next section does.
 
-## 3. The probes: three settles per (state, pair)
+## 3. The probes: single settles once per state, then the per-pair work
+
+For each reachable stable state, `confluence::derive` settles each input's single toggle **once**, into
+the `single` vector, and reuses it across every pair — so the per-state single-settle cost is O(n), not
+O(n²). Every settle goes through `machine::settle_or_cycle` — `settle`'s underlying form, which returns
+`Ok(fixpoint)` or `Err(cycle)`, the periodic trajectory it revisited instead of discarding it.
 
 For each reachable stable state `s` and each unordered input pair `{x, y}` (all other inputs held at
-their values in `s`), `analyse_hazards` performs three settles, each via `machine::settle_or_cycle` —
-`settle`'s underlying form, which returns `Ok(fixpoint)` or `Err(cycle)`, the periodic trajectory it
-revisited instead of discarding it:
+their values in `s`), the pair-specific work is one simultaneous settle plus, when both single toggles
+settled, two order follow-ups:
 
-1. **`x` alone** → `r_x`
-2. **`y` alone** → `r_y`
-3. **`x` and `y` simultaneously** → `r_sim`
+1. **`x` alone** → `r_x` — indexed from `single`
+2. **`y` alone** → `r_y` — indexed from `single`
+3. **`x` and `y` simultaneously** → `r_sim` — the settle done per pair
 
 and, when both single toggles settle, two follow-ups that complete the *orders*:
 
@@ -202,9 +208,11 @@ and the pair's constraint instead comes from the oscillation, which *is* its fau
 
 ## 8. Guards and invariants
 
-- Cells with fewer than two inputs, or with no state variables, have no hazards by construction (a
-  hazard relates two inputs; with nothing latched, every input order is confluent).
-- The same `n + k > 22` blow-up guard as the arc engine bails out on pathologically wide cells.
+- Cells with fewer than two inputs (`n < 2`), or with no state variables (`k == 0`), have no hazards by
+  construction (a hazard relates two inputs; with nothing latched, every input order is confluent);
+  `confluence::derive` returns an empty `HazardAnalysis` at those early-outs before probing anything.
+- The `n + k > 22` blow-up guard is the shared `MAX_MACHINE_VARS`: it gates the whole machine pass in
+  `Machine::build`, so a pathologically wide cell is never explored and yields neither arcs nor hazards.
 - All containers are `BTreeMap`/`BTreeSet`, so reports come out in a deterministic order.
 - The probes never mutate the exploration: they settle *copies* with inputs toggled, so the reachable
   graph the arcs were derived from is exactly the graph the hazards were probed from.

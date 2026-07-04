@@ -4,8 +4,9 @@
 //! (no-change = hold). Internal state nodes are emitted as `direction : internal` pins and appear as
 //! internal-node columns in the state tables of the outputs that reference them.
 //!
-//! The fragment is a bare `cell (...) { ... }` group, not a full library wrapper: the user drops it
-//! into their own Liberate harness. Groups are built with `liberty-parse`'s `Group`/`Attribute`/`Value`
+//! `cell_liberty` renders one cell as a bare `cell (...) { ... }` group; `library_liberty` wraps all of
+//! a run's cells in a single `library (<name>) { ... }` group — the `.lib` file cellsmith writes. Groups
+//! are built with `liberty-parse`'s `Group`/`Attribute`/`Value`
 //! trees (the same idiom as `pseudosync/src/lib.rs`) and rendered by wrapping in `Liberty` — `Group`
 //! itself has no `Display`.
 
