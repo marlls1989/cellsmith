@@ -136,6 +136,8 @@ Options:
   -n, --name <NAME>      Base name for the output files [default: spec file stem, or "cells" for stdin]
       --no-when          Suppress the `-when` conditions on arcs (emitted by default); with them
                          suppressed, arcs sharing a (related, pin, edge) collapse to one
+      --no-internal      Suppress hidden (internal-power) arcs — input toggles where no output
+                         changes (emitted by default)
       --constraints      Emit derived setup/hold & non_seq constraint arcs (off by default; a cell can
                          opt in with `constraint_arcs = true`)
       --stdout           Write all three artifacts to stdout (with banners) instead of files

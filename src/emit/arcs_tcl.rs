@@ -4,7 +4,7 @@
 //! arcs place `-type` first while fall arcs place it after the prevector. Pins are emitted in
 //! declaration order (cellsmith's deliberate divergence from hsNCL's alphabetical sort).
 
-use crate::logic::arcs::{Arc, Edge};
+use crate::logic::arcs::{Arc, Edge, HiddenArc};
 use crate::logic::assignment;
 use crate::logic::confluence::{Constraint, ConstraintKind};
 use crate::logic::interlock::Arbitration;
@@ -21,6 +21,9 @@ pub struct ArcsTclOptions {
     /// Emit derived constraint arcs (setup/hold, non_seq) from state-machine confluence. Off by default;
     /// a cell can opt in individually via `constraint_arcs = true`. See [`crate::logic::confluence`].
     pub emit_constraints: bool,
+    /// Emit hidden (whole-cell internal-power) arcs — an input toggles but no output changes — as
+    /// `-type hidden` blocks. **On by default.**
+    pub emit_internal: bool,
 }
 
 impl Default for ArcsTclOptions {
@@ -28,6 +31,7 @@ impl Default for ArcsTclOptions {
         Self {
             emit_when: true,
             emit_constraints: false,
+            emit_internal: true,
         }
     }
 }
@@ -48,6 +52,16 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     };
     for arc in &arcs {
         out.push_str(&format_arc(cell, arc, opts));
+    }
+    if opts.emit_internal {
+        let hidden = if opts.emit_when {
+            cell.hidden_arcs.clone()
+        } else {
+            collapse_hidden(&cell.hidden_arcs)
+        };
+        for h in &hidden {
+            out.push_str(&format_hidden_arc(cell, h, opts));
+        }
     }
     if opts.emit_constraints || cell.constraint_arcs_declared {
         for c in &cell.constraints {
@@ -165,6 +179,30 @@ fn collapse_conditions(arcs: &[Arc]) -> Vec<Arc> {
     best.into_values().cloned().collect()
 }
 
+/// Collapse hidden arcs that share a `(pin, edge)` — the same physical input toggle reached under
+/// different held-input contexts — to one, keeping the shortest prevector. Used when `-when` is off,
+/// where the held context is not emitted, so a single prevector suffices to exercise the arc.
+fn collapse_hidden(arcs: &[HiddenArc]) -> Vec<HiddenArc> {
+    use std::collections::btree_map::Entry;
+    use std::collections::BTreeMap;
+    // Keep references while deduping so only the surviving arcs are cloned.
+    let mut best: BTreeMap<(String, bool), &HiddenArc> = BTreeMap::new();
+    for arc in arcs {
+        let key = (arc.pin.as_str().to_string(), matches!(arc.edge, Edge::Rise));
+        match best.entry(key) {
+            Entry::Vacant(e) => {
+                e.insert(arc);
+            }
+            Entry::Occupied(mut e) => {
+                if arc.prevector.len() < e.get().prevector.len() {
+                    e.insert(arc);
+                }
+            }
+        }
+    }
+    best.into_values().cloned().collect()
+}
+
 fn format_arc(cell: &AnalysedCell, arc: &Arc, opts: ArcsTclOptions) -> String {
     let type_line = format!(
         "\t-type {} \\\n",
@@ -181,7 +219,7 @@ fn format_arc(cell: &AnalysedCell, arc: &Arc, opts: ArcsTclOptions) -> String {
     );
     let pinlist = format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell));
     let vector = format!("\t-vector {{{}}} \\\n", vector_str(cell, arc));
-    let when = match (opts.emit_when, when_str(arc)) {
+    let when = match (opts.emit_when, when_str(&arc.end, &arc.related)) {
         (true, Some(w)) => format!("\t-when \"{w}\" \\\n"),
         _ => String::new(),
     };
@@ -209,6 +247,59 @@ fn format_arc(cell: &AnalysedCell, arc: &Arc, opts: ArcsTclOptions) -> String {
     s.push_str(&related);
     s.push_str(&pin);
     s.push_str(&name);
+    s.push('\n');
+    s
+}
+
+/// A hidden (whole-cell internal-power) `define_arc` of `-type hidden`: the toggled input drives an
+/// `R`/`F` edge, every other input sits at its held value in the end state, and every output is pinned
+/// at its held `1`/`0` value (never `X` — a hidden arc measures no output transition). Unlike transition
+/// arcs there is no `-related_pin`, and `-type hidden` always leads regardless of edge direction.
+fn format_hidden_arc(cell: &AnalysedCell, h: &HiddenArc, opts: ArcsTclOptions) -> String {
+    let held: std::collections::BTreeMap<&str, bool> =
+        h.outputs.iter().map(|(s, b)| (s.as_str(), *b)).collect();
+    let end = assignment(&h.end);
+    let vec = vector(
+        cell,
+        |input| {
+            if input == h.pin.as_str() {
+                h.edge.rf().to_string()
+            } else {
+                if *end.get(input).unwrap_or(&false) {
+                    "1"
+                } else {
+                    "0"
+                }
+                .to_string()
+            }
+        },
+        |name| {
+            if *held.get(name).expect("hidden arc defines every output") {
+                "1"
+            } else {
+                "0"
+            }
+            .to_string()
+        },
+    );
+
+    let mut s = String::from("define_arc \\\n");
+    s.push_str("\t-type hidden \\\n");
+    s.push_str(&format!(
+        "\t-prevector_pinlist {{{}}} \\\n",
+        cell.inputs.join(" ")
+    ));
+    s.push_str(&format!(
+        "\t-prevector {{{}}} \\\n",
+        prevector_str(cell, &h.prevector)
+    ));
+    s.push_str(&format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell)));
+    s.push_str(&format!("\t-vector {{{vec}}} \\\n"));
+    if let (true, Some(w)) = (opts.emit_when, hidden_when_str(h)) {
+        s.push_str(&format!("\t-when \"{w}\" \\\n"));
+    }
+    s.push_str(&format!("\t-pin {} \\\n", h.pin.as_str()));
+    s.push_str(&format!("\t{{ {} }}\n", cell.name));
     s.push('\n');
     s
 }
@@ -287,11 +378,31 @@ fn vector_str(cell: &AnalysedCell, arc: &Arc) -> String {
 
 /// The `-when` condition: the other inputs' fixed values in the end state, as a product of literals
 /// (`*` AND, `!` NOT). `None` when no other input is fixed (the arc is unconditional).
-fn when_str(arc: &Arc) -> Option<String> {
-    let mut lits: Vec<(String, bool)> = assignment(&arc.end)
+fn when_str(
+    end: &espresso_logic::Minterm<espresso_logic::Symbol>,
+    exclude: &str,
+) -> Option<String> {
+    let mut lits: Vec<(String, bool)> = assignment(end)
         .into_iter()
-        .filter(|(k, _)| *k != arc.related)
+        .filter(|(k, _)| *k != exclude)
         .collect();
+    if lits.is_empty() {
+        return None;
+    }
+    lits.sort();
+    Some(crate::logic::literal_product(&lits))
+}
+
+/// The hidden arc's `-when` condition: the other inputs' fixed values in the end state (excluding the
+/// toggled pin) plus every held output value, as a product of literals. The held outputs disambiguate
+/// the distinct stored-value contexts of a state-holding cell that share one input vector. `None` when
+/// no literal is fixed.
+fn hidden_when_str(h: &HiddenArc) -> Option<String> {
+    let mut lits: Vec<(String, bool)> = assignment(&h.end)
+        .into_iter()
+        .filter(|(k, _)| *k != h.pin.as_str())
+        .collect();
+    lits.extend(h.outputs.iter().map(|(s, v)| (s.as_str().to_string(), *v)));
     if lits.is_empty() {
         return None;
     }
@@ -325,14 +436,138 @@ Q = "A*B + Q*(A+B)"
         assert!(tcl.contains("-prevector_pinlist {A B}"));
         assert!(tcl.contains("-pinlist {A B Q}"));
         assert!(tcl.contains("{ C2 }"));
-        // every block is balanced and combinational here
+        // every transition block is balanced and combinational here
+        assert_eq!(
+            tcl.matches("-type combinational").count(),
+            tcl.matches("-pin Q").count()
+        );
         assert_eq!(
             tcl.matches("define_arc").count(),
-            tcl.matches("-pin Q").count()
+            tcl.matches("-pin Q").count() + tcl.matches("-type hidden").count()
         );
         assert!(!tcl.contains("-type async"));
         // -when is emitted by default.
         assert!(tcl.contains("-when"));
+    }
+
+    #[test]
+    fn and2_emits_hidden_arc_blocks() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "AND2"
+inputs = ["A", "B"]
+[cell.outputs]
+Y = "A*B"
+"#,
+        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        for frag in tcl.split("define_arc") {
+            if !frag.contains("-type hidden") {
+                continue;
+            }
+            // Hidden arcs never carry a related pin.
+            assert!(!frag.contains("-related_pin"));
+            // The toggled input is named by `-pin`.
+            assert!(frag.contains("-pin A") || frag.contains("-pin B"));
+            // Every output is pinned at its held value — never X.
+            assert!(!frag.contains("X"));
+        }
+        // The A-falls-while-B=0 hidden arc: Y held 0. The held output is folded into `-when` (sorted
+        // literals over inputs B and output Y).
+        assert!(tcl
+            .split("define_arc")
+            .any(|frag| frag.contains("-type hidden")
+                && frag.contains("-vector {F 0 0}")
+                && frag.contains("-when \"!B*!Y\"")
+                && frag.contains("-pin A")));
+    }
+
+    #[test]
+    fn dlatch_hidden_when_carries_held_output() {
+        // Transparent-high D-latch: a D toggle in hold (E=0) leaves Q unchanged, but the two stored-value
+        // contexts differ in the held Q. Both must be emitted as hidden `-pin D` arcs and disambiguated by
+        // the held Q literal folded into `-when`.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DLAT"
+inputs = ["E", "D"]
+[cell.outputs]
+Q = "E*D + !E*Q"
+"#,
+        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        let d_hidden: Vec<&str> = tcl
+            .split("define_arc")
+            .filter(|frag| frag.contains("-type hidden") && frag.contains("-pin D"))
+            .collect();
+        // The `-when` of one context holds Q true (`* Q`, not `!Q`) and another holds Q false (`!Q`).
+        let when_of = |frag: &str| {
+            frag.lines()
+                .find(|l| l.contains("-when"))
+                .unwrap_or("")
+                .to_string()
+        };
+        assert!(
+            d_hidden.iter().any(|frag| when_of(frag).contains("*Q")),
+            "expected a D hidden arc whose -when holds Q true"
+        );
+        assert!(
+            d_hidden.iter().any(|frag| when_of(frag).contains("!Q")),
+            "expected a D hidden arc whose -when holds Q false"
+        );
+    }
+
+    #[test]
+    fn no_internal_option_suppresses_hidden() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "AND2"
+inputs = ["A", "B"]
+[cell.outputs]
+Y = "A*B"
+"#,
+        );
+        let off = cell_arcs_tcl(
+            &cell,
+            ArcsTclOptions {
+                emit_internal: false,
+                ..Default::default()
+            },
+        );
+        let on = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        assert_eq!(off.matches("-type hidden").count(), 0);
+        assert!(on.matches("-type hidden").count() >= 1);
+    }
+
+    #[test]
+    fn hidden_arcs_collapse_without_when() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "AND2"
+inputs = ["A", "B"]
+[cell.outputs]
+Y = "A*B"
+"#,
+        );
+        let without_when = cell_arcs_tcl(
+            &cell,
+            ArcsTclOptions {
+                emit_when: false,
+                ..Default::default()
+            },
+        );
+        let with_when = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        assert!(!without_when.contains("-when"));
+        assert!(
+            without_when.matches("-type hidden").count()
+                <= with_when.matches("-type hidden").count()
+        );
     }
 
     #[test]

@@ -23,6 +23,7 @@ use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::analysis::Machine;
 use crate::logic::machine;
+use crate::model::AnalysedOutput;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Edge {
@@ -64,10 +65,23 @@ pub struct Arc {
     pub is_async: bool,
 }
 
+/// A whole-cell internal-power ('hidden') arc: the input `pin` toggles between two settled
+/// states and NO output changes. Used for internal-power characterisation.
+#[derive(Debug, Clone)]
+pub struct HiddenArc {
+    pub pin: Symbol,            // the toggled primary input
+    pub edge: Edge,             // that input's Rise/Fall
+    pub start: Minterm<Symbol>, // input vector before the toggle
+    pub end: Minterm<Symbol>,   // input vector after the toggle
+    pub prevector: Vec<Minterm<Symbol>>,
+    pub outputs: Vec<(Symbol, bool)>, // each output's HELD logic value, in cell.outputs order
+}
+
 /// Derive transition arcs for every output of a cell by re-walking its shared asynchronous state machine
 /// (see [`machine`] and [`Machine`]). A machine node is a fully-fixed [`Minterm<Symbol>`] over
-/// `[inputs…, state_vars…]`.
-pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> Vec<Arc> {
+/// `[inputs…, state_vars…]`. Also derives the whole-cell internal-power ('hidden') arcs — single input
+/// toggles that settle but leave every output unchanged.
+pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> (Vec<Arc>, Vec<HiddenArc>) {
     let cell = m.cell;
     let inputs = &cell.inputs;
     let state_set = &m.state_set;
@@ -97,6 +111,16 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> Vec<Arc> {
     // The same arc can be reached from several start candidates; keep the one with the shortest
     // prevector. Keyed by (output, related, edge-direction, start over the inputs).
     let mut best_arc: BTreeMap<(String, String, bool, Minterm<Symbol>), Arc> = BTreeMap::new();
+    // Hidden ('hidden') arcs, deduped like `best_arc`: keyed by (toggled pin, edge-direction, start over
+    // the inputs, held output values), keeping the one with the shortest prevector. The held outputs are
+    // part of the key so distinct stored-value contexts of a state-holding cell (same input vector, different
+    // stored output) are kept as separate arcs; only contexts that differ solely in an unobservable
+    // internal-node value — which produce identical outputs — collapse to the shortest-prevector one.
+    #[allow(clippy::type_complexity)]
+    let mut best_hidden: BTreeMap<
+        (Symbol, bool, Minterm<Symbol>, Vec<(Symbol, bool)>),
+        HiddenArc,
+    > = BTreeMap::new();
 
     // Re-walk the reachable stable states in BFS order; wherever a single input toggle flips an output,
     // emit an arc.
@@ -111,17 +135,21 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> Vec<Arc> {
             let start = node.project_to(inputs);
             let end = np.project_to(inputs);
             let prevector = ex.path_to(node, inputs);
-            for o in &cell.outputs {
-                let (Some(before), Some(after)) =
-                    (output_value(&o.name, node), output_value(&o.name, &np))
-                else {
+            // Collect each output's (before, after) once so both the transition and hidden paths read it.
+            let vals: Vec<(&AnalysedOutput, Option<bool>, Option<bool>)> = cell
+                .outputs
+                .iter()
+                .map(|o| (o, output_value(&o.name, node), output_value(&o.name, &np)))
+                .collect();
+            for (o, before, after) in &vals {
+                let (Some(before), Some(after)) = (before, after) else {
                     continue;
                 };
                 if before == after {
                     continue;
                 }
-                let edge = if after { Edge::Rise } else { Edge::Fall };
-                let key = (o.name.clone(), related.clone(), after, start.clone());
+                let edge = if *after { Edge::Rise } else { Edge::Fall };
+                let key = (o.name.clone(), related.clone(), *after, start.clone());
                 let arc = Arc {
                     edge,
                     output: o.name.clone(),
@@ -142,12 +170,49 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> Vec<Arc> {
                     }
                 }
             }
+
+            // Hidden path: a settled input toggle where every output is defined at both ends and none of
+            // them changed — internal-power characterisation.
+            if !vals.is_empty()
+                && vals
+                    .iter()
+                    .all(|(_, b, a)| matches!((b, a), (Some(b), Some(a)) if b == a))
+            {
+                let rose = end
+                    .value_of(related.as_str())
+                    .expect("toggled input is fully fixed in the settled end state");
+                let pin = Symbol::from(related.as_str());
+                let outputs: Vec<(Symbol, bool)> = vals
+                    .iter()
+                    .map(|(o, _, a)| (Symbol::from(o.name.as_str()), a.unwrap()))
+                    .collect();
+                let hidden = HiddenArc {
+                    pin: pin.clone(),
+                    edge: if rose { Edge::Rise } else { Edge::Fall },
+                    start: start.clone(),
+                    end: end.clone(),
+                    prevector: prevector.clone(),
+                    outputs: outputs.clone(),
+                };
+                let key = (pin, rose, start.clone(), outputs);
+                match best_hidden.entry(key) {
+                    std::collections::btree_map::Entry::Vacant(e) => {
+                        e.insert(hidden);
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut e) => {
+                        if hidden.prevector.len() < e.get().prevector.len() {
+                            e.insert(hidden);
+                        }
+                    }
+                }
+            }
         }
     }
 
-    let arcs: Vec<Arc> = best_arc.into_values().collect();
-
-    arcs
+    (
+        best_arc.into_values().collect(),
+        best_hidden.into_values().collect(),
+    )
 }
 
 #[cfg(test)]
@@ -188,6 +253,104 @@ Q = "A*B + Q*(A+B)"
                 assert_eq!(w[0].hamming_distance(&w[1]), 1);
             }
         }
+    }
+
+    #[test]
+    fn and2_has_hidden_arc_when_output_held() {
+        // A falling while B=0 settles with Y held at 0: an internal-power hidden arc, not a transition.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "AND2"
+inputs = ["A", "B"]
+[cell.outputs]
+Y = "A*B"
+"#,
+        );
+        assert!(!cell.hidden_arcs.is_empty());
+        assert!(cell.hidden_arcs.iter().any(|h| {
+            h.pin.as_str() == "A"
+                && h.edge == Edge::Fall
+                && h.outputs.len() == 1
+                && h.outputs[0].0.as_str() == "Y"
+                && !h.outputs[0].1
+        }));
+        // Single-output cell: every hidden arc holds exactly one output value.
+        assert!(cell.hidden_arcs.iter().all(|h| h.outputs.len() == 1));
+        // Every hidden arc's prevector is a real single-step walk into its start state.
+        for h in &cell.hidden_arcs {
+            assert_eq!(h.prevector.last(), Some(&h.start));
+            for w in h.prevector.windows(2) {
+                assert_eq!(w[0].hamming_distance(&w[1]), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn dlatch_keeps_both_stored_value_hidden_contexts() {
+        // Transparent-high D-latch: in hold (E=0) a D toggle leaves Q unchanged but its held value depends
+        // on the stored state. Both stored-value contexts (Q held 0 and Q held 1) must survive as distinct
+        // hidden arcs on D — before folding the held output into the dedup key only one survived.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DLAT"
+inputs = ["E", "D"]
+[cell.outputs]
+Q = "E*D + !E*Q"
+"#,
+        );
+        let d_rise: Vec<&HiddenArc> = cell
+            .hidden_arcs
+            .iter()
+            .filter(|h| h.pin.as_str() == "D" && h.edge == Edge::Rise)
+            .collect();
+        assert!(
+            d_rise.len() >= 2,
+            "expected >=2 D-rise hidden arcs, got {}",
+            d_rise.len()
+        );
+        let q_val = |h: &HiddenArc| {
+            h.outputs
+                .iter()
+                .find(|(s, _)| s.as_str() == "Q")
+                .map(|(_, v)| *v)
+        };
+        assert!(d_rise.iter().any(|h| q_val(h) == Some(false)));
+        assert!(d_rise.iter().any(|h| q_val(h) == Some(true)));
+    }
+
+    #[test]
+    fn inverter_has_no_hidden_arc() {
+        // Toggling A always flips Y, so no toggle leaves the output unchanged.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "INV"
+inputs = ["A"]
+[cell.outputs]
+Y = "!A"
+"#,
+        );
+        assert!(cell.hidden_arcs.is_empty());
+    }
+
+    #[test]
+    fn c_element_hidden_arcs_on_inputs_only() {
+        // A toggle that keeps the C-element in hold leaves Q unchanged: a hidden arc on each input, but
+        // never sourced by the output.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "C2"
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+"#,
+        );
+        assert!(cell.hidden_arcs.iter().any(|h| h.pin.as_str() == "A"));
+        assert!(cell.hidden_arcs.iter().any(|h| h.pin.as_str() == "B"));
+        assert!(cell.hidden_arcs.iter().all(|h| h.pin.as_str() != "Q"));
     }
 
     #[test]

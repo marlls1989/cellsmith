@@ -4,6 +4,12 @@
 #   cellsmith examples/cells.toml --stdout    # preview everything on stdout
 
 [[cell]]
+name = "AND2"
+inputs = ["A", "B"]
+[cell.outputs]
+Y = "A*B"
+
+[[cell]]
 name = "C2"                    # physical cell name used in the arcs
 inputs = ["A", "B"]            # ordered: defines pinlist/vector order
 [cell.outputs]
@@ -25,8 +31,8 @@ Q = "(P1*P2*C+Q*(M1+M2+C))*!R"
 name = "SR"
 inputs = ["S", "R"]
 [cell.outputs]
-Q  = "S + Q*!R"                # cross-coupling: Q and Qn reference each other
-Qn = "R + Qn*!S"
+Q  = "!(R+Qn)"                # cross-coupling: Q and Qn reference each other
+Qn = "!(S+Q)"
 
 [[cell]]
 name = "MUT"

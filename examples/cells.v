@@ -1,3 +1,24 @@
+primitive AND2_Y(Y, A, B);
+output Y;
+input  A, B;
+reg    Y;
+table
+	0 ? : ? : 0;
+	1 1 : ? : 1;
+	? 0 : ? : 0;
+endtable
+endprimitive
+`celldefine
+module AND2(Y, A, B);
+output Y;
+input  A, B;
+specify
+	(A => Y) = (0.1, 0.1);
+	(B => Y) = (0.1, 0.1);
+endspecify
+AND2_Y u_AND2_Y (Y, A, B);
+endmodule
+`endcelldefine
 primitive C2_Q(Q, A, B);
 output Q;
 input  A, B;
@@ -73,24 +94,24 @@ endspecify
 RACELEM21_Q u_RACELEM21_Q (Q, P1, P2, C, R, M1, M2);
 endmodule
 `endcelldefine
-primitive SR_Q(Q, S, R);
+primitive SR_Q(Q, R, Qn);
 output Q;
-input  S, R;
+input  R, Qn;
 reg    Q;
 table
-	0 0 : ? : -;
-	0 1 : ? : 0;
-	1 ? : ? : 1;
+	0 0 : ? : 1;
+	1 ? : ? : 0;
+	? 1 : ? : 0;
 endtable
 endprimitive
-primitive SR_Qn(Qn, R, S);
+primitive SR_Qn(Qn, S, Q);
 output Qn;
-input  R, S;
+input  S, Q;
 reg    Qn;
 table
-	0 0 : ? : -;
-	0 1 : ? : 0;
-	1 ? : ? : 1;
+	0 0 : ? : 1;
+	1 ? : ? : 0;
+	? 1 : ? : 0;
 endtable
 endprimitive
 `celldefine
@@ -103,8 +124,8 @@ specify
 	(R => Q) = (0.1, 0.1);
 	(R => Qn) = (0.1, 0.1);
 endspecify
-SR_Q u_SR_Q (Q, S, R);
-SR_Qn u_SR_Qn (Qn, R, S);
+SR_Q u_SR_Q (Q, R, Qn);
+SR_Qn u_SR_Qn (Qn, S, Q);
 endmodule
 `endcelldefine
 primitive MUT_Qa(Qa, Qb, A);

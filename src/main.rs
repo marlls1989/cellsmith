@@ -37,6 +37,10 @@ struct Cli {
     #[arg(long)]
     no_when: bool,
 
+    /// Suppress hidden (internal-power) arcs — input toggles where no output changes (emitted by default).
+    #[arg(long)]
+    no_internal: bool,
+
     /// Emit derived setup/hold & non_seq constraint arcs (off by default; a cell can opt in with
     /// `constraint_arcs = true`).
     #[arg(long)]
@@ -108,6 +112,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     let arc_opts = ArcsTclOptions {
         emit_when: !cli.no_when,
         emit_constraints: cli.constraints,
+        emit_internal: !cli.no_internal,
     };
     let base = cli.name.unwrap_or_else(|| base_name(&cli.spec));
     let arcs = render(&cells, |c| cell_arcs_tcl(c, arc_opts));
