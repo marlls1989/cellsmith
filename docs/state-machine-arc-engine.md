@@ -55,15 +55,15 @@ Every term the later sections lean on, pinned here before first use.
 - **Signal** — an **output** (emits an external pin) or an **internal** (no pin). Both are Boolean
   functions that may reference inputs and other signals; a referenced signal is that signal's
   feedback/delayed value (§1).
-- **Reference graph** — signal → the signals its function names (`dependency_map`, `resolve.rs:30`).
+- **Reference graph** — signal → the signals its function names (`dependency_map`, `resolve.rs:24`).
 - **State variable** — a signal that lies on a **feedback cycle**: it reaches itself in the reference
   graph, whether by a self-loop (`Q = A·B + Q·(A+B)`) or a larger coupling cycle (`Qa = !Qb·A`,
   `Qb = !Qa·B`). Classification runs on the **minimised** model: `logic::minimise` (§3.1) first collapses
   every alias/complement chain onto one representative coordinate and composes every non-self-holding
   relay into its consumers — refusing any fold that would merge a relay and a consumer into a 2-cycle —
   so self-reachability afterwards counts only genuine memory, never a spent wire or relay.
-  `resolve::state_variables` (`resolve.rs:135`) then finds the state variables structurally over that
-  minimised map: take the reference graph's transitive closure (`transitive_closure`, `resolve.rs:108`,
+  `resolve::state_variables` (`resolve.rs:61`) then finds the state variables structurally over that
+  minimised map: take the reference graph's transitive closure (`transitive_closure`, `resolve.rs:34`,
   private), and a signal `s` is a state variable iff **`s` reaches itself**. The state variables — and
   only they — become the coordinates of the machine's state.
 - **Combinational signal** — a signal on **no** feedback cycle. Its value is fixed by the inputs and the
