@@ -1,4 +1,4 @@
-//! lobsterate — generate Cadence Liberate transition arcs (with prevectors) for logic cells,
+//! cellsmith — generate Cadence Liberate transition arcs (with prevectors) for logic cells,
 //! including state-holding/hysteretic cells (C-elements, latches, cross-coupled pairs).
 //!
 //! Modules are filled in per the implementation plan: input model + parser, region derivation
@@ -12,7 +12,7 @@ pub mod model;
 #[cfg(test)]
 mod smoke {
     //! Confirms the espresso-logic 5.x public API and its C-FFI build link, and that the two
-    //! primitives lobsterate leans on behave as the plan assumes:
+    //! primitives cellsmith leans on behave as the plan assumes:
     //!   * feedback projection via universal quantification (`forall`), and
     //!   * universal projection to a two-sided FR cover (`cover_over_fr`), whose F/R cubes are the
     //!     on/off sets and whose absent cubes are the undef/hold gap.

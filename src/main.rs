@@ -1,4 +1,4 @@
-//! lobsterate CLI: read a minimal multi-cell TOML spec and emit, for every cell, the Liberate arcs
+//! cellsmith CLI: read a minimal multi-cell TOML spec and emit, for every cell, the Liberate arcs
 //! (`define_arc` + prevectors), a behavioural Verilog model (sequential UDP + wrapper), and a minimal
 //! Liberty fragment (`statetable` for hysteretic outputs, plain `function` for combinational ones).
 
@@ -10,16 +10,16 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 
-use lobsterate::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
-use lobsterate::emit::liberty::library_liberty;
-use lobsterate::emit::verilog::cell_verilog;
-use lobsterate::logic::confluence;
-use lobsterate::model::{parse_spec, AnalysedCell};
+use cellsmith::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
+use cellsmith::emit::liberty::library_liberty;
+use cellsmith::emit::verilog::cell_verilog;
+use cellsmith::logic::confluence;
+use cellsmith::model::{parse_spec, AnalysedCell};
 
 /// Generate Cadence Liberate transition arcs (with prevectors), a behavioural Verilog model and a
 /// Liberty fragment for logic cells, including state-holding/hysteretic cells.
 #[derive(Parser)]
-#[command(name = "lobsterate", version, about, long_about = None)]
+#[command(name = "cellsmith", version, about, long_about = None)]
 struct Cli {
     /// TOML cell spec to read ("-" reads from stdin).
     spec: String,
@@ -49,7 +49,7 @@ struct Cli {
 
 fn main() {
     if let Err(e) = run(Cli::parse()) {
-        eprintln!("lobsterate: {e}");
+        eprintln!("cellsmith: {e}");
         std::process::exit(1);
     }
 }
@@ -68,7 +68,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     for c in &cells {
         for a in &c.arbitration {
             eprintln!(
-                "lobsterate: warning: cell {:?}: nodes {{{}}} arbitrate (metastable at {}) — \
+                "cellsmith: warning: cell {:?}: nodes {{{}}} arbitrate (metastable at {}) — \
                  annotated only, not modelled as timing.",
                 c.name,
                 a.group.join(", "),
@@ -98,7 +98,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         }
         for ((a, b), (kind, conditions)) in &pairs {
             eprintln!(
-                "lobsterate: warning: cell {:?}: inputs ({a}, {b}) need a {kind} constraint — hazard when {}.",
+                "cellsmith: warning: cell {:?}: inputs ({a}, {b}) need a {kind} constraint — hazard when {}.",
                 c.name,
                 conditions.join("; "),
             );
@@ -151,7 +151,7 @@ fn render(cells: &[AnalysedCell], mut one: impl FnMut(&AnalysedCell) -> String) 
 
 /// A stdout section banner for one artifact.
 fn banner(kind: &str, body: &str) -> String {
-    format!("// ===== lobsterate {kind} =====\n{body}\n")
+    format!("// ===== cellsmith {kind} =====\n{body}\n")
 }
 
 /// The default output base name derived from the spec path (stem), or "cells" for stdin.
@@ -189,14 +189,14 @@ mod tests {
     fn banner_wraps_body_with_a_labelled_header() {
         assert_eq!(
             banner("arcs.tcl", "BODY"),
-            "// ===== lobsterate arcs.tcl =====\nBODY\n",
+            "// ===== cellsmith arcs.tcl =====\nBODY\n",
         );
     }
 
     #[test]
     fn read_spec_reads_a_file() {
         let path =
-            std::env::temp_dir().join(format!("lobsterate_read_spec_{}.toml", std::process::id()));
+            std::env::temp_dir().join(format!("cellsmith_read_spec_{}.toml", std::process::id()));
         fs::write(&path, "hello = 1\n").unwrap();
         let got = read_spec(path.to_str().unwrap()).unwrap();
         assert_eq!(got, "hello = 1\n");
@@ -205,6 +205,6 @@ mod tests {
 
     #[test]
     fn read_spec_errors_on_a_missing_path() {
-        assert!(read_spec("/no/such/lobsterate/spec.toml").is_err());
+        assert!(read_spec("/no/such/cellsmith/spec.toml").is_err());
     }
 }

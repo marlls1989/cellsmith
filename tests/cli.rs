@@ -5,7 +5,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 /// The binary under test, provided by Cargo for integration tests.
-const BIN: &str = env!("CARGO_BIN_EXE_lobsterate");
+const BIN: &str = env!("CARGO_BIN_EXE_cellsmith");
 
 const C2: &str = r#"
 [[cell]]
@@ -17,7 +17,7 @@ Q = "A*B + Q*(A+B)"
 
 /// A unique scratch directory for one test, removed by the caller.
 fn scratch_dir(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("lobsterate_cli_{tag}_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("cellsmith_cli_{tag}_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -32,12 +32,12 @@ fn stdout_mode_emits_all_three_banners() {
         .arg("--stdout")
         .arg(&spec)
         .output()
-        .expect("run lobsterate");
+        .expect("run cellsmith");
     assert!(out.status.success(), "exit: {:?}", out.status);
     let stdout = String::from_utf8(out.stdout).unwrap();
-    assert!(stdout.contains("// ===== lobsterate arcs.tcl ====="));
-    assert!(stdout.contains("// ===== lobsterate verilog ====="));
-    assert!(stdout.contains("// ===== lobsterate liberty ====="));
+    assert!(stdout.contains("// ===== cellsmith arcs.tcl ====="));
+    assert!(stdout.contains("// ===== cellsmith verilog ====="));
+    assert!(stdout.contains("// ===== cellsmith liberty ====="));
     assert!(stdout.contains("define_arc"));
 
     std::fs::remove_dir_all(&dir).ok();
@@ -57,7 +57,7 @@ fn file_mode_writes_the_three_artifacts() {
         .arg("cli")
         .arg(&spec)
         .status()
-        .expect("run lobsterate");
+        .expect("run cellsmith");
     assert!(status.success());
     assert!(outdir.join("cli_arcs.tcl").is_file());
     assert!(outdir.join("cli.v").is_file());
@@ -74,17 +74,17 @@ fn stdin_dash_reads_the_spec() {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
-        .expect("spawn lobsterate");
+        .expect("spawn cellsmith");
     child
         .stdin
         .take()
         .unwrap()
         .write_all(C2.as_bytes())
         .unwrap();
-    let out = child.wait_with_output().expect("wait lobsterate");
+    let out = child.wait_with_output().expect("wait cellsmith");
     assert!(out.status.success());
     let stdout = String::from_utf8(out.stdout).unwrap();
-    assert!(stdout.contains("// ===== lobsterate arcs.tcl ====="));
+    assert!(stdout.contains("// ===== cellsmith arcs.tcl ====="));
     assert!(stdout.contains("define_arc"));
 }
 
@@ -103,7 +103,7 @@ fn bad_spec_exits_non_zero() {
         .arg("--stdout")
         .arg(&spec)
         .status()
-        .expect("run lobsterate");
+        .expect("run cellsmith");
     assert!(!status.success(), "a bad spec must exit non-zero");
 
     std::fs::remove_dir_all(&dir).ok();

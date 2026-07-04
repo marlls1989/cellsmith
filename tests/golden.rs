@@ -1,15 +1,15 @@
 //! End-to-end parity and validity checks over the three per-cell artifacts.
 //!
-//! Full byte-parity with the Haskell `genLiberateTemplate` goldens is not a goal: lobsterate emits
+//! Full byte-parity with the Haskell `genLiberateTemplate` goldens is not a goal: cellsmith emits
 //! pins in declaration order (not alphabetical), drops the `vclk`/alias layer, and factors don't-care
 //! cubes via BDD paths rather than Quine–McCluskey. What we *can* pin down is that the logic matches —
 //! the sequential-UDP next-state table of a 2-input C-element is canonical — and that the emitted
 //! Liberty is syntactically valid (parses back through `liberty-parse`).
 
-use lobsterate::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
-use lobsterate::emit::liberty::cell_liberty;
-use lobsterate::emit::verilog::cell_verilog;
-use lobsterate::model::{parse_spec, AnalysedCell};
+use cellsmith::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
+use cellsmith::emit::liberty::cell_liberty;
+use cellsmith::emit::verilog::cell_verilog;
+use cellsmith::model::{parse_spec, AnalysedCell};
 
 fn analyse_one(src: &str) -> AnalysedCell {
     parse_spec(src).unwrap().cells.remove(0).analyse().unwrap()

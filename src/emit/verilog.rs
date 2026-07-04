@@ -5,7 +5,7 @@
 //! Mirrors hsNCL `outPinUDP`/`cellAliasModule` (`Circuit/NCLCell.hs`), including its structure: the
 //! UDP for output `x` takes the pin's own state as the `reg`/current-state column and every other
 //! signal (primary inputs + other outputs) as an input column, so a self-holding cell keeps its
-//! hysteresis as `-` (no-change) rows. Pins are emitted in declaration order (lobsterate's deliberate
+//! hysteresis as `-` (no-change) rows. Pins are emitted in declaration order (cellsmith's deliberate
 //! divergence from hsNCL's alphabetical sort).
 
 use crate::logic::regions::{StateCube, StateRegions};

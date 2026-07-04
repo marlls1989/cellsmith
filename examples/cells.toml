@@ -1,7 +1,7 @@
-# Example lobsterate input — the cells cited in the README.
+# Example cellsmith input — the cells cited in the README.
 #
-#   lobsterate examples/cells.toml -o out      # -> out/cells_arcs.tcl, out/cells.v, out/cells.lib
-#   lobsterate examples/cells.toml --stdout    # preview everything on stdout
+#   cellsmith examples/cells.toml -o out      # -> out/cells_arcs.tcl, out/cells.v, out/cells.lib
+#   cellsmith examples/cells.toml --stdout    # preview everything on stdout
 
 [[cell]]
 name = "C2"                    # physical cell name used in the arcs

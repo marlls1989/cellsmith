@@ -1,6 +1,6 @@
 # Hazard detection and constraint derivation
 
-How lobsterate detects the hazard phenomena of a state-holding cell — **order-dependence** and
+How cellsmith detects the hazard phenomena of a state-holding cell — **order-dependence** and
 **oscillation** (metastability) — and derives the timing **constraints** (setup/hold, non_seq) that
 avoid them, from the same reachable-state machine that drives arc discovery. This is a companion to `state-machine-arc-engine.md`, which covers the model,
 the next-state functions δ, settling, and the reachability BFS; everything here builds on those.

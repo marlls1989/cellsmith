@@ -143,6 +143,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cellsmith"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "espresso-logic",
+ "indexmap 2.14.0",
+ "liberty-parse",
+ "serde",
+ "thiserror 2.0.18",
+ "toml",
+]
+
+[[package]]
 name = "cexpr"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -516,19 +529,6 @@ name = "linux-raw-sys"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d26c52dbd32dccf2d10cac7725f8eae5296885fb5703b261f7d0a0739ec807ab"
-
-[[package]]
-name = "lobsterate"
-version = "0.1.0"
-dependencies = [
- "clap",
- "espresso-logic",
- "indexmap 2.14.0",
- "liberty-parse",
- "serde",
- "thiserror 2.0.18",
- "toml",
-]
 
 [[package]]
 name = "lock_api"
