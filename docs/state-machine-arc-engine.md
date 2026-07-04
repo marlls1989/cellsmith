@@ -37,17 +37,17 @@ A **state variable** is any signal (output or internal) that lies on a feedback 
 (`Q = A·B + Q·(A+B)`) or a larger coupling cycle (`Qa = !Qb·A`, `Qb = !Qa·B`). A signal on no cycle is
 **combinational**: it is a pure function of inputs and other signals and folds away.
 
-`resolve::state_variables` (`resolve.rs:135`) finds them structurally: build the reference graph
-(`dependency_map`, `resolve.rs:30`), take its transitive closure (`transitive_closure`, `resolve.rs:108`,
+`resolve::state_variables` (`resolve.rs:134`) finds them structurally: build the reference graph
+(`dependency_map`, `resolve.rs:29`), take its transitive closure (`transitive_closure`, `resolve.rs:107`,
 private), and a signal `s` is a state variable iff **`s` reaches itself**. Only the state variables
 become coordinates of the machine's state; everything else is eliminated.
 
 ## 2. The next-state function δ
 
-For each state variable `v`, `resolve::delta(v, …)` (`resolve.rs:149-160`) produces a BDD **δ_v** giving
-`v`'s next value as a function of `inputs ∪ state-variables`. It is `resolve` (`resolve.rs:79`) composing
+For each state variable `v`, `resolve::delta(v, …)` (`resolve.rs:148-159`) produces a BDD **δ_v** giving
+`v`'s next value as a function of `inputs ∪ state-variables`. It is `resolve` (`resolve.rs:78`) composing
 referenced signals in via the BDD layer's native `Bdd::compose` — the substitution `f[v:=g]`
-(`resolve.rs:99`; the module comment records that composition uses `Bdd::compose`, `resolve.rs:20`) — but
+(`resolve.rs:98`; the module comment records that composition uses `Bdd::compose`, `resolve.rs:19`) — but
 substituting **only combinational** signals: every state variable is *kept* as a current-state coordinate
 rather than folded away.
 
