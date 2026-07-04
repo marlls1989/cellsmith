@@ -3,8 +3,8 @@
 //! same exploration.
 //!
 //! A cell is a state machine over `inputs × state-variables` (see [`machine`] and [`resolve`]). Building
-//! it — every signal's BDD, each state variable's next-state δ, the combinational outputs' δ, the shared
-//! headers, and the one [`machine::explore`] BFS — is the same setup for both derivations, so it is done
+//! it — every signal's BDD, each state variable's next-state δ, the combinational outputs' δ, and the
+//! one [`machine::explore`] BFS — is the same setup for both derivations, so it is done
 //! **once** here and shared through [`Machine`]. Only plain data ([`Arc`], [`Constraint`],
 //! [`Arbitration`]) escapes into [`MachineAnalysis`]; the live BDD handles never leave this pass.
 //!
@@ -15,7 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
-use espresso_logic::{bdd_builder, Symbol, Symbols};
+use espresso_logic::bdd_builder;
 
 use crate::logic::arcs::{self, Arc};
 use crate::logic::confluence::{self, Constraint};
@@ -33,12 +33,12 @@ pub struct MachineAnalysis {
     pub arbitration: Vec<Arbitration>,
 }
 
-/// The single home for the combinatorial blow-up guard: a cell whose machine header (inputs + state
-/// variables) exceeds this width is not explored at all — both arcs and hazards come back empty.
+/// The single home for the combinatorial blow-up guard: a cell whose machine width (inputs + state
+/// variables) exceeds this bound is not explored at all — both arcs and hazards come back empty.
 ///
 /// The bound is on `inputs + state variables`, and 22 is a deliberate memory/time ceiling: exploration
 /// materialises candidate pools by expanding the signals' input-projected FR covers (`cover_over_fr`)
-/// into full input minterms (via [`Cover::maximize`](espresso_logic::Cover::maximize)), so a header of
+/// into full input minterms (via [`Cover::maximize`](espresso_logic::Cover::maximize)), so a machine of
 /// width `w` can seed on the order of `2^w` minterms. At 22 that worst case is ~4M candidates — the
 /// largest pool we accept — and each extra variable *doubles* it, so raising the constant grows the pool
 /// (and the exploration cost) exponentially.
@@ -57,17 +57,13 @@ pub(crate) struct Machine<'c, B: Brand, C: ManagerCell> {
     /// The combinational outputs' δ, built **once** (an output's value at a node is read from its δ; a
     /// state output instead reads its own state field).
     pub(crate) out_deltas: BTreeMap<String, Bdd<B, C>>,
-    /// The full node header (inputs + state variables).
-    pub(crate) full_header: std::sync::Arc<Symbols<Symbol>>,
-    /// The input-only header the arcs and constraints are expressed over.
-    pub(crate) input_header: std::sync::Arc<Symbols<Symbol>>,
     /// The reachable stable states, discovered by one [`machine::explore`] BFS.
     pub(crate) explored: machine::Explored,
 }
 
 impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
     /// Build the shared machine for `cell` using `builder`'s manager. Returns `None` — leaving the cell
-    /// unexplored — when the header would exceed [`MAX_MACHINE_VARS`] (the combinatorial blow-up guard).
+    /// unexplored — when the machine width would exceed [`MAX_MACHINE_VARS`] (the combinatorial blow-up guard).
     pub(crate) fn build(
         builder: &BddBuilder<B, C>,
         cell: &'c AnalysedCell,
@@ -115,12 +111,6 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             })
             .collect();
 
-        // The shared headers: the full node header (inputs + state variables) and the input-only header
-        // the arcs and constraints are expressed over.
-        let full_names: Vec<String> = inputs.iter().cloned().chain(state_vars.clone()).collect();
-        let full_header = machine::header(&full_names);
-        let input_header = machine::header(inputs);
-
         // Explore the reachable stable states once. Candidates are seeded from the on/off covers of every
         // signal function (state δ plus the combinational outputs, so combinational cells seed too);
         // [`machine::explore`] records the visitation order and predecessors, shared by both derivations.
@@ -129,7 +119,7 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             .map(|(_, d)| d.clone())
             .chain(out_deltas.values().cloned())
             .collect();
-        let explored = machine::explore(&deltas, &seed_funcs, &full_header, inputs, &state_vars);
+        let explored = machine::explore(&deltas, &seed_funcs, inputs, &state_vars);
 
         Some(Machine {
             cell,
@@ -137,8 +127,6 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             state_set,
             deltas,
             out_deltas,
-            full_header,
-            input_header,
             explored,
         })
     }
@@ -174,7 +162,7 @@ mod tests {
         // inputs + state variables > MAX_MACHINE_VARS ⇒ the machine is left unexplored, so arcs,
         // constraints and arbitration all come back empty (the MachineAnalysis::default path) — yet the
         // emitters must still run without panicking.
-        let n = MAX_MACHINE_VARS + 1; // 23 primary inputs, 0 state variables ⇒ header width 23 > 22
+        let n = MAX_MACHINE_VARS + 1; // 23 primary inputs, 0 state variables ⇒ machine width 23 > 22
         let list = (0..n)
             .map(|i| format!("\"I{i}\""))
             .collect::<Vec<_>>()

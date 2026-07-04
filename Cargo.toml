@@ -6,7 +6,7 @@ description = "Generate Cadence Liberate transition arcs (with prevectors) for l
 license = "MIT"
 
 [dependencies]
-espresso-logic = "5.2"
+espresso-logic = "5.4"
 liberty-parse = { git = "https://github.com/marlls1989/liberty-parse.git", rev = "8e2e3532cdde5a1fa592e0b033b6d748b92d40b3" }
 serde = { version = "1", features = ["derive"] }
 toml = "1"
