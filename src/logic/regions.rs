@@ -18,12 +18,9 @@
 //! - `off  = ∀self. ¬f`  — FR `R` cubes; forced low,
 //! - `hold = ¬(on ∨ off)` — state-dependent (hysteretic); a `-`/`N` no-change entry.
 
-use std::sync::Arc;
-
 use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
-use espresso_logic::{bdd_builder, Anonymous, Cube, CubeType, Symbol, Symbols};
+use espresso_logic::{bdd_builder, Anonymous, Cube, CubeType, Symbol};
 
-use crate::logic::machine;
 use crate::model::AnalysedOutput;
 
 /// Split a signal's feedback into the *other* state signals it references (kept as columns) and its
@@ -74,7 +71,6 @@ pub fn state_regions(output: &AnalysedOutput, inputs: &[String]) -> StateRegions
     let builder = bdd_builder!();
     let f = builder.build(&output.expr);
     let not_f = !f.clone();
-    let cols_header = machine::header(&cols);
 
     // Cross-region disjointness holds by construction: for a hysteretic pin the `on`/`off` sets are the
     // `F`/`R` sides of one `cover_over_fr` extraction (mutually exclusive by definition), and `hold` is
@@ -82,24 +78,18 @@ pub fn state_regions(output: &AnalysedOutput, inputs: &[String]) -> StateRegions
     // must *not* be minimised, or the hold gap would be absorbed as don't-care into the on-set.
     let (on, off, hold) = if self_state.is_empty() {
         // Combinational: no self-feedback to project, so `on`/`off` are just `f`/`¬f` minimised.
-        let on = minimised(&f, &cols_header);
-        let off = minimised(&not_f, &cols_header);
+        let on = minimised(&f, &cols);
+        let off = minimised(&not_f, &cols);
         (on, off, Vec::new())
     } else {
         // Hysteretic: one FR extraction re-bases `f` onto `cols` by universal projection of `self_state`
         // (the only support outside `cols`), so `F ≡ ∀self. f` and `R ≡ ∀self. ¬f`.
         let fr = f.cover_over_fr(&cols);
-        let on = realign_cubes(
-            fr.cubes().filter(|c| c.cube_type() == CubeType::F),
-            &cols_header,
-        );
-        let off = realign_cubes(
-            fr.cubes().filter(|c| c.cube_type() == CubeType::R),
-            &cols_header,
-        );
+        let on = realign_cubes(fr.cubes().filter(|c| c.cube_type() == CubeType::F), &cols);
+        let off = realign_cubes(fr.cubes().filter(|c| c.cube_type() == CubeType::R), &cols);
         // The undef/hold gap is what `F ∪ R` leaves uncovered; compute it on the BDD and minimise that.
         let hold_bdd = !(f.forall(&self_state).or(&not_f.forall(&self_state)));
-        let hold = minimised(&hold_bdd, &cols_header);
+        let hold = minimised(&hold_bdd, &cols);
         (on, off, hold)
     };
     let hysteretic = !hold.is_empty();
@@ -117,25 +107,22 @@ pub fn state_regions(output: &AnalysedOutput, inputs: &[String]) -> StateRegions
 /// to the (non-minimised) prime-path cubes if the minimiser errors. Because `minimize` of a false
 /// function yields an empty cover, region emptiness — and thus the hysteretic flag and the emitters'
 /// constant-detection — is preserved.
-fn minimised<B: Brand, C: ManagerCell>(
-    bdd: &Bdd<B, C>,
-    cols: &Arc<Symbols<Symbol>>,
-) -> Vec<StateCube> {
+fn minimised<B: Brand, C: ManagerCell>(bdd: &Bdd<B, C>, cols: &[String]) -> Vec<StateCube> {
     let cover = bdd.minimize().unwrap_or_else(|_| bdd.cover());
     realign_cubes(cover.cubes(), cols)
 }
 
-/// Realign a cover's cubes onto the `cols` header: for each cube, one `Option<bool>` per column
+/// Realign a cover's cubes onto the `cols` column set: for each cube, one `Option<bool>` per column
 /// (a column the cube does not constrain — a don't-care or a variable outside its support — is `None`).
-/// [`Minterm::project_onto`] re-expresses each cube's minterm over `cols`, so the values are already in
+/// [`Minterm::project_to`] re-expresses each cube's minterm over `cols`, so the values are already in
 /// column order with the absent columns filled as don't-care.
 fn realign_cubes<'a>(
     cubes: impl IntoIterator<Item = &'a Cube<Symbol, Anonymous>>,
-    cols: &Arc<Symbols<Symbol>>,
+    cols: &[String],
 ) -> Vec<StateCube> {
     cubes
         .into_iter()
-        .map(|cube| cube.inputs().project_onto(cols).iter().collect())
+        .map(|cube| cube.inputs().project_to(cols).iter().collect())
         .collect()
 }
 
