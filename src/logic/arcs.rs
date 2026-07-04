@@ -112,8 +112,13 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> (Vec<Arc>, 
     // prevector. Keyed by (output, related, edge-direction, start over the inputs).
     let mut best_arc: BTreeMap<(String, String, bool, Minterm<Symbol>), Arc> = BTreeMap::new();
     // Hidden ('hidden') arcs, deduped like `best_arc`: keyed by (toggled pin, edge-direction, start over
-    // the inputs), keeping the one with the shortest prevector.
-    let mut best_hidden: BTreeMap<(Symbol, bool, Minterm<Symbol>), HiddenArc> = BTreeMap::new();
+    // the inputs, held output values), keeping the one with the shortest prevector. The held outputs are
+    // part of the key so distinct stored-value contexts of a state-holding cell (same input vector, different
+    // stored output) are kept as separate arcs; only contexts that differ solely in an unobservable
+    // internal-node value — which produce identical outputs — collapse to the shortest-prevector one.
+    #[allow(clippy::type_complexity)]
+    let mut best_hidden: BTreeMap<(Symbol, bool, Minterm<Symbol>, Vec<(Symbol, bool)>), HiddenArc> =
+        BTreeMap::new();
 
     // Re-walk the reachable stable states in BFS order; wherever a single input toggle flips an output,
     // emit an arc.
@@ -175,18 +180,19 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> (Vec<Arc>, 
                     .value_of(related.as_str())
                     .expect("toggled input is fully fixed in the settled end state");
                 let pin = Symbol::from(related.as_str());
+                let outputs: Vec<(Symbol, bool)> = vals
+                    .iter()
+                    .map(|(o, _, a)| (Symbol::from(o.name.as_str()), a.unwrap()))
+                    .collect();
                 let hidden = HiddenArc {
                     pin: pin.clone(),
                     edge: if rose { Edge::Rise } else { Edge::Fall },
                     start: start.clone(),
                     end: end.clone(),
                     prevector: prevector.clone(),
-                    outputs: vals
-                        .iter()
-                        .map(|(o, _, a)| (Symbol::from(o.name.as_str()), a.unwrap()))
-                        .collect(),
+                    outputs: outputs.clone(),
                 };
-                let key = (pin, rose, start.clone());
+                let key = (pin, rose, start.clone(), outputs);
                 match best_hidden.entry(key) {
                     std::collections::btree_map::Entry::Vacant(e) => {
                         e.insert(hidden);
@@ -276,6 +282,31 @@ Y = "A*B"
                 assert_eq!(w[0].hamming_distance(&w[1]), 1);
             }
         }
+    }
+
+    #[test]
+    fn dlatch_keeps_both_stored_value_hidden_contexts() {
+        // Transparent-high D-latch: in hold (E=0) a D toggle leaves Q unchanged but its held value depends
+        // on the stored state. Both stored-value contexts (Q held 0 and Q held 1) must survive as distinct
+        // hidden arcs on D — before folding the held output into the dedup key only one survived.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DLAT"
+inputs = ["E", "D"]
+[cell.outputs]
+Q = "E*D + !E*Q"
+"#,
+        );
+        let d_rise: Vec<&HiddenArc> = cell
+            .hidden_arcs
+            .iter()
+            .filter(|h| h.pin.as_str() == "D" && h.edge == Edge::Rise)
+            .collect();
+        assert!(d_rise.len() >= 2, "expected >=2 D-rise hidden arcs, got {}", d_rise.len());
+        let q_val = |h: &HiddenArc| h.outputs.iter().find(|(s, _)| s.as_str() == "Q").map(|(_, v)| *v);
+        assert!(d_rise.iter().any(|h| q_val(h) == Some(false)));
+        assert!(d_rise.iter().any(|h| q_val(h) == Some(true)));
     }
 
     #[test]

@@ -295,7 +295,7 @@ fn format_hidden_arc(cell: &AnalysedCell, h: &HiddenArc, opts: ArcsTclOptions) -
     ));
     s.push_str(&format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell)));
     s.push_str(&format!("\t-vector {{{vec}}} \\\n"));
-    if let (true, Some(w)) = (opts.emit_when, when_str(&h.end, h.pin.as_str())) {
+    if let (true, Some(w)) = (opts.emit_when, hidden_when_str(h)) {
         s.push_str(&format!("\t-when \"{w}\" \\\n"));
     }
     s.push_str(&format!("\t-pin {} \\\n", h.pin.as_str()));
@@ -393,6 +393,23 @@ fn when_str(
     Some(crate::logic::literal_product(&lits))
 }
 
+/// The hidden arc's `-when` condition: the other inputs' fixed values in the end state (excluding the
+/// toggled pin) plus every held output value, as a product of literals. The held outputs disambiguate
+/// the distinct stored-value contexts of a state-holding cell that share one input vector. `None` when
+/// no literal is fixed.
+fn hidden_when_str(h: &HiddenArc) -> Option<String> {
+    let mut lits: Vec<(String, bool)> = assignment(&h.end)
+        .into_iter()
+        .filter(|(k, _)| *k != h.pin.as_str())
+        .collect();
+    lits.extend(h.outputs.iter().map(|(s, v)| (s.as_str().to_string(), *v)));
+    if lits.is_empty() {
+        return None;
+    }
+    lits.sort();
+    Some(crate::logic::literal_product(&lits))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,11 +474,49 @@ Y = "A*B"
             // Every output is pinned at its held value — never X.
             assert!(!frag.contains("X"));
         }
-        // The A-falls-while-B=0 hidden arc: Y held 0.
+        // The A-falls-while-B=0 hidden arc: Y held 0. The held output is folded into `-when` (sorted
+        // literals over inputs B and output Y).
         assert!(tcl.split("define_arc").any(|frag| frag.contains("-type hidden")
             && frag.contains("-vector {F 0 0}")
-            && frag.contains("-when \"!B\"")
+            && frag.contains("-when \"!B*!Y\"")
             && frag.contains("-pin A")));
+    }
+
+    #[test]
+    fn dlatch_hidden_when_carries_held_output() {
+        // Transparent-high D-latch: a D toggle in hold (E=0) leaves Q unchanged, but the two stored-value
+        // contexts differ in the held Q. Both must be emitted as hidden `-pin D` arcs and disambiguated by
+        // the held Q literal folded into `-when`.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DLAT"
+inputs = ["E", "D"]
+[cell.outputs]
+Q = "E*D + !E*Q"
+"#,
+        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        let d_hidden: Vec<&str> = tcl
+            .split("define_arc")
+            .filter(|frag| frag.contains("-type hidden") && frag.contains("-pin D"))
+            .collect();
+        // The `-when` of one context holds Q true (`* Q`, not `!Q`) and another holds Q false (`!Q`).
+        let when_of = |frag: &str| {
+            frag.lines()
+                .find(|l| l.contains("-when"))
+                .unwrap_or("")
+                .to_string()
+        };
+        assert!(
+            d_hidden.iter().any(|frag| when_of(frag).contains("*Q")),
+            "expected a D hidden arc whose -when holds Q true"
+        );
+        assert!(
+            d_hidden.iter().any(|frag| when_of(frag).contains("!Q")),
+            "expected a D hidden arc whose -when holds Q false"
+        );
     }
 
     #[test]
