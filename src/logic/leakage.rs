@@ -27,8 +27,8 @@ pub struct LeakageState {
 
 /// Derive the cell's static leakage states from the settled BFS seeds. For each seed, keep only the
 /// outputs that resolve there (defined literals only — an undefined output is dropped, but the seed is
-/// still emitted). Collect into a [`BTreeSet`] so seeds that differ only in an unobservable internal
-/// value collapse and the result is deterministic (`Minterm: Ord`).
+/// still emitted). Collect into a [`BTreeSet`] for a deterministic, sorted result (`Minterm: Ord`);
+/// each seed's fully-fixed input vector makes the states distinct, so this only orders them.
 pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> Vec<LeakageState> {
     m.explored
         .seeds()
