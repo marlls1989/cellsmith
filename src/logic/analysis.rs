@@ -15,7 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
-use espresso_logic::bdd_builder;
+use espresso_logic::{bdd_builder, Symbol};
 
 use crate::logic::arcs::{self, Arc, HiddenArc};
 use crate::logic::confluence::{self, Constraint};
@@ -50,14 +50,14 @@ pub(crate) const MAX_MACHINE_VARS: usize = 22;
 pub(crate) struct Machine<'c, B: Brand, C: ManagerCell> {
     pub(crate) cell: &'c AnalysedCell,
     /// State variables in signal order (outputs first, then internals).
-    pub(crate) state_vars: Vec<String>,
+    pub(crate) state_vars: Vec<Symbol>,
     /// The same state variables as a set, for membership tests.
-    pub(crate) state_set: BTreeSet<String>,
+    pub(crate) state_set: BTreeSet<Symbol>,
     /// Each state variable's next-state function δ (over inputs + state variables).
     pub(crate) deltas: Vec<machine::Delta<B, C>>,
     /// The combinational outputs' δ, built **once** (an output's value at a node is read from its δ; a
     /// state output instead reads its own state field).
-    pub(crate) out_deltas: BTreeMap<String, Bdd<B, C>>,
+    pub(crate) out_deltas: BTreeMap<Symbol, Bdd<B, C>>,
     /// The reachable stable states, discovered by one [`machine::explore`] BFS.
     pub(crate) explored: machine::Explored,
 }
@@ -76,7 +76,7 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
         let deps = resolve::dependency_map(&signals);
         let state_set = resolve::state_variables(&signals);
         // State variables in signal order (outputs first, then internals).
-        let state_vars: Vec<String> = signals
+        let state_vars: Vec<Symbol> = signals
             .iter()
             .map(|s| s.name.clone())
             .filter(|nm| state_set.contains(nm))
@@ -88,7 +88,7 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             return None;
         }
 
-        let bdds: BTreeMap<String, Bdd<B, C>> = signals
+        let bdds: BTreeMap<Symbol, Bdd<B, C>> = signals
             .iter()
             .map(|s| (s.name.clone(), builder.build(&s.expr)))
             .collect();
@@ -100,7 +100,7 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             .iter()
             .map(|v| (v.clone(), resolve::delta(v, &bdds, &deps, &state_set)))
             .collect();
-        let out_deltas: BTreeMap<String, Bdd<B, C>> = cell
+        let out_deltas: BTreeMap<Symbol, Bdd<B, C>> = cell
             .outputs
             .iter()
             .filter(|o| !state_set.contains(&o.name))

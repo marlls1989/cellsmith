@@ -4,6 +4,8 @@
 //! arcs place `-type` first while fall arcs place it after the prevector. Pins are emitted in
 //! declaration order (cellsmith's deliberate divergence from hsNCL's alphabetical sort).
 
+use espresso_logic::Symbol;
+
 use crate::logic::arcs::{Arc, Edge, HiddenArc};
 use crate::logic::assignment;
 use crate::logic::confluence::{Constraint, ConstraintKind};
@@ -158,7 +160,7 @@ fn collapse_conditions(arcs: &[Arc]) -> Vec<Arc> {
     use std::collections::btree_map::Entry;
     use std::collections::BTreeMap;
     // Keep references while deduping so only the surviving arcs are cloned.
-    let mut best: BTreeMap<(String, String, bool), &Arc> = BTreeMap::new();
+    let mut best: BTreeMap<(Symbol, Symbol, bool), &Arc> = BTreeMap::new();
     for arc in arcs {
         let key = (
             arc.output.clone(),
@@ -186,9 +188,9 @@ fn collapse_hidden(arcs: &[HiddenArc]) -> Vec<HiddenArc> {
     use std::collections::btree_map::Entry;
     use std::collections::BTreeMap;
     // Keep references while deduping so only the surviving arcs are cloned.
-    let mut best: BTreeMap<(String, bool), &HiddenArc> = BTreeMap::new();
+    let mut best: BTreeMap<(Symbol, bool), &HiddenArc> = BTreeMap::new();
     for arc in arcs {
-        let key = (arc.pin.as_str().to_string(), matches!(arc.edge, Edge::Rise));
+        let key = (arc.pin.clone(), matches!(arc.edge, Edge::Rise));
         match best.entry(key) {
             Entry::Vacant(e) => {
                 e.insert(arc);
@@ -382,7 +384,7 @@ fn when_str(
     end: &espresso_logic::Minterm<espresso_logic::Symbol>,
     exclude: &str,
 ) -> Option<String> {
-    let mut lits: Vec<(String, bool)> = assignment(end)
+    let mut lits: Vec<(Symbol, bool)> = assignment(end)
         .into_iter()
         .filter(|(k, _)| *k != exclude)
         .collect();
@@ -398,11 +400,11 @@ fn when_str(
 /// the distinct stored-value contexts of a state-holding cell that share one input vector. `None` when
 /// no literal is fixed.
 fn hidden_when_str(h: &HiddenArc) -> Option<String> {
-    let mut lits: Vec<(String, bool)> = assignment(&h.end)
+    let mut lits: Vec<(Symbol, bool)> = assignment(&h.end)
         .into_iter()
         .filter(|(k, _)| *k != h.pin.as_str())
         .collect();
-    lits.extend(h.outputs.iter().map(|(s, v)| (s.as_str().to_string(), *v)));
+    lits.extend(h.outputs.iter().map(|(s, v)| (s.clone(), *v)));
     if lits.is_empty() {
         return None;
     }

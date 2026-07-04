@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use espresso_logic::BoolExpr;
+use espresso_logic::{BoolExpr, Symbol};
 use indexmap::IndexMap;
 use serde::Deserialize;
 use thiserror::Error;
@@ -29,30 +29,53 @@ pub struct Spec {
 #[serde(deny_unknown_fields)]
 pub struct Cell {
     /// Physical cell name used in the emitted arcs.
-    pub name: String,
+    #[serde(deserialize_with = "de_symbol")]
+    pub name: Symbol,
     /// Primary input pins. Order matters: it defines the pinlist/vector order.
-    pub inputs: Vec<String>,
+    #[serde(deserialize_with = "de_symbol_vec")]
+    pub inputs: Vec<Symbol>,
     /// Output pin name -> Boolean function. Order preserved (stable output order).
-    pub outputs: IndexMap<String, String>,
+    #[serde(deserialize_with = "de_symbol_map")]
+    pub outputs: IndexMap<Symbol, String>,
     /// Optional: internal state variable name -> Boolean function. Order preserved. An internal
     /// signal is referenceable by other functions and is a driven state variable (modelled in the
     /// Verilog and the Liberty state table), but emits **no** external output pin and is never an arc
     /// source or target.
-    #[serde(default)]
-    pub internal: IndexMap<String, String>,
+    #[serde(default, deserialize_with = "de_symbol_map")]
+    pub internal: IndexMap<Symbol, String>,
     /// Optional: input pins that force the output regardless of held state (async set/reset),
     /// so their arcs are emitted as `-type async` rather than combinational.
-    #[serde(rename = "async", default)]
-    pub async_pins: Vec<String>,
+    #[serde(rename = "async", default, deserialize_with = "de_symbol_vec")]
+    pub async_pins: Vec<Symbol>,
     /// Optional: input pins that are clocks. A hazard on a pin pair holding a declared clock yields a
     /// directed setup/hold constraint (clock ← data); any other pair yields a symmetric non_seq. See
     /// [`crate::logic::confluence`].
-    #[serde(default)]
-    pub clock: Vec<String>,
+    #[serde(default, deserialize_with = "de_symbol_vec")]
+    pub clock: Vec<Symbol>,
     /// Optional: opt in to emitting derived constraint arcs (setup/hold, non_seq) for this cell. Off by
     /// default; also enabled globally by the `--constraints` CLI flag.
     #[serde(default)]
     pub constraint_arcs: bool,
+}
+
+/// Deserialize a name field as a [`Symbol`]. `Symbol` has no `serde` impl, so a name is read as a
+/// `String` and interned (Display/Debug/Ord delegate to `str`, so the emitted bytes are unchanged).
+fn de_symbol<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Symbol, D::Error> {
+    String::deserialize(d).map(Symbol::from)
+}
+
+/// Deserialize a list of name fields as `Vec<Symbol>` (order preserved), interning each entry.
+fn de_symbol_vec<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Symbol>, D::Error> {
+    Vec::<String>::deserialize(d).map(|v| v.into_iter().map(Symbol::from).collect())
+}
+
+/// Deserialize a `name -> function` table as `IndexMap<Symbol, String>`, interning the keys and keeping
+/// the function text (and the insertion order) as-is.
+fn de_symbol_map<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<IndexMap<Symbol, String>, D::Error> {
+    IndexMap::<String, String>::deserialize(d)
+        .map(|m| m.into_iter().map(|(k, v)| (Symbol::from(k), v)).collect())
 }
 
 #[derive(Debug, Error)]
@@ -61,51 +84,51 @@ pub enum ModelError {
     Spec(#[from] toml::de::Error),
     #[error("cell {cell:?}: cannot parse function for output {output:?}: {source}")]
     Function {
-        cell: String,
-        output: String,
+        cell: Symbol,
+        output: Symbol,
         #[source]
         source: ParseBoolExprError,
     },
     #[error("cell {cell:?}: duplicate input pin {pin:?}")]
-    DuplicateInput { cell: String, pin: String },
+    DuplicateInput { cell: Symbol, pin: Symbol },
     #[error("cell {cell:?}: pin {pin:?} is both an input and an output")]
-    InputOutputClash { cell: String, pin: String },
+    InputOutputClash { cell: Symbol, pin: Symbol },
     #[error("cell {cell:?}: internal signal {pin:?} clashes with a declared input or output name")]
-    InternalClash { cell: String, pin: String },
+    InternalClash { cell: Symbol, pin: Symbol },
     #[error("cell {cell:?}, output {output:?}: variable {var:?} is neither a declared input nor an output of this cell")]
     UnknownVar {
-        cell: String,
-        output: String,
-        var: String,
+        cell: Symbol,
+        output: Symbol,
+        var: Symbol,
     },
     #[error("cell {cell:?}: async pin {pin:?} is not a declared input")]
-    AsyncNotInput { cell: String, pin: String },
+    AsyncNotInput { cell: Symbol, pin: Symbol },
     #[error("cell {cell:?}: clock pin {pin:?} is not a declared input")]
-    ClockNotInput { cell: String, pin: String },
+    ClockNotInput { cell: Symbol, pin: Symbol },
 }
 
 /// A signal (output **or** internal) after analysis: its function, the variables it references, and
 /// the feedback/state variables among them (a signal-name reference = a delayed/feedback value).
 #[derive(Debug)]
 pub struct AnalysedOutput {
-    pub name: String,
+    pub name: Symbol,
     pub expr: BoolExpr,
-    pub vars: BTreeSet<String>,
+    pub vars: BTreeSet<Symbol>,
     /// Signal names (outputs then internals) referenced by this function — its feedback/state — in
     /// the cell's signal order.
-    pub feedback: Vec<String>,
+    pub feedback: Vec<Symbol>,
 }
 
 /// A cell after validation/analysis.
 #[derive(Debug)]
 pub struct AnalysedCell {
-    pub name: String,
-    pub inputs: Vec<String>,
+    pub name: Symbol,
+    pub inputs: Vec<Symbol>,
     pub outputs: Vec<AnalysedOutput>,
     /// Internal state variables: driven state signals with no external pin. Referenceable by any
     /// function; never an arc source or target.
     pub internals: Vec<AnalysedOutput>,
-    pub async_pins: Vec<String>,
+    pub async_pins: Vec<Symbol>,
     /// The transition arcs derived for the cell's outputs, precomputed once by the shared machine pass
     /// ([`crate::logic::analysis::analyse_machine`]) and consumed by the arcs emitter.
     pub arcs: Vec<Arc>,
@@ -117,7 +140,7 @@ pub struct AnalysedCell {
     /// self-holding cells). See [`crate::logic::interlock`].
     pub arbitration: Vec<Arbitration>,
     /// Declared clock input pins (`clock = [...]`). See [`crate::logic::confluence`].
-    pub clock_pins: Vec<String>,
+    pub clock_pins: Vec<Symbol>,
     /// The constraints derived to avoid the cell's hazards (setup/hold and non_seq). Emission is gated
     /// by the CLI flag or `constraint_arcs_declared`; the kind of each constraint follows the declared
     /// clock.
@@ -158,10 +181,10 @@ impl Cell {
             }
         }
 
-        let output_names: Vec<String> = self.outputs.keys().cloned().collect();
-        let output_set: BTreeSet<String> = output_names.iter().cloned().collect();
-        let internal_names: Vec<String> = self.internal.keys().cloned().collect();
-        let internal_set: BTreeSet<String> = internal_names.iter().cloned().collect();
+        let output_names: Vec<Symbol> = self.outputs.keys().cloned().collect();
+        let output_set: BTreeSet<Symbol> = output_names.iter().cloned().collect();
+        let internal_names: Vec<Symbol> = self.internal.keys().cloned().collect();
+        let internal_set: BTreeSet<Symbol> = internal_names.iter().cloned().collect();
 
         for pin in &self.inputs {
             if output_set.contains(pin) {
@@ -197,7 +220,7 @@ impl Cell {
         }
 
         // Signal order: outputs first, then internals. Feedback references are classified against it.
-        let signal_names: Vec<String> = output_names
+        let signal_names: Vec<Symbol> = output_names
             .iter()
             .cloned()
             .chain(internal_names.iter().cloned())
@@ -221,7 +244,7 @@ impl Cell {
                     });
                 }
             }
-            let feedback: Vec<String> = signal_names
+            let feedback: Vec<Symbol> = signal_names
                 .iter()
                 .filter(|s| parsed.vars.contains(*s))
                 .cloned()
@@ -422,8 +445,8 @@ Q = "CLK*M + !CLK*Q"
         let int_names: Vec<_> = cell.internals.iter().map(|o| o.name.as_str()).collect();
         assert_eq!(int_names, ["M"]);
         // Q references the internal M as feedback/state.
-        assert!(cell.outputs[0].feedback.contains(&"M".to_string()));
-        assert!(cell.outputs[0].feedback.contains(&"Q".to_string()));
+        assert!(cell.outputs[0].feedback.iter().any(|s| s == "M"));
+        assert!(cell.outputs[0].feedback.iter().any(|s| s == "Q"));
         // signals() yields outputs then internals.
         let sig_names: Vec<_> = cell.signals().map(|s| s.name.as_str()).collect();
         assert_eq!(sig_names, ["Q", "M"]);

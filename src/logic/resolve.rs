@@ -21,12 +21,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
+use espresso_logic::Symbol;
 
 use crate::model::AnalysedOutput;
 
 /// `signal name → the signal names its function references` (its feedback/state, self-reference
 /// included). Non-signal variables (primary inputs) are not edges.
-pub fn dependency_map(signals: &[&AnalysedOutput]) -> BTreeMap<String, Vec<String>> {
+pub fn dependency_map(signals: &[&AnalysedOutput]) -> BTreeMap<Symbol, Vec<Symbol>> {
     signals
         .iter()
         .map(|s| (s.name.clone(), s.feedback.clone()))
@@ -37,7 +38,7 @@ pub fn dependency_map(signals: &[&AnalysedOutput]) -> BTreeMap<String, Vec<Strin
 /// signal it (transitively) references. Substituting in this order keeps the acyclic part confluent — a
 /// dependee is never substituted before a depender that would reintroduce it. Cycles are broken by the
 /// visited guard (the residual is the state variable).
-pub fn substitution_order(target: &str, deps: &BTreeMap<String, Vec<String>>) -> Vec<String> {
+pub fn substitution_order(target: &str, deps: &BTreeMap<Symbol, Vec<Symbol>>) -> Vec<Symbol> {
     let mut post = Vec::new();
     let mut seen = BTreeSet::new();
     dfs_post(target, deps, &mut seen, &mut post);
@@ -47,11 +48,11 @@ pub fn substitution_order(target: &str, deps: &BTreeMap<String, Vec<String>>) ->
 
 fn dfs_post(
     node: &str,
-    deps: &BTreeMap<String, Vec<String>>,
-    seen: &mut BTreeSet<String>,
-    post: &mut Vec<String>,
+    deps: &BTreeMap<Symbol, Vec<Symbol>>,
+    seen: &mut BTreeSet<Symbol>,
+    post: &mut Vec<Symbol>,
 ) {
-    if !seen.insert(node.to_string()) {
+    if !seen.insert(Symbol::from(node)) {
         return;
     }
     if let Some(children) = deps.get(node) {
@@ -61,7 +62,7 @@ fn dfs_post(
             }
         }
     }
-    post.push(node.to_string());
+    post.push(Symbol::from(node));
 }
 
 /// Resolve `target` into a BDD over primary inputs plus its residual **state variables**.
@@ -77,8 +78,8 @@ fn dfs_post(
 /// present in `bdds`.
 pub fn resolve<B: Brand, C: ManagerCell>(
     target: &str,
-    bdds: &BTreeMap<String, Bdd<B, C>>,
-    order: &[String],
+    bdds: &BTreeMap<Symbol, Bdd<B, C>>,
+    order: &[Symbol],
 ) -> Bdd<B, C> {
     let mut f = bdds
         .get(target)
@@ -104,8 +105,8 @@ pub fn resolve<B: Brand, C: ManagerCell>(
 /// The ≥1-step reachability relation of a directed graph: `node → the nodes reachable from it in one
 /// or more edges`. Computed by relaxation (the graphs are tiny). Used by [`state_variables`] to find
 /// the signals that reach themselves (the state variables).
-fn transitive_closure(edges: &BTreeMap<String, Vec<String>>) -> BTreeMap<String, BTreeSet<String>> {
-    let mut reach: BTreeMap<String, BTreeSet<String>> = edges
+fn transitive_closure(edges: &BTreeMap<Symbol, Vec<Symbol>>) -> BTreeMap<Symbol, BTreeSet<Symbol>> {
+    let mut reach: BTreeMap<Symbol, BTreeSet<Symbol>> = edges
         .iter()
         .map(|(k, vs)| (k.clone(), vs.iter().cloned().collect()))
         .collect();
@@ -131,7 +132,7 @@ fn transitive_closure(edges: &BTreeMap<String, Vec<String>>) -> BTreeMap<String,
 /// larger coupling cycle. A signal on no cycle is combinational and resolves away entirely; a state
 /// variable is a held coordinate of the cell's state machine. A signal `s` is a state variable iff `s`
 /// reaches itself in the reference graph.
-pub fn state_variables(signals: &[&AnalysedOutput]) -> BTreeSet<String> {
+pub fn state_variables(signals: &[&AnalysedOutput]) -> BTreeSet<Symbol> {
     let reach = transitive_closure(&dependency_map(signals));
     signals
         .iter()
@@ -147,11 +148,11 @@ pub fn state_variables(signals: &[&AnalysedOutput]) -> BTreeSet<String> {
 /// expose cascades in the region view).
 pub fn delta<B: Brand, C: ManagerCell>(
     target: &str,
-    bdds: &BTreeMap<String, Bdd<B, C>>,
-    deps: &BTreeMap<String, Vec<String>>,
-    state_vars: &BTreeSet<String>,
+    bdds: &BTreeMap<Symbol, Bdd<B, C>>,
+    deps: &BTreeMap<Symbol, Vec<Symbol>>,
+    state_vars: &BTreeSet<Symbol>,
 ) -> Bdd<B, C> {
-    let order: Vec<String> = substitution_order(target, deps)
+    let order: Vec<Symbol> = substitution_order(target, deps)
         .into_iter()
         .filter(|n| !state_vars.contains(n))
         .collect();
@@ -169,7 +170,7 @@ mod tests {
         f: &espresso_logic::bdd::Bdd<impl Brand, impl ManagerCell>,
         cell: &AnalysedCell,
     ) -> bool {
-        let names: BTreeSet<String> = cell.signals().map(|s| s.name.clone()).collect();
+        let names: BTreeSet<Symbol> = cell.signals().map(|s| s.name.clone()).collect();
         f.variables().any(|v| names.contains(v.as_str()))
     }
 
@@ -191,7 +192,7 @@ Y = "W1"
         let sigs: Vec<&AnalysedOutput> = cell.signals().collect();
         let deps = dependency_map(&sigs);
         let builder = bdd_builder!();
-        let bdds: BTreeMap<String, _> = sigs
+        let bdds: BTreeMap<Symbol, _> = sigs
             .iter()
             .map(|s| (s.name.clone(), builder.build(&s.expr)))
             .collect();
@@ -240,7 +241,7 @@ Qb = "!Qa * B"
         let deps = dependency_map(&sigs);
         let sv = state_variables(&sigs);
         let builder = bdd_builder!();
-        let bdds: BTreeMap<String, _> = sigs
+        let bdds: BTreeMap<Symbol, _> = sigs
             .iter()
             .map(|s| (s.name.clone(), builder.build(&s.expr)))
             .collect();
@@ -270,7 +271,7 @@ T = "P*Q"
         let sigs: Vec<&AnalysedOutput> = cell.signals().collect();
         let deps = dependency_map(&sigs);
         let builder = bdd_builder!();
-        let bdds: BTreeMap<String, _> = sigs
+        let bdds: BTreeMap<Symbol, _> = sigs
             .iter()
             .map(|s| (s.name.clone(), builder.build(&s.expr)))
             .collect();

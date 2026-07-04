@@ -54,8 +54,8 @@ impl Edge {
 #[derive(Debug, Clone)]
 pub struct Arc {
     pub edge: Edge,
-    pub output: String,
-    pub related: String,
+    pub output: Symbol,
+    pub related: Symbol,
     /// Start state of the measured edge (the prevector's target), over the primary inputs.
     pub start: Minterm<Symbol>,
     /// End state of the measured edge (defines the vector and the `-when` condition).
@@ -107,10 +107,10 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> (Vec<Arc>, 
         }
     };
 
-    let async_set: BTreeSet<&str> = cell.async_pins.iter().map(String::as_str).collect();
+    let async_set: BTreeSet<&str> = cell.async_pins.iter().map(|s| s.as_str()).collect();
     // The same arc can be reached from several start candidates; keep the one with the shortest
     // prevector. Keyed by (output, related, edge-direction, start over the inputs).
-    let mut best_arc: BTreeMap<(String, String, bool, Minterm<Symbol>), Arc> = BTreeMap::new();
+    let mut best_arc: BTreeMap<(Symbol, Symbol, bool, Minterm<Symbol>), Arc> = BTreeMap::new();
     // Hidden ('hidden') arcs, deduped like `best_arc`: keyed by (toggled pin, edge-direction, start over
     // the inputs, held output values), keeping the one with the shortest prevector. The held outputs are
     // part of the key so distinct stored-value contexts of a state-holding cell (same input vector, different
@@ -181,10 +181,10 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> (Vec<Arc>, 
                 let rose = end
                     .value_of(related.as_str())
                     .expect("toggled input is fully fixed in the settled end state");
-                let pin = Symbol::from(related.as_str());
+                let pin = related.clone();
                 let outputs: Vec<(Symbol, bool)> = vals
                     .iter()
-                    .map(|(o, _, a)| (Symbol::from(o.name.as_str()), a.unwrap()))
+                    .map(|(o, _, a)| (o.name.clone(), a.unwrap()))
                     .collect();
                 let hidden = HiddenArc {
                     pin: pin.clone(),

@@ -23,7 +23,7 @@ use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
 
 /// A state variable paired with its next-state function δ (over inputs + state variables).
-pub type Delta<B, C> = (String, Bdd<B, C>);
+pub type Delta<B, C> = (Symbol, Bdd<B, C>);
 
 /// Build a fully-fixed node over `names` from a `name -> value` lookup (called once per variable).
 #[cfg(test)]
@@ -139,7 +139,7 @@ pub struct Explored {
 impl Explored {
     /// The input-projected BFS path into `node` (the prevector): walk predecessors back to a start,
     /// reverse, and project each step onto `input_names`.
-    pub fn path_to(&self, node: &Minterm<Symbol>, input_names: &[String]) -> Vec<Minterm<Symbol>> {
+    pub fn path_to(&self, node: &Minterm<Symbol>, input_names: &[Symbol]) -> Vec<Minterm<Symbol>> {
         let mut chain = vec![node.clone()];
         let mut cur = node.clone();
         while let Some(Some(p)) = self.prev.get(&cur) {
@@ -172,11 +172,11 @@ impl Explored {
 pub fn explore<B: Brand, C: ManagerCell>(
     state_deltas: &[Delta<B, C>],
     seed_funcs: &[Bdd<B, C>],
-    input_names: &[String],
-    state_names: &[String],
+    input_names: &[Symbol],
+    state_names: &[Symbol],
 ) -> Explored {
     // The full node columns: inputs then state variables, in state-variable order (see analysis.rs).
-    let full_names: Vec<String> = input_names
+    let full_names: Vec<Symbol> = input_names
         .iter()
         .cloned()
         .chain(state_names.iter().cloned())
@@ -317,7 +317,7 @@ mod tests {
         // Q = A*B + Q*(A+B). Over columns [A, B, Q], hold state 01/10 keeps Q; 11 forces Q high.
         let builder = bdd_builder!();
         let dq = builder.parse("A*B + Q*(A+B)").unwrap();
-        let deltas = vec![("Q".to_string(), dq)];
+        let deltas = vec![(Symbol::from("Q"), dq)];
 
         // A=1 B=0 Q=1 is a stable hold state.
         let hold = node_from(&["A", "B", "Q"], |n| matches!(n, "A" | "Q"));
@@ -336,7 +336,7 @@ mod tests {
         // Under a hold input (A=1 B=0) with Q undefined, Q is not forced: it stays absent.
         let builder = bdd_builder!();
         let dq = builder.parse("A*B + Q*(A+B)").unwrap();
-        let deltas = vec![("Q".to_string(), dq)];
+        let deltas = vec![(Symbol::from("Q"), dq)];
         let node = node_from_opt(&["A", "B", "Q"], |n| match n {
             "A" => Some(true),
             "B" => Some(false),
@@ -353,7 +353,7 @@ mod tests {
         let builder = bdd_builder!();
         let da = builder.parse("!Qb*A").unwrap();
         let db = builder.parse("!Qa*B").unwrap();
-        let deltas = vec![("Qa".to_string(), da), ("Qb".to_string(), db)];
+        let deltas = vec![(Symbol::from("Qa"), da), (Symbol::from("Qb"), db)];
         let both_low = node_from(&["A", "B", "Qa", "Qb"], |n| matches!(n, "A" | "B"));
         assert_eq!(settle(&deltas, &both_low), None);
     }
@@ -366,7 +366,7 @@ mod tests {
         let builder = bdd_builder!();
         let da = builder.parse("!Qb*A").unwrap();
         let db = builder.parse("!Qa*B").unwrap();
-        let deltas = vec![("Qa".to_string(), da), ("Qb".to_string(), db)];
+        let deltas = vec![(Symbol::from("Qa"), da), (Symbol::from("Qb"), db)];
         let both_low = node_from(&["A", "B", "Qa", "Qb"], |n| matches!(n, "A" | "B"));
 
         let cycle = settle_or_cycle(&deltas, &both_low).expect_err("oscillates, no fixpoint");
