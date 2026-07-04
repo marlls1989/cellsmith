@@ -17,8 +17,7 @@
 //! substituted before a depender whose definition would reintroduce it (that would strand the dependee as
 //! a spurious residual). Reverse-post-order DFS from the target (a signal before every signal it
 //! references) is the topological order that avoids this; cycles are broken by the visited guard, and the
-//! residual is exactly the state variable. Composition is Shannon selection via [`Bdd::ite`] — the BDD
-//! layer has no `compose`, and `ite` is the primitive it is built from.
+//! residual is exactly the state variable. Composition uses the BDD layer's native [`Bdd::compose`].
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -70,7 +69,7 @@ fn dfs_post(
 ///
 /// `bdds` maps every signal name to its own (un-substituted) BDD, all built in the same builder.
 /// `order` is a [`substitution_order`] for `target`. Each signal named in `order` that is still present
-/// in the working function is composed in **once** via `f[v:=g] = g.ite(f|v=1, f|v=0)`; a signal that
+/// in the working function is composed in **once** via [`Bdd::compose`] (`f[v:=g]`); a signal that
 /// reappears after being substituted (or `target` itself) is a state variable and is left in the result.
 ///
 /// # Panics
@@ -97,10 +96,7 @@ pub fn resolve<B: Brand, C: ManagerCell>(
         });
         let Some(name) = next else { break };
         // Cannot panic: `next` (above) only yields names for which `bdds.contains_key` just held.
-        let g = bdds[name].clone();
-        let f1 = f.restrict(name.as_str(), true);
-        let f0 = f.restrict(name.as_str(), false);
-        f = g.ite(&f1, &f0); // f[name := g]
+        f = f.compose(name.as_str(), &bdds[name]); // f[name := g]
         visited.insert(name.as_str());
     }
     f
