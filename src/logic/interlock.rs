@@ -16,7 +16,7 @@ use espresso_logic::{Minterm, Symbol};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Arbitration {
     /// The oscillating state variables, in signal declaration order.
-    pub group: Vec<String>,
+    pub group: Vec<Symbol>,
     /// Primary-input condition under which the group is metastable, as a full input assignment.
     pub condition: Minterm<Symbol>,
     /// The competing stable states — each a group-projected minterm (group order), sorted for

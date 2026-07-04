@@ -8,20 +8,20 @@
 use std::collections::BTreeSet;
 
 use espresso_logic::expression::ParseBoolExprError;
-use espresso_logic::BoolExpr;
+use espresso_logic::{BoolExpr, Symbol};
 
 /// A successfully parsed function: the espresso [`BoolExpr`] plus the set of variable names it
 /// references (used by the model to classify primary inputs vs feedback/state variables).
 #[derive(Debug)]
 pub struct Parsed {
     pub expr: BoolExpr,
-    pub vars: BTreeSet<String>,
+    pub vars: BTreeSet<Symbol>,
 }
 
 /// Parse a Boolean function into a [`BoolExpr`] and the set of variables it syntactically references.
 pub fn parse(input: &str) -> Result<Parsed, ParseBoolExprError> {
     let expr = BoolExpr::parse(input)?;
-    let vars = expr.variables().map(|s| s.to_string()).collect();
+    let vars = expr.variables().collect();
     Ok(Parsed { expr, vars })
 }
 
@@ -30,7 +30,7 @@ mod tests {
     use super::*;
     use espresso_logic::{bdd_builder, expr};
 
-    fn vars(p: &Parsed) -> Vec<String> {
+    fn vars(p: &Parsed) -> Vec<Symbol> {
         p.vars.iter().cloned().collect()
     }
 

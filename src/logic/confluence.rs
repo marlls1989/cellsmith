@@ -63,9 +63,9 @@ pub enum ConstraintKind {
 #[derive(Debug, Clone)]
 pub struct Constraint {
     pub kind: ConstraintKind,
-    pub related: String,
+    pub related: Symbol,
     pub related_edge: Edge,
-    pub pin: String,
+    pub pin: Symbol,
     pub pin_edge: Edge,
     /// The prevector: the input-assignment path that drives every state variable into the state where
     /// the constraint manifests (each node projected onto the inputs).
@@ -85,7 +85,8 @@ impl Constraint {
             self.pin_edge.arrow()
         );
         if let Some(state) = self.prevector.last() {
-            let others = crate::logic::fixed_pairs(state, &[&self.related, &self.pin]);
+            let others =
+                crate::logic::fixed_pairs(state, &[self.related.as_str(), self.pin.as_str()]);
             if !others.is_empty() {
                 cond.push_str(&format!(" with {}", others.join(", ")));
             }
@@ -133,7 +134,7 @@ pub struct HazardAnalysis {
 
 /// The state variables that oscillate across a `settle_or_cycle` cycle (`value_of` differs between any
 /// two cycle nodes — `Some(v)` vs `None` counts as differing), in `state_vars` declaration order.
-fn oscillating_group(cycle: &[Minterm<Symbol>], state_vars: &[String]) -> Vec<String> {
+fn oscillating_group(cycle: &[Minterm<Symbol>], state_vars: &[Symbol]) -> Vec<Symbol> {
     state_vars
         .iter()
         .filter(|v| {
@@ -166,14 +167,9 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
     let deltas = &m.deltas;
     // The direct support of every state variable's δ — precomputed once, used by the
     // combinational-neighbourhood divergence filter below (see the module doc).
-    let support: BTreeMap<String, BTreeSet<String>> = deltas
+    let support: BTreeMap<Symbol, BTreeSet<Symbol>> = deltas
         .iter()
-        .map(|(n, d)| {
-            (
-                n.clone(),
-                d.variables().map(|v| v.as_str().to_string()).collect(),
-            )
-        })
+        .map(|(n, d)| (n.clone(), d.variables().collect()))
         .collect();
 
     let ex = &m.explored;
@@ -192,7 +188,7 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
     let mut arbitration: BTreeMap<String, Arbitration> = BTreeMap::new();
     let mut record_arbitration = |node: &Minterm<Symbol>,
                                   names: &[&str],
-                                  group: Vec<String>,
+                                  group: Vec<Symbol>,
                                   stable: Vec<Minterm<Symbol>>| {
         let toggled = machine::toggle(node, names);
         let condition = toggled.project_to(inputs);
@@ -328,7 +324,7 @@ fn make_constraint(
     s: &Minterm<Symbol>,
     x: &str,
     y: &str,
-    clock_pins: &[String],
+    clock_pins: &[Symbol],
     prevector: Vec<Minterm<Symbol>>,
 ) -> Constraint {
     let is_clock = |p: &str| clock_pins.iter().any(|c| c.as_str() == p);
@@ -336,18 +332,18 @@ fn make_constraint(
         let (clk, data) = if is_clock(x) { (x, y) } else { (y, x) };
         Constraint {
             kind: ConstraintKind::SetupHold,
-            related: clk.to_string(),
+            related: Symbol::from(clk),
             related_edge: edge_from(s, clk),
-            pin: data.to_string(),
+            pin: Symbol::from(data),
             pin_edge: edge_from(s, data),
             prevector,
         }
     } else {
         Constraint {
             kind: ConstraintKind::NonSeq,
-            related: x.to_string(),
+            related: Symbol::from(x),
             related_edge: edge_from(s, x),
-            pin: y.to_string(),
+            pin: Symbol::from(y),
             pin_edge: edge_from(s, y),
             prevector,
         }

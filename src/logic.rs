@@ -4,6 +4,7 @@ pub mod analysis;
 pub mod arcs;
 pub mod confluence;
 pub mod interlock;
+pub mod leakage;
 pub mod machine;
 pub mod regions;
 pub mod resolve;
@@ -14,22 +15,22 @@ use espresso_logic::{Minterm, Symbol};
 
 /// The fixed (non-don't-care) assignments of a minterm as a `name -> value` map. Used by the arcs
 /// emitter to read an arc's input vectors.
-pub fn assignment(m: &Minterm<Symbol>) -> BTreeMap<String, bool> {
+pub fn assignment(m: &Minterm<Symbol>) -> BTreeMap<Symbol, bool> {
     m.vars()
         .iter()
         .zip(m.iter())
-        .filter_map(|(var, val)| val.map(|b| (var.as_str().to_string(), b)))
+        .filter_map(|(var, val)| val.map(|b| (var.clone(), b)))
         .collect()
 }
 
 /// A minterm's fixed values as a product of literals: `A*B`, `!R*S` (in the minterm's variable order).
 /// No fixed value ⇒ the tautology `1`.
 pub(crate) fn literals_str(m: &Minterm<Symbol>) -> String {
-    let pairs: Vec<(String, bool)> = m
+    let pairs: Vec<(Symbol, bool)> = m
         .vars()
         .iter()
         .zip(m.iter())
-        .filter_map(|(n, v)| v.map(|b| (n.as_str().to_string(), b)))
+        .filter_map(|(n, v)| v.map(|b| (n.clone(), b)))
         .collect();
     if pairs.is_empty() {
         "1".to_owned()
@@ -55,9 +56,9 @@ pub(crate) fn fixed_pairs(m: &Minterm<Symbol>, skip: &[&str]) -> Vec<String> {
 }
 
 /// A product of literals `k`/`!k` joined by `*` (no tautology fallback, no sorting — the caller decides).
-pub(crate) fn literal_product(lits: &[(String, bool)]) -> String {
+pub(crate) fn literal_product(lits: &[(Symbol, bool)]) -> String {
     lits.iter()
-        .map(|(k, v)| if *v { k.clone() } else { format!("!{k}") })
+        .map(|(k, v)| if *v { k.to_string() } else { format!("!{k}") })
         .collect::<Vec<_>>()
         .join("*")
 }

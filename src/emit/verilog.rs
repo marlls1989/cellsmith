@@ -8,6 +8,8 @@
 //! hysteresis as `-` (no-change) rows. Pins are emitted in declaration order (cellsmith's deliberate
 //! divergence from hsNCL's alphabetical sort).
 
+use espresso_logic::Symbol;
+
 use crate::logic::regions::{StateCube, StateRegions};
 use crate::model::AnalysedCell;
 
@@ -100,8 +102,8 @@ fn pattern(cube: &StateCube) -> String {
 /// The `celldefine`d wrapper module: declares the cell's ports, a `specify` path delay from every
 /// input to every output, and instantiates each output pin's UDP with that pin's own column set.
 fn wrapper_module(cell: &AnalysedCell) -> String {
-    let outputs: Vec<String> = cell.outputs.iter().map(|o| o.name.clone()).collect();
-    let internals: Vec<String> = cell.internals.iter().map(|o| o.name.clone()).collect();
+    let outputs: Vec<Symbol> = cell.outputs.iter().map(|o| o.name.clone()).collect();
+    let internals: Vec<Symbol> = cell.internals.iter().map(|o| o.name.clone()).collect();
     // Ports are the external face only: outputs and primary inputs. Internal state nodes are not ports.
     let ports = outputs
         .iter()
@@ -134,7 +136,7 @@ fn wrapper_module(cell: &AnalysedCell) -> String {
         let name = prim_name(cell, &sig.name);
         // Constant pins instantiate with just their own port; sequential pins add their columns.
         let args = if sr.hold.is_empty() && (sr.on.is_empty() || sr.off.is_empty()) {
-            sig.name.clone()
+            sig.name.to_string()
         } else {
             std::iter::once(sig.name.as_str())
                 .chain(sr.cols.iter().map(|s| s.as_str()))

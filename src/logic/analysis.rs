@@ -15,11 +15,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
-use espresso_logic::bdd_builder;
+use espresso_logic::{bdd_builder, Minterm, Symbol};
 
 use crate::logic::arcs::{self, Arc, HiddenArc};
 use crate::logic::confluence::{self, Constraint};
 use crate::logic::interlock::Arbitration;
+use crate::logic::leakage::{self, LeakageState};
 use crate::logic::{machine, resolve};
 use crate::model::AnalysedCell;
 
@@ -32,6 +33,7 @@ pub struct MachineAnalysis {
     pub hidden_arcs: Vec<HiddenArc>,
     pub constraints: Vec<Constraint>,
     pub arbitration: Vec<Arbitration>,
+    pub leakage: Vec<LeakageState>,
 }
 
 /// The single home for the combinatorial blow-up guard: a cell whose machine width (inputs + state
@@ -50,14 +52,14 @@ pub(crate) const MAX_MACHINE_VARS: usize = 22;
 pub(crate) struct Machine<'c, B: Brand, C: ManagerCell> {
     pub(crate) cell: &'c AnalysedCell,
     /// State variables in signal order (outputs first, then internals).
-    pub(crate) state_vars: Vec<String>,
+    pub(crate) state_vars: Vec<Symbol>,
     /// The same state variables as a set, for membership tests.
-    pub(crate) state_set: BTreeSet<String>,
+    pub(crate) state_set: BTreeSet<Symbol>,
     /// Each state variable's next-state function δ (over inputs + state variables).
     pub(crate) deltas: Vec<machine::Delta<B, C>>,
     /// The combinational outputs' δ, built **once** (an output's value at a node is read from its δ; a
     /// state output instead reads its own state field).
-    pub(crate) out_deltas: BTreeMap<String, Bdd<B, C>>,
+    pub(crate) out_deltas: BTreeMap<Symbol, Bdd<B, C>>,
     /// The reachable stable states, discovered by one [`machine::explore`] BFS.
     pub(crate) explored: machine::Explored,
 }
@@ -76,7 +78,7 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
         let deps = resolve::dependency_map(&signals);
         let state_set = resolve::state_variables(&signals);
         // State variables in signal order (outputs first, then internals).
-        let state_vars: Vec<String> = signals
+        let state_vars: Vec<Symbol> = signals
             .iter()
             .map(|s| s.name.clone())
             .filter(|nm| state_set.contains(nm))
@@ -88,7 +90,7 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             return None;
         }
 
-        let bdds: BTreeMap<String, Bdd<B, C>> = signals
+        let bdds: BTreeMap<Symbol, Bdd<B, C>> = signals
             .iter()
             .map(|s| (s.name.clone(), builder.build(&s.expr)))
             .collect();
@@ -100,7 +102,7 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             .iter()
             .map(|v| (v.clone(), resolve::delta(v, &bdds, &deps, &state_set)))
             .collect();
-        let out_deltas: BTreeMap<String, Bdd<B, C>> = cell
+        let out_deltas: BTreeMap<Symbol, Bdd<B, C>> = cell
             .outputs
             .iter()
             .filter(|o| !state_set.contains(&o.name))
@@ -131,6 +133,24 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             explored,
         })
     }
+
+    /// The value of `name` at a node, or `None` when the node does not define it: a state output reads
+    /// its state field (absent ⇒ undefined); a combinational output is its δ evaluated at the node
+    /// (`Err` ⇒ still depends on absent state ⇒ undefined). An arc is only measured where the output is
+    /// defined at both ends.
+    pub(crate) fn output_value(&self, name: &str, node: &Minterm<Symbol>) -> Option<bool> {
+        if self.state_set.contains(name) {
+            node.value_of(name)
+        } else {
+            // Every non-state output has a δ in `out_deltas` (one is computed for each of `cell.outputs`
+            // when the machine is built), so this lookup cannot miss.
+            debug_assert!(
+                self.out_deltas.contains_key(name),
+                "output_value: output {name:?} has no entry in out_deltas"
+            );
+            self.out_deltas[name].evaluate(node).ok()
+        }
+    }
 }
 
 /// Build the cell's state machine once and derive its arcs and hazards from the shared exploration. The
@@ -148,6 +168,7 @@ pub fn analyse_machine(cell: &AnalysedCell) -> MachineAnalysis {
         hidden_arcs,
         constraints: hz.constraints,
         arbitration: hz.arbitration,
+        leakage: leakage::derive(&m),
     }
 }
 
@@ -180,6 +201,10 @@ mod tests {
         assert!(
             cell.arbitration.is_empty(),
             "guard must suppress arbitration"
+        );
+        assert!(
+            cell.leakage.is_empty(),
+            "guard must suppress leakage states"
         );
         // Emission still succeeds (no panic); the artifacts are simply arc-free.
         let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());

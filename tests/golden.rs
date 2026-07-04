@@ -147,6 +147,9 @@ fn when_default_on_and_suppressible() {
         &cell,
         ArcsTclOptions {
             emit_when: false,
+            // define_leakage is inherently -when-conditioned; disabled here to isolate arc -when
+            // suppression.
+            emit_leakage: false,
             ..Default::default()
         },
     );
