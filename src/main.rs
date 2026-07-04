@@ -42,6 +42,10 @@ struct Cli {
     #[arg(long)]
     constraints: bool,
 
+    /// Suppress hidden (internal-power) arcs — input toggles where no output changes (emitted by default).
+    #[arg(long)]
+    no_internal: bool,
+
     /// Write all three artifacts to stdout (with banners) instead of writing files.
     #[arg(long)]
     stdout: bool,
@@ -108,6 +112,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     let arc_opts = ArcsTclOptions {
         emit_when: !cli.no_when,
         emit_constraints: cli.constraints,
+        emit_internal: !cli.no_internal,
     };
     let base = cli.name.unwrap_or_else(|| base_name(&cli.spec));
     let arcs = render(&cells, |c| cell_arcs_tcl(c, arc_opts));
