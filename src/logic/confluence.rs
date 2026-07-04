@@ -11,9 +11,10 @@
 //! **confluent** at `s` — no hazard. Otherwise the state has diverged, but global divergence alone is not
 //! the verdict: it must *interact* with the racing pair in the immediate combinational neighbourhood —
 //! some diverging state variable `w` (`s_xy.value_of(w) != s_yx.value_of(w)`) must have **both** `x` and
-//! `y` in the direct support of its transition function `δ_w`. [`resolve::delta`] composes through
-//! combinational logic only, so a state variable stays a variable in `δ_w` — both pins in `δ_w`'s direct
-//! support means the pins meet within one combinational neighbourhood. A divergence mediated only across
+//! `y` in the direct support of its transition function `δ_w`. The model minimisation
+//! ([`super::minimise`]) composes through combinational logic only — a state variable is kept as a
+//! variable, never substituted through — both pins in `δ_w`'s direct support means the pins meet within
+//! one combinational neighbourhood. A divergence mediated only across
 //! a latch boundary — `δ_w` does not itself see both pins — is a settled snapshot carried across that
 //! latch (e.g. the two domains of a dual-clock synchroniser), design-tolerated rather than a pin-pair
 //! hazard.
