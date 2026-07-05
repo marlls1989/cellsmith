@@ -2,70 +2,108 @@
 //!
 //! `resolve::state_variables` classifies a signal as a state coordinate purely by self-reachability in
 //! the dependency graph. That over-counts: a signal that lies on a cycle but holds no genuine memory (an
-//! interlock relay, an alias/complement of another signal) is flagged as state, inflating the machine and
-//! emitting redundant internal nodes. This module rewrites the shared per-cell BDD map **once**, before
-//! the machine pass, so that after it every surviving signal is a genuine memory coordinate — a primary
-//! input or a self-reaching signal — and the machine's next-state δ is a direct lookup in the map.
+//! interlock relay, an alias/complement of another signal, or a duplicate of a signal already kept) is
+//! flagged as state, inflating the machine and emitting redundant internal nodes. This module rewrites
+//! the shared per-cell BDD map **once**, before the machine pass, so that after it every surviving signal
+//! is a genuine memory coordinate — a primary input or a self-reaching signal — and the machine's
+//! next-state δ is a direct lookup in the map.
 //!
-//! The rewrite is two staged, structural discriminators run to a fixpoint over the signals in
-//! `signals()` order (outputs first, then internals as parsed):
+//! # Pipeline
 //!
-//! * **M1 — alias/complement collapse.** A signal whose function is *exactly* another signal (a map key)
-//!   or its negation carries no memory of its own; it is the same coordinate as that signal. A chain of
-//!   such wires is walked (tracking the accumulated complement parity) to its **definer root** — the
-//!   first non-wire signal reached, which may itself be a wire-of-input (its own function targets a
-//!   primary input, not a signal) — and the whole class, root included, collapses onto one
-//!   representative — preferring an external output so a pin is never lost. All references are renamed
-//!   onto the representative via [`Bdd::compose_map`]. This is M1's job even when the class's root is not
-//!   itself a wire (e.g. `W="A"`, `Y="W"`: `Y` is the M1 wire, `W` is only its non-wire root, and both are
-//!   retired by this pass — M2 never sees either).
-//! * **M2 — guarded relay elimination.** A signal `s` that does not appear in its own support is a
-//!   combinational relay: at every stable state `s = δ_s(state)` with `s ∉ support(δ_s)`, so it can be
+//! A single fixpoint loop alternates two **output-preserving** passes — **dedup** (identical-δ merge)
+//! then **guarded fold** — over the signals in `signals()` order (outputs first, then internals as
+//! parsed): `loop { dedup_pass; fold_pass; if neither committed break }`. Every transformation in either
+//! pass prefers to keep an output pin; an output is never purged.
+//!
+//! * **dedup — identical-δ merge.** Signals whose functions are the *exact same* BDD are one coordinate
+//!   seen more than once. Each duplicate group keeps a single representative (an external output where
+//!   the group holds one, so a pin is never lost), renames the others onto `var(rep)` everywhere via
+//!   [`Bdd::compose_map`], and retires them — internals purged, outputs demoted to a bare `var(rep)`
+//!   alias. Bare ±aliases are left for the fold (see the interaction note below).
+//! * **guarded fold — relay/alias elimination.** A signal `s` that does not appear in its own support is
+//!   a combinational relay: at every stable state `s = δ_s(state)` with `s ∉ support(δ_s)`, so it is
 //!   composed into each of its consumers via [`Bdd::compose`] and dropped — *unless* the fold would
-//!   fabricate a register out of emergent memory (see the guard below).
+//!   fabricate a register out of emergent memory (the arity-aware guard below). A bare ±alias is the
+//!   arity-1 case and always folds; an output that is a bare ±alias of a surviving internal is inverted
+//!   instead, keeping the coordinate on the output pin.
+//!
+//! # Lockstep frame
+//!
+//! A signal whose transition function depends on only *one* other signal is in **lockstep** with it —
+//! the same coordinate, up to complement. A bare ±var alias carries exactly one bit, so no oscillation
+//! can hide in the disagreement between the two: they move together at every stable state. The arity
+//! clause (`> 1`) in the fold guard is exactly the boundary between "the same coordinate seen through a
+//! wire" (arity 1, always safe to collapse) and "two coordinates that can disagree" (arity `> 1`, which
+//! may hold emergent memory).
 //!
 //! # Proof obligations
 //!
-//! **(I1) M1 soundness.** A wire chain terminating in a definer root carries exactly one bit: each
-//! member's stability equation is `m = ±(next)`, so at every stable state all members are determined by
-//! the root. The `compose_map` rewrite is exact renaming onto the representative (parity-corrected), and
-//! an all-wire cycle (`a="b", b="a"`; `a="!b", b="a"`) is **refused** — every node on it is left
-//! untouched — so no oscillator is ever collapsed. The representative's own function is the root's
-//! definer with the class renamed in and the parity applied, so its behaviour is unchanged.
+//! **(I1) alias / arity-1 fold soundness.** A bare ±var alias `s = ±var(t)` carries exactly one bit and
+//! is in lockstep with `t`, so it always folds: the old wire-collapse is now simply the **arity-1 case**
+//! of the guarded fold, composed away like any other relay. When the alias is an **output** whose target
+//! `t` is a *surviving internal*, the fold **inverts** rather than composing the output away: `s` is kept
+//! as the coordinate, `t` is purged, every `t` reference is rewritten `t ↦ ±var(s)`, and `t`'s definer is
+//! transferred to `s` with the parity applied — so the pin survives holding the coordinate `t` used to
+//! name. A bare ±alias **ring** is no longer refused: it collapses onto a single self-holding coordinate
+//! (`a="b", b="a"` → `b = var(b)`; `a="!b", b="a"` → `b = !var(b)`, a one-node oscillator), preserving
+//! the one bit — and any oscillation — the ring carried on that surviving coordinate, exactly as a
+//! self-holding `ROSC` register does.
 //!
-//! **(I2) M2 soundness.** At any stable state, stability forces `s = δ_s(state)` and `s ∉ support(δ_s)`,
-//! so `s` is combinational — its value is fixed by the inputs and the other coordinates — and the
-//! reduced machine's stable states are exactly the projections of the original's, with `s` recoverable
-//! as `δ_s`. The fold must not, however, **fabricate a register**. The guard refuses folding `s` into a
-//! consumer `c` exactly when `c` forms an `s ↔ c` 2-cycle (`c ∈ support(δ_s)`) *and does not already
-//! self-hold* — because then the fold invents a self-loop for `c` and projects an oscillation that
-//! lived in the *disagreement* of two non-self-holding nodes onto a single-node fixpoint. Mutex:
-//! neither `Qa` nor `Qb` self-holds; folding `Qa` gives `δ_Qb = Qb*B + !A*B`, which at `A=B=1` is
-//! `δ_Qb = Qb` — the `(0,0) ↔ (1,1)` oscillation (what [`machine::settle_or_cycle`](super::machine)
-//! reads) collapses to two stable states and is lost. Refused. `ROSC` (`X="!Q*A"`, `Q="Q*B+X"`): `Q`
-//! **already self-holds**, so folding `X` re-expresses an existing register rather than inventing one;
-//! the oscillation survives in `Q`'s own self-loop (`δ_Q = !Q` at `A*!B`) and is still flagged. The
-//! fold is allowed — only a *new* self-reference is forbidden. (A folded relay simply leaves the
-//! reported oscillation group; it is not a memory coordinate.)
+//! **(I2) arity-aware guard soundness.** At any stable state, stability forces `s = δ_s(state)` with
+//! `s ∉ support(δ_s)`, so `s` is combinational — its value is fixed by the inputs and the other
+//! coordinates — and the reduced machine's stable states are exactly the projections of the original's,
+//! with `s` recoverable as `δ_s`. The fold must not **fabricate a register**. The guard is three clauses,
+//! refusing the fold of `s` (all-or-nothing) exactly when `arity(δ_s) > 1` **and** some consumer
+//! `c ∈ vars(δ_s)` **does not already self-hold**: then the fold invents a self-loop for `c` and projects
+//! an oscillation that lived in the *disagreement* of two non-self-holding nodes onto a single-node
+//! fixpoint. Mutex (`δ_Qa = {Qb, A}`, arity 2, `Qb` not self-holding): folding `Qa` gives a stable
+//! `δ_Qb` at `A=B=1`, collapsing the `(0,0) ↔ (1,1)` oscillation
+//! [`machine::settle_or_cycle`](super::machine) reads — refused. `ROSC`'s `Q` already self-holds, so
+//! folding the relay `X` re-expresses an existing register rather than inventing one; the oscillation
+//! survives in `Q`'s own self-loop (`δ_Q = !Q` at `A·!B`) — allowed. Only a *new* self-reference is
+//! forbidden, and only a multi-input (arity `> 1`) relay can fabricate one.
 //!
-//! **(I3) fixpoint invariant.** At termination, every surviving signal's signal-name support is a subset
-//! of the primary inputs plus the self-reaching signals: any consumed non-self-holding signal is an M2
-//! candidate, and a refusal implies a 2-cycle whose members self-reach, so `resolve::state_variables`
-//! counts them and the machine's δ is a direct map lookup.
+//! **(I3) fixpoint invariant.** At termination neither pass commits, so every surviving signal's
+//! signal-name support is a subset of the primary inputs plus the self-reaching signals: any consumed
+//! non-self-holding signal is a fold candidate, and a refusal implies a 2-cycle whose members self-reach;
+//! any two signals with an identical δ would already have been deduped. `resolve::state_variables`
+//! therefore counts exactly the genuine coordinates and the machine's δ is a direct map lookup.
 //!
-//! **(I4) termination.** Every M1 commit purges a member or demotes it to `±var(rep)` (demotion is
-//! idempotent under the changed-check, so a re-classified alias output produces no further commit), and
-//! every M2 commit purges an internal or removes `s` from every support (`s` re-enters a support only via
-//! an M1 demotion, bounded by the output count). The outer-loop `debug_assert` backstops the bound.
+//! **(I4) termination.** Every fold commit purges an internal or removes `s` from a support (`s` re-enters
+//! a support only via a demotion to `±var(rep)`, bounded by the output count). Every dedup commit purges
+//! an internal or **terminally** demotes an output to a bare `±var(rep)` alias — demotion is idempotent
+//! under the `!=` change-check, so a demoted output never re-commits — bounded by the internal-plus-output
+//! count. Both measures are bounded, and the outer loop's `2 * order.len() + 2` `debug_assert` backstops
+//! against a runaway.
 //!
-//! **Known limit.** The guard is a structural proxy for "removing `s` preserves the reachable-state
-//! cycle structure", and it inspects only `s ↔ c` **2-cycles**. A longer *emergent* all-relay loop in
-//! which no node self-holds — an odd ring `X1="!X3*A", X2="!X1", X3="!X2"` (no stable states, no
-//! committed fixture) — can admit a fold before any 2-cycle appears, shrinking a would-be oscillation
-//! group. No committed or mandated cell is affected: MUT and SR are 2-cycles the guard catches, and
-//! ICM's folded relays feed synchroniser latches that already self-hold. For an ironclad criterion the
-//! fold would carry a BDD check that the projected cycle structure survives; the structural guard is
-//! accepted per the decided enforcement level.
+//! **(I5) dedup soundness.** If `δ_a == δ_b` as BDDs, then `a` and `b` are computed by the identical
+//! function and take equal values at *every* stable state — lockstep, the I1 wire generalised to any
+//! shared function — so merging them is an exact coordinate rename: each non-representative is rewritten
+//! `↦ var(rep)` in every surviving δ, including the representative's own, which covers a shared function
+//! that holds on a member's variable. Genuine independent memories never collide: a real register
+//! self-holds on its **own** variable, so two distinct registers have distinct δ, and two mutex grants
+//! differ (`!Qb·A ≠ !Qa·B`). Dedup leaves them untouchable by construction — no guard is needed.
+//!
+//! # Dedup × fold interaction
+//!
+//! Dedup can demote one of two identical-δ **output** pins to `var(rep)`, deliberately sharing one
+//! coordinate across two pins. The fold must not then re-expand that alias into a duplicated cone — it
+//! would oscillate against dedup, each pass undoing the other. So folding an output `s` into a consumer
+//! that is itself an **output** bare-alias of `s` is refused — the symmetric counterpart to the
+//! inversion's "`t` must be internal" rule (I1). Both rules preserve a deliberately-shared coordinate
+//! between two output pins: the inversion never fires on an output→output alias, and the fold never
+//! dissolves one.
+//!
+//! # Known limit
+//!
+//! The guard inspects only `s ↔ c` **2-cycles** as a structural proxy for "removing `s` preserves the
+//! reachable-state cycle structure". Arity-1 links no longer sit inside this limit — they collapse
+//! soundly onto a single coordinate (I1). The residual gap is only an *emergent* all-relay ring whose
+//! links are **all** arity `> 1` and no node self-holds: a fold can fire before any 2-cycle forms,
+//! shrinking a would-be oscillation group. No committed or mandated cell is affected — MUT and SR are
+//! 2-cycles the guard catches, and ICM's folded relays feed synchroniser latches that already self-hold.
+//! For an ironclad criterion the fold would carry a BDD check that the projected cycle structure
+//! survives; the structural guard is accepted per the decided enforcement level.
 
 use std::collections::{BTreeMap, BTreeSet};
 

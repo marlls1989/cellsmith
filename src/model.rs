@@ -289,9 +289,10 @@ impl Cell {
             regions: Vec::new(),
         };
         // One-shot state-space rewrite: mint the cell's single builder, build every signal's BDD once,
-        // and run the minimisation (alias/complement collapse + guarded relay fold). It rewrites the map
-        // in place so every surviving signal is a genuine-memory coordinate; the same map is then shared
-        // by the machine pass, the region cache and emission — no signal function is ever rebuilt.
+        // and run the minimisation (identical-δ dedup + guarded relay/alias fold, alternated to a
+        // fixpoint). It rewrites the map in place so every surviving signal is a genuine-memory
+        // coordinate; the same map is then shared by the machine pass, the region cache and emission —
+        // no signal function is ever rebuilt.
         let builder = bdd_builder!();
         let mut bdds: BTreeMap<Symbol, _> = analysed
             .signals()
