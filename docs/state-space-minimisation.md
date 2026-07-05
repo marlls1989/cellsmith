@@ -47,10 +47,19 @@ compare — structurally identical functions share one node — so the grouping 
    passes never fight over the same signal. A group with a single member carries no duplicate and is
    skipped.
 
-2. **Choose the representative:** the first external output in the group, else the first member in
+2. **Merge only a recurrent group.** A group is merged **only when its shared function references one
+   of the group's own members** — the coordinate is *recurrent*. Once every non-rep member is renamed
+   to `var(rep)`, the representative is self-referential and so a genuine **state variable**, which is
+   what makes the resulting `var(rep)` aliases machine-evaluable. A purely **combinational** duplicate
+   — no member in the shared δ, e.g. two pins both computing `A·B` — is **left independent**: an
+   alias's target must be a state variable, because the machine evaluates each signal over the primary
+   inputs plus the state variables only (invariant **I3**), so aliasing an output to a combinational
+   signal would make it unevaluable. Those duplicates stay independent full-function signals.
+
+3. **Choose the representative:** the first external output in the group, else the first member in
    scan order. This guarantees an external pin is preserved wherever the group holds one.
 
-3. **Merge onto the representative:**
+4. **Merge onto the representative:**
    - Build a rename map sending every non-rep member to `var(rep)`.
    - Every surviving signal that references a group member is rewritten with that rename map, so all
      references now point at the representative.
@@ -58,20 +67,27 @@ compare — structurally identical functions share one node — so the grouping 
      `var(rep)` — they keep their pin but become a combinational function of the representative, and
      are marked changed.
 
-This catches **truly-parallel aliases** that folding need not collapse: two independent signals that
-happen to share a function — a buffered output pin and an internal node computing the same thing, or
-two output pins wired to the same logic — are one coordinate even though neither is a bare ±var of the
+This catches **truly-parallel recurrent aliases** that folding need not collapse: two output pins
+wired to the same self-reaching logic are one coordinate even though neither is a bare ±var of the
 other and neither relays through the other.
 
-### Worked example — the buffered C-element
+### Worked example — recurrent duplicate output pins
 
-`QN = !(A·B + IQ·(A+B))`, `IQ = !QN`, `Q = !QN`.
+`Q1 = !R·(S+Q1)`, `Q2 = !R·(S+Q1)`.
 
-`Q` and `IQ` compute the *identical* function `!QN`, so dedup groups `{Q, IQ}` and merges them onto
-the output `Q` (the only external pin). `IQ` is renamed to `var(Q)` inside `QN` — giving
-`QN = !(A·B + Q·(A+B))` — and, being internal, is purged. The fold pass then resolves the surviving
-`Q = !QN` alias (see below), leaving the single output coordinate `δ_Q = A·B + Q·(A+B)` — one bit,
-exactly the physical cell.
+Both pins compute the *identical* function, and that function references `Q1` — a group member — so
+the coordinate is recurrent. Dedup groups `{Q1, Q2}`, keeps `Q1` as representative (the first external
+output), and demotes `Q2` to `var(Q1)`: the pin survives as a combinational function of the
+representative, and `Q1` is left self-holding — a genuine state variable, so the `var(Q1)` alias is
+machine-evaluable.
+
+Two output pins that instead both compute a purely **combinational** `A·B` share no member in their δ,
+so dedup leaves them independent full-function signals rather than alias one pin to a non-state rep.
+
+The **buffered C-element** `Q = !QN`, `IQ = !QN`, `QN = !(A·B + IQ·(A+B))` is *not* a dedup case: `Q`
+and `IQ` are each a bare ±alias of `QN`, which dedup skips. The fold's inversion resolves them (see
+below), collapsing the cell to the single output coordinate `δ_Q = A·B + Q·(A+B)` — one bit, exactly
+the physical cell.
 
 ## Guarded arity-aware fold
 
@@ -150,12 +166,13 @@ The two passes partition the aliasing they resolve, and each defers the other's 
 - **Dedup owns identical functions; fold owns bare ±var aliases.** Dedup explicitly skips a signal
   that is a bare ±alias of another key, leaving it for the fold; the fold's inversion, in turn, only
   fires when the alias *target* is internal. So a signal is never contested.
-- **Output-output alias exclusion.** Dedup may share a single coordinate between *two output pins* —
-  it keeps one pin as representative and demotes the other to `var(rep)`. The fold must not undo that:
-  it **refuses to fold an output into an output that is a bare alias of itself**, so the shared
-  coordinate survives. This is the counterpart to inversion's internal-only rule — inversion resolves
-  an output/internal alias by purging the internal, but an output/output alias has no purgeable side,
-  so both pins are kept and the alias is left standing.
+- **No output-output exclusion is needed.** Dedup may share a single coordinate between *two output
+  pins* — it keeps one pin as representative and demotes the other to `var(rep)`. But dedup only ever
+  aliases to a **self-reaching** representative (the recurrence condition above), and the fold skips
+  self-holding candidates, so a dedup alias is never a fold candidate and can never be re-expanded — no
+  special exclusion is required. Conversely, an output-alias fold that *resolves* a combinational alias
+  — an output buffer or inverter of a combinational output — has no shared coordinate to protect and
+  proceeds normally.
 
 ## Why the rewrite is behaviour-preserving
 
