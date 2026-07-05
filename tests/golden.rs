@@ -105,7 +105,7 @@ Qb = "!Qa * B"
 "#;
 
 /// A cross-coupled mutex generates arcs across all three artifacts (it used to abort at arc
-/// generation), documents its metastable point, and — after collapse — uses only primary inputs as
+/// generation), documents its oscillation, and — after collapse — uses only primary inputs as
 /// related pins (a `Qb→Qa` arc would be a physical deadlock).
 #[test]
 fn mutex_generates_all_three_artifacts() {
@@ -113,7 +113,7 @@ fn mutex_generates_all_three_artifacts() {
 
     // Arcs: no crash, oscillation documented, related pins are inputs only.
     let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
-    assert!(tcl.contains("# oscillation: A*B metastable"));
+    assert!(tcl.contains("# oscillation: A*B risks metastability"));
     assert!(!tcl.contains("-related_pin Qa"));
     assert!(!tcl.contains("-related_pin Qb"));
     assert!(tcl.contains("-related_pin A"));
@@ -310,6 +310,11 @@ fn icm_relays_fold_and_machine_is_preserved() {
         "hidden_arcs differ from hand-folded ICM"
     );
     assert_eq!(
+        format!("{:?}", cell.order_dependence),
+        format!("{:?}", folded.order_dependence),
+        "order_dependence differs from hand-folded ICM"
+    );
+    assert_eq!(
         format!("{:?}", cell.oscillation),
         format!("{:?}", folded.oscillation),
         "oscillation differs from hand-folded ICM"
@@ -363,10 +368,11 @@ fn icm_relays_fold_and_machine_is_preserved() {
     assert!(!tcl.contains("sela"), "purged relay token sela in arcs tcl");
 
     // DELIBERATE LOCK — R2 deviation, coordinator SIGNED OFF. Declassifying the `sela` relay exposes
-    // `S` at the CLKA latch boundary, so the confluence direct-support filter
-    // (src/logic/confluence.rs:291-295) now derives a setup/hold constraint relating CLKA and S that
-    // the un-folded model did not have. This is a *gained* constraint: gains are accepted ('may be
-    // gained, never lost'), losses are not. Do NOT weaken this away — it is the R2-deviation sentinel.
+    // `S` at the CLKA latch boundary, so `confluence::detect`'s combinational-neighbourhood
+    // direct-support filter now detects an order-dependent hazard on CLKA/S — from which
+    // `confluence::constrain` generates a setup/hold constraint relating CLKA and S that the un-folded
+    // model did not have. This is a *gained* constraint: gains are accepted ('may be gained, never
+    // lost'), losses are not. Do NOT weaken this away — it is the R2-deviation sentinel.
     assert!(
         cell.constraints
             .iter()

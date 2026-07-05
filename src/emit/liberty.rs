@@ -15,6 +15,7 @@ use liberty_parse::{
     liberty::{Attribute, Group, Liberty},
 };
 
+use crate::logic::hazard::Oscillation;
 use crate::logic::regions::{StateCube, StateRegions};
 use crate::model::{AnalysedCell, AnalysedOutput};
 
@@ -50,15 +51,17 @@ pub fn library_liberty(name: &str, cells: &[AnalysedCell]) -> String {
 }
 
 /// The Liberty `cell (...) { ... }` fragment for a cell, as text (newline-terminated so fragments
-/// concatenate cleanly). Interlocked (mutex/arbiter) cells are prefixed with a comment recording the
-/// metastable condition and the mutually-exclusive (forbidden-both-high) grants.
+/// concatenate cleanly). A cell with a detected oscillation hazard is prefixed with a comment
+/// recording the racing condition and the competing settled outcomes.
 pub fn cell_liberty(cell: &AnalysedCell) -> String {
     let mut out = String::new();
     for a in &cell.oscillation {
+        let states: Vec<String> = a.stable.iter().map(Oscillation::state_str).collect();
         out.push_str(&format!(
-            "/* oscillation: {} metastable; grants {} mutually exclusive (both-high forbidden) */\n",
+            "/* oscillation: {} risks metastability in {}, settling to one of {} */\n",
             a.condition_str(),
             a.group.join(", "),
+            states.join(" | "),
         ));
     }
     out.push_str(&format!("{}\n", Liberty(vec![cell_group(cell)])));

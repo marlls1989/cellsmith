@@ -14,7 +14,7 @@ use espresso_logic::expression::ParseBoolExprError;
 use crate::expr;
 use crate::logic::arcs::{Arc, HiddenArc};
 use crate::logic::confluence::Constraint;
-use crate::logic::interlock::Oscillation;
+use crate::logic::hazard::{OrderDependence, Oscillation};
 use crate::logic::leakage::LeakageState;
 
 /// The whole input file: a list of `[[cell]]` tables.
@@ -144,14 +144,18 @@ pub struct AnalysedCell {
     /// precomputed once by the shared machine pass
     /// ([`crate::logic::analysis::analyse_machine`]) and consumed by the arcs emitter.
     pub leakage: Vec<LeakageState>,
-    /// Detected oscillation/metastability conditions (empty for ordinary combinational or
-    /// self-holding cells). See [`crate::logic::interlock`].
+    /// Detected order-dependent hazards — pairs whose settled state depends on which edge lands first
+    /// (empty for confluent cells). A detected hazard, sibling to `oscillation`; the constraints that
+    /// avoid it are generated separately into `constraints`. See [`crate::logic::hazard`].
+    pub order_dependence: Vec<OrderDependence>,
+    /// Detected oscillation hazards — pairs (or single toggles) that drive a periodic, non-settling
+    /// cycle (empty for ordinary combinational or self-holding cells). See [`crate::logic::hazard`].
     pub oscillation: Vec<Oscillation>,
     /// Declared clock input pins (`clock = [...]`). See [`crate::logic::confluence`].
     pub clock_pins: Vec<Symbol>,
-    /// The constraints derived to avoid the cell's hazards (setup/hold and non_seq). Emission is gated
-    /// by the CLI flag or `constraint_arcs_declared`; the kind of each constraint follows the declared
-    /// clock.
+    /// The constraints generated to avoid the cell's detected hazards (setup/hold and non_seq). Emission
+    /// is gated by the CLI flag or `constraint_arcs_declared`; the kind of each constraint follows the
+    /// declared clock.
     pub constraints: Vec<Constraint>,
     /// Whether the cell opted in to constraint-arc emission (`constraint_arcs = true`).
     pub constraint_arcs_declared: bool,
@@ -277,6 +281,7 @@ impl Cell {
             arcs: Vec::new(),
             hidden_arcs: Vec::new(),
             leakage: Vec::new(),
+            order_dependence: Vec::new(),
             oscillation: Vec::new(),
             clock_pins: self.clock.clone(),
             constraints: Vec::new(),
@@ -319,15 +324,16 @@ impl Cell {
             }
         }
 
-        // Build the cell's state machine once and derive both its transition arcs and its hazards (the
-        // constraints — setup/hold, non_seq — that avoid them plus the oscillation annotations) from the
-        // shared exploration over the minimised model. Clock suppression and emission gating are applied
-        // downstream.
+        // Build the cell's state machine once and derive both its transition arcs and its hazards from
+        // the shared exploration over the minimised model: the two detected hazards (order-dependence,
+        // oscillation) and the constraints — setup/hold, non_seq — generated to avoid them. Clock
+        // suppression and emission gating are applied downstream.
         let analysis = crate::logic::analysis::analyse_machine(&analysed, &bdds);
         analysed.arcs = analysis.arcs;
         analysed.hidden_arcs = analysis.hidden_arcs;
         analysed.leakage = analysis.leakage;
         analysed.constraints = analysis.constraints;
+        analysed.order_dependence = analysis.order_dependence;
         analysed.oscillation = analysis.oscillation;
         // Cache each signal's state-table regions once, in `signals()` order, from the shared folded
         // BDDs, so downstream emitters don't rebuild the BDDs per call site.

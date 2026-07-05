@@ -17,6 +17,10 @@
 //! at the all-zero input (its reset is an input sequence, not a level) is initialised by the sequence
 //! that actually resolves it — the async pins, a clock edge, both requests high — rather than by an
 //! arbitrary held combination.
+//!
+//! The machine model, settling, cycle detection and start-state discovery are described concept-first in
+//! `state-machine-arc-engine.md`; this module records only the implementation specifics the concept
+//! doesn't need.
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 
@@ -96,7 +100,7 @@ pub fn is_stable<B: Brand, C: ManagerCell>(deltas: &[Delta<B, C>], node: &Minter
 
 /// Settle the state under `node`'s fixed inputs: iterate [`step`] to a fixpoint. The fixpoint may still
 /// leave state variables absent — those the inputs (and resolved state) do not determine. Returns `None`
-/// if the state oscillates without settling (a metastable / oscillation condition).
+/// if the state oscillates without settling (an oscillation hazard, which risks metastability).
 pub fn settle<B: Brand, C: ManagerCell>(
     deltas: &[Delta<B, C>],
     node: &Minterm<Symbol>,
@@ -105,7 +109,10 @@ pub fn settle<B: Brand, C: ManagerCell>(
 }
 
 /// Like [`settle`], but on oscillation returns the periodic cycle itself — the sequence of states
-/// from the first repeated state back around — so callers can name the oscillating variables.
+/// from the first repeated state back around — so callers can name the oscillating variables. The
+/// concept is in `state-machine-arc-engine.md` §5; the mechanics: `pos` maps each visited state to its
+/// index in `trace` (an O(1) revisit check), and `trace` preserves visitation order, so a revisit of a
+/// state already at index `p` slices the cycle out as `trace[p..]`.
 pub fn settle_or_cycle<B: Brand, C: ManagerCell>(
     deltas: &[Delta<B, C>],
     node: &Minterm<Symbol>,
@@ -377,7 +384,7 @@ mod tests {
     }
 
     #[test]
-    fn metastable_mutex_oscillates_to_none() {
+    fn mutex_oscillates_to_none() {
         // Cross-coupled: Qa = !Qb*A, Qb = !Qa*B. Under A=B=1 the joint next-state of {Qa=0,Qb=0}
         // toggles both to 1 then back — no fixpoint reachable from it, so settle yields None.
         let builder = bdd_builder!();
@@ -390,7 +397,7 @@ mod tests {
 
     #[test]
     fn settle_or_cycle_names_the_oscillating_pair() {
-        // Same cross-coupled mutex as `metastable_mutex_oscillates_to_none`, but probed through
+        // Same cross-coupled mutex as `mutex_oscillates_to_none`, but probed through
         // settle_or_cycle: the returned cycle should have length 2, with Qa and Qb each taking both
         // values across it (the pair genuinely oscillates, rather than one of them staying fixed).
         let builder = bdd_builder!();

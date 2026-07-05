@@ -8,9 +8,9 @@
 //!      via [`Bdd::evaluate`] until the state stops changing.
 //!   2. BFS from the reachable stable states — which are not assumed but discovered by [`machine::explore`]
 //!      from the on/off covers of the signal characteristic functions (never an assumed all-zero state) —
-//!      stepping one input at a time and letting the state settle. Metastable transitions (the state
-//!      oscillates instead of settling — a mutex's deadlock) yield no fixpoint and are dropped, so no
-//!      impossible arc is produced.
+//!      stepping one input at a time and letting the state settle. Oscillating transitions (the state
+//!      oscillates instead of settling — an oscillation hazard, e.g. a mutex at simultaneity) yield no
+//!      fixpoint and are dropped, so no impossible arc is produced.
 //!   3. Wherever a single input toggle flips an **output**, emit an arc: the toggled input is the
 //!      `related` pin (arcs are only ever sourced by primary inputs — never an output or internal),
 //!      and the prevector is the BFS path — each node projected onto the inputs — that drives every

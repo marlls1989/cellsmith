@@ -9,7 +9,7 @@ use espresso_logic::Symbol;
 use crate::logic::arcs::{Arc, Edge, HiddenArc};
 use crate::logic::assignment;
 use crate::logic::confluence::{Constraint, ConstraintKind};
-use crate::logic::interlock::Oscillation;
+use crate::logic::hazard::Oscillation;
 use crate::logic::leakage::LeakageState;
 use crate::logic::literal_product;
 use crate::model::AnalysedCell;
@@ -44,9 +44,10 @@ impl Default for ArcsTclOptions {
     }
 }
 
-/// All `define_arc` blocks for a cell, concatenated. Interlocked (mutex/arbiter) cells are prefixed
-/// with a comment documenting the metastable condition, which timing arcs cannot express. When enabled,
-/// derived constraint arcs (setup/hold, non_seq) follow the delay arcs.
+/// All `define_arc` blocks for a cell, concatenated. A cell with a detected oscillation hazard is
+/// prefixed with a comment recording the racing condition and the competing settled outcomes — the
+/// metastability risk timing arcs cannot express. When enabled, derived constraint arcs (setup/hold,
+/// non_seq) follow the delay arcs.
 pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     let mut out = oscillation_comment(cell);
     // Without `-when`, arcs of the same (related, pin, edge) that differ only in the held-input context
@@ -155,7 +156,7 @@ fn oscillation_comment(cell: &AnalysedCell) -> String {
     for a in &cell.oscillation {
         let states: Vec<String> = a.stable.iter().map(Oscillation::state_str).collect();
         s.push_str(&format!(
-            "# oscillation: {} metastable; grants {{{}}} mutually exclusive ({})\n",
+            "# oscillation: {} risks metastability in {{{}}}, settling to one of {}\n",
             a.condition_str(),
             a.group.join(", "),
             states.join(" | "),
@@ -753,7 +754,7 @@ Qb = "!Qa * B"
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
         // Oscillation documented up front.
-        assert!(tcl.contains("# oscillation: A*B metastable"));
+        assert!(tcl.contains("# oscillation: A*B risks metastability"));
         assert!(tcl.contains("Qa, Qb"));
         // Related pins are primary inputs only — never an output (a Qb→Qa arc is a deadlock).
         assert!(!tcl.contains("-related_pin Qa"));
