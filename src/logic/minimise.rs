@@ -16,10 +16,14 @@
 //! pass prefers to keep an output pin; an output is never purged.
 //!
 //! * **dedup — identical-δ merge.** Signals whose functions are the *exact same* BDD are one coordinate
-//!   seen more than once. Each duplicate group keeps a single representative (an external output where
-//!   the group holds one, so a pin is never lost), renames the others onto `var(rep)` everywhere via
+//!   seen more than once — but a group is merged *only when its shared function references a group
+//!   member* (the coordinate is **recurrent**, so the surviving rep self-holds and becomes a genuine
+//!   state variable). A merged group keeps a single representative (an external output where the group
+//!   holds one, so a pin is never lost), renames the others onto `var(rep)` everywhere via
 //!   [`Bdd::compose_map`], and retires them — internals purged, outputs demoted to a bare `var(rep)`
-//!   alias. Bare ±aliases are left for the fold (see the interaction note below).
+//!   alias. A purely **combinational** duplicate (no member in the shared δ) is left untouched: aliasing
+//!   an output to a combinational rep would escape the state set the machine evaluates over (I3), so the
+//!   duplicates stay independent full-function signals. Bare ±aliases are left for the fold.
 //! * **guarded fold — relay/alias elimination.** A signal `s` that does not appear in its own support is
 //!   a combinational relay: at every stable state `s = δ_s(state)` with `s ∉ support(δ_s)`, so it is
 //!   composed into each of its consumers via [`Bdd::compose`] and dropped — *unless* the fold would
@@ -65,8 +69,12 @@
 //!
 //! **(I3) fixpoint invariant.** At termination neither pass commits, so every surviving signal's
 //! signal-name support is a subset of the primary inputs plus the self-reaching signals: any consumed
-//! non-self-holding signal is a fold candidate, and a refusal implies a 2-cycle whose members self-reach;
-//! any two signals with an identical δ would already have been deduped. `resolve::state_variables`
+//! non-self-holding signal is a fold candidate, and a refusal implies a 2-cycle whose members self-reach.
+//! Any two signals with an identical **recurrent** δ would already have been deduped onto a self-holding
+//! rep; combinational duplicates are left as independent full-function signals — each already lies within
+//! inputs plus self-reaching signals, so no alias to a non-state rep is ever emitted. The machine
+//! evaluates every signal over the inputs plus the self-reaching signals only, so an alias's target must
+//! itself be a state variable — which the recurrence condition guarantees. `resolve::state_variables`
 //! therefore counts exactly the genuine coordinates and the machine's δ is a direct map lookup.
 //!
 //! **(I4) termination.** Every fold commit purges an internal or removes `s` from a support (`s` re-enters
@@ -78,21 +86,27 @@
 //!
 //! **(I5) dedup soundness.** If `δ_a == δ_b` as BDDs, then `a` and `b` are computed by the identical
 //! function and take equal values at *every* stable state — lockstep, the I1 wire generalised to any
-//! shared function — so merging them is an exact coordinate rename: each non-representative is rewritten
-//! `↦ var(rep)` in every surviving δ, including the representative's own, which covers a shared function
-//! that holds on a member's variable. Genuine independent memories never collide: a real register
+//! shared function. Merging is sound as a coordinate rename, but the surviving rep must be
+//! machine-evaluable: `analyse_machine` evaluates every signal over the primary inputs plus the
+//! self-reaching signals only, so the `var(rep)` an output demotes to must name a **state variable**.
+//! Dedup therefore merges a group **only when the shared function references a member** — the coordinate
+//! is *recurrent*, so after the rename `↦ var(rep)` (applied in every surviving δ, including the rep's
+//! own) the rep is self-referential and hence a genuine state variable. A purely combinational duplicate
+//! (no member in the shared δ) is **skipped**: merging it would alias an output to a combinational rep
+//! outside the state set (breaking I3), so the duplicates are left as independent full-function signals,
+//! the behaviour-preserving baseline. Genuine independent memories never collide: a real register
 //! self-holds on its **own** variable, so two distinct registers have distinct δ, and two mutex grants
-//! differ (`!Qb·A ≠ !Qa·B`). Dedup leaves them untouchable by construction — no guard is needed.
+//! differ (`!Qb·A ≠ !Qa·B`).
 //!
 //! # Dedup × fold interaction
 //!
 //! Dedup can demote one of two identical-δ **output** pins to `var(rep)`, deliberately sharing one
-//! coordinate across two pins. The fold must not then re-expand that alias into a duplicated cone — it
-//! would oscillate against dedup, each pass undoing the other. So folding an output `s` into a consumer
-//! that is itself an **output** bare-alias of `s` is refused — the symmetric counterpart to the
-//! inversion's "`t` must be internal" rule (I1). Both rules preserve a deliberately-shared coordinate
-//! between two output pins: the inversion never fires on an output→output alias, and the fold never
-//! dissolves one.
+//! coordinate across two pins. It only ever aliases to a **self-reaching** rep (the recurrence
+//! condition, I5), and the fold skips self-holding candidates — so a dedup alias is never a fold
+//! candidate and can never be re-expanded. No exclusion is needed. Conversely, an output-alias fold that
+//! *resolves* a combinational alias (an output that is a bare ±alias of a surviving internal) proceeds
+//! freely: the inversion keeps the coordinate on the pin (`t` must be internal, I1) and folds the alias
+//! away.
 //!
 //! # Known limit
 //!
@@ -178,9 +192,11 @@ pub fn minimise_state_space<B: Brand, C: ManagerCell>(
 /// whether it committed anything.
 ///
 /// Bare aliases are skipped (they are [`fold_pass`]'s job) so the two passes cannot fight over them.
-/// Each group of duplicate functions keeps one representative — an external output where the group holds
-/// one, so a pin is never lost — renames the others onto `var(rep)` everywhere, and retires them
-/// (internals purged, outputs demoted to `var(rep)`).
+/// Each duplicate group is merged only when its shared function references a member (a **recurrent**
+/// coordinate, so the surviving rep self-holds and stays machine-evaluable — I3/I5); a purely
+/// combinational duplicate is left independent. A merged group keeps one representative — an external
+/// output where the group holds one, so a pin is never lost — renames the others onto `var(rep)`
+/// everywhere, and retires them (internals purged, outputs demoted to `var(rep)`).
 fn dedup_pass<B: Brand, C: ManagerCell>(
     bdds: &mut BTreeMap<Symbol, Bdd<B, C>>,
     order: &[Symbol],
@@ -199,7 +215,15 @@ fn dedup_pass<B: Brand, C: ManagerCell>(
         }
     }
     let mut progress = false;
-    for (_, members) in groups.into_iter().filter(|(_, m)| m.len() >= 2) {
+    for (shared, members) in groups.into_iter().filter(|(_, m)| m.len() >= 2) {
+        // Only merge a recurrent coordinate: if the shared δ references a group member, the surviving
+        // rep becomes self-referential after the rename → var(rep) — a genuine state variable, so the
+        // var(rep) aliases are machine-evaluable (I3). A purely combinational duplicate (no member in
+        // δ) would leave an output aliased to a combinational rep, which the machine cannot evaluate;
+        // leave those independent (a later fold/relay pass handles any internal duplicate).
+        if !members.iter().any(|m| shared.variables().any(|v| v == *m)) {
+            continue;
+        }
         let rep = members
             .iter()
             .find(|m| outputs.contains(*m))
@@ -324,18 +348,10 @@ fn fold_pass<B: Brand, C: ManagerCell>(
         }
 
         // Consumers: the surviving signals whose function references s (scanned in signals order).
-        // An output→output alias `c = ±var(s)` is left alone: [`dedup_pass`] created it deliberately to
-        // share a coordinate across two pins, so folding `s`'s function back into it would re-expand the
-        // alias and oscillate against dedup. Inversion never resolves such a pair (both are outputs).
         let consumers: Vec<Symbol> = order
             .iter()
             .filter(|c| c.as_str() != s.as_str() && bdds.contains_key(*c))
             .filter(|c| bdds[*c].variables().any(|v| v.as_str() == s.as_str()))
-            .filter(|c| {
-                !(s_is_output
-                    && outputs.contains(*c)
-                    && alias_target(c, &bdds[*c], bdds).is_some_and(|(t, _)| t == *s))
-            })
             .cloned()
             .collect();
 
@@ -712,9 +728,10 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_output_pins_dedup_to_one_coordinate() {
-        // Two output pins carry the identical function: dedup keeps Y1 and points Y2 at it (both pins are
-        // retained, sharing one coordinate); nothing is purged and the fold leaves the alias intact.
+    fn duplicate_combinational_output_pins_are_left_independent() {
+        // Two output pins carry the identical *combinational* function (no member appears in δ=A*B).
+        // Merging would alias one pin to a combinational rep the machine cannot evaluate (I3), so dedup
+        // skips the group: both pins keep the full function and stay independent.
         let (b, mut bdds, order, outputs) = system! {
             outputs: ["Y1", "Y2"],
             "Y1" = "A*B",
@@ -722,8 +739,25 @@ mod tests {
         };
         let min = minimise_state_space(&mut bdds, &order, &outputs);
         assert!(min.purged.is_empty());
-        assert_eq!(min.changed, [Symbol::from("Y2")].into_iter().collect());
-        assert!(bdds[&Symbol::from("Y2")] == b.var("Y1"));
+        assert!(min.changed.is_empty());
         assert!(bdds[&Symbol::from("Y1")].equivalent_to(&b.parse("A*B").unwrap()));
+        assert!(bdds[&Symbol::from("Y2")].equivalent_to(&b.parse("A*B").unwrap()));
+    }
+
+    #[test]
+    fn recurrent_duplicate_outputs_dedup_to_one_coordinate() {
+        // Two output pins carry the identical *recurrent* function (the coordinate self-reaches through
+        // Q1). Dedup merges: Q1 is the rep, Q2 demotes to var(Q1), and Q1 becomes self-holding — the
+        // alias target is a genuine state variable, so it is machine-evaluable.
+        let (b, mut bdds, order, outputs) = system! {
+            outputs: ["Q1", "Q2"],
+            "Q1" = "!R*(S+Q1)",
+            "Q2" = "!R*(S+Q1)",
+        };
+        let min = minimise_state_space(&mut bdds, &order, &outputs);
+        assert!(min.purged.is_empty());
+        assert_eq!(min.changed, [Symbol::from("Q2")].into_iter().collect());
+        assert!(bdds[&Symbol::from("Q2")] == b.var("Q1"));
+        assert!(bdds[&Symbol::from("Q1")].equivalent_to(&b.parse("!R*(S+Q1)").unwrap()));
     }
 }
