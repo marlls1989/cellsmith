@@ -147,9 +147,9 @@ Q = "CLK*M + !CLK*Q"
     }
 
     #[test]
-    fn mutex_never_seeds_the_metastable_input() {
-        // Cross-coupled mutex Qa=!Qb*A, Qb=!Qa*B: three settled seeds, none at A=1,B=1 (the metastable
-        // input is never a seed).
+    fn mutex_never_seeds_the_oscillation_input() {
+        // Cross-coupled mutex Qa=!Qb*A, Qb=!Qa*B: three settled seeds, none at A=1,B=1 (the input where
+        // the oscillation hazard sits is never a seed).
         let cell = analyse(
             r#"
 [[cell]]
@@ -166,7 +166,7 @@ Qb = "!Qa*B"
             leak.iter()
                 .all(|l| !(l.inputs.value_of("A") == Some(true)
                     && l.inputs.value_of("B") == Some(true))),
-            "the metastable A=1,B=1 input must never be a seed"
+            "the A=1,B=1 input — where the oscillation hazard sits — must never be a seed"
         );
     }
 }
