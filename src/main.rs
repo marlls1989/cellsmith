@@ -71,14 +71,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         .map(|c| c.analyse())
         .collect::<Result<_, _>>()?;
 
-    // Diagnose interlocked cells: their oscillation is detected and annotated, but never expressed as
-    // deterministic timing, so the user should know — naming the nodes (outputs or internals) that
-    // oscillate.
+    // Diagnose detected oscillation hazards: a periodic, non-settling cycle rather than a fixpoint,
+    // naming the nodes (outputs or internals) that oscillate — the user should know, as this is never
+    // expressed as deterministic timing.
     for c in &cells {
         for a in &c.oscillation {
             eprintln!(
-                "cellsmith: warning: cell {:?}: nodes {{{}}} oscillate (metastable at {}) — \
-                 annotated only, not modelled as timing.",
+                "cellsmith: warning: cell {:?}: nodes {{{}}} oscillate when {} — risk of \
+                 metastability; annotated only, not modelled as timing.",
                 c.name,
                 a.group.join(", "),
                 a.condition_str(),
@@ -86,9 +86,29 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // Diagnose every derived constraint, for any cell, listing the hazard conditions that require it.
-    // Each input pin pair is uniformly one kind (setup/hold if it holds a declared clock, else
-    // non_seq), so its conditions are gathered and reported once.
+    // Diagnose detected order-dependent hazards, grouped per racing pin pair: the settled state
+    // depends on which of the pair's edges lands first (non-confluence).
+    type RacePairs<'a> = BTreeMap<(&'a str, &'a str), Vec<String>>;
+    for c in &cells {
+        let mut pairs: RacePairs = BTreeMap::new();
+        for od in &c.order_dependence {
+            let (x, y) = (od.x.as_str(), od.y.as_str());
+            let key = if x <= y { (x, y) } else { (y, x) };
+            pairs.entry(key).or_default().push(od.condition_str());
+        }
+        for ((x, y), conditions) in &pairs {
+            eprintln!(
+                "cellsmith: warning: cell {:?}: inputs ({x}, {y}) race — the settled state depends \
+                 on which edge lands first when {} — risk of metastability.",
+                c.name,
+                conditions.join("; "),
+            );
+        }
+    }
+
+    // Diagnose every generated constraint, for any cell, listing the hazard conditions it was
+    // generated to avoid. Each input pin pair is uniformly one kind (setup/hold if it holds a declared
+    // clock, else non_seq), so its conditions are gathered and reported once.
     type ConstraintPairs<'a> = BTreeMap<(&'a str, &'a str), (&'static str, Vec<String>)>;
     for c in &cells {
         let mut pairs: ConstraintPairs = BTreeMap::new();
@@ -107,7 +127,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         }
         for ((a, b), (kind, conditions)) in &pairs {
             eprintln!(
-                "cellsmith: warning: cell {:?}: inputs ({a}, {b}) need a {kind} constraint — hazard when {}.",
+                "cellsmith: warning: cell {:?}: inputs ({a}, {b}): generated a {kind} constraint to \
+                 avoid the hazard when {}.",
                 c.name,
                 conditions.join("; "),
             );

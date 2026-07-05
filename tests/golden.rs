@@ -113,7 +113,7 @@ fn mutex_generates_all_three_artifacts() {
 
     // Arcs: no crash, oscillation documented, related pins are inputs only.
     let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
-    assert!(tcl.contains("# oscillation: A*B metastable"));
+    assert!(tcl.contains("# oscillation: A*B risks metastability"));
     assert!(!tcl.contains("-related_pin Qa"));
     assert!(!tcl.contains("-related_pin Qb"));
     assert!(tcl.contains("-related_pin A"));
