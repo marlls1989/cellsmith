@@ -76,8 +76,25 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     // expressed as deterministic timing.
     for c in &cells {
         for a in &c.oscillation {
+            // How the machine reached it: the path into the pre-hazard state and the simultaneous
+            // toggle that triggers the oscillation, from the representative pair-probe race (min by
+            // `(prevector.len, discovered)`, matching the constraint tie-break). A single-toggle
+            // oscillation carries no race, so its path/transition are omitted.
+            let via = a
+                .races
+                .iter()
+                .min_by_key(|r| (r.prevector.len(), r.discovered))
+                .map(|r| {
+                    format!(
+                        " (reached along {}; pre-hazard state {}; triggered by simultaneous toggle {})",
+                        r.path_str(),
+                        r.pre_state_str(),
+                        r.transition_str(),
+                    )
+                })
+                .unwrap_or_default();
             eprintln!(
-                "cellsmith: warning: cell {:?}: nodes {{{}}} oscillate when {} — risk of \
+                "cellsmith: warning: cell {:?}: nodes {{{}}} oscillate when {}{via} — risk of \
                  metastability; annotated only, not modelled as timing.",
                 c.name,
                 a.group.join(", "),
@@ -94,14 +111,22 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         for od in &c.order_dependence {
             let (x, y) = (od.x.as_str(), od.y.as_str());
             let key = if x <= y { (x, y) } else { (y, x) };
-            pairs.entry(key).or_default().push(od.condition_str());
+            // Each hazard states how the machine got there: the condition, the path into the pre-hazard
+            // state, and the two settle orders whose outcomes diverge.
+            pairs.entry(key).or_default().push(format!(
+                "{} (reached along {}; pre-hazard state {}; orders {})",
+                od.condition_str(),
+                od.path_str(),
+                od.pre_state_str(),
+                od.transition_str(),
+            ));
         }
-        for ((x, y), conditions) in &pairs {
+        for ((x, y), hazards) in &pairs {
             eprintln!(
                 "cellsmith: warning: cell {:?}: inputs ({x}, {y}) race — the settled state depends \
                  on which edge lands first when {} — risk of metastability.",
                 c.name,
-                conditions.join("; "),
+                hazards.join("; "),
             );
         }
     }
