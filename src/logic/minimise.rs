@@ -82,12 +82,24 @@ pub struct Minimised {
     pub changed: BTreeSet<Symbol>,
 }
 
-/// The signal names that `f` still references — its variables restricted to the current map keys.
-fn signal_support<B: Brand, C: ManagerCell>(
+/// `Some((t, parity))` iff `f` is a bare ±alias of another surviving key.
+///
+/// `parity` is `0` when `f == var(t)` and `1` when `f == !var(t)`. Used both to detect the aliases
+/// [`dedup_pass`] leaves alone and to drive [`fold_pass`]'s output-alias inversion.
+fn alias_target<B: Brand, C: ManagerCell>(
+    name: &Symbol,
     f: &Bdd<B, C>,
     bdds: &BTreeMap<Symbol, Bdd<B, C>>,
-) -> BTreeSet<Symbol> {
-    f.variables().filter(|v| bdds.contains_key(v)).collect()
+) -> Option<(Symbol, u8)> {
+    let vars: Vec<Symbol> = f.variables().collect();
+    if vars.len() == 1 && vars[0] != *name && bdds.contains_key(&vars[0]) {
+        let t = vars[0].clone();
+        let b = f.builder();
+        let parity = if *f == b.var(t.as_str()) { 0 } else { 1 };
+        Some((t, parity))
+    } else {
+        None
+    }
 }
 
 /// Reduce `bdds` to a minimal set of genuine-memory coordinates, mutating it in place.
@@ -96,8 +108,8 @@ fn signal_support<B: Brand, C: ManagerCell>(
 /// external-output names; both drive the scan and the alias-representative choice. The returned
 /// [`Minimised`] names the purged internals and the surviving signals whose function changed.
 ///
-/// The alternating M1/M2 fixpoint (see (I4) above; concept in `state-space-minimisation.md`) is bounded
-/// at `2 * order.len() + 2` outer iterations — a `debug_assert` backstop against a runaway loop, not a
+/// The dedup/fold fixpoint (see (I4) above; concept in `state-space-minimisation.md`) is bounded at
+/// `2 * order.len() + 2` outer iterations — a `debug_assert` backstop against a runaway loop, not a
 /// behavioural limit reached in practice.
 pub fn minimise_state_space<B: Brand, C: ManagerCell>(
     bdds: &mut BTreeMap<Symbol, Bdd<B, C>>,
@@ -107,15 +119,15 @@ pub fn minimise_state_space<B: Brand, C: ManagerCell>(
     let mut result = Minimised::default();
     let mut iterations = 0usize;
     loop {
-        let m1 = m1_pass(bdds, order, outputs, &mut result);
-        let m2 = m2_pass(bdds, order, outputs, &mut result);
+        let d = dedup_pass(bdds, order, outputs, &mut result);
+        let f = fold_pass(bdds, order, outputs, &mut result);
         iterations += 1;
         debug_assert!(
             iterations <= 2 * order.len() + 2,
             "minimise_state_space: outer loop exceeded the {} iteration bound",
             2 * order.len() + 2
         );
-        if !m1 && !m2 {
+        if !d && !f {
             break;
         }
     }
@@ -124,148 +136,50 @@ pub fn minimise_state_space<B: Brand, C: ManagerCell>(
     result
 }
 
-/// One M1 (alias/complement collapse) pass. Returns whether it committed anything.
-fn m1_pass<B: Brand, C: ManagerCell>(
+/// One dedup pass: collapse signals that share the *same* function onto a single coordinate. Returns
+/// whether it committed anything.
+///
+/// Bare aliases are skipped (they are [`fold_pass`]'s job) so the two passes cannot fight over them.
+/// Each group of duplicate functions keeps one representative — an external output where the group holds
+/// one, so a pin is never lost — renames the others onto `var(rep)` everywhere, and retires them
+/// (internals purged, outputs demoted to `var(rep)`).
+fn dedup_pass<B: Brand, C: ManagerCell>(
     bdds: &mut BTreeMap<Symbol, Bdd<B, C>>,
     order: &[Symbol],
     outputs: &BTreeSet<Symbol>,
     result: &mut Minimised,
 ) -> bool {
-    // A wire is a signal whose function is exactly one *signal* (a map key), possibly complemented.
-    let keys: BTreeSet<Symbol> = bdds.keys().cloned().collect();
-    let mut wire_edge: BTreeMap<Symbol, (Symbol, u8)> = BTreeMap::new();
-    for (name, f) in bdds.iter() {
-        let vars: Vec<Symbol> = f.variables().collect();
-        if vars.len() == 1 && vars[0] != *name && keys.contains(&vars[0]) {
-            let t = vars[0].clone();
-            let b = f.builder();
-            let parity = if *f == b.var(t.as_str()) { 0 } else { 1 };
-            wire_edge.insert(name.clone(), (t, parity));
-        }
-    }
-    if wire_edge.is_empty() {
-        return false;
-    }
-
-    // Walk the (out-degree-1) wire graph: each wire resolves to a definer root with a parity relative to
-    // it, or lands on an all-wire cycle — in which case every node on the walk is refused this pass.
-    let mut member_of: BTreeMap<Symbol, (Symbol, u8)> = BTreeMap::new();
-    let mut refused: BTreeSet<Symbol> = BTreeSet::new();
-    for start in wire_edge.keys() {
-        if member_of.contains_key(start) || refused.contains(start) {
+    let mut groups: Vec<(Bdd<B, C>, Vec<Symbol>)> = Vec::new();
+    for s in order {
+        let Some(f) = bdds.get(s) else { continue };
+        if alias_target(s, f, bdds).is_some() {
             continue;
         }
-        // (node, parity accumulated from `start`).
-        let mut walked: Vec<(Symbol, u8)> = Vec::new();
-        let mut seen: BTreeSet<Symbol> = BTreeSet::new();
-        let mut node = start.clone();
-        let mut cum = 0u8;
-        loop {
-            if !seen.insert(node.clone()) {
-                // Revisit ⇒ all-wire cycle. Refuse every node walked.
-                for (n, _) in &walked {
-                    refused.insert(n.clone());
-                }
-                break;
-            }
-            walked.push((node.clone(), cum));
-            match wire_edge.get(&node) {
-                Some((t, e)) => {
-                    cum ^= e;
-                    node = t.clone();
-                }
-                None => {
-                    // `node` is the definer root; its accumulated parity is the class's reference frame.
-                    let root_par = cum;
-                    for (n, c) in &walked {
-                        member_of
-                            .entry(n.clone())
-                            .or_insert((node.clone(), root_par ^ c));
-                    }
-                    break;
-                }
-            }
+        match groups.iter_mut().find(|(g, _)| g == f) {
+            Some((_, members)) => members.push(s.clone()),
+            None => groups.push((f.clone(), vec![s.clone()])),
         }
     }
-
-    // Group members (root included, at parity 0) by their root.
-    let mut classes: BTreeMap<Symbol, Vec<(Symbol, u8)>> = BTreeMap::new();
-    for (m, (root, p)) in &member_of {
-        classes
-            .entry(root.clone())
-            .or_default()
-            .push((m.clone(), *p));
-    }
-
     let mut progress = false;
-    for (root, members) in classes {
-        if members.len() < 2 {
-            continue; // a lone root carries no wire; nothing to collapse.
-        }
-        let member_names: BTreeSet<Symbol> = members.iter().map(|(m, _)| m.clone()).collect();
-
-        // Representative: the root if it is an output, else the first output member in scan order, else
-        // the root — so an external pin is preserved wherever the class holds one.
-        let rep = if outputs.contains(&root) {
-            root.clone()
-        } else if let Some(o) = order
+    for (_, members) in groups.into_iter().filter(|(_, m)| m.len() >= 2) {
+        let rep = members
             .iter()
-            .find(|n| member_names.contains(*n) && outputs.contains(*n))
-        {
-            o.clone()
-        } else {
-            root.clone()
-        };
-        let p_rep = members
-            .iter()
-            .find(|(m, _)| *m == rep)
-            .map(|(_, p)| *p)
-            .expect("rep is a class member");
-
-        // The representative's variable, positive and negated, in this cell's builder.
-        let b = bdds[&root].builder();
-        let rep_pos = b.var(rep.as_str());
-        let rep_neg = !&rep_pos;
-
-        // Rename map: every non-rep member expressed in terms of the representative.
+            .find(|m| outputs.contains(*m))
+            .unwrap_or(&members[0])
+            .clone();
+        let b = bdds[&rep].builder();
+        let rep_var = b.var(rep.as_str());
         let rename: BTreeMap<Symbol, Bdd<B, C>> = members
             .iter()
-            .filter(|(m, _)| *m != rep)
-            .map(|(m, p)| {
-                let g = if *p == p_rep {
-                    rep_pos.clone()
-                } else {
-                    rep_neg.clone()
-                };
-                (m.clone(), g)
-            })
+            .filter(|m| **m != rep)
+            .map(|m| (m.clone(), rep_var.clone()))
             .collect();
-
-        // δ_rep is the root's definer with the class renamed in, then complemented iff the rep is the
-        // root's complement.
-        let root_sup: BTreeSet<Symbol> = bdds[&root].variables().collect();
-        let entries: Vec<(&str, &Bdd<B, C>)> = rename
+        let names: Vec<Symbol> = order
             .iter()
-            .filter(|(k, _)| root_sup.contains(*k))
-            .map(|(k, v)| (k.as_str(), v))
-            .collect();
-        let mut delta_rep = bdds[&root].compose_map(entries);
-        if p_rep == 1 {
-            delta_rep = !&delta_rep;
-        }
-        if delta_rep != bdds[&rep] {
-            result.changed.insert(rep.clone());
-            progress = true;
-        }
-        bdds.insert(rep.clone(), delta_rep);
-
-        // Rewrite every other surviving signal that references a class member.
-        let others: Vec<Symbol> = bdds
-            .keys()
-            .filter(|n| !member_names.contains(*n))
+            .filter(|n| bdds.contains_key(*n))
             .cloned()
             .collect();
-        for s in others {
+        for s in names {
             let f = bdds[&s].clone();
             let sup: BTreeSet<Symbol> = f.variables().collect();
             let entries: Vec<(&str, &Bdd<B, C>)> = rename
@@ -283,21 +197,14 @@ fn m1_pass<B: Brand, C: ManagerCell>(
                 progress = true;
             }
         }
-
-        // Retire the non-rep members: internals vanish, outputs demote to ±var(rep) but keep their pin.
-        for (m, p) in &members {
+        for m in &members {
             if *m == rep {
                 continue;
             }
             if outputs.contains(m) {
-                let want = if (p ^ p_rep) == 0 {
-                    rep_pos.clone()
-                } else {
-                    rep_neg.clone()
-                };
-                if want != bdds[m] {
+                if bdds[m] != rep_var {
                     result.changed.insert(m.clone());
-                    bdds.insert(m.clone(), want);
+                    bdds.insert(m.clone(), rep_var.clone());
                     progress = true;
                 }
             } else {
@@ -307,12 +214,16 @@ fn m1_pass<B: Brand, C: ManagerCell>(
             }
         }
     }
-
     progress
 }
 
-/// One M2 (guarded relay elimination) pass. Returns whether it committed anything.
-fn m2_pass<B: Brand, C: ManagerCell>(
+/// One arity-aware fold pass. Returns whether it committed anything.
+///
+/// For each `s` in scan order: first an **output-alias inversion** (an output that is a bare ±alias of
+/// an *internal* key absorbs that key's definer and purges it, breaking the alias 2-cycle the guard
+/// would otherwise refuse); then the **guarded relay elimination** — a signal that does not self-hold
+/// is composed into its consumers and dropped, unless the fold would fabricate a register.
+fn fold_pass<B: Brand, C: ManagerCell>(
     bdds: &mut BTreeMap<Symbol, Bdd<B, C>>,
     order: &[Symbol],
     outputs: &BTreeSet<Symbol>,
@@ -324,22 +235,75 @@ fn m2_pass<B: Brand, C: ManagerCell>(
             continue; // already purged
         }
         let f_s = bdds[s].clone();
-        let sup_s = signal_support(&f_s, bdds);
-        if sup_s.contains(s) {
+        let s_is_output = outputs.contains(s);
+
+        // Output-alias inversion (before the self-hold check). An output `s` that is a bare ±alias of an
+        // *internal* key `t` is the keeper of that coordinate: re-express `t`'s definer in terms of `s`
+        // (parity-corrected), fold it everywhere `t` was referenced, and purge `t`. This resolves the
+        // `s ↔ t` alias 2-cycle that the register guard below refuses (e.g. C-element `Q = !QN`).
+        if s_is_output {
+            if let Some((t, parity)) = alias_target(s, &f_s, bdds) {
+                if !outputs.contains(&t) {
+                    let b = f_s.builder();
+                    // `t` expressed as ±s.
+                    let g = if parity == 0 {
+                        b.var(s.as_str())
+                    } else {
+                        !&b.var(s.as_str())
+                    };
+                    let mut new_s = bdds[&t].compose(t.as_str(), &g);
+                    if parity == 1 {
+                        new_s = !&new_s;
+                    }
+                    if new_s != f_s {
+                        result.changed.insert(s.clone());
+                    }
+                    bdds.insert(s.clone(), new_s);
+                    let others: Vec<Symbol> = bdds
+                        .keys()
+                        .filter(|k| **k != *s && **k != t)
+                        .cloned()
+                        .collect();
+                    for k in others {
+                        if bdds[&k].variables().any(|v| v == t) {
+                            let nw = bdds[&k].compose(t.as_str(), &g);
+                            if nw != bdds[&k] {
+                                result.changed.insert(k.clone());
+                                bdds.insert(k, nw);
+                            }
+                        }
+                    }
+                    bdds.remove(&t);
+                    result.purged.insert(t);
+                    progress = true;
+                    continue;
+                }
+            }
+        }
+
+        if f_s.variables().any(|v| v == *s) {
             continue; // self-holding ⇒ genuine memory, not a relay
         }
 
         // Consumers: the surviving signals whose function references s (scanned in signals order).
+        // An output→output alias `c = ±var(s)` is left alone: [`dedup_pass`] created it deliberately to
+        // share a coordinate across two pins, so folding `s`'s function back into it would re-expand the
+        // alias and oscillate against dedup. Inversion never resolves such a pair (both are outputs).
         let consumers: Vec<Symbol> = order
             .iter()
             .filter(|c| c.as_str() != s.as_str() && bdds.contains_key(*c))
             .filter(|c| bdds[*c].variables().any(|v| v.as_str() == s.as_str()))
+            .filter(|c| {
+                !(s_is_output
+                    && outputs.contains(*c)
+                    && alias_target(c, &bdds[*c], bdds).is_some_and(|(t, _)| t == *s))
+            })
             .cloned()
             .collect();
 
         if consumers.is_empty() {
             // A dead internal relay is purged; a dead output (e.g. ICM's GCLK) is a legitimate no-op.
-            if !outputs.contains(s) {
+            if !s_is_output {
                 bdds.remove(s);
                 result.purged.insert(s.clone());
                 progress = true;
@@ -354,27 +318,30 @@ fn m2_pass<B: Brand, C: ManagerCell>(
         // stable `δ_Qb = Qb`). A consumer that **already self-holds** (e.g. `ROSC`'s `Q = Q·B + X`) is
         // a genuine register; folding the relay into it preserves the dynamics — the oscillation
         // survives in the register's own self-loop (`δ_Q = !Q` at `A·!B`) — so the fold is allowed
-        // even though it is a 2-cycle. Only a *new* self-reference is forbidden.
-        if consumers
-            .iter()
-            .any(|c| sup_s.contains(c) && !bdds[c].variables().any(|v| v.as_str() == c.as_str()))
+        // even though it is a 2-cycle. Only a *new* self-reference is forbidden, and only a multi-input
+        // relay can fabricate one: a bare ±alias (arity 1) always collapses.
+        let arity = f_s.variables().count();
+        if arity > 1
+            && consumers
+                .iter()
+                .any(|c| f_s.variables().any(|v| v == *c) && !bdds[c].variables().any(|v| v == *c))
         {
             continue;
         }
 
         for c in &consumers {
-            let f_c = bdds[c].clone();
-            let sup_c_before = signal_support(&f_c, bdds);
-            let new = f_c.compose(s.as_str(), &f_s);
-            debug_assert!(
-                !signal_support(&new, bdds).contains(c) || sup_c_before.contains(c),
-                "m2_pass: folding {s:?} introduced a new self-reference for {c:?}"
-            );
+            let new = bdds[c].compose(s.as_str(), &f_s);
+            if arity > 1 {
+                debug_assert!(
+                    !new.variables().any(|v| v == *c) || bdds[c].variables().any(|v| v == *c),
+                    "fold_pass: folding {s:?} introduced a new self-reference for {c:?}"
+                );
+            }
             result.changed.insert(c.clone());
             bdds.insert(c.clone(), new);
         }
         // The relay itself is dropped (internal) or kept but no longer consumed (output).
-        if !outputs.contains(s) {
+        if !s_is_output {
             bdds.remove(s);
             result.purged.insert(s.clone());
         }
@@ -458,7 +425,7 @@ mod tests {
 
     #[test]
     fn sr_nor_latch_is_kept() {
-        // Cross-coupled NOR: supports have two variables (not wires) and the M2 guard trips on the
+        // Cross-coupled NOR: supports have two variables (not wires) and the fold guard trips on the
         // Q↔Qn 2-cycle.
         let (_b, mut bdds, order, outputs) = system! {
             outputs: ["Q", "Qn"],
@@ -527,10 +494,9 @@ mod tests {
 
     #[test]
     fn wire_of_input_folds_through() {
-        // W="A" is a wire-of-input: its own function targets a primary input, not a signal, so W is not
-        // itself an M1 wire. But Y="W" *is* an M1 wire (its target W is a map key), so the whole {Y, W}
-        // class — root W included — is collapsed and purged by m1_pass, not m2_pass: it resolves onto
-        // the output Y, purging W, and Y resolves to A.
+        // W="A" is a wire-of-input: its function targets a primary input, not a signal. Y="W" is a bare
+        // alias of the key W, so the fold collapses the {Y, W} chain — W (an internal relay) folds into
+        // its consumer Y and is purged, and Y resolves to A.
         let (b, mut bdds, order, outputs) = system! {
             outputs: ["Y"],
             "W" = "A",
@@ -542,31 +508,35 @@ mod tests {
     }
 
     #[test]
-    fn all_wire_cycles_are_refused() {
-        // a="b", b="a": a pure alias cycle, no definer — left untouched.
-        let (_b, mut bdds, order, outputs) = system! {
+    fn all_wire_cycles_collapse_to_single_coordinate() {
+        // Notes point-2 resolution: an all-wire cycle is not refused but collapsed onto a single keeper
+        // node whose dynamics are preserved — the surviving coordinate holds the one bit the cycle
+        // carried (a lone keeper for a=b, a one-node oscillator for a=!b).
+        //
+        // a="b", b="a": a folds into b (b=b), a is purged, b is the sole keeper.
+        let (b, mut bdds, order, outputs) = system! {
             outputs: [],
             "a" = "b",
             "b" = "a",
         };
         let min = minimise_state_space(&mut bdds, &order, &outputs);
-        assert!(min.purged.is_empty());
-        assert!(min.changed.is_empty());
+        assert_eq!(min.purged, [Symbol::from("a")].into_iter().collect());
+        assert!(bdds[&Symbol::from("b")] == b.var("b"));
 
-        // a="!b", b="a": a complement cycle, likewise refused.
-        let (_b2, mut bdds2, order2, outputs2) = system! {
+        // a="!b", b="a": a folds into b (b=!b), a is purged, b is a one-node oscillator.
+        let (b2, mut bdds2, order2, outputs2) = system! {
             outputs: [],
             "a" = "!b",
             "b" = "a",
         };
         let min2 = minimise_state_space(&mut bdds2, &order2, &outputs2);
-        assert!(min2.purged.is_empty());
-        assert!(min2.changed.is_empty());
+        assert_eq!(min2.purged, [Symbol::from("a")].into_iter().collect());
+        assert!(bdds2[&Symbol::from("b")] == !&b2.var("b"));
     }
 
     #[test]
     fn dead_combinational_internal_is_purged() {
-        // W="CLK*D" with no consumers is a dead internal — M2 purges it.
+        // W="CLK*D" with no consumers is a dead internal — the fold purges it.
         let (_b, mut bdds, order, outputs) = system! {
             outputs: [],
             "W" = "CLK*D",
@@ -662,5 +632,60 @@ mod tests {
             minimise_state_space(&mut b, &order, &outputs)
         );
         assert_runs_agree(&a, &b);
+
+        // Buffered C-element: dedup of the {Q, IQ} duplicate followed by the output-alias fold.
+        let (_b1, mut a, order, outputs) = system! {
+            outputs: ["Q"],
+            "Q" = "!QN",
+            "IQ" = "!QN",
+            "QN" = "!(A*B + IQ*(A+B))",
+        };
+        let (_b2, mut b, _, _) = system! {
+            outputs: ["Q"],
+            "Q" = "!QN",
+            "IQ" = "!QN",
+            "QN" = "!(A*B + IQ*(A+B))",
+        };
+        assert_eq!(
+            minimise_state_space(&mut a, &order, &outputs),
+            minimise_state_space(&mut b, &order, &outputs)
+        );
+        assert_runs_agree(&a, &b);
+    }
+
+    #[test]
+    fn buffered_c_element_dedups_then_folds_to_single_output_coordinate() {
+        // Q and IQ both buffer !QN. IQ (an internal duplicate/alias) is retired and QN folds through, so
+        // the whole cell reduces to the single output coordinate Q = A*B + Q*(A+B).
+        let (b, mut bdds, order, outputs) = system! {
+            outputs: ["Q"],
+            "Q" = "!QN",
+            "IQ" = "!QN",
+            "QN" = "!(A*B + IQ*(A+B))",
+        };
+        let min = minimise_state_space(&mut bdds, &order, &outputs);
+        assert_eq!(
+            min.purged,
+            ["IQ", "QN"].map(Symbol::from).into_iter().collect()
+        );
+        assert!(bdds[&Symbol::from("Q")].equivalent_to(&b.parse("A*B + Q*(A+B)").unwrap()));
+        assert!(!bdds.contains_key("IQ"));
+        assert!(!bdds.contains_key("QN"));
+    }
+
+    #[test]
+    fn duplicate_output_pins_dedup_to_one_coordinate() {
+        // Two output pins carry the identical function: dedup keeps Y1 and points Y2 at it (both pins are
+        // retained, sharing one coordinate); nothing is purged and the fold leaves the alias intact.
+        let (b, mut bdds, order, outputs) = system! {
+            outputs: ["Y1", "Y2"],
+            "Y1" = "A*B",
+            "Y2" = "A*B",
+        };
+        let min = minimise_state_space(&mut bdds, &order, &outputs);
+        assert!(min.purged.is_empty());
+        assert_eq!(min.changed, [Symbol::from("Y2")].into_iter().collect());
+        assert!(bdds[&Symbol::from("Y2")] == b.var("Y1"));
+        assert!(bdds[&Symbol::from("Y1")].equivalent_to(&b.parse("A*B").unwrap()));
     }
 }
