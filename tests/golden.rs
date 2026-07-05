@@ -666,9 +666,13 @@ fn recurrent_duplicate_outputs_dedup_and_both_emit_arcs() {
             .any(|l| l.contains("statetable") && l.contains("\"Q1\")")),
         "Q1 should keep its recurrent statetable:\n{lib}"
     );
-    assert!(
-        lib.contains("function : \"Q1\";"),
-        "Q2 should be an alias pin of Q1:\n{lib}"
+    // Discriminating: `function : "Q1";` must appear exactly twice — Q1's own statetable self-reference
+    // plus Q2's alias. If a regression let Q2 escape dedup into an independent output, it would emit its
+    // own function/state and the count would drop to 1.
+    assert_eq!(
+        lib.matches("function : \"Q1\";").count(),
+        2,
+        "Q2 should be an alias pin of Q1 (expected two `function : \"Q1\";` — Q1 self-ref + Q2 alias):\n{lib}"
     );
 }
 
