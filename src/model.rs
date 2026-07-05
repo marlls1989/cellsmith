@@ -301,29 +301,10 @@ impl Cell {
         let order: Vec<Symbol> = analysed.signals().map(|s| s.name.clone()).collect();
         let output_set: BTreeSet<Symbol> =
             analysed.outputs.iter().map(|o| o.name.clone()).collect();
-        // `reserved` are the names a hoist-minted internal must avoid: the cell's declared inputs.
-        let min = crate::logic::minimise::minimise_state_space(
-            &mut bdds,
-            &order,
-            &output_set,
-            &input_set,
-        );
+        let min = crate::logic::minimise::minimise_state_space(&mut bdds, &order, &output_set);
 
-        // Drop the internals the fold purged (outputs are never purged), then materialise each internal
-        // the hoist minted — a relocated cyclic coordinate — with its expression set from the folded BDD
-        // (it is not in `min.changed`, so the recompute loop below leaves its expr as-is; regenerating
-        // from the same BDD would be a harmless no-op regardless). Materialise before the recompute so
-        // the minted node's `vars`/`feedback` are filled and it is classified as the state variable
-        // that carries the statetable.
+        // Drop the internals the fold purged (outputs are never purged).
         analysed.internals.retain(|s| !min.purged.contains(&s.name));
-        for n in &min.minted {
-            analysed.internals.push(AnalysedOutput {
-                name: n.clone(),
-                expr: bdds[n].to_expr(),
-                vars: BTreeSet::new(),
-                feedback: Vec::new(),
-            });
-        }
 
         // Recompute every surviving signal from its folded BDD: its support (now semantic, not the
         // parse-time syntactic support) and the feedback/state references among the survivors. The

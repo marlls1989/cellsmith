@@ -56,8 +56,7 @@ fn transitive_closure(edges: &BTreeMap<Symbol, Vec<Symbol>>) -> BTreeMap<Symbol,
 
 /// The nodes of a directed graph that reach **themselves** through one or more edges — the signals on
 /// a dependency cycle (a self-reference or a larger coupling cycle). This is the pure graph kernel of
-/// [`state_variables`]; [`super::minimise`]'s hoist pass reuses it over the folded BDD support graph to
-/// find the cyclic (state-variable) outputs.
+/// [`state_variables`].
 pub(crate) fn self_reaching(edges: &BTreeMap<Symbol, Vec<Symbol>>) -> BTreeSet<Symbol> {
     let reach = transitive_closure(edges);
     edges
