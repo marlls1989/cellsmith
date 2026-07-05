@@ -2,11 +2,25 @@
 //! and the behavioural Verilog draw from, built at **emission time** (not in the minimiser).
 //!
 //! A cell's hysteretic signals (its **state variables**: outputs and internal nodes on a dependency
-//! cycle, as classified in [`crate::logic::regions`]) are folded into ONE joint next-state table over
-//! the cross product of their per-signal regions. Each [`StateRow`] pairs a primary-input pattern and
-//! a current-state pattern with a per-node next-state action (`H`/`L`/`N` = drive-high/drive-low/hold).
-//! Output state variables get an emission-time `{name}_st` alias node so no state-table node ever names
-//! an external output pin; internal state nodes keep their own name.
+//! cycle, as classified in [`crate::logic::regions`]) are folded into ONE joint next-state table. Each
+//! [`StateRow`] pairs a primary-input pattern and a current-state pattern with a per-node next-state
+//! action (`H`/`L`/`N` = drive-high/drive-low/hold, or `-` = unconstrained here). Output state
+//! variables get an emission-time `{name}_st` alias node so no state-table node ever names an external
+//! output pin; internal state nodes keep their own name.
+//!
+//! CONSTRUCTION. The rows are built by **cover algebra**, not a cube cross-product. Each node's three
+//! minimised region covers (on/off/hold, cached on [`StateRegions`]) are re-based onto one **shared
+//! header** — the input nodes followed by the state signals' original names — renamed so their single
+//! output column carries the node's original name, then stacked (`Cover::extend`) into three
+//! multi-output F covers (ON/OFF/HOLD). Each is Espresso joint-minimised independently (cube-shared
+//! across nodes), and every resulting cube is folded into a row keyed by its input pattern: each
+//! asserted output column stamps that node's slot with the pass's action, the same key accumulating
+//! across passes. Unstamped slots stay `-`.
+//!
+//! A `-` in a next field is legal Liberty and defers that node: Liberty resolves next-state PER OUTPUT,
+//! so a node reads the first row specifying it non-`-` and `-` lets a lower-priority row decide (Vol.1
+//! §5; the master-slave `CP(R)`/`CPN(F)` split-row example). Because on/off/hold are disjoint per node,
+//! no node is ever stamped two different definite actions.
 //!
 //! LIBERTY SPEC FACTS (verified against the Liberty User Guide Vol.1 2017.06 §5 pp.5-23..5-33 and the
 //! Liberty Reference Manual R-2020.09 p.217):
@@ -21,10 +35,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use espresso_logic::Symbol;
+use espresso_logic::{Anonymous, Cover, Minimizable, Minterm, Symbol};
 
-use crate::logic::regions::{StateCube, StateRegions};
-use crate::model::{AnalysedCell, AnalysedOutput};
+use crate::logic::regions::StateRegions;
+use crate::model::AnalysedCell;
 
 /// A single state node's next-state action in a joint row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -39,13 +53,15 @@ pub enum Next {
 
 /// One row of the joint state table: an input pattern and a current-state pattern mapped to a
 /// per-node next action. `inputs` is aligned to [`StateModel::input_nodes`], `current` and `next` to
-/// [`StateModel::internal_nodes`] (i.e. the state signals in node order). `Some(true)`/`Some(false)`
-/// are fixed levels; `None` is a don't-care (`-`).
+/// [`StateModel::internal_nodes`] (i.e. the state signals in node order). In `inputs`/`current`,
+/// `Some(true)`/`Some(false)` are fixed levels and `None` is a don't-care (`-`); in `next`, `Some(_)`
+/// is a definite action and `None` is a node this row leaves unconstrained (`-`, deferred to a
+/// lower-priority row per Liberty's per-output resolution).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StateRow {
     pub inputs: Vec<Option<bool>>,
     pub current: Vec<Option<bool>>,
-    pub next: Vec<Next>,
+    pub next: Vec<Option<Next>>,
 }
 
 /// The joint state-table model of a sequential cell: the input-node and internal-node column headers,
@@ -78,83 +94,6 @@ fn mint_node(name: &Symbol, reserved: &BTreeSet<Symbol>) -> Symbol {
             break cand;
         }
         i += 1;
-    }
-}
-
-/// Extend a partial assignment with a region cube's fixed literals, keyed by the ORIGINAL column
-/// symbol (a primary input or another state signal's current value). Returns `None` if any literal
-/// conflicts with the assignment (the branch is pruned).
-fn extend(
-    assignment: &BTreeMap<Symbol, bool>,
-    cols: &[Symbol],
-    cube: &StateCube,
-) -> Option<BTreeMap<Symbol, bool>> {
-    let mut a = assignment.clone();
-    for (col, val) in cols.iter().zip(cube.iter()) {
-        if let Some(b) = val {
-            match a.get(col) {
-                Some(existing) if existing != b => return None,
-                _ => {
-                    a.insert(col.clone(), *b);
-                }
-            }
-        }
-    }
-    Some(a)
-}
-
-/// DFS over the state signals in node order, branching over each signal's three regions (on→`High`,
-/// off→`Low`, hold→`Hold`) and each cube within them. `assignment` carries the accumulated
-/// input/current-value literals; `tags` the accumulated per-node next actions. At a leaf every node has
-/// a tag, so materialise one [`StateRow`].
-#[allow(clippy::too_many_arguments)]
-fn build_rows(
-    state_sigs: &[(&AnalysedOutput, &StateRegions)],
-    idx: usize,
-    assignment: &BTreeMap<Symbol, bool>,
-    tags: &[Next],
-    input_nodes: &[Symbol],
-    rows: &mut BTreeSet<StateRow>,
-) {
-    if idx == state_sigs.len() {
-        let inputs = input_nodes
-            .iter()
-            .map(|n| assignment.get(n).copied())
-            .collect();
-        // A node's own current value is never constrained by its own cube (self is projected out in
-        // regions.rs:79-83); it stays `None` unless another node's cube constrained it.
-        let current = state_sigs
-            .iter()
-            .map(|(sig, _)| assignment.get(&sig.name).copied())
-            .collect();
-        rows.insert(StateRow {
-            inputs,
-            current,
-            next: tags.to_vec(),
-        });
-        return;
-    }
-
-    let (_, sr) = state_sigs[idx];
-    for (region, tag) in [
-        (&sr.on, Next::High),
-        (&sr.off, Next::Low),
-        (&sr.hold, Next::Hold),
-    ] {
-        for cube in region {
-            if let Some(next_assign) = extend(assignment, &sr.cols, cube) {
-                let mut next_tags = tags.to_vec();
-                next_tags.push(tag);
-                build_rows(
-                    state_sigs,
-                    idx + 1,
-                    &next_assign,
-                    &next_tags,
-                    input_nodes,
-                    rows,
-                );
-            }
-        }
     }
 }
 
@@ -222,42 +161,142 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
         .cloned()
         .collect();
 
-    // (d) Joint rows: DFS over the state signals in node order, deduped in a BTreeSet and returned
-    // sorted. Overlapping-cube duplicates dedupe because identical input/current patterns always share
-    // a next-vector (per-node regions are disjoint).
-    let state_sigs: Vec<(&AnalysedOutput, &StateRegions)> = cell
+    // (d) Joint rows via cover algebra (see the module doc). Shared header = the input nodes followed
+    // by the state signals' ORIGINAL names in node order; I3 (section (c)) guarantees every region
+    // column is one of these. `state_orig` doubles as the node-order name list for `current`/`next`.
+    let state_orig: Vec<Symbol> = cell
         .signal_regions()
         .filter(|(_, sr)| sr.hysteretic)
+        .map(|(sig, _)| sig.name.clone())
         .collect();
-    let mut rows: BTreeSet<StateRow> = BTreeSet::new();
-    build_rows(
-        &state_sigs,
-        0,
-        &BTreeMap::new(),
-        &[],
-        &input_nodes,
-        &mut rows,
-    );
+    let regions: Vec<&StateRegions> = cell
+        .signal_regions()
+        .filter(|(_, sr)| sr.hysteretic)
+        .map(|(_, sr)| sr)
+        .collect();
+    let shared_header: Vec<Symbol> = input_nodes
+        .iter()
+        .cloned()
+        .chain(state_orig.iter().cloned())
+        .collect();
+    // ORIGINAL signal name -> its slot index in node order, for stamping outputs BY NAME.
+    let index_of: BTreeMap<&Symbol, usize> =
+        state_orig.iter().enumerate().map(|(i, n)| (n, i)).collect();
+    let k = state_orig.len();
+
+    // Each pass stacks every node's minimised region cover for one action into a single multi-output F
+    // cover over the shared header, joint-minimises it, and folds each cube into `row_map`. A zero-cube
+    // region cover (e.g. an empty hold set) contributes no column and is skipped — the fold reads
+    // outputs BY NAME, so a missing column just means no cube asserts that node in that region.
+    type Pick = fn(&StateRegions) -> &Cover<Symbol, Anonymous>;
+    let passes: [(Next, Pick); 3] = [
+        (Next::High, |sr| &sr.on_cover),
+        (Next::Low, |sr| &sr.off_cover),
+        (Next::Hold, |sr| &sr.hold_cover),
+    ];
+
+    let mut row_map: BTreeMap<Minterm<Symbol>, Vec<Option<Next>>> = BTreeMap::new();
+    for (tag, pick) in passes {
+        let mut labels: Vec<Symbol> = Vec::new();
+        let mut joint: Option<Cover<Symbol, Symbol>> = None;
+        for (name, sr) in state_orig.iter().zip(regions.iter().copied()) {
+            let cover = pick(sr);
+            // rename_outputs needs a one-output header; a zero-cube cover has none — skip it.
+            if cover.num_cubes() == 0 {
+                continue;
+            }
+            let column = cover
+                .clone()
+                .rename_outputs::<Symbol, _>([name.as_str()])
+                .expect("single-output region cover renames to one node name")
+                .over_vars(shared_header.iter().map(Symbol::as_str));
+            labels.push(name.clone());
+            match joint.as_mut() {
+                None => joint = Some(column),
+                Some(acc) => acc.extend(&column),
+            }
+        }
+        let Some(joint) = joint else { continue };
+        debug_assert_eq!(
+            joint
+                .output_labels()
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            labels.iter().cloned().collect::<BTreeSet<_>>(),
+            "joint {tag:?} cover carries exactly the stacked node names",
+        );
+        // Joint (multi-output, cube-shared) minimisation, falling back to the un-minimised cover.
+        let minimised = joint.clone().minimize().unwrap_or(joint);
+        for cube in minimised.cubes() {
+            let slots = row_map
+                .entry(cube.inputs().clone())
+                .or_insert_with(|| vec![None; k]);
+            for (out, asserted) in cube.outputs().vars().iter().zip(cube.outputs().iter()) {
+                if !asserted {
+                    continue;
+                }
+                let i = index_of[out];
+                // Accepted disjointness guarantee: on/off/hold are pairwise disjoint PER NODE, so a
+                // slot is never stamped two DIFFERENT definite actions; overlapping cubes across passes
+                // only ever re-stamp the same tag into a slot.
+                debug_assert!(
+                    slots[i].is_none() || slots[i] == Some(tag),
+                    "state slot for {out} stamped conflicting next actions",
+                );
+                slots[i] = Some(tag);
+            }
+        }
+    }
+
+    // Emit rows in Minterm order (BTreeMap iteration). Each row reads its input and current levels off
+    // the shared-header key BY NAME (an absent column reads `None` = `-`); unstamped next slots stay
+    // `None` (=> `-`).
+    let rows: Vec<StateRow> = row_map
+        .into_iter()
+        .map(|(key, next)| StateRow {
+            inputs: input_nodes.iter().map(|c| key.value_of(c)).collect(),
+            current: state_orig.iter().map(|n| key.value_of(n)).collect(),
+            next,
+        })
+        .collect();
 
     Some(StateModel {
         input_nodes,
         internal_nodes,
         node_of,
-        rows: rows.into_iter().collect(),
+        rows,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::analyse_one as analyse;
+    use crate::logic::regions::StateRegions;
+    use crate::model::{analyse_one as analyse, AnalysedOutput};
+    use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
+    use espresso_logic::bdd_builder;
 
     const T: Option<bool> = Some(true);
     const F: Option<bool> = Some(false);
     const X: Option<bool> = None;
 
+    // Next-action slots: High / Low / hold (N) / unconstrained `-`.
+    const HI: Option<Next> = Some(Next::High);
+    const LO: Option<Next> = Some(Next::Low);
+    const NO: Option<Next> = Some(Next::Hold);
+    const DC: Option<Next> = None;
+
     fn names(v: &[Symbol]) -> Vec<&str> {
         v.iter().map(Symbol::as_str).collect()
+    }
+
+    fn row(inputs: &[Option<bool>], current: &[Option<bool>], next: &[Option<Next>]) -> StateRow {
+        StateRow {
+            inputs: inputs.to_vec(),
+            current: current.to_vec(),
+            next: next.to_vec(),
+        }
     }
 
     #[test]
@@ -274,20 +313,12 @@ Q = "A*B + Q*(A+B)"
         let m = build_state_model(&cell).expect("C2 is sequential");
         assert_eq!(names(&m.input_nodes), ["A", "B"]);
         assert_eq!(names(&m.internal_nodes), ["Q_st"]);
-        // The on row (A*B) and the off row (!A*!B); Q's own current is projected out (None).
-        assert!(m.rows.contains(&StateRow {
-            inputs: vec![T, T],
-            current: vec![X],
-            next: vec![Next::High],
-        }));
-        assert!(m.rows.contains(&StateRow {
-            inputs: vec![F, F],
-            current: vec![X],
-            next: vec![Next::Low],
-        }));
-        // Two hold rows (A xor B).
-        let holds = m.rows.iter().filter(|r| r.next == [Next::Hold]).count();
-        assert_eq!(holds, 2);
+        // One node, so every row carries a definite action (no deferral). On A*B, off !A*!B, hold A^B.
+        assert_eq!(m.rows.len(), 4);
+        assert!(m.rows.contains(&row(&[T, T], &[X], &[HI])));
+        assert!(m.rows.contains(&row(&[F, F], &[X], &[LO])));
+        assert!(m.rows.contains(&row(&[F, T], &[X], &[NO])));
+        assert!(m.rows.contains(&row(&[T, F], &[X], &[NO])));
     }
 
     #[test]
@@ -308,17 +339,21 @@ Q = "CLK*M + !CLK*Q"
         assert_eq!(names(&m.internal_nodes), ["Q_st", "M"]);
         assert_eq!(m.node_of[&Symbol::from("M")], "M");
         assert_eq!(m.node_of[&Symbol::from("Q")], "Q_st");
-        // Exactly the four joint rows, including: Q drives high off M's current, M holds through CLK.
-        assert_eq!(m.rows.len(), 4);
-        assert!(m.rows.contains(&StateRow {
-            inputs: vec![T, X],
-            current: vec![X, T],
-            next: vec![Next::High, Next::Hold],
-        }));
+        // Per-output rows: Q rows are keyed by CLK/M (M slot deferred `-`); M rows keyed by CLK/D
+        // (Q slot deferred `-`). Six rows in all.
+        assert_eq!(m.rows.len(), 6);
+        // Q: drives off the master's current, holds while transparent-low.
+        assert!(m.rows.contains(&row(&[T, X], &[X, T], &[HI, DC])));
+        assert!(m.rows.contains(&row(&[T, X], &[X, F], &[LO, DC])));
+        assert!(m.rows.contains(&row(&[F, X], &[X, X], &[NO, DC])));
+        // M: samples D while CLK low, holds while CLK high.
+        assert!(m.rows.contains(&row(&[F, T], &[X, X], &[DC, HI])));
+        assert!(m.rows.contains(&row(&[F, F], &[X, X], &[DC, LO])));
+        assert!(m.rows.contains(&row(&[T, X], &[X, X], &[DC, NO])));
     }
 
     #[test]
-    fn mut_joint_table_race_row() {
+    fn mut_joint_table_split_race_rows() {
         let cell = analyse(
             r#"
 [[cell]]
@@ -331,12 +366,10 @@ Qb = "!Qa * B"
         );
         let m = build_state_model(&cell).expect("MUT is sequential");
         assert_eq!(names(&m.internal_nodes), ["Qa_st", "Qb_st"]);
-        // The race: both requests high, both grants currently low → both drive high.
-        assert!(m.rows.contains(&StateRow {
-            inputs: vec![T, T],
-            current: vec![F, F],
-            next: vec![Next::High, Next::High],
-        }));
+        // The old joint race row `H H : L L : H H` is now two per-output rows: each grant drives high
+        // off its own request and the other grant being currently low, the other slot deferred `-`.
+        assert!(m.rows.contains(&row(&[T, X], &[X, F], &[HI, DC])));
+        assert!(m.rows.contains(&row(&[X, T], &[F, X], &[DC, HI])));
     }
 
     #[test]
@@ -406,5 +439,145 @@ Y = "!(A*B)"
 "#,
         );
         assert!(build_state_model(&cell).is_none());
+    }
+
+    /// Rebuild a BDD from the emitted rows selecting one per-node action: OR of the selected rows, each
+    /// the AND of its fixed input/current literals over the joint header (input nodes ++ state-signal
+    /// original names). The reconstruct idiom mirrors `regions.rs`'s equivalence test.
+    fn reconstruct_action<B: Brand, C: ManagerCell>(
+        builder: &BddBuilder<B, C>,
+        input_nodes: &[Symbol],
+        state_orig: &[Symbol],
+        rows: &[StateRow],
+        node: usize,
+        want: Next,
+    ) -> Bdd<B, C> {
+        let mut cover = builder.constant(false);
+        for r in rows.iter().filter(|r| r.next[node] == Some(want)) {
+            let mut product = builder.constant(true);
+            for (col, val) in input_nodes.iter().zip(r.inputs.iter()) {
+                match val {
+                    Some(true) => product = product.and(&builder.var(col.as_str())),
+                    Some(false) => product = product.and(&!builder.var(col.as_str())),
+                    None => {}
+                }
+            }
+            for (col, val) in state_orig.iter().zip(r.current.iter()) {
+                match val {
+                    Some(true) => product = product.and(&builder.var(col.as_str())),
+                    Some(false) => product = product.and(&!builder.var(col.as_str())),
+                    None => {}
+                }
+            }
+            cover = cover.or(&product);
+        }
+        cover
+    }
+
+    /// The crux of the cover construction: for every state signal of every fixture, the BDD
+    /// reconstructed from the emitted joint rows carrying that node's `H`/`L`/`N` action must be
+    /// logically equivalent to that signal's reference on/off/hold region — proving the per-node
+    /// next-state functions survive the joint multi-output minimisation and the `-`-deferred fold.
+    #[test]
+    fn emitted_rows_reconstruct_per_node_regions() {
+        let cells = [
+            r#"
+[[cell]]
+name = "C2"
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+"#,
+            r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#,
+            r#"
+[[cell]]
+name = "MUT"
+inputs = ["A", "B"]
+[cell.outputs]
+Qa = "!Qb * A"
+Qb = "!Qa * B"
+"#,
+            r#"
+[[cell]]
+name = "SR"
+inputs = ["S", "R"]
+[cell.outputs]
+Q = "!(R + Qn)"
+Qn = "!(S + Q)"
+"#,
+            r#"
+[[cell]]
+name = "GL"
+inputs = ["C", "D"]
+[cell.internal]
+L = "!C*D + C*L"
+[cell.outputs]
+Y = "C*L"
+"#,
+        ];
+
+        for src in cells {
+            let cell = analyse(src);
+            let m = build_state_model(&cell).expect("fixture is sequential");
+
+            // Emitted rows carry unique (inputs, current) keys. `inputs`/`current` have a fixed width
+            // per model, so their concatenation is an unambiguous key.
+            let mut keys: BTreeSet<Vec<Option<bool>>> = BTreeSet::new();
+            for r in &m.rows {
+                let mut key = r.inputs.clone();
+                key.extend(r.current.iter().copied());
+                assert!(
+                    keys.insert(key),
+                    "duplicate (inputs, current) row key in {}",
+                    cell.name
+                );
+            }
+
+            // State signals in node order == the hysteretic signals in signals() order.
+            let state: Vec<(&AnalysedOutput, &StateRegions)> = cell
+                .signal_regions()
+                .filter(|(_, sr)| sr.hysteretic)
+                .collect();
+            let state_orig: Vec<Symbol> = state.iter().map(|(sig, _)| sig.name.clone()).collect();
+
+            for (i, (sig, _sr)) in state.iter().enumerate() {
+                // Reference on/off/hold BDDs, built exactly as `state_regions` does, on one builder so
+                // `equivalent_to` shares a manager with the reconstruction.
+                let builder = bdd_builder!();
+                let f = builder.build(&sig.expr);
+                let self_state: Vec<&str> = if sig.feedback.contains(&sig.name) {
+                    vec![sig.name.as_str()]
+                } else {
+                    vec![]
+                };
+                let on_bdd = f.forall(&self_state);
+                let off_bdd = (!f.clone()).forall(&self_state);
+                let hold_bdd = !on_bdd.or(&off_bdd);
+
+                for (want, reference, label) in [
+                    (Next::High, &on_bdd, "on"),
+                    (Next::Low, &off_bdd, "off"),
+                    (Next::Hold, &hold_bdd, "hold"),
+                ] {
+                    let got =
+                        reconstruct_action(&builder, &m.input_nodes, &state_orig, &m.rows, i, want);
+                    assert!(
+                        got.equivalent_to(reference),
+                        "{} region mismatch for {}.{}",
+                        label,
+                        cell.name,
+                        sig.name
+                    );
+                }
+            }
+        }
     }
 }

@@ -8,7 +8,9 @@
 //! **state variables**: outputs and internal nodes on a dependency cycle) into one next-state table.
 //! Within a table field node values are **space-separated**; whole rows are **comma-separated**. The
 //! next-state action per node is `H` (drive high = on region) / `L` (drive low = off) / `N` (hold =
-//! no-change). A purely combinational cell has no state table: each output emits a plain `function`.
+//! no-change) / `-` (unconstrained here — a legal next value that defers the node to a lower-priority
+//! row, per Liberty's per-output next-state resolution). A purely combinational cell has no state
+//! table: each output emits a plain `function`.
 //!
 //! The state-table node namespace is isolated from the pin namespace, so nodes bind to ports through
 //! pin attributes:
@@ -261,13 +263,16 @@ fn table_string(model: &StateModel) -> String {
         .join(" , ")
 }
 
-/// Render a per-node next-state action vector as space-separated `H`/`L`/`N` symbols.
-fn next_pattern(next: &[Next]) -> String {
+/// Render a per-node next-state action vector as space-separated `H`/`L`/`N`/`-` symbols. A `None` slot
+/// is a node this row leaves unconstrained (`-`), deferred to a lower-priority row per Liberty's
+/// per-output next-state resolution.
+fn next_pattern(next: &[Option<Next>]) -> String {
     next.iter()
         .map(|n| match n {
-            Next::High => "H",
-            Next::Low => "L",
-            Next::Hold => "N",
+            Some(Next::High) => "H",
+            Some(Next::Low) => "L",
+            Some(Next::Hold) => "N",
+            None => "-",
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -389,12 +394,15 @@ Q = "CLK*M + !CLK*Q"
         // Exactly one joint table over both state nodes (aliased Q_st and internal M).
         assert_eq!(frag.matches("statetable").count(), 1);
         assert!(frag.contains("statetable (\"CLK D\", \"Q_st M\")"));
-        // The four joint next-state rows (Q first, M second within each field).
-        assert!(frag.contains("H - : - H : H N"));
-        assert!(frag.contains("H - : - L : L N"));
-        assert!(frag.contains("L H : - - : N H"));
-        assert!(frag.contains("L L : - - : N L"));
-        // The master is a genuine internal pin anchoring its same-named node.
+        // Per-output next-state rows (Q first, M second): Q rows constrain CLK/M and defer M (`-`);
+        // M rows constrain CLK/D and defer Q (`-`).
+        assert!(frag.contains("H - : - H : H -")); // Q drives high off M currently high
+        assert!(frag.contains("H - : - L : L -")); // Q drives low off M currently low
+        assert!(frag.contains("L - : - - : N -")); // Q holds while CLK low
+        assert!(frag.contains("L H : - - : - H")); // M samples D high while CLK low
+        assert!(frag.contains("L L : - - : - L")); // M samples D low while CLK low
+        assert!(frag.contains("H - : - - : - N")); // M holds while CLK high
+                                                   // The master is a genuine internal pin anchoring its same-named node.
         assert!(frag.contains("pin (M)"));
         assert!(frag.contains("direction : internal;"));
         assert!(frag.contains("internal_node : \"M\";"));
@@ -465,8 +473,11 @@ Qb = "!Qa * B"
         let frag = cell_liberty(&cell);
         eprintln!("{frag}");
         assert!(frag.contains("statetable (\"A B\", \"Qa_st Qb_st\")"));
-        // The race: both requests high, both grants currently low → both drive high.
-        assert!(frag.contains("H H : L L : H H"));
+        // The old joint race row `H H : L L : H H` is split into two per-output rows: each grant drives
+        // high off its own request and the other grant currently low, deferring (`-`) the other node.
+        assert!(!frag.contains("H H : L L : H H"));
+        assert!(frag.contains("H - : - L : H -"));
+        assert!(frag.contains("- H : L - : - H"));
         // Both outputs bind to their `_st` nodes — no `function` (nor `state_function`) token anywhere.
         assert!(!frag.contains("function : "));
         parse_frag(&frag);
