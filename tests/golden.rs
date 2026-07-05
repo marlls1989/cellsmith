@@ -318,8 +318,14 @@ fn mutex_generates_all_three_artifacts() {
     // The race rows (minimal per-output cover): each grant independently drives high when its own
     // request is asserted and the OTHER grant currently reads low — one per-output row per Liberty's
     // per-output-priority multi-output statetable, not a single joint "both go high" row.
-    assert!(frag.contains("H - : - L : H -"), "Qa's race-to-high row missing:\n{frag}");
-    assert!(frag.contains("- H : L - : - H"), "Qb's race-to-high row missing:\n{frag}");
+    assert!(
+        frag.contains("H - : - L : H -"),
+        "Qa's race-to-high row missing:\n{frag}"
+    );
+    assert!(
+        frag.contains("- H : L - : - H"),
+        "Qb's race-to-high row missing:\n{frag}"
+    );
     assert!(frag.contains(r#"internal_node : "Qa_st";"#));
     assert!(frag.contains(r#"internal_node : "Qb_st";"#));
     assert!(frag.contains("inverted_output : false;"));
