@@ -91,15 +91,16 @@ Every term the later sections lean on, pinned here before first use.
 ## 3. Constructing the transition function δ_v
 
 Every state variable's δ_v is already sitting in the shared BDD map by the time the machine is built.
-`logic::minimise::minimise_state_space` (`minimise.rs:85-108`) rewrites that map **once**, before
+`logic::minimise::minimise_state_space` (`minimise.rs:94-117`) rewrites that map **once**, before
 `Machine::build` ever runs, so that every surviving signal's function is expressed purely over primary
 inputs and the surviving state variables: `Machine::build` reads `bdds[v]` for each state variable `v`
 (`analysis.rs:113-116`) and `bdds[o]` for each combinational output `o` (`analysis.rs:117-122`), and
 stores them as `Machine.deltas` / `Machine.out_deltas`; the settle and explore passes (§5–§6) only
 evaluate them. Constructing δ_v is therefore a direct map lookup, not a per-analysis composition.
 
-The map itself was folded by two staged discriminators run to a fixpoint (§3.1 covers the safety guard;
-the full proof lives in the `minimise.rs` module doc): **M1** collapses an alias/complement chain — a
+The map itself was folded by two staged discriminators run to a fixpoint (the algorithm is documented
+in full in `state-space-minimisation.md`; §3.1 below covers the safety guard, and the proof lives in
+the `minimise.rs` module doc): **M1** collapses an alias/complement chain — a
 signal whose function is *exactly* another signal or its negation — onto one representative coordinate
 via `Bdd::compose_map`; **M2** composes a non-self-holding relay into each of its consumers via
 `Bdd::compose` and drops it, refusing any fold that would merge a genuine `s ↔ c` 2-cycle into a stable
@@ -177,8 +178,8 @@ and in `hazard-detection.md`:
 The fold refuses both: before composing a relay `s` into a consumer `c`, it checks whether `c` is already
 in `s`'s own support (the `s ↔ c` 2-cycle) and skips the fold if so. This subsumes the weaker "no new
 self-reference" check, since composing `s` into `c` can only add variables from `s`'s own support to
-`c`'s. The full soundness argument (I1–I4) lives in the `src/logic/minimise.rs` module doc — it is not
-repeated here.
+`c`'s. The full algorithm is documented in `state-space-minimisation.md`, and the soundness argument
+(I1–I4) lives in the `src/logic/minimise.rs` module doc — neither is repeated here.
 
 ## 4. The machine's state as a minterm
 

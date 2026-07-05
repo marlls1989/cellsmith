@@ -5,7 +5,8 @@ the Verilog sequential UDP and the Liberty `statetable`. This is the **functiona
 what value it drives, or holds, as a function of the signals it depends on. It is distinct from the
 **timing-arc** view produced by the state machine, which `state-machine-arc-engine.md` and
 `hazard-detection.md` cover; the two views are computed independently from the same, minimised, cell
-functions.
+functions. How that model is minimised — the alias/complement collapse and guarded relay fold that
+produce the shared per-cell map both views read — is documented in `state-space-minimisation.md`.
 
 The code lives in one file:
 

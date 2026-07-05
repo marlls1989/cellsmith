@@ -165,8 +165,9 @@ pair in the immediate combinational neighbourhood**:
 > Divergence yields a constraint only if some state variable `w` that actually differs between `s_xy`
 > and `s_yx` has **both** `x` and `y` in the **direct support of its own δ_w**.
 
-Why direct support is the right notion of "immediate neighbourhood": the model minimisation composes
-through *combinational* logic only — a state variable is kept as a variable, never substituted through.
+Why direct support is the right notion of "immediate neighbourhood": the model minimisation
+(`state-space-minimisation.md`) composes through *combinational* logic only — a state variable is kept
+as a variable, never substituted through.
 So both pins appearing in `δ_w`'s support means they meet within one combinational cone in front of a
 single latch: the race is physically present at that latch's input. If no diverging `w` sees both pins,
 the divergence was mediated **across a latch boundary** — what crossed the boundary is a *settled
