@@ -337,10 +337,21 @@ impl Cell {
         analysed.order_dependence = analysis.order_dependence;
         analysed.oscillation = analysis.oscillation;
         // Cache each signal's state-table regions once, in `signals()` order, from the shared folded
-        // BDDs, so downstream emitters don't rebuild the BDDs per call site.
+        // BDDs, so downstream emitters don't rebuild the BDDs per call site. The cyclic state-variable
+        // set (over the recomputed feedback) decides each region's `hysteretic` flag — a state variable
+        // must emit a `statetable`, never a combinational `function`. This is the cheap pure-graph
+        // classifier, computed here so it still holds even for cells the machine-width guard skips.
+        let signals: Vec<&AnalysedOutput> = analysed.signals().collect();
+        let state_set = crate::logic::resolve::state_variables(&signals);
         analysed.regions = analysed
             .signals()
-            .map(|s| crate::logic::regions::state_regions(&s.name, &bdds[&s.name]))
+            .map(|s| {
+                crate::logic::regions::state_regions(
+                    &s.name,
+                    &bdds[&s.name],
+                    state_set.contains(&s.name),
+                )
+            })
             .collect();
         Ok(analysed)
     }

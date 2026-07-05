@@ -158,6 +158,17 @@ fn mutex_generates_all_three_artifacts() {
     // Liberty: annotated and still syntactically valid (round-trips through liberty-parse).
     let frag = cell_liberty(&cell);
     assert!(frag.contains("oscillation:"));
+    // Each grant is a state variable (on the Qa↔Qb coupling cycle), so it must emit a `statetable`, not
+    // a combinational `function` naming the other output. The `Qa = !Qb*A` function became a statetable
+    // over the other grant + its own input, and the pin reads its own state node by name.
+    assert!(frag.contains(r#"statetable ("Qb A", "Qa") {"#));
+    assert!(frag.contains(r#"statetable ("Qa B", "Qb") {"#));
+    assert!(frag.contains(r#"function : "Qa";"#));
+    assert!(frag.contains(r#"function : "Qb";"#));
+    assert!(
+        !frag.contains(r#"function : "!Qb*A""#),
+        "a state variable must never emit a combinational function naming another output:\n{frag}"
+    );
     let wrapped = format!("library (test) {{\n{frag}}}\n");
     let lib = liberty_parse::parse_lib(&wrapped).expect("emitted Liberty must parse");
     assert!(lib
@@ -440,10 +451,19 @@ fn genuine_memory_is_never_collapsed() {
     let v = cell_verilog(&sr);
     assert!(v.contains("primitive SR_Q("), "SR_Q primitive missing");
     assert!(v.contains("primitive SR_Qn("), "SR_Qn primitive missing");
-    // Liberty keeps both cross-coupled outputs as distinct output pins (not merged into one). NB: this
-    // NOR-latch form is emitted with combinational `function` attributes, not `statetable` groups —
-    // each function still references the *other* output, which is what "cross-coupling kept" means.
+    // Liberty keeps both cross-coupled outputs as distinct output pins (not merged into one). Each output
+    // is a state variable (on the Q↔Qn coupling cycle), so it emits a `statetable` — over the other
+    // output plus the input its function keeps — and the pin reads its own state node by name. A state
+    // variable must NEVER emit a combinational `function` naming the other output.
     let sr_lib = cell_liberty(&sr);
+    assert!(sr_lib.contains(r#"statetable ("R Qn", "Q") {"#));
+    assert!(sr_lib.contains(r#"statetable ("S Q", "Qn") {"#));
+    assert!(sr_lib.contains(r#"function : "Q";"#));
+    assert!(sr_lib.contains(r#"function : "Qn";"#));
+    assert!(
+        !sr_lib.contains(r#"function : "!(R+Qn)""#) && !sr_lib.contains(r#"function : "!(S+Q)""#),
+        "a state variable must never emit a combinational function naming another output:\n{sr_lib}"
+    );
     let wrapped = format!("library (test) {{\n{sr_lib}}}\n");
     let lib = liberty_parse::parse_lib(&wrapped).expect("SR Liberty must parse");
     let sr_cell = lib
