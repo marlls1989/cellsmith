@@ -16,6 +16,33 @@ fn analyse_one(src: &str) -> AnalysedCell {
     parse_spec(src).unwrap().cells.remove(0).analyse().unwrap()
 }
 
+/// Assert an output pin emits at least one transition (`define_arc`) block — i.e. it is defined at
+/// both ends of some arc and was not dropped from the machine. A transition arc names the output in
+/// `-pin`; a hidden arc names an *input* there, so `-pin <output> ` (trailing space before the line
+/// continuation) is an unambiguous marker for the output's own arcs.
+fn assert_emits_arc(tcl: &str, output: &str) {
+    assert!(
+        tcl.contains(&format!("-pin {output} ")),
+        "output {output} emits no arc block (dropped from the machine):\n{tcl}"
+    );
+}
+
+/// Round-trip the emitted Liberty through `liberty-parse` and return the cell's pin-group names.
+fn liberty_pins(cell: &AnalysedCell) -> Vec<String> {
+    let frag = cell_liberty(cell);
+    let wrapped = format!("library (test) {{\n{frag}}}\n");
+    let lib = liberty_parse::parse_lib(&wrapped).expect("emitted Liberty must parse");
+    lib.iter()
+        .flat_map(|g| g.subgroups.iter())
+        .find(|g| g.type_ == "cell" && g.name == cell.name.as_str())
+        .expect("cell present after round-trip")
+        .subgroups
+        .iter()
+        .filter(|g| g.type_ == "pin")
+        .map(|g| g.name.clone())
+        .collect()
+}
+
 const C2: &str = r#"
 [[cell]]
 name = "C2"
@@ -448,6 +475,200 @@ fn genuine_memory_is_never_collapsed() {
     assert!(
         dff_lib.contains("direction : internal;"),
         "DFF M should be direction : internal"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Whole-pipeline output-alias fixtures (Wave 5).
+//
+// The pass-local minimise tests inspect the `bdds` map directly and never build the machine, so they
+// missed a blocker where an output ended up aliased to a *combinational* output — unevaluable by the
+// machine (its nodes carry only inputs + state variables), which debug-panics at
+// `src/logic/analysis.rs:109` (invariant I3) and in release silently drops the pin's arcs. These
+// fixtures drive the SAME full pipeline as the other goldens (`Cell::analyse`, via `analyse_one`,
+// which builds the machine in `analyse_machine` at `src/logic/analysis.rs:175`) and assert positively
+// on emitted arcs — catching both the debug panic and the release-mode silent drop — for each shape.
+// ---------------------------------------------------------------------------------------------
+
+/// (1) Two output pins carry the identical *combinational* function `A*B`; they must stay independent
+/// combinational outputs, neither aliased to the other.
+const DUP_COMB: &str = r#"
+[[cell]]
+name = "DUPY"
+inputs = ["A", "B"]
+[cell.outputs]
+Y1 = "A*B"
+Y2 = "A*B"
+"#;
+
+/// (2) Output buffer of a combinational output: `Y2 = Y1` where `Y1 = A*B`. The alias must resolve so
+/// `Y2` carries the composed function `A*B` — never left aliased to the combinational `Y1`.
+const BUF_COMB: &str = r#"
+[[cell]]
+name = "BUFY"
+inputs = ["A", "B"]
+[cell.outputs]
+Y1 = "A*B"
+Y2 = "Y1"
+"#;
+
+/// (3) Complementary-output gate over an internal `X = A*B`: `Y = X`, `YN = !X`. The internal is
+/// purged and its coordinate carried on the two output pins (`Y = A*B`, `YN = !(A*B)`).
+const COMP_OUT: &str = r#"
+[[cell]]
+name = "COMPY"
+inputs = ["A", "B"]
+[cell.internal]
+X = "A*B"
+[cell.outputs]
+Y = "X"
+YN = "!X"
+"#;
+
+/// (4) Recurrent duplicate outputs (the positive dedup case): `Q1`, `Q2` both `!R*(S+Q1)`. Dedup
+/// merges onto the state variable `Q1`; `Q2` is kept as a plain alias pin of `Q1` (a genuine state
+/// variable, so the machine can still evaluate it — no escape).
+const DUP_RECUR: &str = r#"
+[[cell]]
+name = "SRDUP"
+inputs = ["S", "R"]
+[cell.outputs]
+Q1 = "!R*(S+Q1)"
+Q2 = "!R*(S+Q1)"
+"#;
+
+/// (1) Duplicate combinational outputs survive as two independent combinational outputs — each emits
+/// its arcs, neither is aliased to the other, and no internal appears.
+#[test]
+fn duplicate_combinational_outputs_stay_independent_and_both_emit_arcs() {
+    let cell = analyse_one(DUP_COMB);
+    assert!(cell.internals.is_empty(), "no internal expected");
+
+    let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+    assert_emits_arc(&tcl, "Y1");
+    assert_emits_arc(&tcl, "Y2");
+
+    let pins = liberty_pins(&cell);
+    assert!(pins.contains(&"Y1".to_string()), "Y1 pin missing: {pins:?}");
+    assert!(pins.contains(&"Y2".to_string()), "Y2 pin missing: {pins:?}");
+
+    // Both pins carry the full A*B function — neither was demoted to an alias of the other.
+    let lib = cell_liberty(&cell);
+    assert_eq!(
+        lib.matches("function : \"A*B\";").count(),
+        2,
+        "both outputs must carry the independent A*B function:\n{lib}"
+    );
+}
+
+/// (2) A combinational output buffered by another output resolves: `Y2` carries the composed `A*B`
+/// and never stays aliased to `Y1`. Both pins emit arcs.
+#[test]
+fn output_buffer_of_combinational_output_resolves_and_both_emit_arcs() {
+    let cell = analyse_one(BUF_COMB);
+    assert!(cell.internals.is_empty(), "no internal expected");
+
+    let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+    assert_emits_arc(&tcl, "Y1");
+    assert_emits_arc(&tcl, "Y2");
+    // Y2's arcs relate to the primary inputs, not to the buffered output Y1.
+    assert!(
+        !tcl.contains("-related_pin Y1"),
+        "Y2 arc relates to the buffered output Y1:\n{tcl}"
+    );
+
+    let pins = liberty_pins(&cell);
+    assert!(pins.contains(&"Y1".to_string()), "Y1 pin missing: {pins:?}");
+    assert!(pins.contains(&"Y2".to_string()), "Y2 pin missing: {pins:?}");
+
+    // Y2 carries the resolved A*B, not a `function : "Y1"` alias; both outputs share the same function.
+    let lib = cell_liberty(&cell);
+    assert!(
+        !lib.contains("function : \"Y1\";"),
+        "Y2 still aliased to Y1:\n{lib}"
+    );
+    assert_eq!(
+        lib.matches("function : \"A*B\";").count(),
+        2,
+        "both outputs must carry the resolved A*B function:\n{lib}"
+    );
+}
+
+/// (3) A complementary-output gate over an internal: the internal is purged, `Y` carries `A*B` and
+/// `YN` its complement, and neither output is left aliased. Both pins emit arcs; the internal never
+/// leaks as a pin.
+#[test]
+fn complementary_outputs_over_internal_purge_internal_and_both_emit_arcs() {
+    let cell = analyse_one(COMP_OUT);
+    assert!(
+        cell.internals.is_empty(),
+        "internal X should be purged: {:?}",
+        cell.internals
+            .iter()
+            .map(|o| o.name.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+    assert_emits_arc(&tcl, "Y");
+    assert_emits_arc(&tcl, "YN");
+    // The purged internal never leaks as an arc pin.
+    assert!(
+        !tcl.contains("-pin X "),
+        "internal X leaked into arcs:\n{tcl}"
+    );
+
+    let pins = liberty_pins(&cell);
+    assert!(pins.contains(&"Y".to_string()), "Y pin missing: {pins:?}");
+    assert!(pins.contains(&"YN".to_string()), "YN pin missing: {pins:?}");
+    assert!(
+        !pins.contains(&"X".to_string()),
+        "purged internal X still a pin: {pins:?}"
+    );
+
+    // Y carries A*B; YN carries the complement (the SOP form of !(A*B): a sum of the inverted inputs).
+    let lib = cell_liberty(&cell);
+    assert!(
+        lib.contains("function : \"A*B\";"),
+        "Y should carry A*B:\n{lib}"
+    );
+    let yn_func = lib
+        .lines()
+        .skip_while(|l| !l.contains("pin (YN)"))
+        .find(|l| l.contains("function"))
+        .expect("YN function present");
+    assert!(
+        yn_func.contains("!A") && yn_func.contains("!B") && !yn_func.contains('*'),
+        "YN should carry the complement of A*B (a sum of !A and !B), got: {yn_func}"
+    );
+}
+
+/// (4) Recurrent duplicate outputs dedup onto the state variable `Q1`; `Q2` survives as an alias pin
+/// of `Q1` (a genuine state variable — the machine stays well-formed, no escape) and both pins emit
+/// arcs.
+#[test]
+fn recurrent_duplicate_outputs_dedup_and_both_emit_arcs() {
+    let cell = analyse_one(DUP_RECUR);
+    assert!(cell.internals.is_empty(), "no internal expected");
+
+    let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+    assert_emits_arc(&tcl, "Q1");
+    assert_emits_arc(&tcl, "Q2");
+
+    let pins = liberty_pins(&cell);
+    assert!(pins.contains(&"Q1".to_string()), "Q1 pin missing: {pins:?}");
+    assert!(pins.contains(&"Q2".to_string()), "Q2 pin missing: {pins:?}");
+
+    // Q1 keeps the recurrent coordinate (a statetable); Q2 is demoted to a plain alias pin of Q1.
+    let lib = cell_liberty(&cell);
+    assert!(
+        lib.lines()
+            .any(|l| l.contains("statetable") && l.contains("\"Q1\")")),
+        "Q1 should keep its recurrent statetable:\n{lib}"
+    );
+    assert!(
+        lib.contains("function : \"Q1\";"),
+        "Q2 should be an alias pin of Q1:\n{lib}"
     );
 }
 
