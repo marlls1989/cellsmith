@@ -2,4 +2,5 @@
 
 pub mod arcs_tcl;
 pub mod liberty;
+pub mod statetable;
 pub mod verilog;
