@@ -9,7 +9,7 @@ use espresso_logic::Symbol;
 use crate::logic::arcs::{Arc, Edge, HiddenArc};
 use crate::logic::assignment;
 use crate::logic::confluence::{Constraint, ConstraintKind};
-use crate::logic::interlock::Arbitration;
+use crate::logic::interlock::Oscillation;
 use crate::logic::leakage::LeakageState;
 use crate::logic::literal_product;
 use crate::model::AnalysedCell;
@@ -48,7 +48,7 @@ impl Default for ArcsTclOptions {
 /// with a comment documenting the metastable condition, which timing arcs cannot express. When enabled,
 /// derived constraint arcs (setup/hold, non_seq) follow the delay arcs.
 pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
-    let mut out = arbitration_comment(cell);
+    let mut out = oscillation_comment(cell);
     // Without `-when`, arcs of the same (related, pin, edge) that differ only in the held-input context
     // are the *same* arc — one prevector is enough to exercise it, so collapse them (keeping the
     // shortest prevector). With `-when` each held context is a distinct characterisation condition and
@@ -86,7 +86,7 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
 
 /// A constraint arc as a pair of `define_arc` blocks — the setup member and the hold member (Liberate
 /// characterises them as separate arcs): `setup`/`hold` for a directed clock↔data constraint,
-/// `non_seq_setup`/`non_seq_hold` for a symmetric (arbitration / mutual-exclusion) one.
+/// `non_seq_setup`/`non_seq_hold` for a symmetric (oscillation / mutual-exclusion) one.
 fn format_constraint(cell: &AnalysedCell, c: &Constraint) -> String {
     let (setup, hold) = match c.kind {
         ConstraintKind::SetupHold => ("setup", "hold"),
@@ -149,13 +149,13 @@ fn constraint_vector_str(cell: &AnalysedCell, c: &Constraint) -> String {
     )
 }
 
-/// A `#` comment block describing each detected arbitration condition (empty for ordinary cells).
-fn arbitration_comment(cell: &AnalysedCell) -> String {
+/// A `#` comment block describing each detected oscillation condition (empty for ordinary cells).
+fn oscillation_comment(cell: &AnalysedCell) -> String {
     let mut s = String::new();
-    for a in &cell.arbitration {
-        let states: Vec<String> = a.stable.iter().map(Arbitration::state_str).collect();
+    for a in &cell.oscillation {
+        let states: Vec<String> = a.stable.iter().map(Oscillation::state_str).collect();
         s.push_str(&format!(
-            "# arbitration: {} metastable; grants {{{}}} mutually exclusive ({})\n",
+            "# oscillation: {} metastable; grants {{{}}} mutually exclusive ({})\n",
             a.condition_str(),
             a.group.join(", "),
             states.join(" | "),
@@ -739,7 +739,7 @@ Qb = "!Qa * B"
     }
 
     #[test]
-    fn mutex_emits_arbitration_comment_and_input_only_related_pins() {
+    fn mutex_emits_oscillation_comment_and_input_only_related_pins() {
         let cell = analyse(
             r#"
 [[cell]]
@@ -752,8 +752,8 @@ Qb = "!Qa * B"
         );
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
-        // Arbitration documented up front.
-        assert!(tcl.contains("# arbitration: A*B metastable"));
+        // Oscillation documented up front.
+        assert!(tcl.contains("# oscillation: A*B metastable"));
         assert!(tcl.contains("Qa, Qb"));
         // Related pins are primary inputs only — never an output (a Qb→Qa arc is a deadlock).
         assert!(!tcl.contains("-related_pin Qa"));

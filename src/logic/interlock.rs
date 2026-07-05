@@ -1,4 +1,4 @@
-//! Arbitration / metastability: the report type only.
+//! Oscillation / metastability: the report type only.
 //!
 //! Metastability is the **periodic oscillation of the state** under an input change probed from a
 //! **reachable** state (primarily a **simultaneous change of ≥2 inputs**, e.g. a mutex's requests
@@ -6,15 +6,15 @@
 //! [`super::machine::settle`] revisits a non-fixpoint state — never by enumerating state assignments
 //! (an undefined state variable simply means uninitialised).
 //!
-//! The detection lives with the exploration; this module carries only the resulting [`Arbitration`]
+//! The detection lives with the exploration; this module carries only the resulting [`Oscillation`]
 //! report type.
 
 use espresso_logic::{Minterm, Symbol};
 
-/// One metastable (arbitration) condition of a cell: the oscillating state variables, the primary-input
+/// One metastable (oscillation) condition of a cell: the oscillating state variables, the primary-input
 /// condition under which they oscillate, and the competing order-of-arrival outcomes (if any).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Arbitration {
+pub struct Oscillation {
     /// The oscillating state variables, in signal declaration order.
     pub group: Vec<Symbol>,
     /// Primary-input condition under which the group is metastable, as a full input assignment.
@@ -24,7 +24,7 @@ pub struct Arbitration {
     pub stable: Vec<Minterm<Symbol>>,
 }
 
-impl Arbitration {
+impl Oscillation {
     /// The condition as a Boolean product of literals (`A*B`, `!R*S`, …).
     pub fn condition_str(&self) -> String {
         crate::logic::literals_str(&self.condition)
@@ -44,7 +44,7 @@ mod tests {
     use crate::model::analyse_one as analyse;
 
     #[test]
-    fn mutex_has_one_arbitration_point() {
+    fn mutex_has_one_oscillation_point() {
         let cell = analyse(
             r#"
 [[cell]]
@@ -55,14 +55,14 @@ Qa = "!Qb * A"
 Qb = "!Qa * B"
 "#,
         );
-        let arb = &cell.arbitration;
+        let arb = &cell.oscillation;
         assert_eq!(arb.len(), 1, "exactly one metastable condition");
         let a = &arb[0];
         assert_eq!(a.group, ["Qa", "Qb"]);
         assert_eq!(a.condition_str(), "A*B");
         // Competing stable states: Qa high / Qb low, and the mirror.
         assert_eq!(a.stable.len(), 2);
-        let states: BTreeSet<String> = a.stable.iter().map(Arbitration::state_str).collect();
+        let states: BTreeSet<String> = a.stable.iter().map(Oscillation::state_str).collect();
         assert_eq!(
             states,
             ["{Qa=1, Qb=0}".to_string(), "{Qa=0, Qb=1}".to_string()]
@@ -72,7 +72,7 @@ Qb = "!Qa * B"
     }
 
     #[test]
-    fn c_element_self_hold_is_not_arbitration() {
+    fn c_element_self_hold_is_not_oscillation() {
         // A C-element is bistable in the hold region, but that is self-feedback, not mutual coupling.
         let cell = analyse(
             r#"
@@ -83,11 +83,11 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        assert!(cell.arbitration.is_empty());
+        assert!(cell.oscillation.is_empty());
     }
 
     #[test]
-    fn non_mutual_sr_is_not_arbitration() {
+    fn non_mutual_sr_is_not_oscillation() {
         // These SR functions each reference only their own state (no mutual edge), so no interlock.
         let cell = analyse(
             r#"
@@ -99,11 +99,11 @@ Q = "S + Q*!R"
 Qn = "R + Qn*!S"
 "#,
         );
-        assert!(cell.arbitration.is_empty());
+        assert!(cell.oscillation.is_empty());
     }
 
     #[test]
-    fn combinational_is_not_arbitration() {
+    fn combinational_is_not_oscillation() {
         let cell = analyse(
             r#"
 [[cell]]
@@ -113,6 +113,6 @@ inputs = ["A", "B"]
 Y = "!(A*B)"
 "#,
         );
-        assert!(cell.arbitration.is_empty());
+        assert!(cell.oscillation.is_empty());
     }
 }

@@ -179,7 +179,7 @@ The module doc states the four invariants in full (`minimise.rs:27-64`); in brie
   the fixpoint is reached within the asserted bound.
 
 The safety boundary is about *behaviour*, not names: a cell's derived arcs, hidden arcs, and the
-**existence and condition** of every oscillating (arbitration) group must match the un-reduced cell — a
+**existence and condition** of every oscillating (oscillation) group must match the un-reduced cell — a
 folded relay leaving a group's membership is not a regression (see the ROSC case above). Gained
 constraints are permitted (a relay can have been masking a genuine hazard); losses are not. This is
 locked by the behaviour-preservation golden tests in `tests/golden.rs`.

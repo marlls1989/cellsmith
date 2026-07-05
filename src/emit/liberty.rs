@@ -30,7 +30,7 @@ fn set_attr(group: &mut Group, name: &str, value: Value) {
 
 /// Wrap every cell's Liberty fragment in a single `library (<name>) { ... }` group so the output is a
 /// self-contained `.lib` that Liberate can consume directly as `user_data` — no external harness
-/// needed. Each cell fragment (arbitration comments included) is indented one level inside the
+/// needed. Each cell fragment (oscillation comments included) is indented one level inside the
 /// library.
 pub fn library_liberty(name: &str, cells: &[AnalysedCell]) -> String {
     let mut out = format!("library ({name}) {{\n");
@@ -54,9 +54,9 @@ pub fn library_liberty(name: &str, cells: &[AnalysedCell]) -> String {
 /// metastable condition and the mutually-exclusive (forbidden-both-high) grants.
 pub fn cell_liberty(cell: &AnalysedCell) -> String {
     let mut out = String::new();
-    for a in &cell.arbitration {
+    for a in &cell.oscillation {
         out.push_str(&format!(
-            "/* arbitration: {} metastable; grants {} mutually exclusive (both-high forbidden) */\n",
+            "/* oscillation: {} metastable; grants {} mutually exclusive (both-high forbidden) */\n",
             a.condition_str(),
             a.group.join(", "),
         ));

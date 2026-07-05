@@ -111,9 +111,9 @@ Qb = "!Qa * B"
 fn mutex_generates_all_three_artifacts() {
     let cell = analyse_one(MUT);
 
-    // Arcs: no crash, arbitration documented, related pins are inputs only.
+    // Arcs: no crash, oscillation documented, related pins are inputs only.
     let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
-    assert!(tcl.contains("# arbitration: A*B metastable"));
+    assert!(tcl.contains("# oscillation: A*B metastable"));
     assert!(!tcl.contains("-related_pin Qa"));
     assert!(!tcl.contains("-related_pin Qb"));
     assert!(tcl.contains("-related_pin A"));
@@ -130,7 +130,7 @@ fn mutex_generates_all_three_artifacts() {
 
     // Liberty: annotated and still syntactically valid (round-trips through liberty-parse).
     let frag = cell_liberty(&cell);
-    assert!(frag.contains("arbitration:"));
+    assert!(frag.contains("oscillation:"));
     let wrapped = format!("library (test) {{\n{frag}}}\n");
     let lib = liberty_parse::parse_lib(&wrapped).expect("emitted Liberty must parse");
     assert!(lib
@@ -207,7 +207,7 @@ GCLK = "enA*CLKA+enB*CLKB"
 "#;
 
 /// A ring-oscillator relay whose 2-cycle guard is strengthened: the relay `X` and the output `Q`
-/// arbitrate at `A*!B` rather than folding away.
+/// oscillate at `A*!B` rather than folding away.
 const ROSC: &str = r#"
 [[cell]]
 name = "ROSC"
@@ -249,9 +249,9 @@ fn c2gate_is_externally_isomorphic_to_c2() {
     let c2gate = analyse_one(C2GATE);
     let c2 = analyse_one(C2);
 
-    // The internals collapsed to the single output coordinate; no arbitration in a plain C-element.
+    // The internals collapsed to the single output coordinate; no oscillation in a plain C-element.
     assert!(c2gate.internals.is_empty(), "C2GATE internals not folded");
-    assert!(c2gate.arbitration.is_empty());
+    assert!(c2gate.oscillation.is_empty());
 
     // All three artifacts are byte-identical to C2's once the physical name is normalised.
     let opts = ArcsTclOptions::default();
@@ -310,9 +310,9 @@ fn icm_relays_fold_and_machine_is_preserved() {
         "hidden_arcs differ from hand-folded ICM"
     );
     assert_eq!(
-        format!("{:?}", cell.arbitration),
-        format!("{:?}", folded.arbitration),
-        "arbitration differs from hand-folded ICM"
+        format!("{:?}", cell.oscillation),
+        format!("{:?}", folded.oscillation),
+        "oscillation differs from hand-folded ICM"
     );
     assert_eq!(
         format!("{:?}", cell.constraints),
@@ -325,8 +325,8 @@ fn icm_relays_fold_and_machine_is_preserved() {
         "leakage differs from hand-folded ICM"
     );
 
-    // No arbitration: a synchroniser chain settles, it does not oscillate.
-    assert!(cell.arbitration.is_empty());
+    // No oscillation: a synchroniser chain settles, it does not oscillate.
+    assert!(cell.oscillation.is_empty());
 
     // Only the genuine-memory internals survive (relays sela/selb purged); machine width drops 13→11.
     let int_names: Vec<_> = cell.internals.iter().map(|o| o.name.as_str()).collect();
@@ -389,8 +389,8 @@ fn rosc_relay_folds_and_oscillation_survives() {
         "ROSC relay X folds into the self-holding Q"
     );
 
-    assert_eq!(cell.arbitration.len(), 1, "expected one oscillating group");
-    let arb = &cell.arbitration[0];
+    assert_eq!(cell.oscillation.len(), 1, "expected one oscillating group");
+    let arb = &cell.oscillation[0];
     let group: Vec<_> = arb.group.iter().map(|s| s.as_str()).collect();
     assert_eq!(group, ["Q"]);
     assert_eq!(arb.condition_str(), "A*!B");

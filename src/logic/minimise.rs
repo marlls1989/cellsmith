@@ -510,7 +510,7 @@ mod tests {
         // ROSC: X="!Q*A", Q="Q*B+X". `Q` already self-holds, so folding the relay `X` into it does not
         // fabricate a register — it only re-expresses an existing one. The guard allows the fold even
         // though X↔Q is a 2-cycle; `X` is purged and `δ_Q = Q*B + !Q*A` (which oscillates at A*!B,
-        // preserving the arbitration in Q's own self-loop).
+        // preserving the oscillation in Q's own self-loop).
         let (b, mut bdds, order, outputs) = system! {
             outputs: ["Q"],
             "X" = "!Q*A",

@@ -13,8 +13,8 @@ The code lives in `src/logic/`:
 | `machine.rs` | the async state machine: states as minterms, `settle` / `settle_or_cycle`, and `explore` |
 | `analysis.rs` | the shared machine pass — builds the machine once and derives both arcs and hazards from it |
 | `arcs.rs` | arc emission by re-walking the shared exploration |
-| `confluence.rs` | pairwise input-order confluence over the same reachable states: constraint arcs and metastable arbitration (see `hazard-detection.md`) |
-| `interlock.rs` | the `Arbitration` report type, populated by `confluence.rs` |
+| `confluence.rs` | pairwise input-order confluence over the same reachable states: constraint arcs and metastable oscillation (see `hazard-detection.md`) |
+| `interlock.rs` | the `Oscillation` report type, populated by `confluence.rs` |
 
 The functional state-table view of the same signals (`regions.rs`) is documented separately in
 `state-table-regions.md`.
@@ -167,7 +167,7 @@ being projected away, not to freeze the set of nodes that participate in it.
 
 - **`MUT`** (§7 below) — the case the fold must **not** perform: `Qa = !Qb·A`, `Qb = !Qa·B`. Neither
   signal self-holds, yet each is the other's consumer — an `s ↔ c` 2-cycle. Folding `Qa` into `Qb`
-  gives `δ_Qb = Qb·B + !A·B`, which at `A=B=1` is `δ_Qb = Qb` — a *fabricated* register. The arbitrating
+  gives `δ_Qb = Qb·B + !A·B`, which at `A=B=1` is `δ_Qb = Qb` — a *fabricated* register. The oscillating
   `(0,0) ↔ (1,1)` oscillation (`hazard-detection.md` §4) lived in the *disagreement* of the two nodes;
   projected onto `Qb` alone it lands on `Qb`'s stable states and disappears. The pair must stay two
   coordinates.
@@ -284,7 +284,7 @@ if let Some(&p) = pos.get(&next) {
 the BFS simply drops that transition (so no impossible arc is fabricated). `confluence.rs` instead keeps
 the cycle: probing a reachable stable state with a simultaneous multi-input toggle (a mutex's requests
 co-asserting) and finding a cycle rather than a fixpoint names the varying state variables as an
-arbitrating group.
+oscillating group.
 
 Example — mutex under `A=B=1` from `(1 1 | 0 0)`:
 

@@ -71,7 +71,7 @@ library (cells) {
       function : "Q";
     }
   }
-  /* arbitration: !S*!R metastable; grants Q, Qn mutually exclusive (both-high forbidden) */
+  /* oscillation: !S*!R metastable; grants Q, Qn mutually exclusive (both-high forbidden) */
   cell (SR) {
     pin (S) {
       direction : input;
@@ -88,7 +88,7 @@ library (cells) {
       function : "!S*!Q";
     }
   }
-  /* arbitration: A*B metastable; grants Qa, Qb mutually exclusive (both-high forbidden) */
+  /* oscillation: A*B metastable; grants Qa, Qb mutually exclusive (both-high forbidden) */
   cell (MUT) {
     pin (A) {
       direction : input;

@@ -14,7 +14,7 @@ use espresso_logic::expression::ParseBoolExprError;
 use crate::expr;
 use crate::logic::arcs::{Arc, HiddenArc};
 use crate::logic::confluence::Constraint;
-use crate::logic::interlock::Arbitration;
+use crate::logic::interlock::Oscillation;
 use crate::logic::leakage::LeakageState;
 
 /// The whole input file: a list of `[[cell]]` tables.
@@ -144,9 +144,9 @@ pub struct AnalysedCell {
     /// precomputed once by the shared machine pass
     /// ([`crate::logic::analysis::analyse_machine`]) and consumed by the arcs emitter.
     pub leakage: Vec<LeakageState>,
-    /// Detected arbitration/metastability conditions (empty for ordinary combinational or
+    /// Detected oscillation/metastability conditions (empty for ordinary combinational or
     /// self-holding cells). See [`crate::logic::interlock`].
-    pub arbitration: Vec<Arbitration>,
+    pub oscillation: Vec<Oscillation>,
     /// Declared clock input pins (`clock = [...]`). See [`crate::logic::confluence`].
     pub clock_pins: Vec<Symbol>,
     /// The constraints derived to avoid the cell's hazards (setup/hold and non_seq). Emission is gated
@@ -277,7 +277,7 @@ impl Cell {
             arcs: Vec::new(),
             hidden_arcs: Vec::new(),
             leakage: Vec::new(),
-            arbitration: Vec::new(),
+            oscillation: Vec::new(),
             clock_pins: self.clock.clone(),
             constraints: Vec::new(),
             constraint_arcs_declared: self.constraint_arcs,
@@ -320,7 +320,7 @@ impl Cell {
         }
 
         // Build the cell's state machine once and derive both its transition arcs and its hazards (the
-        // constraints — setup/hold, non_seq — that avoid them plus the arbitration annotations) from the
+        // constraints — setup/hold, non_seq — that avoid them plus the oscillation annotations) from the
         // shared exploration over the minimised model. Clock suppression and emission gating are applied
         // downstream.
         let analysis = crate::logic::analysis::analyse_machine(&analysed, &bdds);
@@ -328,7 +328,7 @@ impl Cell {
         analysed.hidden_arcs = analysis.hidden_arcs;
         analysed.leakage = analysis.leakage;
         analysed.constraints = analysis.constraints;
-        analysed.arbitration = analysis.arbitration;
+        analysed.oscillation = analysis.oscillation;
         // Cache each signal's state-table regions once, in `signals()` order, from the shared folded
         // BDDs, so downstream emitters don't rebuild the BDDs per call site.
         analysed.regions = analysed
@@ -466,7 +466,7 @@ Y2 = "A*Z2"
 [[cell]]
 name = "X"
 inputs = ["A"]
-arbitrate = ["Q"]
+oscillate = ["Q"]
 [cell.outputs]
 Y = "A"
 "#;
@@ -498,7 +498,7 @@ Q = "CLK*M + !CLK*Q"
         let sig_names: Vec<_> = cell.signals().map(|s| s.name.as_str()).collect();
         assert_eq!(sig_names, ["Q", "M"]);
         // Not flagged as an arbiter (Q→M is a one-way dependency, no mutual cycle).
-        assert!(cell.arbitration.is_empty());
+        assert!(cell.oscillation.is_empty());
     }
 
     #[test]

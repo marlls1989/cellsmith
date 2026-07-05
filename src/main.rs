@@ -71,13 +71,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         .map(|c| c.analyse())
         .collect::<Result<_, _>>()?;
 
-    // Diagnose interlocked cells: their arbitration is detected and annotated, but never expressed as
+    // Diagnose interlocked cells: their oscillation is detected and annotated, but never expressed as
     // deterministic timing, so the user should know — naming the nodes (outputs or internals) that
-    // arbitrate.
+    // oscillate.
     for c in &cells {
-        for a in &c.arbitration {
+        for a in &c.oscillation {
             eprintln!(
-                "cellsmith: warning: cell {:?}: nodes {{{}}} arbitrate (metastable at {}) — \
+                "cellsmith: warning: cell {:?}: nodes {{{}}} oscillate (metastable at {}) — \
                  annotated only, not modelled as timing.",
                 c.name,
                 a.group.join(", "),

@@ -7,7 +7,7 @@
 //! shared map. After the fold every state variable's next-state δ **is** its entry in the map — a direct
 //! lookup, no per-signal composition — and the combinational outputs' δ likewise. Only the one
 //! [`machine::explore`] BFS is set up here, and it is the same setup for both derivations, so it is done
-//! **once** and shared through [`Machine`]. Only plain data ([`Arc`], [`Constraint`], [`Arbitration`])
+//! **once** and shared through [`Machine`]. Only plain data ([`Arc`], [`Constraint`], [`Oscillation`])
 //! escapes into [`MachineAnalysis`]; the live BDD handles never leave this pass.
 //!
 //! The BDD brand is a **generic type parameter** `<B, C>` carried by [`Machine`]: the builder is minted
@@ -21,20 +21,20 @@ use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::arcs::{self, Arc, HiddenArc};
 use crate::logic::confluence::{self, Constraint};
-use crate::logic::interlock::Arbitration;
+use crate::logic::interlock::Oscillation;
 use crate::logic::leakage::{self, LeakageState};
 use crate::logic::{machine, resolve};
 use crate::model::AnalysedCell;
 
 /// The plain-data outcome of the shared machine pass: the transition arcs, the constraints derived to
-/// avoid the cell's hazards, and its arbitration annotations. Empty when the cell is not explored (the
+/// avoid the cell's hazards, and its oscillation annotations. Empty when the cell is not explored (the
 /// combinatorial blow-up guard, see [`MAX_MACHINE_VARS`]).
 #[derive(Debug, Default)]
 pub struct MachineAnalysis {
     pub arcs: Vec<Arc>,
     pub hidden_arcs: Vec<HiddenArc>,
     pub constraints: Vec<Constraint>,
-    pub arbitration: Vec<Arbitration>,
+    pub oscillation: Vec<Oscillation>,
     pub leakage: Vec<LeakageState>,
 }
 
@@ -177,7 +177,7 @@ pub fn analyse_machine<B: Brand, C: ManagerCell>(
         arcs,
         hidden_arcs,
         constraints: hz.constraints,
-        arbitration: hz.arbitration,
+        oscillation: hz.oscillation,
         leakage: leakage::derive(&m),
     }
 }
@@ -193,7 +193,7 @@ mod tests {
     #[test]
     fn oversized_cell_trips_the_blowup_guard() {
         // inputs + state variables > MAX_MACHINE_VARS ⇒ the machine is left unexplored, so arcs,
-        // constraints and arbitration all come back empty (the MachineAnalysis::default path) — yet the
+        // constraints and oscillation all come back empty (the MachineAnalysis::default path) — yet the
         // emitters must still run without panicking.
         let n = MAX_MACHINE_VARS + 1; // 23 primary inputs, 0 state variables ⇒ machine width 23 > 22
         let list = (0..n)
@@ -209,8 +209,8 @@ mod tests {
             "guard must suppress constraints"
         );
         assert!(
-            cell.arbitration.is_empty(),
-            "guard must suppress arbitration"
+            cell.oscillation.is_empty(),
+            "guard must suppress oscillation"
         );
         assert!(
             cell.leakage.is_empty(),
@@ -237,7 +237,7 @@ inputs = ["A"]
 Q = "A + Q"
 "#,
         );
-        assert!(cell.arbitration.is_empty());
+        assert!(cell.oscillation.is_empty());
         assert_eq!(cell.regions.len(), 1);
         let q = &cell.regions[0];
         assert!(q.hysteretic, "a single-input keeper holds its own state");

@@ -37,7 +37,7 @@ Qn = "!(S+Q)"
 [[cell]]
 name = "MUT"
 inputs = ["A", "B"]            # mutex/arbiter: grants are mutually exclusive, metastable at A*B
-[cell.outputs]                 #   -> arcs condition each grant on the other; arbitration is annotated
+[cell.outputs]                 #   -> arcs condition each grant on the other; oscillation is annotated
 Qa  = "!Qb * A"
 Qb  = "!Qa * B"
 
