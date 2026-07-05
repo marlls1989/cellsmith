@@ -3,7 +3,7 @@
 pub mod analysis;
 pub mod arcs;
 pub mod confluence;
-pub mod interlock;
+pub mod hazard;
 pub mod leakage;
 pub mod machine;
 pub mod minimise;

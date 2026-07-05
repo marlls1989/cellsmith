@@ -9,7 +9,7 @@ use espresso_logic::Symbol;
 use crate::logic::arcs::{Arc, Edge, HiddenArc};
 use crate::logic::assignment;
 use crate::logic::confluence::{Constraint, ConstraintKind};
-use crate::logic::interlock::Oscillation;
+use crate::logic::hazard::Oscillation;
 use crate::logic::leakage::LeakageState;
 use crate::logic::literal_product;
 use crate::model::AnalysedCell;

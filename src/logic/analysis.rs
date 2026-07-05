@@ -7,8 +7,9 @@
 //! shared map. After the fold every state variable's next-state δ **is** its entry in the map — a direct
 //! lookup, no per-signal composition — and the combinational outputs' δ likewise. Only the one
 //! [`machine::explore`] BFS is set up here, and it is the same setup for both derivations, so it is done
-//! **once** and shared through [`Machine`]. Only plain data ([`Arc`], [`Constraint`], [`Oscillation`])
-//! escapes into [`MachineAnalysis`]; the live BDD handles never leave this pass.
+//! **once** and shared through [`Machine`]. Only plain data ([`Arc`]; the detected [`OrderDependence`]
+//! and [`Oscillation`] hazards; the generated [`Constraint`]s) escapes into [`MachineAnalysis`]; the live
+//! BDD handles never leave this pass.
 //!
 //! The BDD brand is a **generic type parameter** `<B, C>` carried by [`Machine`]: the builder is minted
 //! once per cell in [`crate::model::Cell::analyse`] (a fresh brand each cell, so handles from two cells
@@ -21,19 +22,20 @@ use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::arcs::{self, Arc, HiddenArc};
 use crate::logic::confluence::{self, Constraint};
-use crate::logic::interlock::Oscillation;
+use crate::logic::hazard::{OrderDependence, Oscillation};
 use crate::logic::leakage::{self, LeakageState};
 use crate::logic::{machine, resolve};
 use crate::model::AnalysedCell;
 
-/// The plain-data outcome of the shared machine pass: the transition arcs, the constraints derived to
-/// avoid the cell's hazards, and its oscillation annotations. Empty when the cell is not explored (the
-/// combinatorial blow-up guard, see [`MAX_MACHINE_VARS`]).
+/// The plain-data outcome of the shared machine pass: the transition arcs, the two detected hazards
+/// (order-dependent and oscillation), and the constraints generated to avoid them. Empty when the cell
+/// is not explored (the combinatorial blow-up guard, see [`MAX_MACHINE_VARS`]).
 #[derive(Debug, Default)]
 pub struct MachineAnalysis {
     pub arcs: Vec<Arc>,
     pub hidden_arcs: Vec<HiddenArc>,
     pub constraints: Vec<Constraint>,
+    pub order_dependence: Vec<OrderDependence>,
     pub oscillation: Vec<Oscillation>,
     pub leakage: Vec<LeakageState>,
 }
@@ -172,12 +174,15 @@ pub fn analyse_machine<B: Brand, C: ManagerCell>(
         return MachineAnalysis::default();
     };
     let (arcs, hidden_arcs) = arcs::derive(&m);
-    let hz = confluence::derive(&m);
+    // Detect the hazards, then generate the constraints that avoid them — two separate stages.
+    let detected = confluence::detect(&m);
+    let constraints = confluence::constrain(&detected, &m.cell.clock_pins);
     MachineAnalysis {
         arcs,
         hidden_arcs,
-        constraints: hz.constraints,
-        oscillation: hz.oscillation,
+        constraints,
+        order_dependence: detected.order_dependence,
+        oscillation: detected.oscillation,
         leakage: leakage::derive(&m),
     }
 }
@@ -193,8 +198,8 @@ mod tests {
     #[test]
     fn oversized_cell_trips_the_blowup_guard() {
         // inputs + state variables > MAX_MACHINE_VARS ⇒ the machine is left unexplored, so arcs,
-        // constraints and oscillation all come back empty (the MachineAnalysis::default path) — yet the
-        // emitters must still run without panicking.
+        // constraints and both detected hazards all come back empty (the MachineAnalysis::default path)
+        // — yet the emitters must still run without panicking.
         let n = MAX_MACHINE_VARS + 1; // 23 primary inputs, 0 state variables ⇒ machine width 23 > 22
         let list = (0..n)
             .map(|i| format!("\"I{i}\""))
@@ -211,6 +216,10 @@ mod tests {
         assert!(
             cell.oscillation.is_empty(),
             "guard must suppress oscillation"
+        );
+        assert!(
+            cell.order_dependence.is_empty(),
+            "guard must suppress order-dependent hazards"
         );
         assert!(
             cell.leakage.is_empty(),
