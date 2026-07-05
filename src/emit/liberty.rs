@@ -1,10 +1,30 @@
-//! Emit a minimal Liberty fragment for a cell: input `pin` groups, then per output and internal state
-//! node either a plain combinational `function` or — for a hysteretic signal (a **state variable**: one
-//! on a dependency cycle, whether a direct self-hold or a larger coupling cycle such as a mutex/SR
-//! latch) — a `statetable` whose next-state encodes the three regions as `H` (on) / `L` (off) / `N`
-//! (no-change = hold). A state variable always emits a `statetable`, never a combinational `function`
-//! that names another output. Internal state nodes are emitted as `direction : internal` pins and appear
-//! as internal-node columns in the state tables of the outputs that reference them.
+//! Emit a minimal Liberty fragment for a cell: input `pin` groups, then — for a sequential cell — ONE
+//! joint `statetable` group, and finally the output and internal-node `pin` groups that bind to it.
+//!
+//! A sequential library cell carries **exactly one** state table (Liberty 2017.06 Vol.1 §5 p.5-23: "a
+//! sequential library cell can have only one state table"); every state variable of the cell is one
+//! column of that single table. The joint model is built at emission time by
+//! [`crate::emit::statetable::build_state_model`], which folds the cell's hysteretic signals (its
+//! **state variables**: outputs and internal nodes on a dependency cycle) into one next-state table.
+//! Within a table field node values are **space-separated**; whole rows are **comma-separated**. The
+//! next-state action per node is `H` (drive high = on region) / `L` (drive low = off) / `N` (hold =
+//! no-change). A purely combinational cell has no state table: each output emits a plain `function`.
+//!
+//! The state-table node namespace is isolated from the pin namespace, so nodes bind to ports through
+//! pin attributes:
+//! - an OUTPUT state variable is aliased at emission time to a `{name}_st` node so no table node ever
+//!   names an external output pin; its pin carries `internal_node : "{name}_st"` and
+//!   `inverted_output : false` (the `_st` alias itself gets no pin group — it is anchored by this
+//!   attribute);
+//! - a GENUINE INTERNAL state node keeps its own name and is emitted as a
+//!   `direction : internal; internal_node : "<name>";` pin (Liberty UG Vol.1 `pin(n1)` example);
+//! - an output that merely projects a state node (a feedthrough or inverter) carries that node's
+//!   `internal_node` with `inverted_output` `false`/`true`;
+//! - any other output of a sequential cell carries `state_function : "<sop>"`, which names PIN ports
+//!   (inputs, internal pins, or output pins carrying an `internal_node`) and NEVER a bare `_st` node —
+//!   the table namespace is isolated (Liberty UG Vol.1 p.5-31, and the `pin(QNZ){state_function:"QN"}`
+//!   / feedthrough `pin(Y){state_function:"A"}` examples on p.5-33). A cell with a state table has no
+//!   plain `function` attribute anywhere.
 //!
 //! `cell_liberty` renders one cell as a bare `cell (...) { ... }` group; `library_liberty` wraps all of
 //! a run's cells in a single `library (<name>) { ... }` group — the `.lib` file cellsmith writes. Groups
@@ -17,9 +37,12 @@ use liberty_parse::{
     liberty::{Attribute, Group, Liberty},
 };
 
+use espresso_logic::Symbol;
+
+use crate::emit::statetable::{build_state_model, Next, StateModel};
 use crate::logic::hazard::Oscillation;
 use crate::logic::regions::{StateCube, StateRegions};
-use crate::model::{AnalysedCell, AnalysedOutput};
+use crate::model::AnalysedCell;
 
 /// Add a simple `name : value;` attribute to a group.
 ///
@@ -70,38 +93,44 @@ pub fn cell_liberty(cell: &AnalysedCell) -> String {
     out
 }
 
-/// Build the `cell` group: one input `pin` per primary input, then each output pin, then each internal
-/// state node as a `direction : internal` pin — each with a `statetable` when hysteretic.
+/// Build the `cell` group: one input `pin` per primary input, then — for a sequential cell — the single
+/// joint `statetable`, its output pins (in declaration order), and its genuine-internal pins. A purely
+/// combinational cell (no state model) emits each output as a plain `function` pin instead.
 fn cell_group(cell: &AnalysedCell) -> Group {
     let mut group = Group::new("cell", &cell.name);
 
     for input in &cell.inputs {
         group.subgroups.push(input_pin(input));
     }
-    let n_out = cell.outputs.len();
-    for (i, (sig, sr)) in cell.signal_regions().enumerate() {
-        let direction = if i < n_out { "output" } else { "internal" };
-        push_signal(&mut group, sig, sr, direction);
+
+    match build_state_model(cell) {
+        // Purely combinational: every signal is an output carrying a plain `function`.
+        None => {
+            for (sig, sr) in cell.signal_regions() {
+                group
+                    .subgroups
+                    .push(function_pin(&sig.name, &function_sop(sr)));
+            }
+        }
+        // Sequential: one joint statetable, then output pins bound to it, then internal-node pins.
+        Some(model) => {
+            group.subgroups.push(statetable_group(&model));
+
+            let n_out = cell.outputs.len();
+            for (i, (sig, sr)) in cell.signal_regions().enumerate() {
+                if i < n_out {
+                    group.subgroups.push(output_pin(&sig.name, sr, &model));
+                }
+            }
+            for (i, (sig, _)) in cell.signal_regions().enumerate() {
+                if i >= n_out {
+                    group.subgroups.push(internal_pin(&sig.name));
+                }
+            }
+        }
     }
 
     group
-}
-
-/// Emit a signal's pin (and, if hysteretic, its `statetable`). `direction` is `"output"` for an
-/// external pin or `"internal"` for an internal state node — modelled in the state table exactly like
-/// an output, but with no external connection.
-fn push_signal(group: &mut Group, sig: &AnalysedOutput, sr: &StateRegions, direction: &str) {
-    if sr.hysteretic {
-        group.subgroups.push(statetable_group(sr, &sig.name));
-        // A hysteretic pin reads the state node of the same name defined by its statetable.
-        group
-            .subgroups
-            .push(signal_pin(&sig.name, direction, &sig.name));
-    } else {
-        group
-            .subgroups
-            .push(signal_pin(&sig.name, direction, &function_sop(sr)));
-    }
 }
 
 /// `pin (<name>) { direction : input; }`
@@ -111,42 +140,146 @@ fn input_pin(name: &str) -> Group {
     pin
 }
 
-/// `pin (<name>) { direction : <output|internal>; function : "<func>"; }`
-fn signal_pin(name: &str, direction: &str, func: &str) -> Group {
+/// `pin (<name>) { direction : output; function : "<func>"; }` — a combinational output.
+fn function_pin(name: &str, func: &str) -> Group {
     let mut pin = Group::new("pin", name);
     set_attr(
         &mut pin,
         "direction",
-        Value::Expression(direction.to_owned()),
+        Value::Expression("output".to_owned()),
     );
     set_attr(&mut pin, "function", Value::String(func.to_owned()));
     pin
 }
 
-/// `statetable ("<inputs>", "<pin>") { table : "<rows>"; }` — the hysteretic next-state table.
-fn statetable_group(sr: &StateRegions, pin: &str) -> Group {
-    // The header is one verbatim string: input-node list and internal-node list, each quoted.
-    let header = format!("\"{}\", \"{}\"", sr.cols.join(" "), pin);
+/// The output pin of a sequential cell, bound to the joint statetable. Three cases (Liberty UG Vol.1
+/// pp.5-31..5-33):
+/// - a state variable (`sig` is itself a table node) reads its own `{name}_st` alias node;
+/// - a pure projection of a state node (a feedthrough/inverter, no hold) reads that node with the
+///   matching `inverted_output`;
+/// - any other output names PIN ports through `state_function` (never a bare `_st` node).
+fn output_pin(name: &Symbol, sr: &StateRegions, model: &StateModel) -> Group {
+    let mut pin = Group::new("pin", name);
+    set_attr(
+        &mut pin,
+        "direction",
+        Value::Expression("output".to_owned()),
+    );
+
+    if let Some(node) = model.node_of.get(name) {
+        // (1) This output is itself a state variable — read its own aliased node.
+        set_attr(
+            &mut pin,
+            "internal_node",
+            Value::String(node.as_str().to_owned()),
+        );
+        set_attr(
+            &mut pin,
+            "inverted_output",
+            Value::Expression("false".to_owned()),
+        );
+    } else if let Some((node, inverted)) = projection_of(sr, model) {
+        // (2) A pure projection of a state node — a feedthrough (false) or inverter (true).
+        set_attr(
+            &mut pin,
+            "internal_node",
+            Value::String(node.as_str().to_owned()),
+        );
+        let inv = if inverted { "true" } else { "false" };
+        set_attr(
+            &mut pin,
+            "inverted_output",
+            Value::Expression(inv.to_owned()),
+        );
+    } else {
+        // (3) Any other output — a combinational function over PIN ports, never a `_st` node.
+        set_attr(&mut pin, "state_function", Value::String(function_sop(sr)));
+    }
+    pin
+}
+
+/// `pin (<name>) { direction : internal; internal_node : "<name>"; }` — a genuine internal state node,
+/// anchoring the same-named table column to a port (Liberty UG Vol.1 `pin(n1)` example).
+fn internal_pin(name: &Symbol) -> Group {
+    let mut pin = Group::new("pin", name);
+    set_attr(
+        &mut pin,
+        "direction",
+        Value::Expression("internal".to_owned()),
+    );
+    set_attr(
+        &mut pin,
+        "internal_node",
+        Value::String(name.as_str().to_owned()),
+    );
+    pin
+}
+
+/// If `sr` is a pure projection of a single state node — one column, empty hold, and an on-set of a
+/// single one-literal cube — return that node's table name and whether the projection is inverted
+/// (`on = [[Some(false)]]`). Otherwise `None`, so the output falls back to `state_function`.
+fn projection_of(sr: &StateRegions, model: &StateModel) -> Option<(Symbol, bool)> {
+    if sr.cols.len() != 1 || !sr.hold.is_empty() {
+        return None;
+    }
+    let node = model.node_of.get(&sr.cols[0])?.clone();
+    match sr.on.as_slice() {
+        [cube] if cube.as_slice() == [Some(true)] => Some((node, false)),
+        [cube] if cube.as_slice() == [Some(false)] => Some((node, true)),
+        _ => None,
+    }
+}
+
+/// `statetable ("<inputs>", "<nodes>") { table : "<rows>"; }` — the cell's single joint next-state
+/// table. Node values are space-separated within a field; rows are comma-separated.
+fn statetable_group(model: &StateModel) -> Group {
+    let header = format!(
+        "\"{}\", \"{}\"",
+        join_nodes(&model.input_nodes),
+        join_nodes(&model.internal_nodes),
+    );
     let mut st = Group::new("statetable", &header);
-    set_attr(&mut st, "table", Value::String(table_string(sr)));
+    set_attr(&mut st, "table", Value::String(table_string(model)));
     st
 }
 
-/// Build the state table string: one comma-separated row per region cube,
-/// `<input state> : <current state> : <next state>`, current state always `-` (any).
-fn table_string(sr: &StateRegions) -> String {
-    let mut rows: Vec<String> = Vec::new();
-    for cube in &sr.on {
-        rows.push(format!("{} : - : H", state_pattern(cube)));
-    }
-    for cube in &sr.off {
-        rows.push(format!("{} : - : L", state_pattern(cube)));
-    }
-    for cube in &sr.hold {
-        rows.push(format!("{} : - : N", state_pattern(cube)));
-    }
-    rows.sort();
-    rows.join(" , ")
+/// Render the joint table body: one `<inputs> : <current> : <next>` row per [`StateModel::rows`] entry,
+/// comma-joined in model (deterministic) order. Inputs/current use `H`/`L`/`-`; next uses `H`/`L`/`N`.
+fn table_string(model: &StateModel) -> String {
+    model
+        .rows
+        .iter()
+        .map(|row| {
+            format!(
+                "{} : {} : {}",
+                state_pattern(&row.inputs),
+                state_pattern(&row.current),
+                next_pattern(&row.next),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" , ")
+}
+
+/// Render a per-node next-state action vector as space-separated `H`/`L`/`N` symbols.
+fn next_pattern(next: &[Next]) -> String {
+    next.iter()
+        .map(|n| match n {
+            Next::High => "H",
+            Next::Low => "L",
+            Next::Hold => "N",
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Space-join a node list into a single statetable-header field.
+fn join_nodes(nodes: &[Symbol]) -> String {
+    nodes
+        .iter()
+        .map(Symbol::as_str)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Render a cube as space-separated `H`/`L`/`-` symbols (Liberty state-table input levels).
@@ -202,6 +335,12 @@ mod tests {
     use super::*;
     use crate::model::analyse_one as analyse;
 
+    /// Wrap a bare cell fragment and assert it round-trips through `liberty_parse::parse_lib`.
+    fn parse_frag(frag: &str) -> Liberty {
+        let wrapped = format!("library (test) {{\n{frag}}}\n");
+        liberty_parse::parse_lib(&wrapped).expect("emitted Liberty must parse")
+    }
+
     #[test]
     fn c_element_emits_statetable() {
         let cell = analyse(
@@ -218,16 +357,22 @@ Q = "A*B + Q*(A+B)"
         assert!(lib.contains("cell (C2)"));
         assert!(lib.contains("pin (A)"));
         assert!(lib.contains("direction : input;"));
-        assert!(lib.contains("statetable (\"A B\", \"Q\")"));
-        assert!(lib.contains(": - : H")); // on
-        assert!(lib.contains(": - : L")); // off
-        assert!(lib.contains(": - : N")); // hold
+        // One joint statetable over the aliased output node `Q_st`.
+        assert!(lib.contains("statetable (\"A B\", \"Q_st\")"));
+        assert!(lib.contains("H H : - : H")); // on
+        assert!(lib.contains("L L : - : L")); // off
+        assert!(lib.contains("H L : - : N")); // hold
+        assert!(lib.contains("L H : - : N")); // hold
+                                              // The output pin binds to its `_st` node; no combinational `function`.
         assert!(lib.contains("pin (Q)"));
-        assert!(lib.contains("function : \"Q\";"));
+        assert!(lib.contains("internal_node : \"Q_st\";"));
+        assert!(lib.contains("inverted_output : false;"));
+        assert!(!lib.contains("function : "));
+        parse_frag(&lib);
     }
 
     #[test]
-    fn dff_internal_master_is_an_internal_pin_with_statetable() {
+    fn dff_emits_one_joint_statetable() {
         let cell = analyse(
             r#"
 [[cell]]
@@ -241,16 +386,21 @@ Q = "CLK*M + !CLK*Q"
         );
         let frag = cell_liberty(&cell);
         eprintln!("{frag}");
-        // The slave Q's statetable carries the internal master M as an input node — but not D, which
-        // Q's function (CLK*M + !CLK*Q) does not depend on.
-        assert!(frag.contains("statetable (\"CLK M\", \"Q\")"));
-        // The master is an internal pin with its own statetable.
-        assert!(frag.contains("statetable (\"CLK D\", \"M\")"));
+        // Exactly one joint table over both state nodes (aliased Q_st and internal M).
+        assert_eq!(frag.matches("statetable").count(), 1);
+        assert!(frag.contains("statetable (\"CLK D\", \"Q_st M\")"));
+        // The four joint next-state rows (Q first, M second within each field).
+        assert!(frag.contains("H - : - H : H N"));
+        assert!(frag.contains("H - : - L : L N"));
+        assert!(frag.contains("L H : - - : N H"));
+        assert!(frag.contains("L L : - - : N L"));
+        // The master is a genuine internal pin anchoring its same-named node.
         assert!(frag.contains("pin (M)"));
         assert!(frag.contains("direction : internal;"));
+        assert!(frag.contains("internal_node : \"M\";"));
+        assert!(!frag.contains("function : "));
         // The fragment still round-trips through liberty-parse.
-        let wrapped = format!("library (test) {{\n{frag}}}\n");
-        let lib = liberty_parse::parse_lib(&wrapped).expect("emitted Liberty must parse");
+        let lib = parse_frag(&frag);
         let cellg = lib
             .iter()
             .flat_map(|g| g.subgroups.iter())
@@ -260,6 +410,66 @@ Q = "CLK*M + !CLK*Q"
             .subgroups
             .iter()
             .any(|g| g.type_ == "pin" && g.name == "M"));
+    }
+
+    #[test]
+    fn gated_latch_projection_output_uses_state_function() {
+        // GL: internal L self-holds (a state node); output Y = C*L is combinational over pins C and L.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "GL"
+inputs = ["C", "D"]
+[cell.internal]
+L = "!C*D + C*L"
+[cell.outputs]
+Y = "C*L"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        assert!(frag.contains("statetable (\"C D\", \"L\")"));
+        // Y names PIN ports through state_function — inputs and the internal pin L, never an `_st` node.
+        assert!(frag.contains("state_function : "));
+        assert!(frag.contains('C') && frag.contains('L'));
+        // Y is combinational: it carries no internal_node of its own.
+        let lib = parse_frag(&frag);
+        let cellg = lib
+            .iter()
+            .flat_map(|g| g.subgroups.iter())
+            .find(|g| g.type_ == "cell" && g.name == "GL")
+            .expect("GL cell present");
+        let y = cellg
+            .subgroups
+            .iter()
+            .find(|g| g.type_ == "pin" && g.name == "Y")
+            .expect("Y pin present");
+        assert!(!y.attributes.contains_key("internal_node"));
+        // The internal state node L is a direction:internal pin.
+        assert!(frag.contains("pin (L)"));
+        assert!(frag.contains("direction : internal;"));
+    }
+
+    #[test]
+    fn mutex_emits_joint_statetable_no_function() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "MUT"
+inputs = ["A", "B"]
+[cell.outputs]
+Qa = "!Qb * A"
+Qb = "!Qa * B"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        assert!(frag.contains("statetable (\"A B\", \"Qa_st Qb_st\")"));
+        // The race: both requests high, both grants currently low → both drive high.
+        assert!(frag.contains("H H : L L : H H"));
+        // Both outputs bind to their `_st` nodes — no `function` (nor `state_function`) token anywhere.
+        assert!(!frag.contains("function : "));
+        parse_frag(&frag);
     }
 
     #[test]
