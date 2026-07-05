@@ -55,6 +55,15 @@ pub struct StateRegions {
     pub on: Vec<StateCube>,
     pub off: Vec<StateCube>,
     pub hold: Vec<StateCube>,
+    /// The minimised on-region as a single-output F cover over `cols` (the same cover the `on` cubes
+    /// are read from). Kept so the joint state-table build can re-base and stack it into a
+    /// multi-output cover without rebuilding any BDD.
+    pub on_cover: Cover<Symbol, Anonymous>,
+    /// The minimised off-region cover, twin of [`on_cover`](Self::on_cover).
+    pub off_cover: Cover<Symbol, Anonymous>,
+    /// The minimised hold-region cover, twin of [`on_cover`](Self::on_cover). Empty for a signal with
+    /// no self-hold gap (cross-coupled emergent memory).
+    pub hold_cover: Cover<Symbol, Anonymous>,
     /// The signal is a state variable — it lies on a dependency cycle (a direct self-hold or a larger
     /// coupling cycle, as classified by [`super::resolve::state_variables`]) — and so must emit a
     /// `statetable`, never a combinational `function`. This is independent of whether the signal has a
@@ -86,8 +95,11 @@ pub fn state_regions<B: Brand, C: ManagerCell>(
     // the output still depends on the projected self var) is *not* emitted as cubes. Taking the F side
     // of `f` gives the onset and the F side of `!f` the offset — each already a clean F cover we can
     // minimise on its own without collapsing the gap.
-    let on_cover = f_side(&f.cover_over_fr(&cols));
-    let off_cover = f_side(&(!f).cover_over_fr(&cols));
+    // Minimise each region independently, keeping the minimised covers. This is safe precisely because
+    // each is its own onset with no don't-care set: Espresso reproduces that exact region and cannot
+    // bleed the hold gap into on/off.
+    let on_cover = minimise(f_side(&f.cover_over_fr(&cols)));
+    let off_cover = minimise(f_side(&(!f).cover_over_fr(&cols)));
 
     // The hold set is the undef gap = complement of (onset ∪ offset), reconstructed from the two region
     // covers as its own function so it, too, can be minimised as an independent onset. The shared per-cell
@@ -96,12 +108,12 @@ pub fn state_regions<B: Brand, C: ManagerCell>(
     let on_bdd = builder.build_cover(&on_cover);
     let off_bdd = builder.build_cover(&off_cover);
     let hold_bdd = !(on_bdd.or(&off_bdd));
+    let hold_cover = minimise_bdd(&hold_bdd);
 
-    // Minimise each region independently. This is safe precisely because each is its own onset with no
-    // don't-care set: Espresso reproduces that exact region and cannot bleed the hold gap into on/off.
-    let on = region_cubes(&minimise(on_cover), &cols);
-    let off = region_cubes(&minimise(off_cover), &cols);
-    let hold = region_cubes(&minimise_bdd(&hold_bdd), &cols);
+    // Derive the `StateCube` views from the SAME minimised covers, so cube output is bit-identical.
+    let on = region_cubes(&on_cover, &cols);
+    let off = region_cubes(&off_cover, &cols);
+    let hold = region_cubes(&hold_cover, &cols);
 
     let hysteretic = is_state;
 
@@ -110,6 +122,9 @@ pub fn state_regions<B: Brand, C: ManagerCell>(
         on,
         off,
         hold,
+        on_cover,
+        off_cover,
+        hold_cover,
         hysteretic,
     }
 }
