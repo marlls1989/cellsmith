@@ -36,6 +36,20 @@ Iteration is bounded as a runaway backstop; in practice a couple of rounds suffi
 foldable only *after* another substitution is picked up on the next round (e.g. a relay chain
 `W1 → W2 → input`, or a bare-alias chain resolved one link per round).
 
+### Output/state separation is not this pass's job
+
+The fixpoint above is behaviour-preserving, not Liberty-spec-preserving: it may legitimately leave the
+minimised model with a cyclic output referenced by another output's function (two genuine coordinates,
+each an external pin). That shape is exactly what a Liberty `statetable`/`function` cannot express for
+an output pin — the spec forbids an output referencing another output. Separating output pins from the
+state they depend on is a Liberty-specific emission concern, not a property of the minimised model, so
+it is handled entirely at emission time (alias minting in `src/emit/statetable.rs`), never by a
+minimisation pass here. An earlier version of this pass hoisted such a cyclic output onto a minted
+internal after the fixpoint; that hoist has been removed, because it fixed a Liberty-only constraint by
+mutating the shared model that the Verilog emitter also reads — a Verilog UDP is free to have an output
+reference another output directly, so baking the hoist into minimisation cost Verilog a distinction it
+was allowed to keep.
+
 ## Identical-δ merge (dedup)
 
 This pass recognises signals that are the **same coordinate** because they compute the *same

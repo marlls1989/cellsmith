@@ -17,7 +17,7 @@ For every cell in the input spec, cellsmith emits three artifacts:
 |----------|------|----------|
 | Liberate arcs | `<name>_arcs.tcl` | `define_arc` blocks with prevector walks and `R/F/1/0/X` vectors, plus `define_leakage` blocks — one static leakage state per settled seed state, conditioned on inputs and settled outputs |
 | Behavioural Verilog | `<name>.v` | one sequential UDP `primitive` per signal (outputs + internal state nodes, three-valued next-state table) + a `celldefine`d wrapper `module` (internals as internal `wire`s) with a `specify` block |
-| Liberty stub | `<name>.lib` | a self-contained `library (<name>) { ... }` file (Liberate can consume it directly) wrapping one `cell (...)` per cell: input `pin`s, output/internal `pin`s (`direction : internal` for state nodes), each with a `statetable` (hysteretic) or a plain `function` (combinational) |
+| Liberty stub | `<name>.lib` | a self-contained `library (<name>) { ... }` file (Liberate can consume it directly) wrapping one `cell (...)` per cell: input `pin`s; a sequential cell gets one joint `statetable` listing every state node — emission-minted `_st` aliases for state outputs plus genuine internals — with output pins expressed as spec projections onto it (`internal_node` + `inverted_output`, or `state_function`) and `direction : internal` pins for the hidden nodes; a cell with no state nodes gets a plain `function` per output instead |
 
 ## The model
 
@@ -80,10 +80,16 @@ derived from the functions themselves; there is no spec key to declare or silenc
 *choice* itself is a physical property Liberate characterises separately — it is not, and cannot be,
 expressed as a deterministic timing arc.
 
-The Verilog UDP and Liberty `statetable` are the **functional** view: each keeps the other referenced
-state signals (other outputs *and* internal nodes) as input/internal-node columns and projects out
-only the signal's own feedback. Internal nodes appear as internal `wire`s in the Verilog and
-`direction : internal` pins in the Liberty — modelled, but not exposed as ports.
+The Verilog UDP and Liberty `statetable` are both the **functional** view, but Liberty's spec forces a
+different shape. Verilog keeps one sequential UDP per signal, and an output's table may reference
+another output directly — the UDP columns are simply that signal's support, projecting out only its own
+feedback. The Liberty spec, in contrast, disallows an output pin's own table from referencing another
+output pin, so no output pin ever carries state directly there: instead the emitter merges every
+sequential cell's state into **one joint `statetable`**, whose rows give the joint next-state of every
+state node (genuine internals plus an emission-minted `_st` alias for each state output), and each
+output pin is re-expressed as a spec-legal projection onto that one table. Internal nodes appear as
+internal `wire`s in the Verilog and `direction : internal` pins in the Liberty — modelled, but not
+exposed as ports.
 
 ## Input format
 
