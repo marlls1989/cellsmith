@@ -5902,7 +5902,7 @@ define_leakage -when "C*M1*M2*!P1*P2*!Q*R" RACELEM21
 define_leakage -when "C*M1*M2*P1*!P2*!Q*R" RACELEM21
 define_leakage -when "C*M1*M2*P1*P2*Q*!R" RACELEM21
 define_leakage -when "C*M1*M2*P1*P2*!Q*R" RACELEM21
-# oscillation: !S*!R metastable; grants {Q, Qn} mutually exclusive ({Q=0, Qn=1} | {Q=1, Qn=0})
+# oscillation: !S*!R risks metastability in {Q, Qn}, settling to one of {Q=0, Qn=1} | {Q=1, Qn=0}
 define_arc \
 	-prevector_pinlist {S R} \
 	-prevector {10 00} \
@@ -6034,7 +6034,7 @@ define_arc \
 define_leakage -when "Q*!Qn*!R*S" SR
 define_leakage -when "!Q*Qn*R*!S" SR
 define_leakage -when "!Q*!Qn*R*S" SR
-# oscillation: A*B metastable; grants {Qa, Qb} mutually exclusive ({Qa=0, Qb=1} | {Qa=1, Qb=0})
+# oscillation: A*B risks metastability in {Qa, Qb}, settling to one of {Qa=0, Qb=1} | {Qa=1, Qb=0}
 define_arc \
 	-prevector_pinlist {A B} \
 	-prevector {10} \

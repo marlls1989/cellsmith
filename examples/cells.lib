@@ -71,7 +71,7 @@ library (cells) {
       function : "Q";
     }
   }
-  /* oscillation: !S*!R metastable; grants Q, Qn mutually exclusive (both-high forbidden) */
+  /* oscillation: !S*!R risks metastability in Q, Qn, settling to one of {Q=0, Qn=1} | {Q=1, Qn=0} */
   cell (SR) {
     pin (S) {
       direction : input;
@@ -88,7 +88,7 @@ library (cells) {
       function : "!S*!Q";
     }
   }
-  /* oscillation: A*B metastable; grants Qa, Qb mutually exclusive (both-high forbidden) */
+  /* oscillation: A*B risks metastability in Qa, Qb, settling to one of {Qa=0, Qb=1} | {Qa=1, Qb=0} */
   cell (MUT) {
     pin (A) {
       direction : input;
