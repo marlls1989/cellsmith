@@ -181,6 +181,15 @@ cell gains the derived setup/hold pairs `(CLKA, S)` and `(CLKB, S)` alongside it
 and `(CLKB, RB)` constraints — a genuine gain, never a loss, and consistent with the fold's own soundness
 (`minimise.rs` I1–I2).
 
+The latch-boundary filter (`confluence.rs`) iterates over diverging **state variables**, so the same
+declassification is symmetric in principle: folding a cycle-resident relay could in theory also *drop* a
+pin-pair constraint whose divergence every consumer's settled value masks. That is the mirror image of
+the gain above — the tool re-deciding, on the minimised model, what counts as a design-tolerated
+settled snapshot across a latch — and would be a correction in the same sense, not a regression. No
+committed cell exhibits it (the whole-corpus stderr diff shows only the two ICM gains), and the golden
+`icm_relays_fold_and_machine_is_preserved` locks constraints field-for-field against the hand-folded
+reference so any real change is caught.
+
 Worked example — a two-domain sampling chain (the `SYNC2` test fixture; the `ICM` dual-clock
 synchroniser in `examples/cells.toml` is the same shape at scale):
 

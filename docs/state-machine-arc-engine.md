@@ -338,15 +338,17 @@ input-forced transitions cascade naturally through the multi-round settle.
 
 ### The shared machine pass: `analysis.rs`
 
-The whole setup happens once, in `analysis.rs`. `Machine::build` (`analysis.rs:67-132`) builds every
-signal's BDD, each state variable's δ, the combinational outputs' δ, and runs the **one**
-`machine::explore` BFS seeded from all of them. `analyse_machine` (`analysis.rs:138-150`) mints a
-per-cell BDD builder and derives **both** `arcs::derive` and `confluence::derive` from the shared
-`Machine`.
+The whole setup happens once, in `analysis.rs`, over the **minimised** model. `Machine::build`
+(`analysis.rs:74`) takes the cell's shared per-cell BDD map (minted once in `Cell::analyse`,
+`model.rs:290`, and reused here — no rebuild): each state variable's δ and each combinational output's
+δ are **direct lookups** into that map, and it runs the **one** `machine::explore` BFS seeded from all
+of them. `analyse_machine` (`analysis.rs:167`) receives the same shared map and derives **both**
+`arcs::derive` and `confluence::derive` from the shared `Machine`.
 
-A combinatorial blow-up guard, `MAX_MACHINE_VARS = 22` (`analysis.rs:45`), gates the whole shared pass:
+A combinatorial blow-up guard, `MAX_MACHINE_VARS = 22` (`analysis.rs:50`), gates the whole shared pass:
 `Machine::build` returns `None` — leaving the cell unexplored, so arcs *and* hazards come back empty —
-when `inputs + state variables` exceeds it (`analysis.rs:86`).
+when `inputs + state variables` exceeds it (`analysis.rs:94`); the width is now the **minimised**
+state count, so folded relays no longer count against the budget.
 
 ## 7. Worked example: discovering `B↓ → Qa↑` on the mutex
 

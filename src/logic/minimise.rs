@@ -56,7 +56,12 @@
 //!
 //! **Known limit.** An odd all-relay ring (`X1="!X3*A", X2="!X1", X3="!X2"` — no stable states, no
 //! committed fixture) admits one fold before the 2-cycle guard bites, shrinking a would-be arbitration
-//! group. This is documented and accepted per the decided enforcement level.
+//! group. The M1 analogue is a wire hanging on a self-inverting definer cycle (`R="!W1*A", W1="R"`):
+//! M1 collapses the wire (it is not an all-wire cycle — `R` has a two-variable definer), likewise
+//! shrinking the `{R, W1}` group. In both cases inversion parity is preserved by `compose`, so the
+//! oscillation itself survives and arbitration is still flagged — only the group can shrink. No
+//! committed or mandated cell is affected (MUT/ROSC members all have ≥2-variable supports). Documented
+//! and accepted per the decided enforcement level.
 
 use std::collections::{BTreeMap, BTreeSet};
 
