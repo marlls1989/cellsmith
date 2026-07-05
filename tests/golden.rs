@@ -43,6 +43,90 @@ fn liberty_pins(cell: &AnalysedCell) -> Vec<String> {
         .collect()
 }
 
+/// R2 invariant guard: a Liberty output pin's `function:` may reference only inputs and INTERNAL
+/// nodes — never another OUTPUT pin. Round-trips the emitted Liberty, then for each output pin
+/// tokenises its `function` string and asserts no token names a *different* output. A token equal to
+/// the pin's OWN name is allowed only when that pin is backed by a `statetable` of the same node name
+/// (the valid single-output state-variable pattern, e.g. C2's `pin(Q){function:"Q"}` with
+/// `statetable("A B","Q")`).
+fn assert_no_output_function_references_another_output(cell: &AnalysedCell) {
+    let frag = cell_liberty(cell);
+    let wrapped = format!("library (test) {{\n{frag}}}\n");
+    assert_liberty_no_output_cross_reference(&wrapped, cell.name.as_str());
+}
+
+/// The parse-and-check core of the R2 net, split out so it can be driven against a hand-forged
+/// fragment (see `net_bites_on_output_referencing_another_output`).
+fn assert_liberty_no_output_cross_reference(wrapped: &str, cell_name: &str) {
+    let lib = liberty_parse::parse_lib(wrapped).expect("emitted Liberty must parse");
+    let cell_group = lib
+        .iter()
+        .flat_map(|g| g.subgroups.iter())
+        .find(|g| g.type_ == "cell" && g.name == cell_name)
+        .expect("cell present after round-trip");
+
+    // OUTPUT pins: pin groups whose `direction` attribute is `output`.
+    let output_pins: Vec<_> = cell_group
+        .subgroups
+        .iter()
+        .filter(|g| g.type_ == "pin")
+        .filter(|g| {
+            g.simple_attribute("direction").map(|v| v.to_string()) == Some("output".to_owned())
+        })
+        .collect();
+    let output_names: std::collections::HashSet<&str> =
+        output_pins.iter().map(|g| g.name.as_str()).collect();
+
+    // Statetable-backed nodes: the statetable's second header string is the backing internal_node
+    // name. `liberty-parse` joins the two quoted header args (keeping their quotes) as
+    // `"<inputs>", "<node>"`, so the node is the trailing comma-separated field with quotes stripped
+    // (e.g. `"A B", "Q"` → `Q`).
+    let statetable_nodes: std::collections::HashSet<String> = cell_group
+        .subgroups
+        .iter()
+        .filter(|g| g.type_ == "statetable")
+        .filter_map(|g| {
+            g.name
+                .rsplit(", ")
+                .next()
+                .map(|s| s.trim_matches('"').to_owned())
+        })
+        .collect();
+
+    for pin in &output_pins {
+        let Some(func) = pin
+            .simple_attribute("function")
+            .map(|v| v.to_string().trim_matches('"').to_owned())
+        else {
+            continue;
+        };
+        // Real tokenisation: keep maximal identifier runs, split on every other character. So `Q1` and
+        // `Q1_st` stay distinct tokens (a substring search would conflate them).
+        for token in func
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|t| !t.is_empty())
+        {
+            if token == pin.name {
+                // A pin referencing its OWN name is valid only as a state variable reading its own
+                // statetable node.
+                assert!(
+                    statetable_nodes.contains(token),
+                    "R2: output pin `{}` function `{}` names itself without a backing statetable",
+                    pin.name,
+                    func
+                );
+                continue;
+            }
+            assert!(
+                !output_names.contains(token),
+                "R2 violation: output pin `{}` function `{}` references another output `{token}`",
+                pin.name,
+                func
+            );
+        }
+    }
+}
+
 const C2: &str = r#"
 [[cell]]
 name = "C2"
@@ -777,6 +861,27 @@ fn complement_c_element_pair_hoists_coordinate_to_internal() {
     );
 }
 
+/// R2 net over every fixture: no output pin's Liberty `function:` may name another output pin. The
+/// statetable cells (MUT/SR) pass because their outputs reference their OWN state node; the hoisted
+/// cells (DUP_RECUR/CLATCH) pass because their outputs project over an INTERNAL node; the
+/// combinational cells reference only inputs. ND2 has no standalone const — it lives inline in the
+/// multi-cell fixture — so it is reproduced here verbatim.
+#[test]
+fn no_output_function_references_another_output_across_fixtures() {
+    const ND2: &str = r#"
+[[cell]]
+name = "ND2"
+inputs = ["A", "B"]
+[cell.outputs]
+Y = "!(A*B)"
+"#;
+    for src in [
+        C2, ND2, MUT, SR, DFF, ICM, ROSC, C2GATE, DUP_COMB, BUF_COMB, COMP_OUT, DUP_RECUR, CLATCH,
+    ] {
+        assert_no_output_function_references_another_output(&analyse_one(src));
+    }
+}
+
 /// `-when` is emitted by default; disabling it (the `--no-when` path) drops it from the arc text.
 #[test]
 fn when_default_on_and_suppressible() {
@@ -794,4 +899,29 @@ fn when_default_on_and_suppressible() {
     );
     assert!(on.contains("-when"));
     assert!(!off.contains("-when"));
+}
+
+/// The net actually bites: a pre-fix shape where output `Q2`'s `function` names another output `Q1`
+/// (with no statetable backing `Q2`) must be REJECTED. This locks that the own-name carve-out does not
+/// accidentally pass a cross-output reference. The fixes make the emitter never produce this shape, so
+/// the offending Liberty is hand-forged and fed straight to the check core.
+#[test]
+fn net_bites_on_output_referencing_another_output() {
+    let wrapped = r#"library (test) {
+cell (BAD) {
+pin (A) { direction : input; }
+pin (B) { direction : input; }
+pin (Q1) { direction : output; function : "A*B"; }
+pin (Q2) { direction : output; function : "Q1"; }
+}
+}
+"#;
+    let rejected = std::panic::catch_unwind(|| {
+        assert_liberty_no_output_cross_reference(wrapped, "BAD");
+    })
+    .is_err();
+    assert!(
+        rejected,
+        "R2 net failed to reject an output pin whose function names another output"
+    );
 }
