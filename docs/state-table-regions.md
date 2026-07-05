@@ -111,12 +111,37 @@ The Verilog sequential UDP consumes regions **per-signal**, unchanged: `on` beco
 the tables of the outputs that reference them — an output's UDP may reference another output directly.
 
 The Liberty `statetable` cannot work the same way: the Liberty spec disallows an output pin's own table
-from referencing another output pin. So emission (`src/emit/statetable.rs`) **joins** every sequential
-cell's per-signal regions into one cell-wide `statetable` by cube intersection. Each joint row picks one
-region — `on`, `off`, or `hold` — per state node and renders it `H`/`L`/`N` in that node's column; where
-one node's next-state depends on another node's *current* value, that dependency is carried as a
-current-value token (`H`/`L`) in the row's middle field, named after the referenced node's own table
-entry. Every state output gets an emission-minted `_st` alias standing in for it as a node in the joint
+from referencing another output pin. So emission (`src/emit/statetable.rs`) builds one cell-wide
+`statetable` from the per-signal regions by **cover algebra**, not a cube-intersection cross-product,
+in five steps:
+
+1. **Rename.** Each state signal's minimised `on`/`off`/`hold` cover is renamed (`rename_outputs`) so
+   its single output column carries that node's own name, rather than an anonymous placeholder.
+2. **Normalise.** Each renamed cover is re-based (`over_vars`) onto one **shared header**: the union of
+   every state signal's own transition function's input support (the primary-input columns from every
+   signal's region, in cell input order), followed by the state signals' original names in node order.
+   Normalising onto this shared header is what makes the next step's stacking well defined.
+3. **Extend.** For a given action, every state signal's renamed, normalised cover is folded
+   (`Cover::extend`) into one another, giving a single multi-output F cover for that action. Doing this
+   once per action produces three multi-output covers — ON, OFF, HOLD.
+4. **Minimise.** Each of the three multi-output covers is Espresso-minimised independently, as a joint
+   multi-output problem, so cubes can be shared across nodes that agree on the same action over the
+   same input/current pattern.
+5. **Keyed fold.** Every resulting cube, from all three minimised covers, is folded into the joint row
+   table keyed by its input/current minterm (a `BTreeMap` keyed on the pattern): for each node the cube
+   asserts, that node's slot in the row for that key is stamped with the pass's action (`H`/`L`/`N`);
+   cubes that land on the same key — whether from the same action's cover or a different one — stamp
+   different nodes' slots of the *same* row rather than producing separate rows.
+
+A `-` in a row's next-state field for some node means this row does not define that node's next value at
+all. Liberty resolves each output's next state independently — **per-output priority** (Vol. 1 §5) — by
+reading the first row that pins a definite (non-`-`) value for it, in table order; `-` simply defers
+that node to whichever lower-priority row does pin it (the master-slave `CP(R)`/`CPN(F)` split-row
+example is exactly this deferral). The construction is sound only because, per node, its `on`, `off`,
+and `hold` regions are mutually disjoint: a row can therefore never need to stamp the same node with two
+different definite actions, however many passes contribute cubes to it.
+
+Every state output gets an emission-minted `_st` alias standing in for it as a node in the joint
 table, so the table's node set is genuine internals plus these minted aliases — never the output pins
 themselves. Each output pin is instead re-expressed as a spec-legal projection onto the joint table
 (`internal_node` + `inverted_output`, or `state_function`).
