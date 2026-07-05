@@ -18,12 +18,13 @@ library (cells) {
     pin (B) {
       direction : input;
     }
-    statetable ("A B", "Q") {
-      table : "H H : - : H , H L : - : N , L H : - : N , L L : - : L";
+    statetable ("A B", "Q_st") {
+      table : "L L : - : L , L H : - : N , H L : - : N , H H : - : H";
     }
     pin (Q) {
       direction : output;
-      function : "Q";
+      internal_node : "Q_st";
+      inverted_output : false;
     }
   }
   cell (RCELEM2) {
@@ -36,12 +37,13 @@ library (cells) {
     pin (R) {
       direction : input;
     }
-    statetable ("A B R", "Q") {
-      table : "- - H : - : L , H H L : - : H , H L L : - : N , L H L : - : N , L L - : - : L";
+    statetable ("A B R", "Q_st") {
+      table : "- - H : - : L , L L - : - : L , L H L : - : N , H L L : - : N , H H L : - : H";
     }
     pin (Q) {
       direction : output;
-      function : "Q";
+      internal_node : "Q_st";
+      inverted_output : false;
     }
   }
   cell (RACELEM21) {
@@ -63,12 +65,13 @@ library (cells) {
     pin (R) {
       direction : input;
     }
-    statetable ("P1 P2 C R M1 M2", "Q") {
-      table : "- - - H - - : - : L , - - L - L L : - : L , - - L L - H : - : N , - - L L H - : - : N , - L H L - - : - : N , H H H L - - : - : H , L - H L - - : - : N";
+    statetable ("M1 M2 P1 P2 C R", "Q_st") {
+      table : "- - - - - H : - : L , - - - L H L : - : N , - - L - H L : - : N , - - H H H L : - : H , - H - - L L : - : N , L L - - L - : - : L , H - - - L L : - : N";
     }
     pin (Q) {
       direction : output;
-      function : "Q";
+      internal_node : "Q_st";
+      inverted_output : false;
     }
   }
   /* oscillation: !S*!R risks metastability in Q, Qn, settling to one of {Q=0, Qn=1} | {Q=1, Qn=0} */
@@ -79,13 +82,18 @@ library (cells) {
     pin (R) {
       direction : input;
     }
+    statetable ("S R", "Q_st Qn_st") {
+      table : "- - : H H : L L , - L : H L : H L , - H : H - : L L , L - : L H : L H , L L : L L : H H , L H : L - : L H , H - : - H : L L , H L : - L : H L , H H : - - : L L";
+    }
     pin (Q) {
       direction : output;
-      function : "!R*!Qn";
+      internal_node : "Q_st";
+      inverted_output : false;
     }
     pin (Qn) {
       direction : output;
-      function : "!S*!Q";
+      internal_node : "Qn_st";
+      inverted_output : false;
     }
   }
   /* oscillation: A*B risks metastability in Qa, Qb, settling to one of {Qa=0, Qb=1} | {Qa=1, Qb=0} */
@@ -96,13 +104,18 @@ library (cells) {
     pin (B) {
       direction : input;
     }
+    statetable ("A B", "Qa_st Qb_st") {
+      table : "- - : H H : L L , - L : - H : L L , - H : L H : L H , L - : H - : L L , L L : - - : L L , L H : L - : L H , H - : H L : H L , H L : - L : H L , H H : L L : H H";
+    }
     pin (Qa) {
       direction : output;
-      function : "!Qb*A";
+      internal_node : "Qa_st";
+      inverted_output : false;
     }
     pin (Qb) {
       direction : output;
-      function : "!Qa*B";
+      internal_node : "Qb_st";
+      inverted_output : false;
     }
   }
   cell (DFF) {
@@ -112,19 +125,17 @@ library (cells) {
     pin (D) {
       direction : input;
     }
-    statetable ("CLK M", "Q") {
-      table : "H H : - : H , H L : - : L , L - : - : N";
+    statetable ("CLK D", "Q_st M") {
+      table : "L L : - - : N L , L H : - - : N H , H - : - L : L N , H - : - H : H N";
     }
     pin (Q) {
       direction : output;
-      function : "Q";
-    }
-    statetable ("CLK D", "M") {
-      table : "H - : - : N , L H : - : H , L L : - : L";
+      internal_node : "Q_st";
+      inverted_output : false;
     }
     pin (M) {
       direction : internal;
-      function : "M";
+      internal_node : "M";
     }
   }
   cell (ICM) {
@@ -143,51 +154,36 @@ library (cells) {
     pin (S) {
       direction : input;
     }
+    statetable ("CLKA CLKB RA RB S", "enA enB sela1 sela2 selb1 selb2") {
+      table : "- - H H - : - - - - - - : L L L L L L , - L H L - : H - - - - L : L L L L L N , - L H L - : H - - - - H : L H L L L N , - L H L L : - - - - - L : L L L L L N , - L H L L : - - - - - H : L H L L L N , - L H L H : L - - - - L : L L L L H N , - L H L H : L - - - - H : L H L L H N , - L H H - : - - - - - L : L L L L L L , - L H H - : H - - - - - : L L L L L L , - L H H - : H - - - - L : L L L L L L , - L H H L : - - - - - - : L L L L L L , - L H H L : - - - - - L : L L L L L L , - H H L - : - - - - L - : L N L L N L , - H H L - : - - - - H - : L N L L N H , - H H H - : - - - - L - : L L L L L L , L - L H - : - H - L - - : L L L N L L , L - L H - : - H - H - - : H L L N L L , L - L H L : - L - L - - : L L H N L L , L - L H L : - L - H - - : H L H N L L , L - L H H : - - - L - - : L L L N L L , L - L H H : - - - H - - : H L L N L L , L - H H - : - - - L - - : L L L L L L , L - H H - : - H - - - - : L L L L L L , L - H H - : - H - L - - : L L L L L L , L - H H H : - - - - - - : L L L L L L , L - H H H : - - - L - - : L L L L L L , L L L L - : H H - L - L : L L L N L N , L L L L - : H H - L - H : L H L N L N , L L L L - : H H - H - L : H L L N L N , L L L L - : H H - H - H : H H L N L N , L L L L L : - L - L - L : L L H N L N , L L L L L : - L - L - H : L H H N L N , L L L L L : - L - H - L : H L H N L N , L L L L L : - L - H - H : H H H N L N , L L L L L : - H - L - L : L L L N L N , L L L L L : - H - L - H : L H L N L N , L L L L L : - H - H - L : H L L N L N , L L L L L : - H - H - H : H H L N L N , L L L L L : H L - L - L : L L H N L N , L L L L L : H L - L - H : L H H N L N , L L L L L : H L - H - L : H L H N L N , L L L L L : H L - H - H : H H H N L N , L L L L H : L - - L - L : L L L N H N , L L L L H : L - - L - H : L H L N H N , L L L L H : L - - H - L : H L L N H N , L L L L H : L - - H - H : H H L N H N , L L L L H : L H - L - L : L L L N H N , L L L L H : L H - L - H : L H L N H N , L L L L H : L H - H - L : H L L N H N , L L L L H : L H - H - H : H H L N H N , L L L L H : H - - L - L : L L L N L N , L L L L H : H - - L - H : L H L N L N , L L L L H : H - - H - L : H L L N L N , L L L L H : H - - H - H : H H L N L N , L L L H - : - H - L - L : L L L N L L , L L L H - : - H - H - L : H L L N L L , L L L H - : H H - L - - : L L L N L L , L L L H - : H H - L - L : L L L N L L , L L L H - : H H - H - - : H L L N L L , L L L H - : H H - H - L : H L L N L L , L L L H L : - L - L - - : L L H N L L , L L L H L : - L - L - L : L L H N L L , L L L H L : - L - H - - : H L H N L L , L L L H L : - L - H - L : H L H N L L , L L L H L : - H - L - - : L L L N L L , L L L H L : - H - L - L : L L L N L L , L L L H L : - H - H - - : H L L N L L , L L L H L : - H - H - L : H L L N L L , L L L H L : H L - L - - : L L H N L L , L L L H L : H L - L - L : L L H N L L , L L L H L : H L - H - - : H L H N L L , L L L H L : H L - H - L : H L H N L L , L L L H H : - - - L - L : L L L N L L , L L L H H : - - - H - L : H L L N L L , L L L H H : H - - L - - : L L L N L L , L L L H H : H - - L - L : L L L N L L , L L L H H : H - - H - - : H L L N L L , L L L H H : H - - H - L : H L L N L L , L L H L - : H - - L - L : L L L L L N , L L H L - : H - - L - H : L H L L L N , L L H L - : H H - - - L : L L L L L N , L L H L - : H H - - - H : L H L L L N , L L H L - : H H - L - L : L L L L L N , L L H L - : H H - L - H : L H L L L N , L L H L L : - - - L - L : L L L L L N , L L H L L : - - - L - H : L H L L L N , L L H L L : - H - - - L : L L L L L N , L L H L L : - H - - - H : L H L L L N , L L H L L : - H - L - L : L L L L L N , L L H L L : - H - L - H : L H L L L N , L L H L H : L - - - - L : L L L L H N , L L H L H : L - - - - H : L H L L H N , L L H L H : L - - L - L : L L L L H N , L L H L H : L - - L - H : L H L L H N , L L H L H : L H - - - L : L L L L H N , L L H L H : L H - - - H : L H L L H N , L L H L H : L H - L - L : L L L L H N , L L H L H : L H - L - H : L H L L H N , L L H L H : H - - - - L : L L L L L N , L L H L H : H - - - - H : L H L L L N , L L H L H : H - - L - L : L L L L L N , L L H L H : H - - L - H : L H L L L N , L L H H - : - - - L - L : L L L L L L , L L H H - : - H - - - L : L L L L L L , L L H H - : - H - L - L : L L L L L L , L L H H - : H - - L - - : L L L L L L , L L H H - : H - - L - L : L L L L L L , L L H H - : H H - - - - : L L L L L L , L L H H - : H H - - - L : L L L L L L , L L H H - : H H - L - - : L L L L L L , L L H H - : H H - L - L : L L L L L L , L L H H L : - - - L - - : L L L L L L , L L H H L : - - - L - L : L L L L L L , L L H H L : - H - - - - : L L L L L L , L L H H L : - H - - - L : L L L L L L , L L H H L : - H - L - - : L L L L L L , L L H H L : - H - L - L : L L L L L L , L L H H H : - - - - - L : L L L L L L , L L H H H : - - - L - L : L L L L L L , L L H H H : H - - - - - : L L L L L L , L L H H H : H - - - - L : L L L L L L , L L H H H : H - - L - - : L L L L L L , L L H H H : H - - L - L : L L L L L L , L H L L - : - H - L L - : L N L N N L , L H L L - : - H - L H - : L N L N N H , L H L L - : - H - H L - : H N L N N L , L H L L - : - H - H H - : H N L N N H , L H L L L : - L - L L - : L N H N N L , L H L L L : - L - L H - : L N H N N H , L H L L L : - L - H L - : H N H N N L , L H L L L : - L - H H - : H N H N N H , L H L L H : - - - L L - : L N L N N L , L H L L H : - - - L H - : L N L N N H , L H L L H : - - - H L - : H N L N N L , L H L L H : - - - H H - : H N L N N H , L H L H - : - H - L L - : L L L N L L , L H L H - : - H - H L - : H L L N L L , L H L H L : - L - L L - : L L H N L L , L H L H L : - L - H L - : H L H N L L , L H L H H : - - - L L - : L L L N L L , L H L H H : - - - H L - : H L L N L L , L H H L - : - - - L L - : L N L L N L , L H H L - : - - - L H - : L N L L N H , L H H L - : - H - - L - : L N L L N L , L H H L - : - H - - H - : L N L L N H , L H H L - : - H - L L - : L N L L N L , L H H L - : - H - L H - : L N L L N H , L H H L H : - - - - L - : L N L L N L , L H H L H : - - - - H - : L N L L N H , L H H L H : - - - L L - : L N L L N L , L H H L H : - - - L H - : L N L L N H , L H H H - : - - - L L - : L L L L L L , L H H H - : - H - - L - : L L L L L L , L H H H - : - H - L L - : L L L L L L , L H H H H : - - - - L - : L L L L L L , L H H H H : - - - L L - : L L L L L L , H - L H - : - - L - - - : N L N L L L , H - L H - : - - H - - - : N L N H L L , H - H H - : - - L - - - : L L L L L L , H L L L - : H - L - - L : N L N L L N , H L L L - : H - L - - H : N H N L L N , H L L L - : H - H - - L : N L N H L N , H L L L - : H - H - - H : N H N H L N , H L L L L : - - L - - L : N L N L L N , H L L L L : - - L - - H : N H N L L N , H L L L L : - - H - - L : N L N H L N , H L L L L : - - H - - H : N H N H L N , H L L L H : L - L - - L : N L N L H N , H L L L H : L - L - - H : N H N L H N , H L L L H : L - H - - L : N L N H H N , H L L L H : L - H - - H : N H N H H N , H L L H - : - - L - - L : N L N L L L , H L L H - : - - H - - L : N L N H L L , H L L H - : H - L - - - : N L N L L L , H L L H - : H - L - - L : N L N L L L , H L L H - : H - H - - - : N L N H L L , H L L H - : H - H - - L : N L N H L L , H L L H L : - - L - - - : N L N L L L , H L L H L : - - L - - L : N L N L L L , H L L H L : - - H - - - : N L N H L L , H L L H L : - - H - - L : N L N H L L , H L H L - : H - L - - L : L L L L L N , H L H L - : H - L - - H : L H L L L N , H L H L L : - - L - - L : L L L L L N , H L H L L : - - L - - H : L H L L L N , H L H L H : L - L - - L : L L L L H N , H L H L H : L - L - - H : L H L L H N , H L H H - : - - L - - L : L L L L L L , H L H H - : H - L - - - : L L L L L L , H L H H - : H - L - - L : L L L L L L , H L H H L : - - L - - - : L L L L L L , H L H H L : - - L - - L : L L L L L L , H H L L - : - - L - L - : N N N L N L , H H L L - : - - L - H - : N N N L N H , H H L L - : - - H - L - : N N N H N L , H H L L - : - - H - H - : N N N H N H , H H L H - : - - L - L - : N L N L L L , H H L H - : - - H - L - : N L N H L L , H H H L - : - - L - L - : L N L L N L , H H H L - : - - L - H - : L N L L N H , H H H H - : - - L - L - : L L L L L L";
+    }
     pin (GCLK) {
       direction : output;
-      function : "enB*CLKB + enA*CLKA";
-    }
-    statetable ("CLKA RA sela2", "enA") {
-      table : "- H - : - : L , H L - : - : N , L - L : - : L , L L H : - : H";
+      state_function : "enB*CLKB + enA*CLKA";
     }
     pin (enA) {
       direction : internal;
-      function : "enA";
-    }
-    statetable ("CLKB RB selb2", "enB") {
-      table : "- H - : - : L , H L - : - : N , L - L : - : L , L L H : - : H";
+      internal_node : "enA";
     }
     pin (enB) {
       direction : internal;
-      function : "enB";
-    }
-    statetable ("CLKA RA enB S", "sela1") {
-      table : "- H - - : - : L , H L - - : - : N , L - - H : - : L , L - H - : - : L , L L L L : - : H";
+      internal_node : "enB";
     }
     pin (sela1) {
       direction : internal;
-      function : "sela1";
-    }
-    statetable ("CLKA RA sela1", "sela2") {
-      table : "- H - : - : L , H - L : - : L , H L H : - : H , L L - : - : N";
+      internal_node : "sela1";
     }
     pin (sela2) {
       direction : internal;
-      function : "sela2";
-    }
-    statetable ("enA CLKB RB S", "selb1") {
-      table : "- - H - : - : L , - H L - : - : N , - L - L : - : L , H L - - : - : L , L L L H : - : H";
+      internal_node : "sela2";
     }
     pin (selb1) {
       direction : internal;
-      function : "selb1";
-    }
-    statetable ("CLKB RB selb1", "selb2") {
-      table : "- H - : - : L , H - L : - : L , H L H : - : H , L L - : - : N";
+      internal_node : "selb1";
     }
     pin (selb2) {
       direction : internal;
-      function : "selb2";
+      internal_node : "selb2";
     }
   }
   cell (C2GATE) {
@@ -197,12 +193,13 @@ library (cells) {
     pin (B) {
       direction : input;
     }
-    statetable ("A B", "Q") {
-      table : "H H : - : H , H L : - : N , L H : - : N , L L : - : L";
+    statetable ("A B", "Q_st") {
+      table : "L L : - : L , L H : - : N , H L : - : N , H H : - : H";
     }
     pin (Q) {
       direction : output;
-      function : "Q";
+      internal_node : "Q_st";
+      inverted_output : false;
     }
   }
 }
