@@ -21,8 +21,8 @@
 //!   retired by this pass — M2 never sees either).
 //! * **M2 — guarded relay elimination.** A signal `s` that does not appear in its own support is a
 //!   combinational relay: at every stable state `s = δ_s(state)` with `s ∉ support(δ_s)`, so it can be
-//!   composed into each of its consumers via [`Bdd::compose`] and dropped — *unless* the fold would merge
-//!   a genuine feedback loop into a self-hold (see the guard below).
+//!   composed into each of its consumers via [`Bdd::compose`] and dropped — *unless* the fold would
+//!   fabricate a register out of emergent memory (see the guard below).
 //!
 //! # Proof obligations
 //!
@@ -34,15 +34,19 @@
 //! definer with the class renamed in and the parity applied, so its behaviour is unchanged.
 //!
 //! **(I2) M2 soundness.** At any stable state, stability forces `s = δ_s(state)` and `s ∉ support(δ_s)`,
-//! so the reduced machine's stable states are exactly the projections of the original's, with `s`
-//! recoverable as `δ_s`. The fold removes only the relay's one parallel-step lag. The guard refuses
-//! precisely the folds that merge an `s ↔ c` 2-cycle into `c`'s self-loop — converting a settle-time
-//! oscillation into a stable self-hold. Worked examples: the mutex at `A=B=1` oscillates `(Qa,Qb)`
-//! `(0,0) ↔ (1,1)` (what [`machine::settle_or_cycle`](super::machine) reads); folding `Qa` would give
-//! `δ_Qb = Qb*B + !A*B`, silently dropping the arbitration. `ROSC` (`X="!Q*A"`, `Q="Q*B+X"`): `Q`
-//! already self-holds, so the decided "no new self-reference" criterion alone would admit folding `X`,
-//! yet the arbitration group would shrink `{Q,X} → {Q}`. The strengthened 2-cycle guard refuses both,
-//! and **subsumes** the new-self-reference criterion because `compose` introduces only `support(δ_s)`.
+//! so `s` is combinational — its value is fixed by the inputs and the other coordinates — and the
+//! reduced machine's stable states are exactly the projections of the original's, with `s` recoverable
+//! as `δ_s`. The fold must not, however, **fabricate a register**. The guard refuses folding `s` into a
+//! consumer `c` exactly when `c` forms an `s ↔ c` 2-cycle (`c ∈ support(δ_s)`) *and does not already
+//! self-hold* — because then the fold invents a self-loop for `c` and projects an oscillation that
+//! lived in the *disagreement* of two non-self-holding nodes onto a single-node fixpoint. Mutex:
+//! neither `Qa` nor `Qb` self-holds; folding `Qa` gives `δ_Qb = Qb*B + !A*B`, which at `A=B=1` is
+//! `δ_Qb = Qb` — the `(0,0) ↔ (1,1)` oscillation (what [`machine::settle_or_cycle`](super::machine)
+//! reads) collapses to two stable states and is lost. Refused. `ROSC` (`X="!Q*A"`, `Q="Q*B+X"`): `Q`
+//! **already self-holds**, so folding `X` re-expresses an existing register rather than inventing one;
+//! the oscillation survives in `Q`'s own self-loop (`δ_Q = !Q` at `A*!B`) and is still flagged. The
+//! fold is allowed — only a *new* self-reference is forbidden. (A folded relay simply leaves the
+//! reported oscillation group; it is not a memory coordinate.)
 //!
 //! **(I3) fixpoint invariant.** At termination, every surviving signal's signal-name support is a subset
 //! of the primary inputs plus the self-reaching signals: any consumed non-self-holding signal is an M2
@@ -54,14 +58,14 @@
 //! every M2 commit purges an internal or removes `s` from every support (`s` re-enters a support only via
 //! an M1 demotion, bounded by the output count). The outer-loop `debug_assert` backstops the bound.
 //!
-//! **Known limit.** An odd all-relay ring (`X1="!X3*A", X2="!X1", X3="!X2"` — no stable states, no
-//! committed fixture) admits one fold before the 2-cycle guard bites, shrinking a would-be arbitration
-//! group. The M1 analogue is a wire hanging on a self-inverting definer cycle (`R="!W1*A", W1="R"`):
-//! M1 collapses the wire (it is not an all-wire cycle — `R` has a two-variable definer), likewise
-//! shrinking the `{R, W1}` group. In both cases inversion parity is preserved by `compose`, so the
-//! oscillation itself survives and arbitration is still flagged — only the group can shrink. No
-//! committed or mandated cell is affected (MUT/ROSC members all have ≥2-variable supports). Documented
-//! and accepted per the decided enforcement level.
+//! **Known limit.** The guard is a structural proxy for "removing `s` preserves the reachable-state
+//! cycle structure", and it inspects only `s ↔ c` **2-cycles**. A longer *emergent* all-relay loop in
+//! which no node self-holds — an odd ring `X1="!X3*A", X2="!X1", X3="!X2"` (no stable states, no
+//! committed fixture) — can admit a fold before any 2-cycle appears, shrinking a would-be oscillation
+//! group. No committed or mandated cell is affected: MUT and SR are 2-cycles the guard catches, and
+//! ICM's folded relays feed synchroniser latches that already self-hold. For an ironclad criterion the
+//! fold would carry a BDD check that the projected cycle structure survives; the structural guard is
+//! accepted per the decided enforcement level.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -339,9 +343,18 @@ fn m2_pass<B: Brand, C: ManagerCell>(
             continue;
         }
 
-        // Guard: refuse a fold whose consumer appears in s's support — an s↔c 2-cycle, the emergent
-        // memory signature. This subsumes "no new self-reference" (compose adds only support(δ_s)).
-        if consumers.iter().any(|c| sup_s.contains(c)) {
+        // Guard: refuse only a fold that would *fabricate* a register. A consumer `c` that forms an
+        // `s ↔ c` 2-cycle (`c ∈ support(δ_s)`) yet does **not** already self-hold is emergent memory:
+        // folding `s` into it invents a self-loop and projects a multi-node oscillation onto a
+        // single-node fixpoint, hiding it (the mutex — `(0,0) ↔ (1,1)` at `A=B=1` collapses to a
+        // stable `δ_Qb = Qb`). A consumer that **already self-holds** (e.g. `ROSC`'s `Q = Q·B + X`) is
+        // a genuine register; folding the relay into it preserves the dynamics — the oscillation
+        // survives in the register's own self-loop (`δ_Q = !Q` at `A·!B`) — so the fold is allowed
+        // even though it is a 2-cycle. Only a *new* self-reference is forbidden.
+        if consumers
+            .iter()
+            .any(|c| sup_s.contains(c) && !bdds[c].variables().any(|v| v.as_str() == c.as_str()))
+        {
             continue;
         }
 
@@ -493,17 +506,19 @@ mod tests {
     }
 
     #[test]
-    fn relay_cross_coupled_with_self_holding_consumer_is_refused() {
-        // ROSC: X="!Q*A", Q="Q*B+X". Q self-holds, so the decided "no new self-reference" guard alone
-        // would fold X. The strengthened 2-cycle guard (X consumes Q, Q consumes X) refuses it.
-        let (_b, mut bdds, order, outputs) = system! {
+    fn relay_into_self_holding_consumer_folds() {
+        // ROSC: X="!Q*A", Q="Q*B+X". `Q` already self-holds, so folding the relay `X` into it does not
+        // fabricate a register — it only re-expresses an existing one. The guard allows the fold even
+        // though X↔Q is a 2-cycle; `X` is purged and `δ_Q = Q*B + !Q*A` (which oscillates at A*!B,
+        // preserving the arbitration in Q's own self-loop).
+        let (b, mut bdds, order, outputs) = system! {
             outputs: ["Q"],
             "X" = "!Q*A",
             "Q" = "Q*B + X",
         };
         let min = minimise_state_space(&mut bdds, &order, &outputs);
-        assert!(min.purged.is_empty());
-        assert!(min.changed.is_empty());
+        assert_eq!(min.purged, ["X"].map(Symbol::from).into_iter().collect());
+        assert!(bdds[&Symbol::from("Q")].equivalent_to(&b.parse("Q*B + !Q*A").unwrap()));
     }
 
     #[test]

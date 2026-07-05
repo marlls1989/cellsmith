@@ -376,19 +376,23 @@ fn icm_relays_fold_and_machine_is_preserved() {
     );
 }
 
-/// The strengthened 2-cycle guard refuses to fold `ROSC`'s relay: `X` survives as an internal and
-/// `{Q, X}` arbitrate at `A*!B`.
+/// `ROSC`'s relay `X` folds into the already-self-holding `Q`. Folding a relay into a genuine
+/// register preserves the dynamics: the oscillation survives in `Q`'s own self-loop (`δ_Q = !Q` at
+/// `A*!B`), so `{Q}` still oscillates at the same condition — only the folded-away relay leaves the
+/// reported group.
 #[test]
-fn rosc_guard_keeps_relay_and_arbitration() {
+fn rosc_relay_folds_and_oscillation_survives() {
     let cell = analyse_one(ROSC);
 
-    let int_names: Vec<_> = cell.internals.iter().map(|o| o.name.as_str()).collect();
-    assert_eq!(int_names, ["X"], "ROSC relay X should not fold");
+    assert!(
+        cell.internals.is_empty(),
+        "ROSC relay X folds into the self-holding Q"
+    );
 
-    assert_eq!(cell.arbitration.len(), 1, "expected one arbitration group");
+    assert_eq!(cell.arbitration.len(), 1, "expected one oscillating group");
     let arb = &cell.arbitration[0];
     let group: Vec<_> = arb.group.iter().map(|s| s.as_str()).collect();
-    assert_eq!(group, ["Q", "X"]);
+    assert_eq!(group, ["Q"]);
     assert_eq!(arb.condition_str(), "A*!B");
 }
 

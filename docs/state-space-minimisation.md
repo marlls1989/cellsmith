@@ -124,11 +124,12 @@ the current inputs and coordinates. It scans candidates in `order` (`minimise.rs
 3. **Dead relay** (`minimise.rs:332-340`): no consumers → a dead internal is purged; a dead *output*
    (e.g. ICM's `GCLK`, which nothing consumes) is a legitimate no-op and kept.
 
-4. **The guard** (`minimise.rs:344-346`): **refuse the fold if any consumer appears in `s`'s
-   support** — that is an `s ↔ c` 2-cycle, the signature of emergent cross-coupled memory. Folding it
-   would merge the 2-cycle into `c`'s self-loop, turning a settle-time oscillation into a stable
-   self-hold and silently dropping arbitration. This guard *subsumes* a "no consumer gains a new
-   self-reference" test, because `compose` introduces only `support(δ_s)`.
+4. **The guard** (`minimise.rs:346-358`): **refuse the fold only if it would *fabricate* a register** —
+   a consumer `c` that forms an `s ↔ c` 2-cycle (`c ∈ support(δ_s)`) yet does **not already
+   self-hold**. That is the emergent-memory signature: `s` and `c` hold no memory individually, so the
+   fold invents a self-loop for `c` and projects an oscillation that lived in their *disagreement* onto
+   a single-node fixpoint, hiding it. A consumer that already self-holds is a genuine register — folding
+   the relay into it is safe (only a *new* self-reference is forbidden).
 
 5. **Fold** (`minimise.rs:348-364`): substitute `δ_s` into every consumer via `Bdd::compose`, mark
    them `changed`, then drop the relay (internal → purged; output → kept but no longer consumed). A
@@ -147,14 +148,17 @@ sela1 = !RA·(!CLKA·(!enB·!S) + CLKA·sela1)
 `sela`/`selb` are purged; the machine width drops from 13 to 11 coordinates, and `sela1`/`selb1` now
 carry `enB`/`enA` and `S` in their statetable columns.
 
-### What the guard keeps
+### What the guard keeps — and what it lets fold
 
-- **Mutex** `Qa = !Qb·A`, `Qb = !Qa·B`: folding either makes the other appear in the relay's support
-  (a 2-cycle) → refused. The `(0,0) ↔ (1,1)` arbitration oscillation at `A=B=1` is preserved.
-- **SR NOR latch**, **master/slave DFF**: self-holding (or become self-holding on fold) → kept.
-- **Ring oscillator** `X = !Q·A`, `Q = Q·B + X`: `Q` already self-holds, so a naive "new
-  self-reference" rule would fold `X`, shrinking the arbitration group `{Q, X} → {Q}`. The 2-cycle
-  guard refuses it.
+- **Mutex** `Qa = !Qb·A`, `Qb = !Qa·B`: neither self-holds, so folding either fabricates a register.
+  Folding `Qa` gives `δ_Qb = Qb·B + !A·B`, which at `A=B=1` is `δ_Qb = Qb` — the `(0,0) ↔ (1,1)`
+  oscillation collapses to two stable states and is **lost**. Refused; both coordinates kept.
+- **SR NOR latch**, **master/slave DFF**: self-holding (or become so on fold) → kept.
+- **Ring oscillator** `X = !Q·A`, `Q = Q·B + X`: `Q` **already self-holds**, so folding `X` re-expresses
+  an existing register rather than inventing one. `X` folds; `δ_Q = Q·B + !Q·A` still oscillates
+  (`δ_Q = !Q` at `A·!B`), so the machine still flags the oscillation — the group is just `{Q}` instead
+  of `{Q, X}`. The reported group is the genuine memory coordinates that oscillate, not the relays
+  feeding them.
 
 ## Why the rewrite is behaviour-preserving
 
@@ -165,24 +169,27 @@ The module doc states the four invariants in full (`minimise.rs:27-64`); in brie
   refused, so no oscillator is ever collapsed.
 - **(I2) M2 soundness.** At any stable state a relay satisfies `s = δ_s(state)` with `s ∉ support(δ_s)`,
   so the reduced machine's stable states are exactly the projections of the original's, with `s`
-  recoverable as `δ_s`. The guard refuses precisely the folds that would convert an oscillation into a
-  self-hold.
+  recoverable as `δ_s`. The guard refuses only folds that would *fabricate* a register — a 2-cycle
+  consumer that does not already self-hold — the sole way a fold can turn an oscillation into a stable
+  self-hold; folding a relay into an existing register preserves the dynamics.
 - **(I3) fixpoint invariant.** At termination every surviving signal's signal support is a subset of
   the primary inputs plus the self-reaching signals, so `state_variables` classifies exactly them and
   the machine's δ is a direct map lookup.
 - **(I4) termination.** Every commit either purges a signal or demotes an alias output idempotently, so
   the fixpoint is reached within the asserted bound.
 
-The safety boundary is absolute: a cell's derived arcs, hidden arcs, confluence constraints, and
-arbitration must be identical to the un-reduced cell — *gained* constraints are permitted (a relay can
-have been masking a genuine hazard), losses are not. This is locked by the behaviour-preservation
-golden tests in `tests/golden.rs`.
+The safety boundary is about *behaviour*, not names: a cell's derived arcs, hidden arcs, and the
+**existence and condition** of every oscillating (arbitration) group must match the un-reduced cell — a
+folded relay leaving a group's membership is not a regression (see the ROSC case above). Gained
+constraints are permitted (a relay can have been masking a genuine hazard); losses are not. This is
+locked by the behaviour-preservation golden tests in `tests/golden.rs`.
 
 ## Known limits
 
-An **odd all-relay ring** (`X1="!X3·A", X2="!X1", X3="!X2"` — no stable states) admits one M2 fold
-before the 2-cycle guard bites, shrinking a would-be arbitration group. The M1 analogue is a wire
-hanging on a self-inverting definer cycle (`R="!W1·A", W1="R"`). In both cases inversion parity is
-preserved by `compose`, so the oscillation itself survives and arbitration is still flagged — only the
-group can shrink. No committed or mandated cell is affected (their cross-coupled members all have
-≥ 2-variable supports). This is documented and accepted at the module level (`minimise.rs:57-64`).
+The guard is a structural proxy for "removing `s` preserves the reachable-state cycle structure", and
+it inspects only `s ↔ c` **2-cycles**. A longer *emergent* all-relay loop where no node self-holds — an
+odd ring `X1="!X3·A", X2="!X1", X3="!X2"` (no stable states, no committed fixture) — can admit a fold
+before any 2-cycle appears, shrinking a would-be oscillation group. No committed or mandated cell is
+affected: MUT and SR are 2-cycles the guard catches, and ICM's folded relays feed synchroniser latches
+that already self-hold. An ironclad criterion would carry a BDD check that the projected cycle structure
+survives; the structural guard is accepted per the decided enforcement level (`minimise.rs:57-64`).

@@ -60,8 +60,8 @@ Every term the later sections lean on, pinned here before first use.
   graph, whether by a self-loop (`Q = A·B + Q·(A+B)`) or a larger coupling cycle (`Qa = !Qb·A`,
   `Qb = !Qa·B`). Classification runs on the **minimised** model: `logic::minimise` (§3.1) first collapses
   every alias/complement chain onto one representative coordinate and composes every non-self-holding
-  relay into its consumers — refusing any fold that would merge a relay and a consumer into a 2-cycle —
-  so self-reachability afterwards counts only genuine memory, never a spent wire or relay.
+  relay into its consumers — refusing only a fold that would *fabricate* a register (an emergent-memory
+  2-cycle) — so self-reachability afterwards counts only genuine memory, never a spent wire or relay.
   `resolve::state_variables` (`resolve.rs:61`) then finds the state variables structurally over that
   minimised map: take the reference graph's transitive closure (`transitive_closure`, `resolve.rs:34`,
   private), and a signal `s` is a state variable iff **`s` reaches itself**. The state variables — and
@@ -103,8 +103,8 @@ in full in `state-space-minimisation.md`; §3.1 below covers the safety guard, a
 the `minimise.rs` module doc): **M1** collapses an alias/complement chain — a
 signal whose function is *exactly* another signal or its negation — onto one representative coordinate
 via `Bdd::compose_map`; **M2** composes a non-self-holding relay into each of its consumers via
-`Bdd::compose` and drops it, refusing any fold that would merge a genuine `s ↔ c` 2-cycle into a stable
-self-hold.
+`Bdd::compose` and drops it, refusing only a fold that would *fabricate* a register — an `s ↔ c`
+2-cycle whose consumer does not already self-hold (emergent memory).
 
 Three examples, each isolating one point.
 
@@ -159,27 +159,29 @@ the current state. A combinational output is resolved the same way as any folded
 never carries the result as a coordinate. Arc derivation reads a combinational output's value by
 *evaluating* its δ at a state (`arcs.rs:125-126`); a state output instead reads its own state coordinate.
 
-### 3.1 The safety guard: why folding refuses a 2-cycle
+### 3.1 The safety guard: why folding must not fabricate a register
 
-Collapsing every non-self-holding relay sounds harmless — until the relay's own consumer is what makes it
-feedback in the first place. Two cases the fold must **not** perform, both already used as examples above
-and in `hazard-detection.md`:
+Collapsing a non-self-holding relay is safe — *unless* the fold would invent memory that wasn't there.
+The machine detects **oscillating (non-confluent) states**; the guard exists to keep an oscillation from
+being projected away, not to freeze the set of nodes that participate in it.
 
-- **`MUT`** (§7 below): `Qa = !Qb·A`, `Qb = !Qa·B`. Neither signal self-holds on its own, but each is the
-  other's consumer — an `s ↔ c` 2-cycle. Folding `Qa` into `Qb` would give `δ_Qb = Qb·B + !A·B`, a signal
-  that now *does* self-hold — silently converting the arbitrating `(0,0) ↔ (1,1)` oscillation at `A=B=1`
-  (`hazard-detection.md` §4) into a single stable state. The pair must stay two coordinates, or the
-  arbitration itself disappears.
-- **`ROSC`** (`X = "!Q*A"`, `Q = "Q*B+X"`): `Q` already self-holds, so a weaker guard that only checks
-  "does this fold introduce a *new* self-reference" would still admit folding `X` into `Q` — `X` does not
-  itself gain a self-loop. But the arbitration group would shrink `{Q, X} → {Q}`, losing the very thing
-  being guarded.
+- **`MUT`** (§7 below) — the case the fold must **not** perform: `Qa = !Qb·A`, `Qb = !Qa·B`. Neither
+  signal self-holds, yet each is the other's consumer — an `s ↔ c` 2-cycle. Folding `Qa` into `Qb`
+  gives `δ_Qb = Qb·B + !A·B`, which at `A=B=1` is `δ_Qb = Qb` — a *fabricated* register. The arbitrating
+  `(0,0) ↔ (1,1)` oscillation (`hazard-detection.md` §4) lived in the *disagreement* of the two nodes;
+  projected onto `Qb` alone it lands on `Qb`'s stable states and disappears. The pair must stay two
+  coordinates.
+- **`ROSC`** (`X = "!Q*A"`, `Q = "Q*B+X"`) — the case the fold **does** perform: `Q` already self-holds,
+  so folding the relay `X` into it re-expresses an existing register rather than inventing one. The
+  oscillation survives in `Q`'s own self-loop (`δ_Q = !Q` at `A·!B`) and is still flagged; only the
+  folded-away relay leaves the reported group (`{Q, X} → {Q}`). That is correct — the group is the
+  genuine memory coordinates that oscillate, not the relays feeding them.
 
-The fold refuses both: before composing a relay `s` into a consumer `c`, it checks whether `c` is already
-in `s`'s own support (the `s ↔ c` 2-cycle) and skips the fold if so. This subsumes the weaker "no new
-self-reference" check, since composing `s` into `c` can only add variables from `s`'s own support to
-`c`'s. The full algorithm is documented in `state-space-minimisation.md`, and the soundness argument
-(I1–I4) lives in the `src/logic/minimise.rs` module doc — neither is repeated here.
+So the guard refuses a fold **only** when the consumer forms an `s ↔ c` 2-cycle *and does not already
+self-hold* — i.e. only when the fold would create a *new* self-reference (the emergent-memory case). A
+relay folded into an existing register is allowed. The full algorithm is documented in
+`state-space-minimisation.md`, and the soundness argument (I1–I4) lives in the `src/logic/minimise.rs`
+module doc — neither is repeated here.
 
 ## 4. The machine's state as a minterm
 
