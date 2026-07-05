@@ -14,6 +14,9 @@
 //! The BDD brand is a **generic type parameter** `<B, C>` carried by [`Machine`]: the builder is minted
 //! once per cell in [`crate::model::Cell::analyse`] (a fresh brand each cell, so handles from two cells
 //! cannot be mixed) and the shared map is threaded into this pass, the minimisation and the regions cache.
+//!
+//! The machine model and the two-stage detect/constrain hazard pipeline are described concept-first in
+//! `state-machine-arc-engine.md` and `hazard-detection.md`; this module only wires the shared pass.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -30,6 +33,9 @@ use crate::model::AnalysedCell;
 /// The plain-data outcome of the shared machine pass: the transition arcs, the two detected hazards
 /// (order-dependent and oscillation), and the constraints generated to avoid them. Empty when the cell
 /// is not explored (the combinatorial blow-up guard, see [`MAX_MACHINE_VARS`]).
+///
+/// `MachineAnalysis` itself never escapes this module: [`analyse_machine`]'s result is copied field-for-
+/// field into the matching [`crate::model::AnalysedCell`] fields by `Cell::analyse` (see `model.rs`).
 #[derive(Debug, Default)]
 pub struct MachineAnalysis {
     pub arcs: Vec<Arc>,

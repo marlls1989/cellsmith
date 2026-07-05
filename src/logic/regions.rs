@@ -24,6 +24,14 @@
 //!
 //! The region view is derived from the **minimised model's** folded BDD, taken from the shared per-cell
 //! builder — a purged relay/alias internal has no region.
+//!
+//! The two-view split, the column/self-feedback rule and the independent-region minimisation argument are
+//! described concept-first in `state-table-regions.md`; this module records only the implementation
+//! shape.
+//!
+//! **Emission plumbing:** [`state_regions`] is called once per signal from `Cell::analyse`, cached on
+//! `AnalysedCell::regions` in `signals()` order (see `model.rs`); the Verilog and Liberty emitters read
+//! that cache rather than rebuilding the BDDs.
 
 use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
 use espresso_logic::{Anonymous, Cover, CoverType, CubeType, Minimizable, Symbol};

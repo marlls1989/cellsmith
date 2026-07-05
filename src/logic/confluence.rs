@@ -42,6 +42,18 @@
 //!
 //! The reachable states and the prevector into `s` come from the shared [`machine::explore`], the same
 //! exploration the delay-arc BFS uses.
+//!
+//! **Implementation notes** (concept in `hazard-detection.md`, not restated here): each reachable state's
+//! per-input settle (`single`) is computed once and reused across every pair probe, so [`detect`] costs
+//! O(n) settles per state rather than O(n²). [`detect`]'s `order_dependence` dedup and [`constrain`]'s own
+//! [`Constraint`] dedup ([`constraint_key`]) both keep the min `(prevector.len, discovered)` representative
+//! per canonical key; [`detect`]'s `oscillation` dedup instead keeps the *first* insertion (earliest
+//! reachable state, by exploration order) and appends every colliding pair-probe [`Race`] to it. All three
+//! dedup maps are [`BTreeMap`]s, so iteration order — and hence report/emission order — is deterministic
+//! independent of any hash map's order. On the `ICM` cell, folding the `sela`/`selb` relays *gains* a
+//! `(CLKA, S)`/`(CLKB, S)` setup/hold pair the un-folded model lacks — a locked sentinel in
+//! `tests/golden.rs::icm_relays_fold_and_machine_is_preserved`, since a fold may only gain a constraint,
+//! never lose one.
 
 use std::collections::{BTreeMap, BTreeSet};
 
