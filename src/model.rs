@@ -311,9 +311,10 @@ impl Cell {
 
         // Drop the internals the fold purged (outputs are never purged), then materialise each internal
         // the hoist minted — a relocated cyclic coordinate — with its expression set from the folded BDD
-        // (it is not in `min.changed`, so the recompute loop below must not regenerate it). Materialise
-        // before the recompute so the minted node's `vars`/`feedback` are filled and it is classified as
-        // the state variable that carries the statetable.
+        // (it is not in `min.changed`, so the recompute loop below leaves its expr as-is; regenerating
+        // from the same BDD would be a harmless no-op regardless). Materialise before the recompute so
+        // the minted node's `vars`/`feedback` are filled and it is classified as the state variable
+        // that carries the statetable.
         analysed.internals.retain(|s| !min.purged.contains(&s.name));
         for n in &min.minted {
             analysed.internals.push(AnalysedOutput {

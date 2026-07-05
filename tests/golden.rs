@@ -859,6 +859,22 @@ fn complement_c_element_pair_hoists_coordinate_to_internal() {
         !lib.contains("function : \"!Q\";"),
         "QN must not name the output Q — the coordinate lives on Q_st:\n{lib}"
     );
+
+    // Verilog mirrors the hoist: the coordinate is an internal `Q_st` sequential UDP over the inputs,
+    // and each output is a projection UDP driven by `Q_st` — never by the other output pin.
+    let v = cell_verilog(&cell);
+    assert!(
+        v.contains("primitive CLATCH_Q_st(Q_st, A, B);"),
+        "Q_st should be a sequential UDP over the inputs:\n{v}"
+    );
+    assert!(
+        v.contains("primitive CLATCH_Q(Q, Q_st);"),
+        "Q should project over the internal Q_st:\n{v}"
+    );
+    assert!(
+        v.contains("primitive CLATCH_QN(QN, Q_st);"),
+        "QN should project over the internal Q_st, not over the output Q:\n{v}"
+    );
 }
 
 /// R2 net over every fixture: no output pin's Liberty `function:` may name another output pin. The
