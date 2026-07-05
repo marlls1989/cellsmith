@@ -13,14 +13,7 @@
 //! A single fixpoint loop alternates two **output-preserving** passes — **dedup** (identical-δ merge)
 //! then **guarded fold** — over the signals in `signals()` order (outputs first, then internals as
 //! parsed): `loop { dedup_pass; fold_pass; if neither committed break }`. Every transformation in either
-//! pass prefers to keep an output pin; an output is never purged. A single **hoist pass** then runs
-//! **once** after the loop settles (see (R2) below).
-//!
-//! * **hoist — R2 enforcement.** The fixpoint can leave a cyclic (state-variable) output referenced by
-//!   a *non-cyclic* output (a complement pair `Qn = !Q`, a recurrent dedup alias `Q2 = var(Q1)`), which
-//!   would emit an output `function:` naming another output. The hoist relocates the shared cyclic
-//!   coordinate onto a freshly **minted internal** node and reduces both outputs to projections over it,
-//!   so no output function references another output.
+//! pass prefers to keep an output pin; an output is never purged.
 //!
 //! * **dedup — identical-δ merge.** Signals whose functions are the *exact same* BDD are one coordinate
 //!   seen more than once — but a group is merged *only when its shared function references a group
@@ -105,15 +98,8 @@
 //! self-holds on its **own** variable, so two distinct registers have distinct δ, and two mutex grants
 //! differ (`!Qb·A ≠ !Qa·B`).
 //!
-//! **(R2) no output names another output.** A combinational output pin's `function:` may reference only
-//! primary inputs and **internal** nodes — never another output pin (the Liberty state-variable domain
-//! rule). The fixpoint can violate it: dedup demotes a duplicate output to `var(rep)` where `rep` is
-//! another output, and the fold keeps a complement `Qn = !Q` on its pin. The [`hoist_pass`] restores R2
-//! after the loop by relocating the shared cyclic coordinate `q` onto a fresh internal `n` (`n` self-holds
-//! ≡ δ_q, `q ↦ var(n)` everywhere, `q = var(n)`). It runs **once, post-fixpoint and is never re-folded**:
-//! inside the loop the fold's output-alias inversion would pull the coordinate straight back onto the pin.
-//! A hoist is a pure coordinate rename, so it preserves every signal's dynamics and never changes another
-//! signal's cyclicity — the trigger set is safely snapshotted once.
+//! Output/state separation (no output `function:` naming another output pin) is a Liberty-only
+//! limitation handled at emission time — see `src/emit/liberty.rs`.
 //!
 //! # Dedup × fold interaction
 //!
@@ -149,9 +135,6 @@ pub struct Minimised {
     pub purged: BTreeSet<Symbol>,
     /// Surviving signals whose BDD differs from the originally parsed one.
     pub changed: BTreeSet<Symbol>,
-    /// Internal state nodes freshly minted by the hoist pass (in mint order), each holding a cyclic
-    /// coordinate relocated off an output pin. The caller materialises these as internal signals.
-    pub minted: Vec<Symbol>,
 }
 
 /// `Some((t, parity))` iff `f` is a bare ±alias of another surviving key.
@@ -187,7 +170,6 @@ pub fn minimise_state_space<B: Brand, C: ManagerCell>(
     bdds: &mut BTreeMap<Symbol, Bdd<B, C>>,
     order: &[Symbol],
     outputs: &BTreeSet<Symbol>,
-    reserved: &BTreeSet<Symbol>,
 ) -> Minimised {
     let mut result = Minimised::default();
     let mut iterations = 0usize;
@@ -204,10 +186,6 @@ pub fn minimise_state_space<B: Brand, C: ManagerCell>(
             break;
         }
     }
-    // Enforce R2 once, after the fixpoint has settled: relocate any cyclic coordinate that a non-cyclic
-    // output still names onto a fresh internal node, so no output function references another output.
-    // Never inside the loop — the fold's output-alias inversion would pull the coordinate back.
-    hoist_pass(bdds, order, outputs, reserved, &mut result);
     // A signal that was rewritten and then purged is gone; keep `changed` to the survivors.
     result.changed.retain(|n| !result.purged.contains(n));
     result
@@ -429,97 +407,6 @@ fn fold_pass<B: Brand, C: ManagerCell>(
     progress
 }
 
-/// Post-fixpoint hoist pass: enforce **R2** — no combinational output pin's function may reference
-/// another output pin. It runs **once**, after the dedup/fold fixpoint (see the module doc): a cyclic
-/// (state-variable) output `q` still named by some *non-cyclic* output `o` has its coordinate moved
-/// onto a freshly minted internal node `n`, with both `q` and `o` reduced to projections over `n`
-/// (`q = var(n)`, `o` composed `q ↦ var(n)`). A hoist is a pure coordinate rename, so it never changes
-/// another signal's cyclicity — the triggers are snapshotted once against the folded support graph.
-fn hoist_pass<B: Brand, C: ManagerCell>(
-    bdds: &mut BTreeMap<Symbol, Bdd<B, C>>,
-    order: &[Symbol],
-    outputs: &BTreeSet<Symbol>,
-    reserved: &BTreeSet<Symbol>,
-    result: &mut Minimised,
-) {
-    // The folded support graph, restricted to surviving keys, and its cyclic (self-reaching) signals.
-    let keys: BTreeSet<Symbol> = bdds.keys().cloned().collect();
-    let edges: BTreeMap<Symbol, Vec<Symbol>> = bdds
-        .iter()
-        .map(|(k, f)| {
-            (
-                k.clone(),
-                f.variables().filter(|v| keys.contains(v)).collect(),
-            )
-        })
-        .collect();
-    let cyclic = crate::logic::resolve::self_reaching(&edges);
-
-    // Snapshot the triggers once (a rename never changes another signal's cyclicity): a cyclic output
-    // `q` that some *other* non-cyclic output references.
-    let triggers: Vec<Symbol> = order
-        .iter()
-        .filter(|q| outputs.contains(*q) && cyclic.contains(*q))
-        .filter(|q| {
-            order.iter().any(|o| {
-                o != *q
-                    && outputs.contains(o)
-                    && !cyclic.contains(o)
-                    && bdds.get(o).is_some_and(|f| f.variables().any(|v| v == **q))
-            })
-        })
-        .cloned()
-        .collect();
-
-    let mut minted_this_pass: BTreeSet<Symbol> = BTreeSet::new();
-    for q in triggers {
-        // Mint `n`: `{q}_st`, then `{q}_st2`, `{q}_st3`… until it collides with no reserved name, no
-        // scan-order name (covers purged signals), no surviving key, and nothing minted this pass.
-        let n = {
-            let mut i = 1usize;
-            loop {
-                let cand = if i == 1 {
-                    Symbol::from(format!("{q}_st"))
-                } else {
-                    Symbol::from(format!("{q}_st{i}"))
-                };
-                let collides = reserved.contains(&cand)
-                    || order.contains(&cand)
-                    || bdds.contains_key(&cand)
-                    || minted_this_pass.contains(&cand);
-                if !collides {
-                    break cand;
-                }
-                i += 1;
-            }
-        };
-        minted_this_pass.insert(n.clone());
-
-        // The coordinate moves onto `n`: `q`'s self-reference is renamed so `n` self-holds ≡ δ_q.
-        let var_n = bdds[&q].builder().var(n.as_str());
-        let hoisted = bdds[&q].compose(q.as_str(), &var_n);
-        bdds.insert(n.clone(), hoisted);
-        // Every other surviving reference to `q` (the non-cyclic outputs, complements, aliases) is
-        // reprojected onto `n`.
-        let others: Vec<Symbol> = bdds
-            .keys()
-            .filter(|k| **k != q && **k != n)
-            .cloned()
-            .collect();
-        for k in others {
-            if bdds[&k].variables().any(|v| v == q) {
-                let nw = bdds[&k].compose(q.as_str(), &var_n);
-                result.changed.insert(k.clone());
-                bdds.insert(k, nw);
-            }
-        }
-        // `q` itself becomes a bare projection over the new internal.
-        bdds.insert(q.clone(), var_n);
-        result.changed.insert(q.clone());
-        result.minted.push(n);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -542,14 +429,12 @@ mod tests {
         }};
     }
 
-    /// Call [`minimise_state_space`] with an empty `reserved` set — the default for these unit tests. A
-    /// test that needs the mint to dodge a declared name passes `reserved` to the real function directly.
     fn minimise<B: Brand, C: ManagerCell>(
         bdds: &mut BTreeMap<Symbol, Bdd<B, C>>,
         order: &[Symbol],
         outputs: &BTreeSet<Symbol>,
     ) -> Minimised {
-        minimise_state_space(bdds, order, outputs, &BTreeSet::new())
+        minimise_state_space(bdds, order, outputs)
     }
 
     #[test]
@@ -569,16 +454,13 @@ mod tests {
         assert!(bdds[&Symbol::from("Q")].equivalent_to(&b.parse("A*B + Q*(A+B)").unwrap()));
         assert!(!bdds.contains_key("IQ"));
         assert!(!bdds.contains_key("QN"));
-        // Single output: no other output to name it, so the hoist stays quiet.
-        assert!(min.minted.is_empty());
     }
 
     #[test]
     fn complement_output_pair_keeps_both_pins() {
         // Both Q and QN are outputs; the definer QN self-holds after the fold (Q = !QN substituted in),
-        // leaving the non-cyclic output Q = !QN naming the cyclic output QN — an R2 violation. The hoist
-        // relocates QN's coordinate onto a minted internal QN_st: QN = var(QN_st), Q = !var(QN_st), and
-        // QN_st self-holds ≡ the original δ. Nothing is purged; both pins survive as projections.
+        // leaving the non-cyclic output Q = !QN legally naming the cyclic output QN. No hoist runs —
+        // output/state separation is now a Liberty-only concern handled at emission time.
         let (b, mut bdds, order, outputs) = system! {
             outputs: ["Q", "QN"],
             "Q" = "!QN",
@@ -586,20 +468,9 @@ mod tests {
         };
         let min = minimise(&mut bdds, &order, &outputs);
         assert!(min.purged.is_empty());
-        assert_eq!(min.minted, [Symbol::from("QN_st")]);
-        let n = Symbol::from("QN_st");
-        assert!(bdds[&Symbol::from("QN")] == b.var("QN_st"));
-        assert!(bdds[&Symbol::from("Q")] == !&b.var("QN_st"));
-        // The minted internal self-holds and carries the original next-state (QN renamed to QN_st).
-        assert!(bdds[&n].variables().any(|v| v.as_str() == "QN_st"));
-        assert!(bdds[&n].equivalent_to(&b.parse("!(A*B + !QN_st*(A+B))").unwrap()));
-        // No surviving output function references another output.
-        assert!(!bdds[&Symbol::from("Q")]
-            .variables()
-            .any(|v| outputs.contains(&v)));
-        assert!(!bdds[&Symbol::from("QN")]
-            .variables()
-            .any(|v| outputs.contains(&v)));
+        assert_eq!(min.changed, [Symbol::from("QN")].into_iter().collect());
+        assert!(bdds[&Symbol::from("Q")] == !&b.var("QN"));
+        assert!(bdds[&Symbol::from("QN")].equivalent_to(&b.parse("!(A*B + !QN*(A+B))").unwrap()));
     }
 
     #[test]
@@ -613,8 +484,6 @@ mod tests {
         let min = minimise(&mut bdds, &order, &outputs);
         assert!(min.purged.is_empty());
         assert!(min.changed.is_empty());
-        // Both grants are cyclic (the mutex 2-cycle): no non-cyclic output names one, so no hoist.
-        assert!(min.minted.is_empty());
     }
 
     #[test]
@@ -629,8 +498,6 @@ mod tests {
         let min = minimise(&mut bdds, &order, &outputs);
         assert!(min.purged.is_empty());
         assert!(min.changed.is_empty());
-        // Both latch nodes are cyclic (the R↔S cross-couple): no hoist.
-        assert!(min.minted.is_empty());
     }
 
     #[test]
@@ -670,8 +537,6 @@ mod tests {
             .equivalent_to(&b.parse("!RA*(!CLKA*(!enB*!S)+CLKA*sela1)").unwrap()));
         assert!(bdds[&Symbol::from("selb1")]
             .equivalent_to(&b.parse("!RB*(!CLKB*(!enA*S)+CLKB*selb1)").unwrap()));
-        // GCLK (the sole output) references only internal enablers, never another output: no hoist.
-        assert!(min.minted.is_empty());
     }
 
     #[test]
@@ -688,8 +553,6 @@ mod tests {
         let min = minimise(&mut bdds, &order, &outputs);
         assert_eq!(min.purged, ["X"].map(Symbol::from).into_iter().collect());
         assert!(bdds[&Symbol::from("Q")].equivalent_to(&b.parse("Q*B + !Q*A").unwrap()));
-        // Q is the sole output and self-holds directly: nothing else names it, so no hoist.
-        assert!(min.minted.is_empty());
     }
 
     #[test]
@@ -893,9 +756,8 @@ mod tests {
     #[test]
     fn recurrent_duplicate_outputs_dedup_to_one_coordinate() {
         // Two output pins carry the identical *recurrent* function (the coordinate self-reaches through
-        // Q1). Dedup merges Q2 onto var(Q1), making Q1 self-holding — but Q2 = var(Q1) then names the
-        // output Q1 (R2 violation). The hoist relocates the coordinate onto a minted internal Q1_st:
-        // both Q1 and Q2 become var(Q1_st), and Q1_st self-holds ≡ the original δ.
+        // Q1). Dedup merges Q2 onto var(Q1), making Q1 self-holding — Q2 = var(Q1) legally names the
+        // output Q1; no hoist runs (separation is now an emission-time concern).
         let (b, mut bdds, order, outputs) = system! {
             outputs: ["Q1", "Q2"],
             "Q1" = "!R*(S+Q1)",
@@ -903,23 +765,14 @@ mod tests {
         };
         let min = minimise(&mut bdds, &order, &outputs);
         assert!(min.purged.is_empty());
-        assert_eq!(min.minted, [Symbol::from("Q1_st")]);
-        assert!(bdds[&Symbol::from("Q1")] == b.var("Q1_st"));
-        assert!(bdds[&Symbol::from("Q2")] == b.var("Q1_st"));
-        assert!(bdds[&Symbol::from("Q1_st")].equivalent_to(&b.parse("!R*(S+Q1_st)").unwrap()));
-        // Neither output function references another output.
-        for out in ["Q1", "Q2"] {
-            assert!(!bdds[&Symbol::from(out)]
-                .variables()
-                .any(|v| outputs.contains(&v)));
-        }
+        assert!(bdds[&Symbol::from("Q2")] == b.var("Q1"));
+        assert!(bdds[&Symbol::from("Q1")].equivalent_to(&b.parse("!R*(S+Q1)").unwrap()));
     }
 
     #[test]
-    fn hoist_shares_one_mint_across_three_projections() {
-        // A cyclic output Q (C-element) named by two non-cyclic outputs: Qn = !Q and Qc = Q. A single
-        // mint Q_st carries the coordinate; Q, Qn and Qc all become projections over it (one mint, three
-        // projections).
+    fn projections_of_cyclic_output_stay_on_pins() {
+        // A cyclic output Q (C-element) named by two non-cyclic outputs: Qn = !Q and Qc = Q. Nothing
+        // fires: dead-output aliases are left as-is, on the pins.
         let (b, mut bdds, order, outputs) = system! {
             outputs: ["Q", "Qn", "Qc"],
             "Q" = "A*B + Q*(A+B)",
@@ -927,31 +780,10 @@ mod tests {
             "Qc" = "Q",
         };
         let min = minimise(&mut bdds, &order, &outputs);
-        assert_eq!(min.minted, [Symbol::from("Q_st")]);
-        assert!(bdds[&Symbol::from("Q")] == b.var("Q_st"));
-        assert!(bdds[&Symbol::from("Qc")] == b.var("Q_st"));
-        assert!(bdds[&Symbol::from("Qn")] == !&b.var("Q_st"));
-        assert!(bdds[&Symbol::from("Q_st")].equivalent_to(&b.parse("A*B + Q_st*(A+B)").unwrap()));
-        for out in ["Q", "Qn", "Qc"] {
-            assert!(!bdds[&Symbol::from(out)]
-                .variables()
-                .any(|v| outputs.contains(&v)));
-        }
-    }
-
-    #[test]
-    fn hoist_mint_escalates_past_a_reserved_collision() {
-        // A signal literally named like the default mint (`Q_st`, here declared as an input) forces the
-        // mint to escalate to `Q_st2`.
-        let (b, mut bdds, order, outputs) = system! {
-            outputs: ["Q", "Qn"],
-            "Q" = "A*Q_st + Q*(A+Q_st)",
-            "Qn" = "!Q",
-        };
-        let reserved: BTreeSet<Symbol> = [Symbol::from("Q_st")].into_iter().collect();
-        let min = minimise_state_space(&mut bdds, &order, &outputs, &reserved);
-        assert_eq!(min.minted, [Symbol::from("Q_st2")]);
-        assert!(bdds[&Symbol::from("Q")] == b.var("Q_st2"));
-        assert!(bdds[&Symbol::from("Qn")] == !&b.var("Q_st2"));
+        assert!(min.purged.is_empty());
+        assert!(min.changed.is_empty());
+        assert!(bdds[&Symbol::from("Q")].equivalent_to(&b.parse("A*B + Q*(A+B)").unwrap()));
+        assert!(bdds[&Symbol::from("Qn")] == !&b.var("Q"));
+        assert!(bdds[&Symbol::from("Qc")] == b.var("Q"));
     }
 }
