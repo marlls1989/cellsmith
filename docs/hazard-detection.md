@@ -203,9 +203,9 @@ hazard, with a deterministic tie-break so the generated set is reproducible.
 
 ## 7. Reporting and emission
 
-- **stderr.** Each detected hazard is reported on its own line: the oscillation hazards, the
-  order-dependent hazards, and — separately — the constraint generated as each hazard's remedy, named with
-  its kind and every condition under which it fires. Each hazard states the shared metastability risk; an
+- **stderr.** The detected hazards are reported — the oscillation hazards, the order-dependent hazards
+  (grouped per racing input pair, a pair's conditions joined), and — separately — the constraint generated
+  as each hazard's remedy, named with its kind and every condition under which it fires. Each hazard states the shared metastability risk; an
   oscillation is flagged as annotated only, never modelled as deterministic timing, because it is a
   property of the cell the user must know about, not an arc. (The exact wording is fixed elsewhere.)
 - **Constraint arcs.** Off by default; enabled per cell in the spec or globally with a CLI flag. Each

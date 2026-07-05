@@ -245,8 +245,8 @@ shared *physical risk* of both — never a name for either hazard on its own. Fr
 cellsmith can **generate** a timing constraint (setup/hold for a pair holding a declared clock,
 otherwise a symmetric `non_seq`) to avoid it, gated by the `--constraints` flag or a cell's
 `constraint_arcs = true`; the constraint is the remedy, not the hazard. cellsmith emits three
-per-cell stderr diagnostics: one for each detected oscillation hazard, one for each detected
-order-dependent hazard (race), and one for each generated constraint.
+kinds of per-cell stderr diagnostic: the oscillation hazards, the order-dependent hazards (grouped
+per racing input pair, a pair's conditions joined), and the constraints generated to avoid them.
 
 ## Licence
 
