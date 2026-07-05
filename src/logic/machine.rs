@@ -5,7 +5,8 @@
 //! header object. Every input carries a concrete value and each state variable is either **defined** (a
 //! concrete `0`/`1`) or **absent** — encoded as the don't-care `-`, never a placeholder value. Power-on
 //! is the inputs-only node: no state fixed. The next-state map settles the state columns (via each state
-//! variable's δ, [`super::resolve::delta`]) using [`Bdd::evaluate`], which reads a δ under the node's
+//! variable's minimised next-state function, read directly from the model (see [`super::minimise`]))
+//! using [`Bdd::evaluate`], which reads a δ under the node's
 //! fixed columns and returns `Ok(v)` only when they force it — an absent state variable stays absent
 //! (its δ provably does not depend on it yet, so `evaluate` returns `Err`). A node is *stable* when it
 //! is its own next-state.
@@ -95,7 +96,7 @@ pub fn is_stable<B: Brand, C: ManagerCell>(deltas: &[Delta<B, C>], node: &Minter
 
 /// Settle the state under `node`'s fixed inputs: iterate [`step`] to a fixpoint. The fixpoint may still
 /// leave state variables absent — those the inputs (and resolved state) do not determine. Returns `None`
-/// if the state oscillates without settling (a metastable / arbitration condition).
+/// if the state oscillates without settling (a metastable / oscillation condition).
 pub fn settle<B: Brand, C: ManagerCell>(
     deltas: &[Delta<B, C>],
     node: &Minterm<Symbol>,

@@ -8,12 +8,13 @@ The code lives in `src/logic/`:
 
 | File | Role |
 |------|------|
-| `resolve.rs` | classify state variables; build each state variable's transition function δ |
+| `minimise.rs` | one-shot state-space minimisation: alias/complement collapse + guarded relay fold on the shared per-cell BDD map, before the machine pass |
+| `resolve.rs` | reference graph + state-variable classifier (over the minimised model) |
 | `machine.rs` | the async state machine: states as minterms, `settle` / `settle_or_cycle`, and `explore` |
 | `analysis.rs` | the shared machine pass — builds the machine once and derives both arcs and hazards from it |
 | `arcs.rs` | arc emission by re-walking the shared exploration |
-| `confluence.rs` | pairwise input-order confluence over the same reachable states: constraint arcs and metastable arbitration (see `hazard-detection.md`) |
-| `interlock.rs` | the `Arbitration` report type, populated by `confluence.rs` |
+| `confluence.rs` | pairwise input-order confluence over the same reachable states: constraint arcs and metastable oscillation (see `hazard-detection.md`) |
+| `interlock.rs` | the `Oscillation` report type, populated by `confluence.rs` |
 
 The functional state-table view of the same signals (`regions.rs`) is documented separately in
 `state-table-regions.md`.
@@ -37,11 +38,15 @@ picture and defines the vocabulary; §3–§5 detail how the machine is built an
 
 Before any construction detail, the whole pipeline in one view. For a cell, cellsmith:
 
-1. classifies each signal as a **state variable** (it holds state) or **combinational** (it does not);
-2. builds, **once**, a fixed **transition function** δ — one component δ_v per state variable;
-3. **settles** a state by repeatedly *evaluating* δ until the state stops changing (a fixpoint);
-4. **explores** the reachable settled states, toggling one input at a time;
-5. **derives arcs** by re-walking that exploration and watching which input toggles flip an output.
+1. **minimises** the cell's signal model once — collapsing alias/complement chains and folding guarded
+   combinational relays — so only genuine memory coordinates remain (§3, §3.1);
+2. classifies each surviving signal as a **state variable** (it holds state) or **combinational** (it does
+   not);
+3. reads, directly from the minimised model, a fixed **transition function** δ — one component δ_v per
+   state variable;
+4. **settles** a state by repeatedly *evaluating* δ until the state stops changing (a fixpoint);
+5. **explores** the reachable settled states, toggling one input at a time;
+6. **derives arcs** by re-walking that exploration and watching which input toggles flip an output.
 
 ### 2.1 Definitions
 
@@ -50,13 +55,17 @@ Every term the later sections lean on, pinned here before first use.
 - **Signal** — an **output** (emits an external pin) or an **internal** (no pin). Both are Boolean
   functions that may reference inputs and other signals; a referenced signal is that signal's
   feedback/delayed value (§1).
-- **Reference graph** — signal → the signals its function names (`dependency_map`, `resolve.rs:29`).
+- **Reference graph** — signal → the signals its function names (`dependency_map`, `resolve.rs:24`).
 - **State variable** — a signal that lies on a **feedback cycle**: it reaches itself in the reference
   graph, whether by a self-loop (`Q = A·B + Q·(A+B)`) or a larger coupling cycle (`Qa = !Qb·A`,
-  `Qb = !Qa·B`). `resolve::state_variables` (`resolve.rs:134`) finds them structurally — build the
-  reference graph, take its transitive closure (`transitive_closure`, `resolve.rs:107`, private), and a
-  signal `s` is a state variable iff **`s` reaches itself**. The state variables — and only they —
-  become the coordinates of the machine's state.
+  `Qb = !Qa·B`). Classification runs on the **minimised** model: `logic::minimise` (§3.1) first collapses
+  every alias/complement chain onto one representative coordinate and composes every non-self-holding
+  relay into its consumers — refusing only a fold that would *fabricate* a register (an emergent-memory
+  2-cycle) — so self-reachability afterwards counts only genuine memory, never a spent wire or relay.
+  `resolve::state_variables` (`resolve.rs:61`) then finds the state variables structurally over that
+  minimised map: take the reference graph's transitive closure (`transitive_closure`, `resolve.rs:34`,
+  private), and a signal `s` is a state variable iff **`s` reaches itself**. The state variables — and
+  only they — become the coordinates of the machine's state.
 - **Combinational signal** — a signal on **no** feedback cycle. Its value is fixed by the inputs and the
   current state, so it need not be held as a coordinate; it is eliminated (composed away, §3) and
   reconstructed on demand. **"Combinational" means "off every cycle," not "a function of inputs only"**:
@@ -68,27 +77,34 @@ Every term the later sections lean on, pinned here before first use.
 - **Transition function δ** — the machine's next-state map, given as one **component δ_v per state
   variable**: a fixed Boolean function of `inputs ∪ state-variables` yielding v's next value (§3). δ is
   the standard automata-theory transition function, not a difference/delta of states.
-- The three verbs, in increasing scope:
+- The verbs, in increasing scope:
   - **substitute** — the atomic step: replace one referenced signal name by its definition, **at most
-    once** (`resolve.rs:9`).
-  - **compose** — the BDD primitive that performs one substitution, `f[v := g]` (`Bdd::compose`,
-    `resolve.rs:19,98`).
-  - **resolve** / **delta** — drive substitution to a fixpoint. `resolve::resolve` (`resolve.rs:78`)
-    composes away *every* referenced signal; `resolve::delta` (`resolve.rs:148-159`) composes away **only
-    combinational** signals, keeping state variables. δ_v is what `resolve::delta` returns.
+    once**.
+  - **compose** — the BDD primitive that performs one substitution, `f[v := g]` (`Bdd::compose`) — used
+    directly for a guarded relay fold and, batched, as `Bdd::compose_map` for an alias/complement class
+    rename (`logic::minimise`, §3.1).
+  - **minimise** — drive substitution to a fixpoint **once**, before the machine is built:
+    `logic::minimise::minimise_state_space` collapses alias/complement chains and folds non-self-holding
+    relays into their consumers. δ_v is the minimised model's own function for `v`, read directly from
+    the shared BDD map (`analysis.rs`); no per-signal composition remains once the machine is built.
 
 ## 3. Constructing the transition function δ_v
 
-For each state variable `v`, the constructor `resolve::delta(v, …)` (`resolve.rs:148-159`) returns the
-BDD δ_v giving v's next value as a function of `inputs ∪ state-variables`. It starts from v's own function
-and **composes away only the combinational signals** it references (`Bdd::compose`, the substitution
-`f[name := g]`, `resolve.rs:98`); **every state variable it references is kept** as a current-state
-coordinate rather than composed away. So a combinational signal on the path *disappears* into δ_v (its
-definition is inlined), while a state variable *remains* as a free variable of δ_v.
+Every state variable's δ_v is already sitting in the shared BDD map by the time the machine is built.
+`logic::minimise::minimise_state_space` (`minimise.rs:94-117`) rewrites that map **once**, before
+`Machine::build` ever runs, so that every surviving signal's function is expressed purely over primary
+inputs and the surviving state variables: `Machine::build` reads `bdds[v]` for each state variable `v`
+(`analysis.rs:113-116`) and `bdds[o]` for each combinational output `o` (`analysis.rs:117-122`), and
+stores them as `Machine.deltas` / `Machine.out_deltas`; the settle and explore passes (§5–§6) only
+evaluate them. Constructing δ_v is therefore a direct map lookup, not a per-analysis composition.
 
-`resolve::delta` is the constructor; δ_v is the value it returns. It runs once per state variable at
-machine-build time (`analysis.rs:99-102`) and the results are stored in `Machine.deltas`; the settle and
-explore passes (§5–§6) only evaluate them.
+The map itself was folded by two staged discriminators run to a fixpoint (the algorithm is documented
+in full in `state-space-minimisation.md`; §3.1 below covers the safety guard, and the proof lives in
+the `minimise.rs` module doc): **M1** collapses an alias/complement chain — a
+signal whose function is *exactly* another signal or its negation — onto one representative coordinate
+via `Bdd::compose_map`; **M2** composes a non-self-holding relay into each of its consumers via
+`Bdd::compose` and drops it, refusing only a fold that would *fabricate* a register — an `s ↔ c`
+2-cycle whose consumer does not already self-hold (emergent memory).
 
 Three examples, each isolating one point.
 
@@ -100,27 +116,34 @@ illustrative cell):
 name = "DFFG"
 inputs = ["CLK", "A", "B"]
 [cell.internal]
-D = "A*B"                 # on no cycle  → combinational → composed away
+D = "A*B"                 # on no cycle  → combinational → folded away
 M = "!CLK*D + CLK*M"      # references M → self-loop     → state variable → kept
 [cell.outputs]
 Q = "CLK*M + !CLK*Q"      # references Q → self-loop     → state variable → kept
 ```
 
-State variables are `{M, Q}`; `D` is combinational. Building δ_M starts from `!CLK·D + CLK·M`, composes
-`D` away (`D := A·B`), and keeps `M`:
+State variables are `{M, Q}`; `D` is combinational — and, being a relay whose only consumer is `M`, it is
+folded away entirely by `logic::minimise` before the machine is even built (an M2 fold: `D` does not
+self-hold, and `M` is not in `D`'s own support). `M`'s entry in the shared map already reads:
 
-- **δ_M = !CLK·(A·B) + CLK·M**  (`D` composed away; `M` kept; `CLK`, `A`, `B` are inputs)
+- **δ_M = !CLK·(A·B) + CLK·M**  (`D` folded away; `M` kept; `CLK`, `A`, `B` are inputs)
 
-`D` has vanished from δ_M — that is a composition/substitution actually firing.
+`D` has vanished from δ_M — that is a composition actually firing, just done once, upstream of the
+machine pass, rather than per analysis.
 
 **A state variable is kept.** The plain mutex `Qa = !Qb·A`, `Qb = !Qa·B` — both signals are state
-variables, so nothing is composed away and each δ keeps its cross-coupled peer:
+variables, so nothing is folded away and each δ keeps its cross-coupled peer:
 
 - **δ_Qa = !Qb · A**  (`Qb` kept; `A` is an input)
 - **δ_Qb = !Qa · B**  (`Qa` kept; `B` is an input)
 
-**A combinational output that depends on state.** The real `ICM` cell (`examples/cells.toml:55-72`) has
-eight cross-coupled internals — all state variables — and one output:
+**A combinational output that depends on state.** The real `ICM` cell (`examples/cells.toml:55-72`) is
+written with eight internal signals, all mutually coupled on one dependency cycle — but two of them,
+`sela` and `selb`, are combinational relays on the enable loop (a selection interlock ahead of each
+synchroniser), each with a single consumer and no self-reference. `logic::minimise` folds both into
+their consumers (`sela` into `sela1`, `selb` into `selb1`) before the machine is built, leaving **six**
+surviving coordinates — `sela1`, `sela2`, `enA`, `selb1`, `selb2`, `enB` — so the machine width drops
+from 5 inputs + 8 state vars = 13 to 5 + 6 = **11**. One output:
 
 ```toml
 GCLK = "enA*CLKA+enB*CLKB"
@@ -132,9 +155,33 @@ Nothing references `GCLK`, so it is on no cycle → **combinational**. Yet it re
 - **δ_GCLK = enA·CLKA + enB·CLKB**  (`enA`, `enB` kept as state coordinates; `CLKA`, `CLKB` are inputs)
 
 This is the concrete proof that "combinational" ≠ "function of inputs only": δ_GCLK genuinely depends on
-the current state. `resolve::delta` resolves such a combinational output the same way — it just never
-carries the result as a coordinate. Arc derivation reads a combinational output's value by *evaluating*
-its δ at a state (`arcs.rs:93`); a state output instead reads its own state coordinate.
+the current state. A combinational output is resolved the same way as any folded-away signal — it just
+never carries the result as a coordinate. Arc derivation reads a combinational output's value by
+*evaluating* its δ at a state (`arcs.rs:125-126`); a state output instead reads its own state coordinate.
+
+### 3.1 The safety guard: why folding must not fabricate a register
+
+Collapsing a non-self-holding relay is safe — *unless* the fold would invent memory that wasn't there.
+The machine detects **oscillating (non-confluent) states**; the guard exists to keep an oscillation from
+being projected away, not to freeze the set of nodes that participate in it.
+
+- **`MUT`** (§7 below) — the case the fold must **not** perform: `Qa = !Qb·A`, `Qb = !Qa·B`. Neither
+  signal self-holds, yet each is the other's consumer — an `s ↔ c` 2-cycle. Folding `Qa` into `Qb`
+  gives `δ_Qb = Qb·B + !A·B`, which at `A=B=1` is `δ_Qb = Qb` — a *fabricated* register. The oscillating
+  `(0,0) ↔ (1,1)` oscillation (`hazard-detection.md` §4) lived in the *disagreement* of the two nodes;
+  projected onto `Qb` alone it lands on `Qb`'s stable states and disappears. The pair must stay two
+  coordinates.
+- **`ROSC`** (`X = "!Q*A"`, `Q = "Q*B+X"`) — the case the fold **does** perform: `Q` already self-holds,
+  so folding the relay `X` into it re-expresses an existing register rather than inventing one. The
+  oscillation survives in `Q`'s own self-loop (`δ_Q = !Q` at `A·!B`) and is still flagged; only the
+  folded-away relay leaves the reported group (`{Q, X} → {Q}`). That is correct — the group is the
+  genuine memory coordinates that oscillate, not the relays feeding them.
+
+So the guard refuses a fold **only** when the consumer forms an `s ↔ c` 2-cycle *and does not already
+self-hold* — i.e. only when the fold would create a *new* self-reference (the emergent-memory case). A
+relay folded into an existing register is allowed. The full algorithm is documented in
+`state-space-minimisation.md`, and the soundness argument (I1–I4) lives in the `src/logic/minimise.rs`
+module doc — neither is repeated here.
 
 ## 4. The machine's state as a minterm
 
@@ -237,7 +284,7 @@ if let Some(&p) = pos.get(&next) {
 the BFS simply drops that transition (so no impossible arc is fabricated). `confluence.rs` instead keeps
 the cycle: probing a reachable stable state with a simultaneous multi-input toggle (a mutex's requests
 co-asserting) and finding a cycle rather than a fixpoint names the varying state variables as an
-arbitrating group.
+oscillating group.
 
 Example — mutex under `A=B=1` from `(1 1 | 0 0)`:
 
@@ -294,15 +341,17 @@ input-forced transitions cascade naturally through the multi-round settle.
 
 ### The shared machine pass: `analysis.rs`
 
-The whole setup happens once, in `analysis.rs`. `Machine::build` (`analysis.rs:67-132`) builds every
-signal's BDD, each state variable's δ, the combinational outputs' δ, and runs the **one**
-`machine::explore` BFS seeded from all of them. `analyse_machine` (`analysis.rs:138-150`) mints a
-per-cell BDD builder and derives **both** `arcs::derive` and `confluence::derive` from the shared
-`Machine`.
+The whole setup happens once, in `analysis.rs`, over the **minimised** model. `Machine::build`
+(`analysis.rs:74`) takes the cell's shared per-cell BDD map (minted once in `Cell::analyse`,
+`model.rs:290`, and reused here — no rebuild): each state variable's δ and each combinational output's
+δ are **direct lookups** into that map, and it runs the **one** `machine::explore` BFS seeded from all
+of them. `analyse_machine` (`analysis.rs:167`) receives the same shared map and derives **both**
+`arcs::derive` and `confluence::derive` from the shared `Machine`.
 
-A combinatorial blow-up guard, `MAX_MACHINE_VARS = 22` (`analysis.rs:45`), gates the whole shared pass:
+A combinatorial blow-up guard, `MAX_MACHINE_VARS = 22` (`analysis.rs:50`), gates the whole shared pass:
 `Machine::build` returns `None` — leaving the cell unexplored, so arcs *and* hazards come back empty —
-when `inputs + state variables` exceeds it (`analysis.rs:86`).
+when `inputs + state variables` exceeds it (`analysis.rs:94`); the width is now the **minimised**
+state count, so folded relays no longer count against the budget.
 
 ## 7. Worked example: discovering `B↓ → Qa↑` on the mutex
 

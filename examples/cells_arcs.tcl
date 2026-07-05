@@ -5902,7 +5902,7 @@ define_leakage -when "C*M1*M2*!P1*P2*!Q*R" RACELEM21
 define_leakage -when "C*M1*M2*P1*!P2*!Q*R" RACELEM21
 define_leakage -when "C*M1*M2*P1*P2*Q*!R" RACELEM21
 define_leakage -when "C*M1*M2*P1*P2*!Q*R" RACELEM21
-# arbitration: !S*!R metastable; grants {Q, Qn} mutually exclusive ({Q=0, Qn=1} | {Q=1, Qn=0})
+# oscillation: !S*!R metastable; grants {Q, Qn} mutually exclusive ({Q=0, Qn=1} | {Q=1, Qn=0})
 define_arc \
 	-prevector_pinlist {S R} \
 	-prevector {10 00} \
@@ -6034,7 +6034,7 @@ define_arc \
 define_leakage -when "Q*!Qn*!R*S" SR
 define_leakage -when "!Q*Qn*R*!S" SR
 define_leakage -when "!Q*!Qn*R*S" SR
-# arbitration: A*B metastable; grants {Qa, Qb} mutually exclusive ({Qa=0, Qb=1} | {Qa=1, Qb=0})
+# oscillation: A*B metastable; grants {Qa, Qb} mutually exclusive ({Qa=0, Qb=1} | {Qa=1, Qb=0})
 define_arc \
 	-prevector_pinlist {A B} \
 	-prevector {10} \
@@ -8926,7 +8926,6 @@ define_leakage -when "!CLKA*!CLKB*!GCLK*RA*!RB*!S" ICM
 define_leakage -when "!CLKA*!CLKB*!GCLK*RA*!RB*S" ICM
 define_leakage -when "!CLKA*!CLKB*!GCLK*RA*RB*!S" ICM
 define_leakage -when "!CLKA*!CLKB*!GCLK*RA*RB*S" ICM
-define_leakage -when "!CLKA*CLKB*!RA*!RB*!S" ICM
 define_leakage -when "!CLKA*CLKB*!RA*!RB*S" ICM
 define_leakage -when "!CLKA*CLKB*!GCLK*!RA*RB*!S" ICM
 define_leakage -when "!CLKA*CLKB*!GCLK*!RA*RB*S" ICM
@@ -8935,18 +8934,141 @@ define_leakage -when "!CLKA*CLKB*RA*!RB*S" ICM
 define_leakage -when "!CLKA*CLKB*!GCLK*RA*RB*!S" ICM
 define_leakage -when "!CLKA*CLKB*!GCLK*RA*RB*S" ICM
 define_leakage -when "CLKA*!CLKB*!RA*!RB*!S" ICM
-define_leakage -when "CLKA*!CLKB*!RA*!RB*S" ICM
 define_leakage -when "CLKA*!CLKB*!RA*RB*!S" ICM
 define_leakage -when "CLKA*!CLKB*!RA*RB*S" ICM
 define_leakage -when "CLKA*!CLKB*!GCLK*RA*!RB*!S" ICM
 define_leakage -when "CLKA*!CLKB*!GCLK*RA*!RB*S" ICM
 define_leakage -when "CLKA*!CLKB*!GCLK*RA*RB*!S" ICM
 define_leakage -when "CLKA*!CLKB*!GCLK*RA*RB*S" ICM
-define_leakage -when "CLKA*CLKB*!RA*!RB*!S" ICM
-define_leakage -when "CLKA*CLKB*!RA*!RB*S" ICM
 define_leakage -when "CLKA*CLKB*!RA*RB*!S" ICM
 define_leakage -when "CLKA*CLKB*!RA*RB*S" ICM
 define_leakage -when "CLKA*CLKB*RA*!RB*!S" ICM
 define_leakage -when "CLKA*CLKB*RA*!RB*S" ICM
 define_leakage -when "CLKA*CLKB*!GCLK*RA*RB*!S" ICM
 define_leakage -when "CLKA*CLKB*!GCLK*RA*RB*S" ICM
+define_arc \
+	-prevector_pinlist {A B} \
+	-prevector {11 10} \
+	-type combinational \
+	-pinlist {A B Q} \
+	-vector {F 0 F} \
+	-when "!B" \
+	-related_pin A \
+	-pin Q \
+	{ C2GATE }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {A B} \
+	-prevector {00 01} \
+	-pinlist {A B Q} \
+	-vector {R 1 R} \
+	-when "B" \
+	-related_pin A \
+	-pin Q \
+	{ C2GATE }
+
+define_arc \
+	-prevector_pinlist {A B} \
+	-prevector {11 01} \
+	-type combinational \
+	-pinlist {A B Q} \
+	-vector {0 F F} \
+	-when "!A" \
+	-related_pin B \
+	-pin Q \
+	{ C2GATE }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {A B} \
+	-prevector {00 10} \
+	-pinlist {A B Q} \
+	-vector {1 R R} \
+	-when "A" \
+	-related_pin B \
+	-pin Q \
+	{ C2GATE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {A B} \
+	-prevector {00 10} \
+	-pinlist {A B Q} \
+	-vector {F 0 0} \
+	-when "!B*!Q" \
+	-pin A \
+	{ C2GATE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {A B} \
+	-prevector {11} \
+	-pinlist {A B Q} \
+	-vector {F 1 1} \
+	-when "B*Q" \
+	-pin A \
+	{ C2GATE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {A B} \
+	-prevector {00} \
+	-pinlist {A B Q} \
+	-vector {R 0 0} \
+	-when "!B*!Q" \
+	-pin A \
+	{ C2GATE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {A B} \
+	-prevector {11 01} \
+	-pinlist {A B Q} \
+	-vector {R 1 1} \
+	-when "B*Q" \
+	-pin A \
+	{ C2GATE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {A B} \
+	-prevector {00 01} \
+	-pinlist {A B Q} \
+	-vector {0 F 0} \
+	-when "!A*!Q" \
+	-pin B \
+	{ C2GATE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {A B} \
+	-prevector {11} \
+	-pinlist {A B Q} \
+	-vector {1 F 1} \
+	-when "A*Q" \
+	-pin B \
+	{ C2GATE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {A B} \
+	-prevector {00} \
+	-pinlist {A B Q} \
+	-vector {0 R 0} \
+	-when "!A*!Q" \
+	-pin B \
+	{ C2GATE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {A B} \
+	-prevector {11 10} \
+	-pinlist {A B Q} \
+	-vector {1 R 1} \
+	-when "A*Q" \
+	-pin B \
+	{ C2GATE }
+
+define_leakage -when "!A*!B*!Q" C2GATE
+define_leakage -when "A*B*Q" C2GATE

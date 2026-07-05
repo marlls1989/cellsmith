@@ -2,37 +2,39 @@
 //! its transition arcs ([`super::arcs`]) and its confluence hazards ([`super::confluence`]) from the
 //! same exploration.
 //!
-//! A cell is a state machine over `inputs × state-variables` (see [`machine`] and [`resolve`]). Building
-//! it — every signal's BDD, each state variable's next-state δ, the combinational outputs' δ, and the
-//! one [`machine::explore`] BFS — is the same setup for both derivations, so it is done
-//! **once** here and shared through [`Machine`]. Only plain data ([`Arc`], [`Constraint`],
-//! [`Arbitration`]) escapes into [`MachineAnalysis`]; the live BDD handles never leave this pass.
+//! A cell is a state machine over `inputs × state-variables` (see [`machine`] and [`resolve`]). The
+//! signals' BDDs are built and minimised once in [`crate::model::Cell::analyse`]; this pass reads that
+//! shared map. After the fold every state variable's next-state δ **is** its entry in the map — a direct
+//! lookup, no per-signal composition — and the combinational outputs' δ likewise. Only the one
+//! [`machine::explore`] BFS is set up here, and it is the same setup for both derivations, so it is done
+//! **once** and shared through [`Machine`]. Only plain data ([`Arc`], [`Constraint`], [`Oscillation`])
+//! escapes into [`MachineAnalysis`]; the live BDD handles never leave this pass.
 //!
 //! The BDD brand is a **generic type parameter** `<B, C>` carried by [`Machine`]: the builder is minted
-//! per cell (a fresh brand each cell, so handles from two cells cannot be mixed) and lives on
-//! [`analyse_machine`]'s stack for the duration of the pass.
+//! once per cell in [`crate::model::Cell::analyse`] (a fresh brand each cell, so handles from two cells
+//! cannot be mixed) and the shared map is threaded into this pass, the minimisation and the regions cache.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
-use espresso_logic::{bdd_builder, Minterm, Symbol};
+use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
+use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::arcs::{self, Arc, HiddenArc};
 use crate::logic::confluence::{self, Constraint};
-use crate::logic::interlock::Arbitration;
+use crate::logic::interlock::Oscillation;
 use crate::logic::leakage::{self, LeakageState};
 use crate::logic::{machine, resolve};
 use crate::model::AnalysedCell;
 
 /// The plain-data outcome of the shared machine pass: the transition arcs, the constraints derived to
-/// avoid the cell's hazards, and its arbitration annotations. Empty when the cell is not explored (the
+/// avoid the cell's hazards, and its oscillation annotations. Empty when the cell is not explored (the
 /// combinatorial blow-up guard, see [`MAX_MACHINE_VARS`]).
 #[derive(Debug, Default)]
 pub struct MachineAnalysis {
     pub arcs: Vec<Arc>,
     pub hidden_arcs: Vec<HiddenArc>,
     pub constraints: Vec<Constraint>,
-    pub arbitration: Vec<Arbitration>,
+    pub oscillation: Vec<Oscillation>,
     pub leakage: Vec<LeakageState>,
 }
 
@@ -55,27 +57,30 @@ pub(crate) struct Machine<'c, B: Brand, C: ManagerCell> {
     pub(crate) state_vars: Vec<Symbol>,
     /// The same state variables as a set, for membership tests.
     pub(crate) state_set: BTreeSet<Symbol>,
-    /// Each state variable's next-state function δ (over inputs + state variables).
+    /// Each state variable's next-state function δ (over inputs + state variables), read directly from
+    /// the minimised model: after the fold a state variable's map entry **is** its δ.
     pub(crate) deltas: Vec<machine::Delta<B, C>>,
-    /// The combinational outputs' δ, built **once** (an output's value at a node is read from its δ; a
-    /// state output instead reads its own state field).
+    /// The combinational outputs' δ, read directly from the minimised map (an output's value at a node is
+    /// read from its δ; a state output instead reads its own state field).
     pub(crate) out_deltas: BTreeMap<Symbol, Bdd<B, C>>,
     /// The reachable stable states, discovered by one [`machine::explore`] BFS.
     pub(crate) explored: machine::Explored,
 }
 
 impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
-    /// Build the shared machine for `cell` using `builder`'s manager. Returns `None` — leaving the cell
-    /// unexplored — when the machine width would exceed [`MAX_MACHINE_VARS`] (the combinatorial blow-up guard).
+    /// Build the shared machine for `cell` from the minimised `bdds` map (built once in
+    /// [`crate::model::Cell::analyse`]). Returns `None` — leaving the cell unexplored — when the machine
+    /// width would exceed [`MAX_MACHINE_VARS`] (the combinatorial blow-up guard).
     pub(crate) fn build(
-        builder: &BddBuilder<B, C>,
         cell: &'c AnalysedCell,
+        bdds: &BTreeMap<Symbol, Bdd<B, C>>,
     ) -> Option<Machine<'c, B, C>> {
         let inputs = &cell.inputs;
         let n = inputs.len();
 
         let signals: Vec<&crate::model::AnalysedOutput> = cell.signals().collect();
-        let deps = resolve::dependency_map(&signals);
+        // Feedback was recomputed post-fold, so this classifier is now exact: every surviving state
+        // variable genuinely self-reaches.
         let state_set = resolve::state_variables(&signals);
         // State variables in signal order (outputs first, then internals).
         let state_vars: Vec<Symbol> = signals
@@ -85,33 +90,35 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             .collect();
         let k = state_vars.len();
 
-        // Guard against a combinatorial blow-up on pathologically wide cells.
+        // Guard against a combinatorial blow-up on pathologically wide cells (now on the minimised width).
         if n + k > MAX_MACHINE_VARS {
             return None;
         }
 
-        let bdds: BTreeMap<Symbol, Bdd<B, C>> = signals
-            .iter()
-            .map(|s| (s.name.clone(), builder.build(&s.expr)))
-            .collect();
+        // The minimise fixpoint invariant (I3): every signal's signal-name support is a subset of the
+        // state variables, so a state variable's next-state δ and a combinational output's δ are both a
+        // direct lookup in the shared map — no per-signal composition remains.
+        debug_assert!(
+            signals.iter().all(|s| {
+                bdds[&s.name]
+                    .variables()
+                    .all(|v| !bdds.contains_key(&v) || state_set.contains(&v))
+            }),
+            "analyse_machine: a signal's support escapes the state set — minimise invariant I3 broken"
+        );
 
-        // δ of each state variable (the machine's transition functions), and of each *combinational*
-        // output. The combinational deltas are built once here — the arc derivation reads an output's
-        // value from its δ, and both derivations seed exploration from them.
+        // δ of each state variable (the machine's transition functions) and of each *combinational*
+        // output are read directly from the minimised map — the arc derivation reads an output's value
+        // from its δ, and both derivations seed exploration from them.
         let deltas: Vec<machine::Delta<B, C>> = state_vars
             .iter()
-            .map(|v| (v.clone(), resolve::delta(v, &bdds, &deps, &state_set)))
+            .map(|v| (v.clone(), bdds[v].clone()))
             .collect();
         let out_deltas: BTreeMap<Symbol, Bdd<B, C>> = cell
             .outputs
             .iter()
             .filter(|o| !state_set.contains(&o.name))
-            .map(|o| {
-                (
-                    o.name.clone(),
-                    resolve::delta(&o.name, &bdds, &deps, &state_set),
-                )
-            })
+            .map(|o| (o.name.clone(), bdds[&o.name].clone()))
             .collect();
 
         // Explore the reachable stable states once. Candidates are seeded from the on/off covers of every
@@ -153,12 +160,15 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
     }
 }
 
-/// Build the cell's state machine once and derive its arcs and hazards from the shared exploration. The
-/// builder is minted here (a fresh brand for this cell only) and lives on this stack for the whole pass.
-/// Returns an empty [`MachineAnalysis`] when the cell is not explored (the blow-up guard).
-pub fn analyse_machine(cell: &AnalysedCell) -> MachineAnalysis {
-    let builder = bdd_builder!();
-    let Some(m) = Machine::build(&builder, cell) else {
+/// Build the cell's state machine from the minimised `bdds` map and derive its arcs and hazards from the
+/// shared exploration. The builder was minted once in [`crate::model::Cell::analyse`]; this pass only
+/// reads the shared map. Returns an empty [`MachineAnalysis`] when the cell is not explored (the blow-up
+/// guard).
+pub fn analyse_machine<B: Brand, C: ManagerCell>(
+    cell: &AnalysedCell,
+    bdds: &BTreeMap<Symbol, Bdd<B, C>>,
+) -> MachineAnalysis {
+    let Some(m) = Machine::build(cell, bdds) else {
         return MachineAnalysis::default();
     };
     let (arcs, hidden_arcs) = arcs::derive(&m);
@@ -167,7 +177,7 @@ pub fn analyse_machine(cell: &AnalysedCell) -> MachineAnalysis {
         arcs,
         hidden_arcs,
         constraints: hz.constraints,
-        arbitration: hz.arbitration,
+        oscillation: hz.oscillation,
         leakage: leakage::derive(&m),
     }
 }
@@ -183,7 +193,7 @@ mod tests {
     #[test]
     fn oversized_cell_trips_the_blowup_guard() {
         // inputs + state variables > MAX_MACHINE_VARS ⇒ the machine is left unexplored, so arcs,
-        // constraints and arbitration all come back empty (the MachineAnalysis::default path) — yet the
+        // constraints and oscillation all come back empty (the MachineAnalysis::default path) — yet the
         // emitters must still run without panicking.
         let n = MAX_MACHINE_VARS + 1; // 23 primary inputs, 0 state variables ⇒ machine width 23 > 22
         let list = (0..n)
@@ -199,8 +209,8 @@ mod tests {
             "guard must suppress constraints"
         );
         assert!(
-            cell.arbitration.is_empty(),
-            "guard must suppress arbitration"
+            cell.oscillation.is_empty(),
+            "guard must suppress oscillation"
         );
         assert!(
             cell.leakage.is_empty(),
@@ -227,7 +237,7 @@ inputs = ["A"]
 Q = "A + Q"
 "#,
         );
-        assert!(cell.arbitration.is_empty());
+        assert!(cell.oscillation.is_empty());
         assert_eq!(cell.regions.len(), 1);
         let q = &cell.regions[0];
         assert!(q.hysteretic, "a single-input keeper holds its own state");

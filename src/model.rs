@@ -2,9 +2,9 @@
 //! variables into **primary inputs** vs **feedback/state** (an output name referenced inside a
 //! function is the delayed/feedback value of that output).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use espresso_logic::{BoolExpr, Symbol};
+use espresso_logic::{bdd_builder, BoolExpr, Symbol};
 use indexmap::IndexMap;
 use serde::Deserialize;
 use thiserror::Error;
@@ -14,7 +14,7 @@ use espresso_logic::expression::ParseBoolExprError;
 use crate::expr;
 use crate::logic::arcs::{Arc, HiddenArc};
 use crate::logic::confluence::Constraint;
-use crate::logic::interlock::Arbitration;
+use crate::logic::interlock::Oscillation;
 use crate::logic::leakage::LeakageState;
 
 /// The whole input file: a list of `[[cell]]` tables.
@@ -113,6 +113,8 @@ pub enum ModelError {
 #[derive(Debug)]
 pub struct AnalysedOutput {
     pub name: Symbol,
+    /// The parsed function, regenerated from the minimised BDD when the rewrite changed it.
+    /// DISPLAY-ONLY — analysis reads the shared BDD map, never this field.
     pub expr: BoolExpr,
     pub vars: BTreeSet<Symbol>,
     /// Signal names (outputs then internals) referenced by this function — its feedback/state — in
@@ -127,7 +129,8 @@ pub struct AnalysedCell {
     pub inputs: Vec<Symbol>,
     pub outputs: Vec<AnalysedOutput>,
     /// Internal state variables: driven state signals with no external pin. Referenceable by any
-    /// function; never an arc source or target.
+    /// function; never an arc source or target. Relay/alias internals are folded away by the
+    /// state-space minimisation in [`Cell::analyse`], so only genuine-memory internals survive here.
     pub internals: Vec<AnalysedOutput>,
     pub async_pins: Vec<Symbol>,
     /// The transition arcs derived for the cell's outputs, precomputed once by the shared machine pass
@@ -141,9 +144,9 @@ pub struct AnalysedCell {
     /// precomputed once by the shared machine pass
     /// ([`crate::logic::analysis::analyse_machine`]) and consumed by the arcs emitter.
     pub leakage: Vec<LeakageState>,
-    /// Detected arbitration/metastability conditions (empty for ordinary combinational or
+    /// Detected oscillation/metastability conditions (empty for ordinary combinational or
     /// self-holding cells). See [`crate::logic::interlock`].
-    pub arbitration: Vec<Arbitration>,
+    pub oscillation: Vec<Oscillation>,
     /// Declared clock input pins (`clock = [...]`). See [`crate::logic::confluence`].
     pub clock_pins: Vec<Symbol>,
     /// The constraints derived to avoid the cell's hazards (setup/hold and non_seq). Emission is gated
@@ -274,26 +277,63 @@ impl Cell {
             arcs: Vec::new(),
             hidden_arcs: Vec::new(),
             leakage: Vec::new(),
-            arbitration: Vec::new(),
+            oscillation: Vec::new(),
             clock_pins: self.clock.clone(),
             constraints: Vec::new(),
             constraint_arcs_declared: self.constraint_arcs,
             regions: Vec::new(),
         };
+        // One-shot state-space rewrite: mint the cell's single builder, build every signal's BDD once,
+        // and run the minimisation (alias/complement collapse + guarded relay fold). It rewrites the map
+        // in place so every surviving signal is a genuine-memory coordinate; the same map is then shared
+        // by the machine pass, the region cache and emission — no signal function is ever rebuilt.
+        let builder = bdd_builder!();
+        let mut bdds: BTreeMap<Symbol, _> = analysed
+            .signals()
+            .map(|s| (s.name.clone(), builder.build(&s.expr)))
+            .collect();
+        let order: Vec<Symbol> = analysed.signals().map(|s| s.name.clone()).collect();
+        let output_set: BTreeSet<Symbol> =
+            analysed.outputs.iter().map(|o| o.name.clone()).collect();
+        let min = crate::logic::minimise::minimise_state_space(&mut bdds, &order, &output_set);
+
+        // Drop the internals the fold purged (outputs are never purged), then recompute every surviving
+        // signal from its folded BDD: its support (now semantic, not the parse-time syntactic support)
+        // and the feedback/state references among the survivors. The display expression is regenerated
+        // only when the rewrite actually changed the function.
+        analysed.internals.retain(|s| !min.purged.contains(&s.name));
+        let surviving: Vec<Symbol> = analysed.signals().map(|s| s.name.clone()).collect();
+        for sig in analysed
+            .outputs
+            .iter_mut()
+            .chain(analysed.internals.iter_mut())
+        {
+            sig.vars = bdds[&sig.name].variables().collect();
+            sig.feedback = surviving
+                .iter()
+                .filter(|n| sig.vars.contains(n.as_str()))
+                .cloned()
+                .collect();
+            if min.changed.contains(&sig.name) {
+                sig.expr = bdds[&sig.name].to_expr();
+            }
+        }
+
         // Build the cell's state machine once and derive both its transition arcs and its hazards (the
-        // constraints — setup/hold, non_seq — that avoid them plus the arbitration annotations) from the
-        // shared exploration. Clock suppression and emission gating are applied downstream.
-        let analysis = crate::logic::analysis::analyse_machine(&analysed);
+        // constraints — setup/hold, non_seq — that avoid them plus the oscillation annotations) from the
+        // shared exploration over the minimised model. Clock suppression and emission gating are applied
+        // downstream.
+        let analysis = crate::logic::analysis::analyse_machine(&analysed, &bdds);
         analysed.arcs = analysis.arcs;
         analysed.hidden_arcs = analysis.hidden_arcs;
         analysed.leakage = analysis.leakage;
         analysed.constraints = analysis.constraints;
-        analysed.arbitration = analysis.arbitration;
-        // Cache each signal's state-table regions once, in `signals()` order, so downstream emitters
-        // don't rebuild the BDDs per call site.
+        analysed.oscillation = analysis.oscillation;
+        // Cache each signal's state-table regions once, in `signals()` order, from the shared folded
+        // BDDs, so downstream emitters don't rebuild the BDDs per call site.
         analysed.regions = analysed
             .signals()
-            .map(crate::logic::regions::state_regions)
+            .map(|s| crate::logic::regions::state_regions(&s.name, &bdds[&s.name]))
             .collect();
         Ok(analysed)
     }
@@ -426,7 +466,7 @@ Y2 = "A*Z2"
 [[cell]]
 name = "X"
 inputs = ["A"]
-arbitrate = ["Q"]
+oscillate = ["Q"]
 [cell.outputs]
 Y = "A"
 "#;
@@ -458,7 +498,7 @@ Q = "CLK*M + !CLK*Q"
         let sig_names: Vec<_> = cell.signals().map(|s| s.name.as_str()).collect();
         assert_eq!(sig_names, ["Q", "M"]);
         // Not flagged as an arbiter (Q→M is a one-way dependency, no mutual cycle).
-        assert!(cell.arbitration.is_empty());
+        assert!(cell.oscillation.is_empty());
     }
 
     #[test]

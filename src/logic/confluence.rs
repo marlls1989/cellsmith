@@ -1,8 +1,8 @@
-//! Constraint-arc and arbitration derivation from **confluence** of the asynchronous state machine.
+//! Constraint-arc and oscillation derivation from **confluence** of the asynchronous state machine.
 //!
 //! A delay arc ([`super::arcs`]) records a single input edge that *causes* an output edge. A
 //! **constraint** arc instead records that two inputs must not change too close together — a setup/hold
-//! (data vs clock) or a non-sequential/arbitration relation (two racing requests). The physical origin
+//! (data vs clock) or a non-sequential/oscillation relation (two racing requests). The physical origin
 //! of both is the same: for a pair of near-simultaneous input edges the machine is **non-confluent** —
 //! the settled state depends on which edge lands first.
 //!
@@ -11,22 +11,23 @@
 //! **confluent** at `s` — no hazard. Otherwise the state has diverged, but global divergence alone is not
 //! the verdict: it must *interact* with the racing pair in the immediate combinational neighbourhood —
 //! some diverging state variable `w` (`s_xy.value_of(w) != s_yx.value_of(w)`) must have **both** `x` and
-//! `y` in the direct support of its transition function `δ_w`. [`resolve::delta`] composes through
-//! combinational logic only, so a state variable stays a variable in `δ_w` — both pins in `δ_w`'s direct
-//! support means the pins meet within one combinational neighbourhood. A divergence mediated only across
+//! `y` in the direct support of its transition function `δ_w`. The model minimisation
+//! ([`super::minimise`]) composes through combinational logic only — a state variable is kept as a
+//! variable, never substituted through — both pins in `δ_w`'s direct support means the pins meet within
+//! one combinational neighbourhood. A divergence mediated only across
 //! a latch boundary — `δ_w` does not itself see both pins — is a settled snapshot carried across that
 //! latch (e.g. the two domains of a dual-clock synchroniser), design-tolerated rather than a pin-pair
 //! hazard.
 //!
-//! The same pass also detects **arbitration/metastability**: probed from `s`, the pair applied
+//! The same pass also detects **oscillation/metastability**: probed from `s`, the pair applied
 //! *simultaneously* (or, degenerately, a single input toggle) can drive the state into a **periodic
 //! oscillation** rather than a fixpoint ([`machine::settle_or_cycle`] returning the cycle instead of
-//! settling). That is reported as an [`Arbitration`] — distinct from order-dependence: a mutex *is*
+//! settling). That is reported as an [`Oscillation`] — distinct from order-dependence: a mutex *is*
 //! order-dependent by design (that is its function as an arbiter); its hazard is the oscillation at
 //! simultaneity, not the ordinary settling of one request before the other. For the two-input case, that
 //! same simultaneous-toggle oscillation is *also* filed as the pair's [`Constraint`] (kind still decided
 //! by the declared-clock rule below): metastability at simultaneity **is** the physical origin of the
-//! pair's timing constraint, and it is what supplies one for an arbitrating pair (a mutex's `A`/`B`)
+//! pair's timing constraint, and it is what supplies one for an oscillating pair (a mutex's `A`/`B`)
 //! whose order-divergence the combinational-neighbourhood filter above discards — the grant latches that
 //! diverge do not have both racing pins in their own `δ`'s direct support.
 //!
@@ -47,11 +48,11 @@ use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::analysis::Machine;
 use crate::logic::arcs::Edge;
-use crate::logic::interlock::Arbitration;
+use crate::logic::interlock::Oscillation;
 use crate::logic::machine;
 
 /// The kind of a constraint arc: a directed setup/hold (clock ← data) or a symmetric non-sequential
-/// (arbitration / mutual-exclusion) relation between two request inputs.
+/// (oscillation / mutual-exclusion) relation between two request inputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConstraintKind {
     SetupHold,
@@ -124,12 +125,12 @@ fn constraint_key(c: &Constraint) -> String {
 }
 
 /// The outcome of one hazard-analysis pass over the reachable state machine: the constraints derived
-/// to avoid the cell's hazards (order-dependence and oscillation), and the arbitrations annotating its
+/// to avoid the cell's hazards (order-dependence and oscillation), and the oscillations annotating its
 /// metastable oscillations.
 #[derive(Debug, Default)]
 pub struct HazardAnalysis {
     pub constraints: Vec<Constraint>,
-    pub arbitration: Vec<Arbitration>,
+    pub oscillation: Vec<Oscillation>,
 }
 
 /// The state variables that oscillate across a `settle_or_cycle` cycle (`value_of` differs between any
@@ -147,8 +148,8 @@ fn oscillating_group(cycle: &[Minterm<Symbol>], state_vars: &[Symbol]) -> Vec<Sy
 }
 
 /// Derive a cell's hazards by re-walking its shared state machine ([`Machine`]) and testing pairwise
-/// input-order confluence, producing the constraints that avoid them and the arbitration annotations.
-/// Empty for confluent cells (ordinary combinational / self-holding gates without arbitration) and for
+/// input-order confluence, producing the constraints that avoid them and the oscillation annotations.
+/// Empty for confluent cells (ordinary combinational / self-holding gates without oscillation) and for
 /// cells with too few inputs or no state to latch.
 pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnalysis {
     let cell = m.cell;
@@ -184,9 +185,9 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
     let mut found: BTreeMap<String, Constraint> = BTreeMap::new();
 
     // Dedup by `group|condition`, keeping the FIRST insertion (BFS order over `ex.order` → the earliest
-    // reachable state at which the arbitration is observed).
-    let mut arbitration: BTreeMap<String, Arbitration> = BTreeMap::new();
-    let mut record_arbitration = |node: &Minterm<Symbol>,
+    // reachable state at which the oscillation is observed).
+    let mut oscillation: BTreeMap<String, Oscillation> = BTreeMap::new();
+    let mut record_oscillation = |node: &Minterm<Symbol>,
                                   names: &[&str],
                                   group: Vec<Symbol>,
                                   stable: Vec<Minterm<Symbol>>| {
@@ -197,7 +198,7 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
             group.join(","),
             crate::logic::literals_str(&condition)
         );
-        arbitration.entry(key).or_insert_with(|| Arbitration {
+        oscillation.entry(key).or_insert_with(|| Oscillation {
             group,
             condition,
             stable,
@@ -216,13 +217,13 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
             .collect();
 
         // Single-toggle oscillation capture: a lone input toggle that never settles is itself an
-        // arbitration (no competing order to report — `stable` is empty). Recorded once per input per
+        // oscillation (no competing order to report — `stable` is empty). Recorded once per input per
         // state; its `group|condition` key (one input toggled) can collide with neither a simultaneous
         // pair's key (two toggled) nor another single's, so first-insertion-wins is unaffected.
         for (i, r) in single.iter().enumerate() {
             if let Err(cycle) = r {
                 let group = oscillating_group(cycle, state_vars);
-                record_arbitration(s, &[inputs[i].as_str()], group, Vec::new());
+                record_oscillation(s, &[inputs[i].as_str()], group, Vec::new());
             }
         }
 
@@ -258,7 +259,7 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
                     if let Some(syx) = &s_yx {
                         stable_set.insert(syx.project_to(&group));
                     }
-                    record_arbitration(
+                    record_oscillation(
                         s,
                         &[x.as_str(), y.as_str()],
                         group,
@@ -268,7 +269,7 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
                     // Metastability at simultaneity is itself the pair's timing-constraint origin: file
                     // it into the same dedup map the divergence path below uses, built exactly the same
                     // way (kind by the declared-clock rule, edges at `s`, prevector = path_to(s)). This
-                    // supplies an arbitrating pair's (e.g. a mutex's) constraint, replacing the
+                    // supplies an oscillating pair's (e.g. a mutex's) constraint, replacing the
                     // divergence-derived one the combinational-neighbourhood filter discards for it.
                     record_constraint(
                         &mut found,
@@ -313,7 +314,7 @@ pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> HazardAnaly
 
     HazardAnalysis {
         constraints: found.into_values().collect(),
-        arbitration: arbitration.into_values().collect(),
+        oscillation: oscillation.into_values().collect(),
     }
 }
 
@@ -425,7 +426,7 @@ Q = "CLK*M + !CLK*Q"
         // Cross-coupled mutex: A and B race symmetrically. Their order-divergence is on the interlocked
         // grant outputs (Qa/Qb), neither of which has *both* A and B in its own δ's direct support, so
         // the combinational-neighbourhood filter discards that divergence-derived constraint — but the
-        // simultaneous A*B toggle drives the state into oscillation (arbitration), and that metastability
+        // simultaneous A*B toggle drives the state into oscillation, and that metastability
         // is itself filed as the pair's non_seq constraint.
         let cell = analyse(
             r#"
@@ -455,7 +456,7 @@ Qb = "!Qa * B"
     #[test]
     fn c_element_has_non_seq_constraint() {
         // A C-element is order-sensitive: A↓ racing B↑ leaves Q history-dependent. That is a real timing
-        // hazard, filed as a non_seq constraint between A and B (not an arbitration, but a genuine one).
+        // hazard, filed as a non_seq constraint between A and B (not an oscillation, but a genuine one).
         let cell = analyse(
             r#"
 [[cell]]

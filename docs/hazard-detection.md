@@ -10,12 +10,12 @@ The code lives in `src/logic/`:
 
 | File | Role |
 |------|------|
-| `confluence.rs` | `confluence::derive`: one pass over the reachable states probing every input pair — produces both constraints and arbitrations |
-| `interlock.rs` | the `Arbitration` report type (and its string helpers); no detection logic |
+| `confluence.rs` | `confluence::derive`: one pass over the reachable states probing every input pair — produces both constraints and oscillations |
+| `interlock.rs` | the `Oscillation` report type (and its string helpers); no detection logic |
 | `machine.rs` | `settle_or_cycle`, the settle variant that returns the periodic cycle instead of discarding it |
 
 Downstream: `Cell::analyse` calls `analysis::analyse_machine`, which calls `confluence::derive` once
-per cell, and stores the results on `AnalysedCell` (`constraints`, `arbitration`); `main.rs` prints one
+per cell, and stores the results on `AnalysedCell` (`constraints`, `oscillation`); `main.rs` prints one
 stderr warning per hazard; `emit/arcs_tcl.rs` renders constraints as Liberate `define_arc` blocks when
 enabled.
 
@@ -34,8 +34,8 @@ A **constraint** (`Constraint`) is not a kind of hazard — it is the *remedy*: 
 two inputs keep enough separation, which is how **both** phenomena are avoided. Whenever a phenomenon is
 attributed to a pin pair, the engine files a constraint for that pair — directed *setup/hold* if the
 pair contains a declared clock, symmetric *non_seq* otherwise (§5). Oscillation is additionally
-*reported* as an **arbitration** (`Arbitration`, §4): the constraint says how to stay out of the
-metastable window; the arbitration annotates that the window exists and what oscillates inside it.
+*reported* as an **oscillation** (`Oscillation`, §4): the constraint says how to stay out of the
+metastable window; the oscillation annotates that the window exists and what oscillates inside it.
 
 Two things are deliberately **not** hazards:
 
@@ -61,7 +61,7 @@ manufactured on a state the cell can never occupy.
 The BFS itself, however, never *reports* metastability: when a toggle fails to settle it silently drops
 that transition (no impossible arc is fabricated) and moves on. More importantly, it never presents the
 transition that makes an arbiter oscillate: its edges toggle one input at a time, and the trigger for
-arbitration is precisely the violation of that single-change assumption — **two or more inputs changing
+oscillation is precisely the violation of that single-change assumption — **two or more inputs changing
 simultaneously** (a mutex's requests co-asserting). So the detector must apply that change itself, as a
 probe from each reachable state, which is what the next section does.
 
@@ -89,13 +89,13 @@ The outcomes classify as:
 
 | Observation | Meaning | Report |
 |---|---|---|
-| `r_sim` is `Err(cycle)` | the pair tied and the state oscillates | **Arbitration**, plus the pair's **Constraint** (§4) |
-| `r_x` or `r_y` is `Err(cycle)` | even a lone toggle never settles (degenerate) | **Arbitration** (no competing orders to report) |
+| `r_sim` is `Err(cycle)` | the pair tied and the state oscillates | **Oscillation**, plus the pair's **Constraint** (§4) |
+| `r_x` or `r_y` is `Err(cycle)` | even a lone toggle never settles (degenerate) | **Oscillation** (no competing orders to report) |
 | `s_xy == s_yx` | confluent — order does not matter here | nothing |
 | `s_xy != s_yx`, and the divergence *interacts* (§6) | order-dependence | **Constraint** |
 | `s_xy != s_yx`, latch-mediated only (§6) | divergence real but design-tolerated | nothing |
 
-## 4. Arbitration: oscillation as the report — and as the constraint's origin
+## 4. Oscillation: the report — and the constraint's origin
 
 When `settle_or_cycle` returns `Err(cycle)`, the cycle *is* the metastability: a finite, deterministic
 `step` that revisits a non-fixpoint state is periodic forever after. From it the report is assembled:
@@ -110,7 +110,7 @@ When `settle_or_cycle` returns `Err(cycle)`, the cycle *is* the metastability: a
   two grants; simultaneity is exactly the boundary between the two orders, so the order outcomes are the
   states the cycle cannot choose between.
 
-Arbitrations are deduplicated by `(group, condition)`, keeping the first occurrence in BFS order — the
+Oscillations are deduplicated by `(group, condition)`, keeping the first occurrence in BFS order — the
 earliest reachable state at which the condition is observed.
 
 **The same oscillation also files the pair's timing constraint.** Metastability at simultaneity is the
@@ -130,9 +130,9 @@ Worked example — the mutex `Qa = !Qb·A`, `Qb = !Qa·B`, from the idle state `
   `{Qa=0, Qb=1}` (the two order outcomes, projected onto the group), plus the constraint
   `non_seq A↑/B↑`.
 
-A C-element, by contrast, never arbitrates: it is bistable in its hold region, but that is self-feedback
+A C-element, by contrast, never oscillates: it is bistable in its hold region, but that is self-feedback
 holding a *settled* value — no probe from a reachable state makes it oscillate. Its `A↓` racing `B↑`
-order-dependence is a genuine constraint (§6), just not an arbitration.
+order-dependence is a genuine constraint (§6), just not an oscillation.
 
 ## 5. Constraint shape, kind, and dedup
 
@@ -165,12 +165,31 @@ pair in the immediate combinational neighbourhood**:
 > Divergence yields a constraint only if some state variable `w` that actually differs between `s_xy`
 > and `s_yx` has **both** `x` and `y` in the **direct support of its own δ_w**.
 
-Why direct support is the right notion of "immediate neighbourhood": `resolve::delta` composes through
-*combinational* logic only — a state variable is kept as a variable, never substituted through. So both
-pins appearing in `δ_w`'s support means they meet within one combinational cone in front of a single
-latch: the race is physically present at that latch's input. If no diverging `w` sees both pins, the
-divergence was mediated **across a latch boundary** — what crossed the boundary is a *settled snapshot*
-of the earlier domain, not the live race — and the pin pair is not at fault.
+Why direct support is the right notion of "immediate neighbourhood": the model minimisation
+(`state-space-minimisation.md`) composes through *combinational* logic only — a state variable is kept
+as a variable, never substituted through.
+So both pins appearing in `δ_w`'s support means they meet within one combinational cone in front of a
+single latch: the race is physically present at that latch's input. If no diverging `w` sees both pins,
+the divergence was mediated **across a latch boundary** — what crossed the boundary is a *settled
+snapshot* of the earlier domain, not the live race — and the pin pair is not at fault.
+
+Declassifying a relay can legitimately **surface** a hazard that used to be latch-masked. Once
+`logic::minimise` folds a combinational relay into its consumer, that consumer's δ directly incorporates
+the relay's former support — so a pin pair that used to meet only across a latch boundary can now land in
+the same direct support. On the real `ICM` cell this is exactly what happens: folding the selection-
+interlock relays `sela`/`selb` into `sela1`/`selb1` extends each synchroniser's direct support, so the
+cell gains the derived setup/hold pairs `(CLKA, S)` and `(CLKB, S)` alongside its existing `(CLKA, RA)`
+and `(CLKB, RB)` constraints — a genuine gain, never a loss, and consistent with the fold's own soundness
+(`minimise.rs` I1–I2).
+
+The latch-boundary filter (`confluence.rs`) iterates over diverging **state variables**, so the same
+declassification is symmetric in principle: folding a cycle-resident relay could in theory also *drop* a
+pin-pair constraint whose divergence every consumer's settled value masks. That is the mirror image of
+the gain above — the tool re-deciding, on the minimised model, what counts as a design-tolerated
+settled snapshot across a latch — and would be a correction in the same sense, not a regression. No
+committed cell exhibits it (the whole-corpus stderr diff shows only the two ICM gains), and the golden
+`icm_relays_fold_and_machine_is_preserved` locks constraints field-for-field against the hand-folded
+reference so any real change is caught.
 
 Worked example — a two-domain sampling chain (the `SYNC2` test fixture; the `ICM` dual-clock
 synchroniser in `examples/cells.toml` is the same shape at scale):
@@ -187,16 +206,16 @@ in `δ_M1` and survives as a genuine hazard. On the `ICM` cell this filter is wh
 constraints to the two same-domain pairs (`CLKA`,`RA`) and (`CLKB`,`RB`) and removes the meaningless
 cross-domain clock-vs-clock ones.
 
-The filter is also why the arbitration probe must file the arbiter's constraint itself (§4): a mutex's
+The filter is also why the oscillation probe must file the arbiter's constraint itself (§4): a mutex's
 diverging grants each see only *their own* request (`δ_Qa` support is `{A, Qb}`), so its `(A, B)`
 divergence fails the filter — correctly, since for an arbiter that divergence is function, not fault —
 and the pair's constraint instead comes from the oscillation, which *is* its fault.
 
 ## 7. Reporting and emission
 
-- **stderr warnings** (`main.rs`): one line per arbitration —
-  `nodes {Qa, Qb} arbitrate (metastable at A*B) — annotated only, not modelled as timing` — and one line
-  per constrained pin pair, its kind and every condition under which it fires. Arbitration is *never*
+- **stderr warnings** (`main.rs`): one line per oscillation —
+  `nodes {Qa, Qb} oscillate (metastable at A*B) — annotated only, not modelled as timing` — and one line
+  per constrained pin pair, its kind and every condition under which it fires. Oscillation is *never*
   expressed as deterministic timing; it is a property of the cell the user must know about, not an arc.
 - **Constraint arcs** (`emit/arcs_tcl.rs`): off by default; enabled per cell with
   `constraint_arcs = true` in the spec or globally with the `--constraints` CLI flag. Each `Constraint`

@@ -21,11 +21,12 @@
 //! Each region is then Espresso-minimised **independently** as its own onset — safe because none
 //! carries a don't-care set, so minimisation reproduces that exact region and never absorbs the hold
 //! gap into on/off.
+//!
+//! The region view is derived from the **minimised model's** folded BDD, taken from the shared per-cell
+//! builder — a purged relay/alias internal has no region.
 
 use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
-use espresso_logic::{bdd_builder, Anonymous, Cover, CoverType, CubeType, Minimizable, Symbol};
-
-use crate::model::AnalysedOutput;
+use espresso_logic::{Anonymous, Cover, CoverType, CubeType, Minimizable, Symbol};
 
 /// One cube over the state-table/UDP column set: `Some(true)`/`Some(false)` for a fixed column,
 /// `None` for a don't-care. Aligned position-by-position to [`StateRegions::cols`].
@@ -48,18 +49,16 @@ pub struct StateRegions {
     pub hysteretic: bool,
 }
 
-/// Derive the state-table regions of `output` (see [`StateRegions`]).
-pub fn state_regions(output: &AnalysedOutput) -> StateRegions {
-    let builder = bdd_builder!();
-    let f = builder.build(&output.expr);
-
+/// Derive the state-table regions of the signal `name` from its folded BDD `f` (see [`StateRegions`]),
+/// taken from the shared per-cell BDD map.
+pub fn state_regions<B: Brand, C: ManagerCell>(name: &Symbol, f: &Bdd<B, C>) -> StateRegions {
     // Columns = the function's BDD support minus the pin's own self-feedback, in BDD variable order.
     // Inputs the function does not depend on are simply absent from `variables()`, so they never
     // become columns. `cover_over_fr(&cols)` then universally projects the self var (the only support
     // variable left outside `cols`) away, re-basing `f` onto the partial function over `cols`.
     let cols: Vec<Symbol> = f
         .variables()
-        .filter(|v| v.as_str() != output.name)
+        .filter(|v| v.as_str() != name.as_str())
         .collect();
 
     // Onset and offset as independent single-output F covers. For a two-sided FR cover the F side is
@@ -68,10 +67,12 @@ pub fn state_regions(output: &AnalysedOutput) -> StateRegions {
     // of `f` gives the onset and the F side of `!f` the offset — each already a clean F cover we can
     // minimise on its own without collapsing the gap.
     let on_cover = f_side(&f.cover_over_fr(&cols));
-    let off_cover = f_side(&(!&f).cover_over_fr(&cols));
+    let off_cover = f_side(&(!f).cover_over_fr(&cols));
 
     // The hold set is the undef gap = complement of (onset ∪ offset), reconstructed from the two region
-    // covers as its own function so it, too, can be minimised as an independent onset.
+    // covers as its own function so it, too, can be minimised as an independent onset. The shared per-cell
+    // builder that minted `f` mints these too.
+    let builder = f.builder();
     let on_bdd = builder.build_cover(&on_cover);
     let off_bdd = builder.build_cover(&off_cover);
     let hold_bdd = !(on_bdd.or(&off_bdd));
@@ -126,7 +127,17 @@ fn region_cubes(cover: &Cover<Symbol, Anonymous>, cols: &[Symbol]) -> Vec<StateC
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::analyse_one as analyse;
+    use crate::model::{analyse_one as analyse, AnalysedOutput};
+    use espresso_logic::bdd_builder;
+
+    /// Derive the regions of a signal straight from its parsed expression, in a throwaway builder. The
+    /// in-file test cells are all untouched by minimisation, so `sig.expr` is still the parsed truth and
+    /// this reproduces exactly what the shared-map `state_regions` computes.
+    fn regions_of(sig: &AnalysedOutput) -> StateRegions {
+        let b = bdd_builder!();
+        let f = b.build(&sig.expr);
+        state_regions(&sig.name, &f)
+    }
 
     #[test]
     fn state_regions_c_element_self_holds() {
@@ -139,7 +150,7 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        let sr = state_regions(&cell.outputs[0]);
+        let sr = regions_of(&cell.outputs[0]);
         // Self-feedback ⇒ hysteretic; the only columns are the primary inputs (Q is the reg).
         assert!(sr.hysteretic);
         assert_eq!(
@@ -164,7 +175,7 @@ Q = "S + Q*!R"
 Qn = "R + Qn*!S"
 "#,
         );
-        let q = state_regions(&cell.outputs[0]);
+        let q = regions_of(&cell.outputs[0]);
         // Q = S + Q*!R references only S, R and itself — no other output, so cols are just inputs.
         assert_eq!(
             q.cols.iter().map(Symbol::as_str).collect::<Vec<_>>(),
@@ -187,7 +198,7 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 "#,
         );
-        let q = state_regions(&cell.outputs[0]);
+        let q = regions_of(&cell.outputs[0]);
         // Q = CLK*M + !CLK*Q depends on CLK and the internal M only — D is not in its support, so it is
         // no longer a column (Q, its self-feedback, is projected out as the reg).
         assert_eq!(
@@ -274,7 +285,7 @@ Q = "(P1*P2*C+Q*(M1+M2+C))*!R"
         for src in cells {
             let cell = analyse(src);
             for sig in cell.signals() {
-                let sr = state_regions(sig);
+                let sr = regions_of(sig);
 
                 // Reference region BDDs, built exactly as `state_regions` does. One builder for both
                 // the references and the reconstruction so `equivalent_to` shares a manager.
@@ -322,7 +333,7 @@ inputs = ["A", "B"]
 Y = "!(A*B)"
 "#,
         );
-        let sr = state_regions(&cell.outputs[0]);
+        let sr = regions_of(&cell.outputs[0]);
         assert!(!sr.hysteretic);
         assert!(sr.hold.is_empty());
         assert!(!sr.on.is_empty());
