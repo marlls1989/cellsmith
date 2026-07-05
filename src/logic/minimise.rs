@@ -576,43 +576,72 @@ mod tests {
 
     #[test]
     fn minimisation_is_deterministic() {
-        // Two independent runs of the C-element and the ICM must produce identical Minimised sets and
-        // identical per-signal cover renderings (builder-independent strings).
-        fn run_c2gate() -> (Minimised, Vec<(Symbol, String)>) {
-            let (_b, mut bdds, order, outputs) = system! {
-                outputs: ["Q"],
-                "Q" = "IQ",
-                "IQ" = "!QN",
-                "QN" = "!(A*B + IQ*(A+B))",
-            };
-            let min = minimise_state_space(&mut bdds, &order, &outputs);
-            let covers = bdds
-                .iter()
-                .map(|(n, f)| (n.clone(), f.cover().to_string()))
-                .collect();
-            (min, covers)
+        // Two independent builder instances must fold each cell to equivalent results. The two runs
+        // carry different brands, so we compare the BDDs by their builder-independent `Cover`: rebuild
+        // the second run's function in the first run's builder and use `equivalent_to` — a real BDD
+        // equivalence, never a stringified cover.
+        fn assert_runs_agree<B1: Brand, C1: ManagerCell, B2: Brand, C2: ManagerCell>(
+            a: &BTreeMap<Symbol, Bdd<B1, C1>>,
+            b: &BTreeMap<Symbol, Bdd<B2, C2>>,
+        ) {
+            assert!(a.keys().eq(b.keys()));
+            for (name, fa) in a {
+                let fb = fa.builder().build_cover(&b[name].cover());
+                assert!(
+                    fa.equivalent_to(&fb),
+                    "signal {name} differs between the two folds"
+                );
+            }
         }
-        fn run_icm() -> (Minimised, Vec<(Symbol, String)>) {
-            let (_b, mut bdds, order, outputs) = system! {
-                outputs: ["GCLK"],
-                "sela" = "!enB*!S",
-                "selb" = "!enA*S",
-                "sela1" = "!RA*(!CLKA*sela+CLKA*sela1)",
-                "sela2" = "!RA*(CLKA*sela1+!CLKA*sela2)",
-                "enA" = "!RA*(!CLKA*sela2+CLKA*enA)",
-                "selb1" = "!RB*(!CLKB*selb+CLKB*selb1)",
-                "selb2" = "!RB*(CLKB*selb1+!CLKB*selb2)",
-                "enB" = "!RB*(!CLKB*selb2+CLKB*enB)",
-                "GCLK" = "enA*CLKA+enB*CLKB",
-            };
-            let min = minimise_state_space(&mut bdds, &order, &outputs);
-            let covers = bdds
-                .iter()
-                .map(|(n, f)| (n.clone(), f.cover().to_string()))
-                .collect();
-            (min, covers)
-        }
-        assert_eq!(run_c2gate(), run_c2gate());
-        assert_eq!(run_icm(), run_icm());
+
+        // C-element.
+        let (_b1, mut a, order, outputs) = system! {
+            outputs: ["Q"],
+            "Q" = "IQ",
+            "IQ" = "!QN",
+            "QN" = "!(A*B + IQ*(A+B))",
+        };
+        let (_b2, mut b, _, _) = system! {
+            outputs: ["Q"],
+            "Q" = "IQ",
+            "IQ" = "!QN",
+            "QN" = "!(A*B + IQ*(A+B))",
+        };
+        assert_eq!(
+            minimise_state_space(&mut a, &order, &outputs),
+            minimise_state_space(&mut b, &order, &outputs)
+        );
+        assert_runs_agree(&a, &b);
+
+        // ICM.
+        let (_b1, mut a, order, outputs) = system! {
+            outputs: ["GCLK"],
+            "sela" = "!enB*!S",
+            "selb" = "!enA*S",
+            "sela1" = "!RA*(!CLKA*sela+CLKA*sela1)",
+            "sela2" = "!RA*(CLKA*sela1+!CLKA*sela2)",
+            "enA" = "!RA*(!CLKA*sela2+CLKA*enA)",
+            "selb1" = "!RB*(!CLKB*selb+CLKB*selb1)",
+            "selb2" = "!RB*(CLKB*selb1+!CLKB*selb2)",
+            "enB" = "!RB*(!CLKB*selb2+CLKB*enB)",
+            "GCLK" = "enA*CLKA+enB*CLKB",
+        };
+        let (_b2, mut b, _, _) = system! {
+            outputs: ["GCLK"],
+            "sela" = "!enB*!S",
+            "selb" = "!enA*S",
+            "sela1" = "!RA*(!CLKA*sela+CLKA*sela1)",
+            "sela2" = "!RA*(CLKA*sela1+!CLKA*sela2)",
+            "enA" = "!RA*(!CLKA*sela2+CLKA*enA)",
+            "selb1" = "!RB*(!CLKB*selb+CLKB*selb1)",
+            "selb2" = "!RB*(CLKB*selb1+!CLKB*selb2)",
+            "enB" = "!RB*(!CLKB*selb2+CLKB*enB)",
+            "GCLK" = "enA*CLKA+enB*CLKB",
+        };
+        assert_eq!(
+            minimise_state_space(&mut a, &order, &outputs),
+            minimise_state_space(&mut b, &order, &outputs)
+        );
+        assert_runs_agree(&a, &b);
     }
 }
