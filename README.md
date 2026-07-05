@@ -27,13 +27,21 @@ some **internal** functions. Two rules make state-holding cells work with no spe
 - **any signal name referenced inside a function is that signal's feedback/delayed value** — so a
   C-element referencing `Q`, an SR pair referencing each other, and a flop's slave referencing its
   master are all just ordinary references;
-- an **internal** signal (declared under `[cell.internal]`) is a first-class **state node** that other
-  functions may reference, but which has **no external pin** — it models hidden state like a
-  flip-flop's master latch.
+- an **internal** signal (declared under `[cell.internal]`) *may* become a **state node**, but is not
+  automatically one: before the machine is built, cellsmith **minimises** the model — a pure alias or
+  complement of another signal collapses onto that signal's coordinate, and a non-self-holding
+  combinational relay is composed into its consumers and dropped. Only internals that survive as
+  genuine memory (e.g. a flip-flop's master latch) remain first-class state nodes with **no external
+  pin**.
 
 cellsmith treats a cell as an **asynchronous state machine** over `inputs × state-variables`, where a
-*state variable* is any signal (output or internal) that sits on a feedback cycle. Combinational
-signals are folded away; only true state remains as machine state.
+*state variable* is any signal (output or internal) that sits on a feedback cycle. This
+self-reachability check runs over the **already-minimised** model — the raw feedback-cycle rule over
+the declared signals would over-count: a one-shot minimisation pass folds aliases/relays first, so what
+remains afterwards is genuine memory. For example, a gate-level C-element built from complementary
+internals (`IQ = !QN`, `QN = !(A*B + IQ*(A+B))`) collapses from 3 signals to 1 coordinate, and the ICM
+cell's 8 relay/synchroniser internals fold to 6, taking the machine's width from 13 raw declared
+signals down to 11.
 
 ### Arcs by state-machine exploration
 
@@ -51,19 +59,26 @@ Three properties follow from this construction:
   (a `-related_pin Qb` on `Qa` would be invalid); they are established *indirectly* by the prevector,
   whose input sequence drives every state variable — internal ones included — into the measured edge's
   start state (e.g. a flop's `CLK→Q` prevector first drives `D` to load the master);
-- **impossible arcs are never generated** — a mutex's deadlock/metastable states oscillate instead of
-  settling, so the search drops them, and no `Qb→Qa` arc is produced;
+- **impossible arcs are never generated** — a mutex's colliding states oscillate (an oscillation
+  hazard) instead of settling, so the search drops them, and no `Qb→Qa` arc is produced;
 - **input-forced transitions cascade through settling** — with `Qb = Sb + !Qa·B`, toggling `Sb` flips
   both `Qb` (rise) and, through the coupling, `Qa` (fall); the search discovers both.
 
 A cross-coupled cell is also **bistable**: under some input condition (`A·B` for the plain mutex) the
-joint next-state has two stable states and the physical cell picks one non-deterministically
-(metastability). cellsmith detects this during analysis, annotates the arcs and the Liberty stub with
-the metastable condition and the mutually-exclusive grants, and always emits a stderr warning naming
-the interlocked nodes and the metastable condition, noting that it is annotated only, not modelled as
-timing. This interlock is derived from the functions themselves; there is no spec key to declare or
-silence it. The arbitration *choice* itself is a physical property Liberate characterises separately —
-it is not, and cannot be, expressed as a deterministic timing arc.
+joint next-state has two stable states, and the physical cell picks one non-deterministically instead
+of settling — an **oscillation hazard**, whose physical risk is metastability. cellsmith detects this
+during analysis and annotates both the arcs and the Liberty stub with a generic comment naming the
+condition, the group of nodes involved and the states it can settle to:
+
+```
+# oscillation: A*B risks metastability in {Qa, Qb}, settling to one of {Qa=0, Qb=1} | {Qa=1, Qb=0}
+```
+
+(and the equivalent `/* oscillation: ... */` form in the `.lib`). cellsmith always emits a stderr
+warning for the same hazard, noting that it is annotated only, not modelled as timing. The hazard is
+derived from the functions themselves; there is no spec key to declare or silence it. The arbitration
+*choice* itself is a physical property Liberate characterises separately — it is not, and cannot be,
+expressed as a deterministic timing arc.
 
 The Verilog UDP and Liberty `statetable` are the **functional** view: each keeps the other referenced
 state signals (other outputs *and* internal nodes) as input/internal-node columns and projects out
@@ -92,15 +107,15 @@ Q = "(A*B + Q*(A+B))*!R"
 name = "SR"
 inputs = ["S", "R"]
 [cell.outputs]
-Q  = "S + Q*!R"                # each output references only its own held state
-Qn = "R + Qn*!S"
+Q  = "!(R + Qn)"               # cross-coupling: each output references the *other*
+Qn = "!(S + Q)"
 
 [[cell]]
 name = "MUT"
 inputs = ["A", "B"]
 [cell.outputs]
 Qa = "!Qb * A"                 # genuine cross-coupling: each grant references the *other*
-Qb = "!Qa * B"                 #   arbitration is auto-detected during analysis (no spec key)
+Qb = "!Qa * B"                 #   the resulting oscillation hazard is auto-detected (no spec key)
 
 [[cell]]
 name = "DFF"
@@ -220,9 +235,18 @@ C-elements and latches, cross-coupled SR pairs, mutexes / arbiters, and cells wi
 nodes** (a master/slave flip-flop). Arcs are found by exploring the settled state machine, so related
 pins are always primary inputs, impossible arcs are never reached, input-forced transitions cascade
 through settling, and a prevector drives every state variable (internal ones included) into the
-measured start state. The metastable arbitration point is detected and annotated; the arbitration
-*choice* is left to Liberate's physical characterisation, since timing arcs cannot express a
-non-deterministic next-state.
+measured start state.
+
+The engine detects two kinds of hazard: an **order-dependent** hazard (non-confluence — the settled
+state depends on which of a racing input pair's edges lands first; seen on C-elements, DFFs and SR
+latches) and an **oscillation** hazard (a bistable condition where the machine picks a settled state
+non-deterministically instead of converging on one, as in a mutex/arbiter). Metastability is the
+shared *physical risk* of both — never a name for either hazard on its own. From a detected hazard,
+cellsmith can **generate** a timing constraint (setup/hold for a pair holding a declared clock,
+otherwise a symmetric `non_seq`) to avoid it, gated by the `--constraints` flag or a cell's
+`constraint_arcs = true`; the constraint is the remedy, not the hazard. cellsmith emits three
+per-cell stderr diagnostics: one for each detected oscillation hazard, one for each detected
+order-dependent hazard (race), and one for each generated constraint.
 
 ## Licence
 
