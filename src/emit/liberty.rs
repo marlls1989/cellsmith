@@ -1,8 +1,10 @@
 //! Emit a minimal Liberty fragment for a cell: input `pin` groups, then per output and internal state
-//! node either a plain combinational `function` or — for a hysteretic (self-holding) signal — a
-//! `statetable` whose next-state encodes the three regions as `H` (on) / `L` (off) / `N`
-//! (no-change = hold). Internal state nodes are emitted as `direction : internal` pins and appear as
-//! internal-node columns in the state tables of the outputs that reference them.
+//! node either a plain combinational `function` or — for a hysteretic signal (a **state variable**: one
+//! on a dependency cycle, whether a direct self-hold or a larger coupling cycle such as a mutex/SR
+//! latch) — a `statetable` whose next-state encodes the three regions as `H` (on) / `L` (off) / `N`
+//! (no-change = hold). A state variable always emits a `statetable`, never a combinational `function`
+//! that names another output. Internal state nodes are emitted as `direction : internal` pins and appear
+//! as internal-node columns in the state tables of the outputs that reference them.
 //!
 //! `cell_liberty` renders one cell as a bare `cell (...) { ... }` group; `library_liberty` wraps all of
 //! a run's cells in a single `library (<name>) { ... }` group — the `.lib` file cellsmith writes. Groups

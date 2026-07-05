@@ -15,8 +15,10 @@
 //!
 //! - `on   = ∀self. f`    — the `F` side of `f.cover_over_fr(cols)`,
 //! - `off  = ∀self. ¬f`   — the `F` side of `(!f).cover_over_fr(cols)`,
-//! - `hold = ¬(on ∨ off)` — the undef gap the two leave behind; state-dependent (hysteretic); a
-//!   `-`/`N` no-change entry.
+//! - `hold = ¬(on ∨ off)` — the undef gap the two leave behind; a `-`/`N` no-change entry. A signal can
+//!   be hysteretic (a state variable) yet have an *empty* hold set: cross-coupled emergent memory (a
+//!   mutex or SR latch) holds via its coupling cycle, not a direct self-hold gap. Hysteresis is decided
+//!   by the machine's state-variable set (see `is_state` below), not by hold emptiness.
 //!
 //! Each region is then Espresso-minimised **independently** as its own onset — safe because none
 //! carries a don't-care set, so minimisation reproduces that exact region and never absorbs the hold
@@ -53,13 +55,23 @@ pub struct StateRegions {
     pub on: Vec<StateCube>,
     pub off: Vec<StateCube>,
     pub hold: Vec<StateCube>,
-    /// The pin holds on its own state (self-referential ⇒ hysteretic ⇒ `hold` non-empty).
+    /// The signal is a state variable — it lies on a dependency cycle (a direct self-hold or a larger
+    /// coupling cycle, as classified by [`super::resolve::state_variables`]) — and so must emit a
+    /// `statetable`, never a combinational `function`. This is independent of whether the signal has a
+    /// direct self-hold gap: cross-coupled emergent memory (mutex, SR latch) is hysteretic with an
+    /// empty `hold`.
     pub hysteretic: bool,
 }
 
 /// Derive the state-table regions of the signal `name` from its folded BDD `f` (see [`StateRegions`]),
-/// taken from the shared per-cell BDD map.
-pub fn state_regions<B: Brand, C: ManagerCell>(name: &Symbol, f: &Bdd<B, C>) -> StateRegions {
+/// taken from the shared per-cell BDD map. `is_state` is the machine's cyclic classification — whether
+/// `name` is in the cell's [`super::resolve::state_variables`] set — and decides `hysteretic` (and thus
+/// statetable-vs-function emission), independent of the region maths.
+pub fn state_regions<B: Brand, C: ManagerCell>(
+    name: &Symbol,
+    f: &Bdd<B, C>,
+    is_state: bool,
+) -> StateRegions {
     // Columns = the function's BDD support minus the pin's own self-feedback, in BDD variable order.
     // Inputs the function does not depend on are simply absent from `variables()`, so they never
     // become columns. `cover_over_fr(&cols)` then universally projects the self var (the only support
@@ -91,7 +103,7 @@ pub fn state_regions<B: Brand, C: ManagerCell>(name: &Symbol, f: &Bdd<B, C>) -> 
     let off = region_cubes(&minimise(off_cover), &cols);
     let hold = region_cubes(&minimise_bdd(&hold_bdd), &cols);
 
-    let hysteretic = !hold.is_empty();
+    let hysteretic = is_state;
 
     StateRegions {
         cols,
@@ -111,8 +123,8 @@ fn f_side(fr: &Cover<Symbol, Anonymous>) -> Cover<Symbol, Anonymous> {
 }
 
 /// Espresso-minimise a region's own F cover, falling back to the un-minimised cover on error. An empty
-/// cover minimises to empty, so region emptiness — and thus the hysteretic flag and the emitters'
-/// constant-detection — is preserved.
+/// cover minimises to empty, so region emptiness — and thus the emitters' constant-detection — is
+/// preserved.
 fn minimise(cover: Cover<Symbol, Anonymous>) -> Cover<Symbol, Anonymous> {
     cover.minimize().unwrap_or(cover)
 }
@@ -135,16 +147,20 @@ fn region_cubes(cover: &Cover<Symbol, Anonymous>, cols: &[Symbol]) -> Vec<StateC
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{analyse_one as analyse, AnalysedOutput};
+    use crate::logic::resolve;
+    use crate::model::{analyse_one as analyse, AnalysedCell, AnalysedOutput};
     use espresso_logic::bdd_builder;
 
     /// Derive the regions of a signal straight from its parsed expression, in a throwaway builder. The
     /// in-file test cells are all untouched by minimisation, so `sig.expr` is still the parsed truth and
-    /// this reproduces exactly what the shared-map `state_regions` computes.
-    fn regions_of(sig: &AnalysedOutput) -> StateRegions {
+    /// this reproduces exactly what the shared-map `state_regions` computes. `is_state` is the cell's
+    /// cyclic classification (`resolve::state_variables`), matching how `model.rs` calls `state_regions`.
+    fn regions_of(cell: &AnalysedCell, sig: &AnalysedOutput) -> StateRegions {
         let b = bdd_builder!();
         let f = b.build(&sig.expr);
-        state_regions(&sig.name, &f)
+        let signals: Vec<&AnalysedOutput> = cell.signals().collect();
+        let state_set = resolve::state_variables(&signals);
+        state_regions(&sig.name, &f, state_set.contains(&sig.name))
     }
 
     #[test]
@@ -158,7 +174,7 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        let sr = regions_of(&cell.outputs[0]);
+        let sr = regions_of(&cell, &cell.outputs[0]);
         // Self-feedback ⇒ hysteretic; the only columns are the primary inputs (Q is the reg).
         assert!(sr.hysteretic);
         assert_eq!(
@@ -183,7 +199,7 @@ Q = "S + Q*!R"
 Qn = "R + Qn*!S"
 "#,
         );
-        let q = regions_of(&cell.outputs[0]);
+        let q = regions_of(&cell, &cell.outputs[0]);
         // Q = S + Q*!R references only S, R and itself — no other output, so cols are just inputs.
         assert_eq!(
             q.cols.iter().map(Symbol::as_str).collect::<Vec<_>>(),
@@ -206,7 +222,7 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 "#,
         );
-        let q = regions_of(&cell.outputs[0]);
+        let q = regions_of(&cell, &cell.outputs[0]);
         // Q = CLK*M + !CLK*Q depends on CLK and the internal M only — D is not in its support, so it is
         // no longer a column (Q, its self-feedback, is projected out as the reg).
         assert_eq!(
@@ -293,7 +309,7 @@ Q = "(P1*P2*C+Q*(M1+M2+C))*!R"
         for src in cells {
             let cell = analyse(src);
             for sig in cell.signals() {
-                let sr = regions_of(sig);
+                let sr = regions_of(&cell, sig);
 
                 // Reference region BDDs, built exactly as `state_regions` does. One builder for both
                 // the references and the reconstruction so `equivalent_to` shares a manager.
@@ -341,9 +357,83 @@ inputs = ["A", "B"]
 Y = "!(A*B)"
 "#,
         );
-        let sr = regions_of(&cell.outputs[0]);
+        let sr = regions_of(&cell, &cell.outputs[0]);
         assert!(!sr.hysteretic);
         assert!(sr.hold.is_empty());
         assert!(!sr.on.is_empty());
+    }
+
+    #[test]
+    fn state_regions_mutex_is_hysteretic_with_empty_hold() {
+        // Cross-coupled mutex: each grant holds via the *coupling* cycle (Qa↔Qb), not a direct
+        // self-hold. Both are state variables, so both classify hysteretic — yet each region maths
+        // leaves an empty hold set (the function is total once the other grant is a column).
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "MUT"
+inputs = ["A", "B"]
+[cell.outputs]
+Qa = "!Qb * A"
+Qb = "!Qa * B"
+"#,
+        );
+        let qa = regions_of(&cell, &cell.outputs[0]);
+        let qb = regions_of(&cell, &cell.outputs[1]);
+        assert!(qa.hysteretic);
+        assert!(qb.hysteretic);
+        assert!(qa.hold.is_empty());
+        assert!(qb.hold.is_empty());
+    }
+
+    #[test]
+    fn state_regions_sr_nor_latch_is_hysteretic() {
+        // SR NOR latch: cross-coupled, each output on the coupling cycle ⇒ both hysteretic.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "SR"
+inputs = ["S", "R"]
+[cell.outputs]
+Q = "!(R + Qn)"
+Qn = "!(S + Q)"
+"#,
+        );
+        let q = regions_of(&cell, &cell.outputs[0]);
+        let qn = regions_of(&cell, &cell.outputs[1]);
+        assert!(q.hysteretic);
+        assert!(qn.hysteretic);
+    }
+
+    #[test]
+    fn state_regions_plain_combinational_stays_non_hysteretic() {
+        // A pure combinational gate is on no dependency cycle ⇒ never hysteretic.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "ND2"
+inputs = ["A", "B"]
+[cell.outputs]
+Y = "!(A*B)"
+"#,
+        );
+        let sr = regions_of(&cell, &cell.outputs[0]);
+        assert!(!sr.hysteretic);
+    }
+
+    #[test]
+    fn state_regions_self_holding_keeper_stays_hysteretic() {
+        // A C-element keeper self-holds directly (Q on its own cycle) ⇒ hysteretic, as before.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "C2"
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+"#,
+        );
+        let sr = regions_of(&cell, &cell.outputs[0]);
+        assert!(sr.hysteretic);
     }
 }
