@@ -384,7 +384,7 @@ mod tests {
     }
 
     #[test]
-    fn metastable_mutex_oscillates_to_none() {
+    fn mutex_oscillates_to_none() {
         // Cross-coupled: Qa = !Qb*A, Qb = !Qa*B. Under A=B=1 the joint next-state of {Qa=0,Qb=0}
         // toggles both to 1 then back — no fixpoint reachable from it, so settle yields None.
         let builder = bdd_builder!();
@@ -397,7 +397,7 @@ mod tests {
 
     #[test]
     fn settle_or_cycle_names_the_oscillating_pair() {
-        // Same cross-coupled mutex as `metastable_mutex_oscillates_to_none`, but probed through
+        // Same cross-coupled mutex as `mutex_oscillates_to_none`, but probed through
         // settle_or_cycle: the returned cycle should have length 2, with Qa and Qb each taking both
         // values across it (the pair genuinely oscillates, rather than one of them staying fixed).
         let builder = bdd_builder!();

@@ -146,7 +146,7 @@ oscillation from being projected away, not to freeze the set of nodes that parti
 - **`MUT`** (§7 below) — the case the fold must **not** perform: `Qa = !Qb·A`, `Qb = !Qa·B`. Neither
   signal self-holds, yet each is the other's consumer — an `s ↔ c` 2-cycle. Folding `Qa` into `Qb`
   gives `δ_Qb = Qb·B + !A·B`, which at `A=B=1` is `δ_Qb = Qb` — a *fabricated* register. The oscillating
-  `(0,0) ↔ (1,1)` cycle (`hazard-detection.md` §4) lived in the *disagreement* of the two nodes;
+  `(0,0) ↔ (1,1)` cycle (`hazard-detection.md` §5) lived in the *disagreement* of the two nodes;
   projected onto `Qb` alone it lands on `Qb`'s stable states and disappears. The pair must stay two
   coordinates.
 - **`ROSC`** (`X = !Q·A`, `Q = Q·B + X`) — the case the fold **does** perform: `Q` already self-holds,

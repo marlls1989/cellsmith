@@ -105,7 +105,7 @@ Qb = "!Qa * B"
 "#;
 
 /// A cross-coupled mutex generates arcs across all three artifacts (it used to abort at arc
-/// generation), documents its metastable point, and — after collapse — uses only primary inputs as
+/// generation), documents its oscillation, and — after collapse — uses only primary inputs as
 /// related pins (a `Qb→Qa` arc would be a physical deadlock).
 #[test]
 fn mutex_generates_all_three_artifacts() {
@@ -170,7 +170,7 @@ inputs = ["CLKA", "CLKB", "RA", "RB", "S"]
 clock = ["CLKA", "CLKB"]
 
 [cell.internal]
-# selection mutual-exclusion
+# selection interlock
 sela = "!enB*!S"
 selb = "!enA*S"
 # CLKA synchroniser

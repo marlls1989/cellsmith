@@ -220,9 +220,10 @@ pub(crate) fn detect<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> DetectedHaz
 
         // Single-toggle oscillation capture: a lone input toggle that never settles is itself an
         // oscillation (no competing order to report — `stable` is empty, and no [`Race`] is appended:
-        // one toggle names no racing pair). Recorded once per input per state; its `group|condition`
-        // key (one input toggled) can collide with neither a simultaneous pair's key (two toggled) nor
-        // another single's, so first-insertion-wins is unaffected.
+        // one toggle names no racing pair, so it generates no constraint). Recorded once per input per
+        // state. Its `group|condition` key shares the report key space with the simultaneous-pair
+        // observations below, so a colliding pair-probe [`Race`] is appended to the surviving entry
+        // (append-never-drop), never dropped; first-insertion-wins fixes only the reported representative.
         for (i, r) in single.iter().enumerate() {
             if let Err(cycle) = r {
                 let group = oscillating_group(cycle, state_vars);

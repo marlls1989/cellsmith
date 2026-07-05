@@ -86,6 +86,30 @@ pub struct OrderDependence {
     pub discovered: usize,
 }
 
+/// One input state as a brace-wrapped literal product (`{S=1, R=0}`).
+fn render_state(state: &Minterm<Symbol>) -> String {
+    format!("{{{}}}", crate::logic::fixed_pairs(state, &[]).join(", "))
+}
+
+/// A prevector as the input-state path that drives the machine — establishing its hidden state along
+/// the way — into the pre-hazard state: each state a brace-wrapped literal product, joined by ` → `.
+/// The last state is the pre-hazard state.
+fn render_path(prevector: &[Minterm<Symbol>]) -> String {
+    prevector
+        .iter()
+        .map(render_state)
+        .collect::<Vec<_>>()
+        .join(" → ")
+}
+
+/// The pre-hazard state: the reachable stable state the probe toggles from — the prevector's last input
+/// state (empty braces if the prevector is somehow empty, which `path_to` never produces).
+fn render_pre_state(prevector: &[Minterm<Symbol>]) -> String {
+    prevector
+        .last()
+        .map_or_else(|| "{}".to_owned(), render_state)
+}
+
 impl Oscillation {
     /// The condition as a Boolean product of literals (`A*B`, `!R*S`, …).
     pub fn condition_str(&self) -> String {
@@ -94,7 +118,33 @@ impl Oscillation {
 
     /// A competing stable state as a brace-wrapped literal product (`{Qa=1, Qb=0}`).
     pub fn state_str(state: &Minterm<Symbol>) -> String {
-        format!("{{{}}}", crate::logic::fixed_pairs(state, &[]).join(", "))
+        render_state(state)
+    }
+}
+
+impl Race {
+    /// The path into the pre-hazard state: the sequence of input states the machine walks — driving its
+    /// hidden state — to reach the state the simultaneous toggle oscillates from. Last state is the
+    /// pre-hazard state.
+    pub fn path_str(&self) -> String {
+        render_path(&self.prevector)
+    }
+
+    /// The pre-hazard state: the reachable stable state the simultaneous toggle starts from (the path's
+    /// last input state).
+    pub fn pre_state_str(&self) -> String {
+        render_pre_state(&self.prevector)
+    }
+
+    /// The triggering transition: the two racing inputs toggling simultaneously (`S↓ & R↓`).
+    pub fn transition_str(&self) -> String {
+        format!(
+            "{}{} & {}{}",
+            self.x,
+            self.x_edge.arrow(),
+            self.y,
+            self.y_edge.arrow(),
+        )
     }
 }
 
@@ -106,7 +156,27 @@ impl OrderDependence {
 
     /// A competing settled state as a brace-wrapped literal product (`{Q=1}`).
     pub fn state_str(state: &Minterm<Symbol>) -> String {
-        format!("{{{}}}", crate::logic::fixed_pairs(state, &[]).join(", "))
+        render_state(state)
+    }
+
+    /// The path into the pre-hazard state: the sequence of input states the machine walks — driving its
+    /// hidden state — to reach the state the two orders diverge from. Last state is the pre-hazard state.
+    pub fn path_str(&self) -> String {
+        render_path(&self.prevector)
+    }
+
+    /// The pre-hazard state: the reachable stable state the two settle orders start from (the path's last
+    /// input state).
+    pub fn pre_state_str(&self) -> String {
+        render_pre_state(&self.prevector)
+    }
+
+    /// The triggering transitions: the two settle orders whose outcomes differ (`A↓ then B↑ vs B↑ then
+    /// A↓`).
+    pub fn transition_str(&self) -> String {
+        let (x, xe) = (&self.x, self.x_edge.arrow());
+        let (y, ye) = (&self.y, self.y_edge.arrow());
+        format!("{x}{xe} then {y}{ye} vs {y}{ye} then {x}{xe}")
     }
 }
 
