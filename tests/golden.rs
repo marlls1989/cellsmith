@@ -16,6 +16,117 @@ fn analyse_one(src: &str) -> AnalysedCell {
     parse_spec(src).unwrap().cells.remove(0).analyse().unwrap()
 }
 
+/// Assert an output pin emits at least one transition (`define_arc`) block — i.e. it is defined at
+/// both ends of some arc and was not dropped from the machine. A transition arc names the output in
+/// `-pin`; a hidden arc names an *input* there, so `-pin <output> ` (trailing space before the line
+/// continuation) is an unambiguous marker for the output's own arcs.
+fn assert_emits_arc(tcl: &str, output: &str) {
+    assert!(
+        tcl.contains(&format!("-pin {output} ")),
+        "output {output} emits no arc block (dropped from the machine):\n{tcl}"
+    );
+}
+
+/// Round-trip the emitted Liberty through `liberty-parse` and return the cell's pin-group names.
+fn liberty_pins(cell: &AnalysedCell) -> Vec<String> {
+    let frag = cell_liberty(cell);
+    let wrapped = format!("library (test) {{\n{frag}}}\n");
+    let lib = liberty_parse::parse_lib(&wrapped).expect("emitted Liberty must parse");
+    lib.iter()
+        .flat_map(|g| g.subgroups.iter())
+        .find(|g| g.type_ == "cell" && g.name == cell.name.as_str())
+        .expect("cell present after round-trip")
+        .subgroups
+        .iter()
+        .filter(|g| g.type_ == "pin")
+        .map(|g| g.name.clone())
+        .collect()
+}
+
+/// R2 invariant guard: a Liberty output pin's `function:` may reference only inputs and INTERNAL
+/// nodes — never another OUTPUT pin. Round-trips the emitted Liberty, then for each output pin
+/// tokenises its `function` string and asserts no token names a *different* output. A token equal to
+/// the pin's OWN name is allowed only when that pin is backed by a `statetable` of the same node name
+/// (the valid single-output state-variable pattern, e.g. C2's `pin(Q){function:"Q"}` with
+/// `statetable("A B","Q")`).
+fn assert_no_output_function_references_another_output(cell: &AnalysedCell) {
+    let frag = cell_liberty(cell);
+    let wrapped = format!("library (test) {{\n{frag}}}\n");
+    assert_liberty_no_output_cross_reference(&wrapped, cell.name.as_str());
+}
+
+/// The parse-and-check core of the R2 net, split out so it can be driven against a hand-forged
+/// fragment (see `net_bites_on_output_referencing_another_output`).
+fn assert_liberty_no_output_cross_reference(wrapped: &str, cell_name: &str) {
+    let lib = liberty_parse::parse_lib(wrapped).expect("emitted Liberty must parse");
+    let cell_group = lib
+        .iter()
+        .flat_map(|g| g.subgroups.iter())
+        .find(|g| g.type_ == "cell" && g.name == cell_name)
+        .expect("cell present after round-trip");
+
+    // OUTPUT pins: pin groups whose `direction` attribute is `output`.
+    let output_pins: Vec<_> = cell_group
+        .subgroups
+        .iter()
+        .filter(|g| g.type_ == "pin")
+        .filter(|g| {
+            g.simple_attribute("direction").map(|v| v.to_string()) == Some("output".to_owned())
+        })
+        .collect();
+    let output_names: std::collections::HashSet<&str> =
+        output_pins.iter().map(|g| g.name.as_str()).collect();
+
+    // Statetable-backed nodes: the statetable's second header string is the backing internal_node
+    // name. `liberty-parse` joins the two quoted header args (keeping their quotes) as
+    // `"<inputs>", "<node>"`, so the node is the trailing comma-separated field with quotes stripped
+    // (e.g. `"A B", "Q"` → `Q`).
+    let statetable_nodes: std::collections::HashSet<String> = cell_group
+        .subgroups
+        .iter()
+        .filter(|g| g.type_ == "statetable")
+        .filter_map(|g| {
+            g.name
+                .rsplit(", ")
+                .next()
+                .map(|s| s.trim_matches('"').to_owned())
+        })
+        .collect();
+
+    for pin in &output_pins {
+        let Some(func) = pin
+            .simple_attribute("function")
+            .map(|v| v.to_string().trim_matches('"').to_owned())
+        else {
+            continue;
+        };
+        // Real tokenisation: keep maximal identifier runs, split on every other character. So `Q1` and
+        // `Q1_st` stay distinct tokens (a substring search would conflate them).
+        for token in func
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|t| !t.is_empty())
+        {
+            if token == pin.name {
+                // A pin referencing its OWN name is valid only as a state variable reading its own
+                // statetable node.
+                assert!(
+                    statetable_nodes.contains(token),
+                    "R2: output pin `{}` function `{}` names itself without a backing statetable",
+                    pin.name,
+                    func
+                );
+                continue;
+            }
+            assert!(
+                !output_names.contains(token),
+                "R2 violation: output pin `{}` function `{}` references another output `{token}`",
+                pin.name,
+                func
+            );
+        }
+    }
+}
+
 const C2: &str = r#"
 [[cell]]
 name = "C2"
@@ -131,6 +242,17 @@ fn mutex_generates_all_three_artifacts() {
     // Liberty: annotated and still syntactically valid (round-trips through liberty-parse).
     let frag = cell_liberty(&cell);
     assert!(frag.contains("oscillation:"));
+    // Each grant is a state variable (on the Qa↔Qb coupling cycle), so it must emit a `statetable`, not
+    // a combinational `function` naming the other output. The `Qa = !Qb*A` function became a statetable
+    // over the other grant + its own input, and the pin reads its own state node by name.
+    assert!(frag.contains(r#"statetable ("Qb A", "Qa") {"#));
+    assert!(frag.contains(r#"statetable ("Qa B", "Qb") {"#));
+    assert!(frag.contains(r#"function : "Qa";"#));
+    assert!(frag.contains(r#"function : "Qb";"#));
+    assert!(
+        !frag.contains(r#"function : "!Qb*A""#),
+        "a state variable must never emit a combinational function naming another output:\n{frag}"
+    );
     let wrapped = format!("library (test) {{\n{frag}}}\n");
     let lib = liberty_parse::parse_lib(&wrapped).expect("emitted Liberty must parse");
     assert!(lib
@@ -413,10 +535,19 @@ fn genuine_memory_is_never_collapsed() {
     let v = cell_verilog(&sr);
     assert!(v.contains("primitive SR_Q("), "SR_Q primitive missing");
     assert!(v.contains("primitive SR_Qn("), "SR_Qn primitive missing");
-    // Liberty keeps both cross-coupled outputs as distinct output pins (not merged into one). NB: this
-    // NOR-latch form is emitted with combinational `function` attributes, not `statetable` groups —
-    // each function still references the *other* output, which is what "cross-coupling kept" means.
+    // Liberty keeps both cross-coupled outputs as distinct output pins (not merged into one). Each output
+    // is a state variable (on the Q↔Qn coupling cycle), so it emits a `statetable` — over the other
+    // output plus the input its function keeps — and the pin reads its own state node by name. A state
+    // variable must NEVER emit a combinational `function` naming the other output.
     let sr_lib = cell_liberty(&sr);
+    assert!(sr_lib.contains(r#"statetable ("R Qn", "Q") {"#));
+    assert!(sr_lib.contains(r#"statetable ("S Q", "Qn") {"#));
+    assert!(sr_lib.contains(r#"function : "Q";"#));
+    assert!(sr_lib.contains(r#"function : "Qn";"#));
+    assert!(
+        !sr_lib.contains(r#"function : "!(R+Qn)""#) && !sr_lib.contains(r#"function : "!(S+Q)""#),
+        "a state variable must never emit a combinational function naming another output:\n{sr_lib}"
+    );
     let wrapped = format!("library (test) {{\n{sr_lib}}}\n");
     let lib = liberty_parse::parse_lib(&wrapped).expect("SR Liberty must parse");
     let sr_cell = lib
@@ -451,6 +582,322 @@ fn genuine_memory_is_never_collapsed() {
     );
 }
 
+// ---------------------------------------------------------------------------------------------
+// Whole-pipeline output-alias fixtures (Wave 5).
+//
+// The pass-local minimise tests inspect the `bdds` map directly and never build the machine, so they
+// missed a blocker where an output ended up aliased to a *combinational* output — unevaluable by the
+// machine (its nodes carry only inputs + state variables), which debug-panics at
+// `src/logic/analysis.rs:109` (invariant I3) and in release silently drops the pin's arcs. These
+// fixtures drive the SAME full pipeline as the other goldens (`Cell::analyse`, via `analyse_one`,
+// which builds the machine in `analyse_machine` at `src/logic/analysis.rs:175`) and assert positively
+// on emitted arcs — catching both the debug panic and the release-mode silent drop — for each shape.
+// ---------------------------------------------------------------------------------------------
+
+/// (1) Two output pins carry the identical *combinational* function `A*B`; they must stay independent
+/// combinational outputs, neither aliased to the other.
+const DUP_COMB: &str = r#"
+[[cell]]
+name = "DUPY"
+inputs = ["A", "B"]
+[cell.outputs]
+Y1 = "A*B"
+Y2 = "A*B"
+"#;
+
+/// (2) Output buffer of a combinational output: `Y2 = Y1` where `Y1 = A*B`. The alias must resolve so
+/// `Y2` carries the composed function `A*B` — never left aliased to the combinational `Y1`.
+const BUF_COMB: &str = r#"
+[[cell]]
+name = "BUFY"
+inputs = ["A", "B"]
+[cell.outputs]
+Y1 = "A*B"
+Y2 = "Y1"
+"#;
+
+/// (3) Complementary-output gate over an internal `X = A*B`: `Y = X`, `YN = !X`. The internal is
+/// purged and its coordinate carried on the two output pins (`Y = A*B`, `YN = !(A*B)`).
+const COMP_OUT: &str = r#"
+[[cell]]
+name = "COMPY"
+inputs = ["A", "B"]
+[cell.internal]
+X = "A*B"
+[cell.outputs]
+Y = "X"
+YN = "!X"
+"#;
+
+/// (4) Recurrent duplicate outputs (the positive dedup case): `Q1`, `Q2` both `!R*(S+Q1)`. Dedup
+/// merges onto the state variable `Q1`; `Q2` is kept as a plain alias pin of `Q1` (a genuine state
+/// variable, so the machine can still evaluate it — no escape).
+const DUP_RECUR: &str = r#"
+[[cell]]
+name = "SRDUP"
+inputs = ["S", "R"]
+[cell.outputs]
+Q1 = "!R*(S+Q1)"
+Q2 = "!R*(S+Q1)"
+"#;
+
+/// (5) Complement-output C-element: `Q` is the held (cyclic) coordinate, `QN = !Q` its complement. The
+/// fixpoint would leave the non-cyclic output `QN` naming the cyclic output `Q`; the hoist relocates the
+/// coordinate onto a minted internal `Q_st`, so `Q = Q_st`, `QN = !Q_st`, and neither output names the
+/// other.
+const CLATCH: &str = r#"
+[[cell]]
+name = "CLATCH"
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+QN = "!Q"
+"#;
+
+/// (1) Duplicate combinational outputs survive as two independent combinational outputs — each emits
+/// its arcs, neither is aliased to the other, and no internal appears.
+#[test]
+fn duplicate_combinational_outputs_stay_independent_and_both_emit_arcs() {
+    let cell = analyse_one(DUP_COMB);
+    assert!(cell.internals.is_empty(), "no internal expected");
+
+    let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+    assert_emits_arc(&tcl, "Y1");
+    assert_emits_arc(&tcl, "Y2");
+
+    let pins = liberty_pins(&cell);
+    assert!(pins.contains(&"Y1".to_string()), "Y1 pin missing: {pins:?}");
+    assert!(pins.contains(&"Y2".to_string()), "Y2 pin missing: {pins:?}");
+
+    // Both pins carry the full A*B function — neither was demoted to an alias of the other.
+    let lib = cell_liberty(&cell);
+    assert_eq!(
+        lib.matches("function : \"A*B\";").count(),
+        2,
+        "both outputs must carry the independent A*B function:\n{lib}"
+    );
+}
+
+/// (2) A combinational output buffered by another output resolves: `Y2` carries the composed `A*B`
+/// and never stays aliased to `Y1`. Both pins emit arcs.
+#[test]
+fn output_buffer_of_combinational_output_resolves_and_both_emit_arcs() {
+    let cell = analyse_one(BUF_COMB);
+    assert!(cell.internals.is_empty(), "no internal expected");
+
+    let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+    assert_emits_arc(&tcl, "Y1");
+    assert_emits_arc(&tcl, "Y2");
+    // Y2's arcs relate to the primary inputs, not to the buffered output Y1.
+    assert!(
+        !tcl.contains("-related_pin Y1"),
+        "Y2 arc relates to the buffered output Y1:\n{tcl}"
+    );
+
+    let pins = liberty_pins(&cell);
+    assert!(pins.contains(&"Y1".to_string()), "Y1 pin missing: {pins:?}");
+    assert!(pins.contains(&"Y2".to_string()), "Y2 pin missing: {pins:?}");
+
+    // Y2 carries the resolved A*B, not a `function : "Y1"` alias; both outputs share the same function.
+    let lib = cell_liberty(&cell);
+    assert!(
+        !lib.contains("function : \"Y1\";"),
+        "Y2 still aliased to Y1:\n{lib}"
+    );
+    assert_eq!(
+        lib.matches("function : \"A*B\";").count(),
+        2,
+        "both outputs must carry the resolved A*B function:\n{lib}"
+    );
+}
+
+/// (3) A complementary-output gate over an internal: the internal is purged, `Y` carries `A*B` and
+/// `YN` its complement, and neither output is left aliased. Both pins emit arcs; the internal never
+/// leaks as a pin.
+#[test]
+fn complementary_outputs_over_internal_purge_internal_and_both_emit_arcs() {
+    let cell = analyse_one(COMP_OUT);
+    assert!(
+        cell.internals.is_empty(),
+        "internal X should be purged: {:?}",
+        cell.internals
+            .iter()
+            .map(|o| o.name.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+    assert_emits_arc(&tcl, "Y");
+    assert_emits_arc(&tcl, "YN");
+    // The purged internal never leaks as an arc pin.
+    assert!(
+        !tcl.contains("-pin X "),
+        "internal X leaked into arcs:\n{tcl}"
+    );
+
+    let pins = liberty_pins(&cell);
+    assert!(pins.contains(&"Y".to_string()), "Y pin missing: {pins:?}");
+    assert!(pins.contains(&"YN".to_string()), "YN pin missing: {pins:?}");
+    assert!(
+        !pins.contains(&"X".to_string()),
+        "purged internal X still a pin: {pins:?}"
+    );
+
+    // Y carries A*B; YN carries the complement (the SOP form of !(A*B): a sum of the inverted inputs).
+    let lib = cell_liberty(&cell);
+    assert!(
+        lib.contains("function : \"A*B\";"),
+        "Y should carry A*B:\n{lib}"
+    );
+    let yn_func = lib
+        .lines()
+        .skip_while(|l| !l.contains("pin (YN)"))
+        .find(|l| l.contains("function"))
+        .expect("YN function present");
+    assert!(
+        yn_func.contains("!A") && yn_func.contains("!B") && !yn_func.contains('*'),
+        "YN should carry the complement of A*B (a sum of !A and !B), got: {yn_func}"
+    );
+}
+
+/// (4) Recurrent duplicate outputs dedup onto one coordinate; the hoist then relocates that coordinate
+/// onto a minted internal `Q1_st`, so neither output names another output — both `Q1` and `Q2` project
+/// over the internal statetable node. Both pins still emit arcs.
+#[test]
+fn recurrent_duplicate_outputs_dedup_and_both_emit_arcs() {
+    let cell = analyse_one(DUP_RECUR);
+    // The recurrent coordinate is hoisted onto a minted internal state node.
+    let int_names: Vec<_> = cell.internals.iter().map(|o| o.name.as_str()).collect();
+    assert_eq!(int_names, ["Q1_st"], "expected the minted internal Q1_st");
+
+    let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+    assert_emits_arc(&tcl, "Q1");
+    assert_emits_arc(&tcl, "Q2");
+    // The internal node is never an arc pin — arcs range over inputs and outputs only.
+    assert!(
+        !tcl.contains("Q1_st"),
+        "minted internal Q1_st leaked into the arcs:\n{tcl}"
+    );
+
+    let pins = liberty_pins(&cell);
+    assert!(pins.contains(&"Q1".to_string()), "Q1 pin missing: {pins:?}");
+    assert!(pins.contains(&"Q2".to_string()), "Q2 pin missing: {pins:?}");
+    assert!(
+        pins.contains(&"Q1_st".to_string()),
+        "internal Q1_st pin missing: {pins:?}"
+    );
+
+    // The statetable lives on the internal node; both outputs carry a `function : "Q1_st"` projection.
+    let lib = cell_liberty(&cell);
+    assert!(
+        lib.contains(r#"statetable ("R S", "Q1_st") {"#),
+        "Q1_st should carry the recurrent statetable:\n{lib}"
+    );
+    assert!(
+        lib.contains("pin (Q1_st) {") && lib.contains("direction : internal;"),
+        "Q1_st should be an internal pin:\n{lib}"
+    );
+    // Discriminating: `function : "Q1_st";` appears exactly three times — the internal node self-ref
+    // plus Q1 and Q2 projecting over it. No output function may name another output.
+    assert_eq!(
+        lib.matches("function : \"Q1_st\";").count(),
+        3,
+        "expected three `function : \"Q1_st\";` (Q1_st self-ref + Q1 + Q2 projections):\n{lib}"
+    );
+    assert_eq!(
+        lib.matches("function : \"Q1\";").count(),
+        0,
+        "no output may reference the output Q1 — the coordinate lives on the internal Q1_st:\n{lib}"
+    );
+}
+
+/// (5) Complement-output C-element: the hoist moves the shared coordinate onto a minted internal
+/// `Q_st` statetable node; `Q = Q_st`, `QN = !Q_st`. Both outputs emit arcs, the Liberty round-trips,
+/// and no output function names another output.
+#[test]
+fn complement_c_element_pair_hoists_coordinate_to_internal() {
+    let cell = analyse_one(CLATCH);
+    let int_names: Vec<_> = cell.internals.iter().map(|o| o.name.as_str()).collect();
+    assert_eq!(int_names, ["Q_st"], "expected the minted internal Q_st");
+
+    let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+    assert_emits_arc(&tcl, "Q");
+    assert_emits_arc(&tcl, "QN");
+    assert!(
+        !tcl.contains("Q_st"),
+        "minted internal Q_st leaked into the arcs:\n{tcl}"
+    );
+
+    // Round-trips through liberty-parse and the internal node carries the statetable.
+    let pins = liberty_pins(&cell);
+    assert!(
+        pins.contains(&"Q_st".to_string()),
+        "Q_st pin missing: {pins:?}"
+    );
+
+    let lib = cell_liberty(&cell);
+    assert!(
+        lib.contains(r#"statetable ("A B", "Q_st") {"#),
+        "Q_st should carry the statetable:\n{lib}"
+    );
+    // Q projects over the internal; QN over its complement — neither names the other output.
+    assert_eq!(
+        lib.matches("function : \"Q_st\";").count(),
+        2,
+        "expected two `function : \"Q_st\";` (Q_st self-ref + Q projection):\n{lib}"
+    );
+    assert!(
+        lib.contains("function : \"!Q_st\";"),
+        "QN should project over the complement of the internal:\n{lib}"
+    );
+    assert_eq!(
+        lib.matches("function : \"Q\";").count(),
+        0,
+        "no output may reference the output Q:\n{lib}"
+    );
+    assert!(
+        !lib.contains("function : \"!Q\";"),
+        "QN must not name the output Q — the coordinate lives on Q_st:\n{lib}"
+    );
+
+    // Verilog mirrors the hoist: the coordinate is an internal `Q_st` sequential UDP over the inputs,
+    // and each output is a projection UDP driven by `Q_st` — never by the other output pin.
+    let v = cell_verilog(&cell);
+    assert!(
+        v.contains("primitive CLATCH_Q_st(Q_st, A, B);"),
+        "Q_st should be a sequential UDP over the inputs:\n{v}"
+    );
+    assert!(
+        v.contains("primitive CLATCH_Q(Q, Q_st);"),
+        "Q should project over the internal Q_st:\n{v}"
+    );
+    assert!(
+        v.contains("primitive CLATCH_QN(QN, Q_st);"),
+        "QN should project over the internal Q_st, not over the output Q:\n{v}"
+    );
+}
+
+/// R2 net over every fixture: no output pin's Liberty `function:` may name another output pin. The
+/// statetable cells (MUT/SR) pass because their outputs reference their OWN state node; the hoisted
+/// cells (DUP_RECUR/CLATCH) pass because their outputs project over an INTERNAL node; the
+/// combinational cells reference only inputs. ND2 has no standalone const — it lives inline in the
+/// multi-cell fixture — so it is reproduced here verbatim.
+#[test]
+fn no_output_function_references_another_output_across_fixtures() {
+    const ND2: &str = r#"
+[[cell]]
+name = "ND2"
+inputs = ["A", "B"]
+[cell.outputs]
+Y = "!(A*B)"
+"#;
+    for src in [
+        C2, ND2, MUT, SR, DFF, ICM, ROSC, C2GATE, DUP_COMB, BUF_COMB, COMP_OUT, DUP_RECUR, CLATCH,
+    ] {
+        assert_no_output_function_references_another_output(&analyse_one(src));
+    }
+}
+
 /// `-when` is emitted by default; disabling it (the `--no-when` path) drops it from the arc text.
 #[test]
 fn when_default_on_and_suppressible() {
@@ -468,4 +915,29 @@ fn when_default_on_and_suppressible() {
     );
     assert!(on.contains("-when"));
     assert!(!off.contains("-when"));
+}
+
+/// The net actually bites: a pre-fix shape where output `Q2`'s `function` names another output `Q1`
+/// (with no statetable backing `Q2`) must be REJECTED. This locks that the own-name carve-out does not
+/// accidentally pass a cross-output reference. The fixes make the emitter never produce this shape, so
+/// the offending Liberty is hand-forged and fed straight to the check core.
+#[test]
+fn net_bites_on_output_referencing_another_output() {
+    let wrapped = r#"library (test) {
+cell (BAD) {
+pin (A) { direction : input; }
+pin (B) { direction : input; }
+pin (Q1) { direction : output; function : "A*B"; }
+pin (Q2) { direction : output; function : "Q1"; }
+}
+}
+"#;
+    let rejected = std::panic::catch_unwind(|| {
+        assert_liberty_no_output_cross_reference(wrapped, "BAD");
+    })
+    .is_err();
+    assert!(
+        rejected,
+        "R2 net failed to reject an output pin whose function names another output"
+    );
 }

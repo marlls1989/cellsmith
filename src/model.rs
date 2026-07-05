@@ -289,9 +289,10 @@ impl Cell {
             regions: Vec::new(),
         };
         // One-shot state-space rewrite: mint the cell's single builder, build every signal's BDD once,
-        // and run the minimisation (alias/complement collapse + guarded relay fold). It rewrites the map
-        // in place so every surviving signal is a genuine-memory coordinate; the same map is then shared
-        // by the machine pass, the region cache and emission — no signal function is ever rebuilt.
+        // and run the minimisation (identical-δ dedup + guarded relay/alias fold, alternated to a
+        // fixpoint). It rewrites the map in place so every surviving signal is a genuine-memory
+        // coordinate; the same map is then shared by the machine pass, the region cache and emission —
+        // no signal function is ever rebuilt.
         let builder = bdd_builder!();
         let mut bdds: BTreeMap<Symbol, _> = analysed
             .signals()
@@ -300,13 +301,33 @@ impl Cell {
         let order: Vec<Symbol> = analysed.signals().map(|s| s.name.clone()).collect();
         let output_set: BTreeSet<Symbol> =
             analysed.outputs.iter().map(|o| o.name.clone()).collect();
-        let min = crate::logic::minimise::minimise_state_space(&mut bdds, &order, &output_set);
+        // `reserved` are the names a hoist-minted internal must avoid: the cell's declared inputs.
+        let min = crate::logic::minimise::minimise_state_space(
+            &mut bdds,
+            &order,
+            &output_set,
+            &input_set,
+        );
 
-        // Drop the internals the fold purged (outputs are never purged), then recompute every surviving
-        // signal from its folded BDD: its support (now semantic, not the parse-time syntactic support)
-        // and the feedback/state references among the survivors. The display expression is regenerated
-        // only when the rewrite actually changed the function.
+        // Drop the internals the fold purged (outputs are never purged), then materialise each internal
+        // the hoist minted — a relocated cyclic coordinate — with its expression set from the folded BDD
+        // (it is not in `min.changed`, so the recompute loop below leaves its expr as-is; regenerating
+        // from the same BDD would be a harmless no-op regardless). Materialise before the recompute so
+        // the minted node's `vars`/`feedback` are filled and it is classified as the state variable
+        // that carries the statetable.
         analysed.internals.retain(|s| !min.purged.contains(&s.name));
+        for n in &min.minted {
+            analysed.internals.push(AnalysedOutput {
+                name: n.clone(),
+                expr: bdds[n].to_expr(),
+                vars: BTreeSet::new(),
+                feedback: Vec::new(),
+            });
+        }
+
+        // Recompute every surviving signal from its folded BDD: its support (now semantic, not the
+        // parse-time syntactic support) and the feedback/state references among the survivors. The
+        // display expression is regenerated only when the rewrite actually changed the function.
         let surviving: Vec<Symbol> = analysed.signals().map(|s| s.name.clone()).collect();
         for sig in analysed
             .outputs
@@ -336,10 +357,21 @@ impl Cell {
         analysed.order_dependence = analysis.order_dependence;
         analysed.oscillation = analysis.oscillation;
         // Cache each signal's state-table regions once, in `signals()` order, from the shared folded
-        // BDDs, so downstream emitters don't rebuild the BDDs per call site.
+        // BDDs, so downstream emitters don't rebuild the BDDs per call site. The cyclic state-variable
+        // set (over the recomputed feedback) decides each region's `hysteretic` flag — a state variable
+        // must emit a `statetable`, never a combinational `function`. This is the cheap pure-graph
+        // classifier, computed here so it still holds even for cells the machine-width guard skips.
+        let signals: Vec<&AnalysedOutput> = analysed.signals().collect();
+        let state_set = crate::logic::resolve::state_variables(&signals);
         analysed.regions = analysed
             .signals()
-            .map(|s| crate::logic::regions::state_regions(&s.name, &bdds[&s.name]))
+            .map(|s| {
+                crate::logic::regions::state_regions(
+                    &s.name,
+                    &bdds[&s.name],
+                    state_set.contains(&s.name),
+                )
+            })
             .collect();
         Ok(analysed)
     }
