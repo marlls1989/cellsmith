@@ -54,17 +54,25 @@ fn transitive_closure(edges: &BTreeMap<Symbol, Vec<Symbol>>) -> BTreeMap<Symbol,
     reach
 }
 
+/// The nodes of a directed graph that reach **themselves** through one or more edges — the signals on
+/// a dependency cycle (a self-reference or a larger coupling cycle). This is the pure graph kernel of
+/// [`state_variables`]; [`super::minimise`]'s hoist pass reuses it over the folded BDD support graph to
+/// find the cyclic (state-variable) outputs.
+pub(crate) fn self_reaching(edges: &BTreeMap<Symbol, Vec<Symbol>>) -> BTreeSet<Symbol> {
+    let reach = transitive_closure(edges);
+    edges
+        .keys()
+        .filter(|n| reach.get(*n).is_some_and(|r| r.contains(*n)))
+        .cloned()
+        .collect()
+}
+
 /// The **state variables** of a cell: signals that lie on a dependency cycle — a self-reference or a
 /// larger coupling cycle. A signal on no cycle is combinational and resolves away entirely; a state
 /// variable is a held coordinate of the cell's state machine. A signal `s` is a state variable iff `s`
 /// reaches itself in the reference graph.
 pub fn state_variables(signals: &[&AnalysedOutput]) -> BTreeSet<Symbol> {
-    let reach = transitive_closure(&dependency_map(signals));
-    signals
-        .iter()
-        .map(|s| s.name.clone())
-        .filter(|n| reach.get(n).is_some_and(|r| r.contains(n)))
-        .collect()
+    self_reaching(&dependency_map(signals))
 }
 
 #[cfg(test)]

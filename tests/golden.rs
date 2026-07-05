@@ -557,6 +557,19 @@ Q1 = "!R*(S+Q1)"
 Q2 = "!R*(S+Q1)"
 "#;
 
+/// (5) Complement-output C-element: `Q` is the held (cyclic) coordinate, `QN = !Q` its complement. The
+/// fixpoint would leave the non-cyclic output `QN` naming the cyclic output `Q`; the hoist relocates the
+/// coordinate onto a minted internal `Q_st`, so `Q = Q_st`, `QN = !Q_st`, and neither output names the
+/// other.
+const CLATCH: &str = r#"
+[[cell]]
+name = "CLATCH"
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+QN = "!Q"
+"#;
+
 /// (1) Duplicate combinational outputs survive as two independent combinational outputs — each emits
 /// its arcs, neither is aliased to the other, and no internal appears.
 #[test]
@@ -663,36 +676,104 @@ fn complementary_outputs_over_internal_purge_internal_and_both_emit_arcs() {
     );
 }
 
-/// (4) Recurrent duplicate outputs dedup onto the state variable `Q1`; `Q2` survives as an alias pin
-/// of `Q1` (a genuine state variable — the machine stays well-formed, no escape) and both pins emit
-/// arcs.
+/// (4) Recurrent duplicate outputs dedup onto one coordinate; the hoist then relocates that coordinate
+/// onto a minted internal `Q1_st`, so neither output names another output — both `Q1` and `Q2` project
+/// over the internal statetable node. Both pins still emit arcs.
 #[test]
 fn recurrent_duplicate_outputs_dedup_and_both_emit_arcs() {
     let cell = analyse_one(DUP_RECUR);
-    assert!(cell.internals.is_empty(), "no internal expected");
+    // The recurrent coordinate is hoisted onto a minted internal state node.
+    let int_names: Vec<_> = cell.internals.iter().map(|o| o.name.as_str()).collect();
+    assert_eq!(int_names, ["Q1_st"], "expected the minted internal Q1_st");
 
     let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
     assert_emits_arc(&tcl, "Q1");
     assert_emits_arc(&tcl, "Q2");
+    // The internal node is never an arc pin — arcs range over inputs and outputs only.
+    assert!(
+        !tcl.contains("Q1_st"),
+        "minted internal Q1_st leaked into the arcs:\n{tcl}"
+    );
 
     let pins = liberty_pins(&cell);
     assert!(pins.contains(&"Q1".to_string()), "Q1 pin missing: {pins:?}");
     assert!(pins.contains(&"Q2".to_string()), "Q2 pin missing: {pins:?}");
+    assert!(
+        pins.contains(&"Q1_st".to_string()),
+        "internal Q1_st pin missing: {pins:?}"
+    );
 
-    // Q1 keeps the recurrent coordinate (a statetable); Q2 is demoted to a plain alias pin of Q1.
+    // The statetable lives on the internal node; both outputs carry a `function : "Q1_st"` projection.
     let lib = cell_liberty(&cell);
     assert!(
-        lib.lines()
-            .any(|l| l.contains("statetable") && l.contains("\"Q1\")")),
-        "Q1 should keep its recurrent statetable:\n{lib}"
+        lib.contains(r#"statetable ("R S", "Q1_st") {"#),
+        "Q1_st should carry the recurrent statetable:\n{lib}"
     );
-    // Discriminating: `function : "Q1";` must appear exactly twice — Q1's own statetable self-reference
-    // plus Q2's alias. If a regression let Q2 escape dedup into an independent output, it would emit its
-    // own function/state and the count would drop to 1.
+    assert!(
+        lib.contains("pin (Q1_st) {") && lib.contains("direction : internal;"),
+        "Q1_st should be an internal pin:\n{lib}"
+    );
+    // Discriminating: `function : "Q1_st";` appears exactly three times — the internal node self-ref
+    // plus Q1 and Q2 projecting over it. No output function may name another output.
+    assert_eq!(
+        lib.matches("function : \"Q1_st\";").count(),
+        3,
+        "expected three `function : \"Q1_st\";` (Q1_st self-ref + Q1 + Q2 projections):\n{lib}"
+    );
     assert_eq!(
         lib.matches("function : \"Q1\";").count(),
+        0,
+        "no output may reference the output Q1 — the coordinate lives on the internal Q1_st:\n{lib}"
+    );
+}
+
+/// (5) Complement-output C-element: the hoist moves the shared coordinate onto a minted internal
+/// `Q_st` statetable node; `Q = Q_st`, `QN = !Q_st`. Both outputs emit arcs, the Liberty round-trips,
+/// and no output function names another output.
+#[test]
+fn complement_c_element_pair_hoists_coordinate_to_internal() {
+    let cell = analyse_one(CLATCH);
+    let int_names: Vec<_> = cell.internals.iter().map(|o| o.name.as_str()).collect();
+    assert_eq!(int_names, ["Q_st"], "expected the minted internal Q_st");
+
+    let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+    assert_emits_arc(&tcl, "Q");
+    assert_emits_arc(&tcl, "QN");
+    assert!(
+        !tcl.contains("Q_st"),
+        "minted internal Q_st leaked into the arcs:\n{tcl}"
+    );
+
+    // Round-trips through liberty-parse and the internal node carries the statetable.
+    let pins = liberty_pins(&cell);
+    assert!(
+        pins.contains(&"Q_st".to_string()),
+        "Q_st pin missing: {pins:?}"
+    );
+
+    let lib = cell_liberty(&cell);
+    assert!(
+        lib.contains(r#"statetable ("A B", "Q_st") {"#),
+        "Q_st should carry the statetable:\n{lib}"
+    );
+    // Q projects over the internal; QN over its complement — neither names the other output.
+    assert_eq!(
+        lib.matches("function : \"Q_st\";").count(),
         2,
-        "Q2 should be an alias pin of Q1 (expected two `function : \"Q1\";` — Q1 self-ref + Q2 alias):\n{lib}"
+        "expected two `function : \"Q_st\";` (Q_st self-ref + Q projection):\n{lib}"
+    );
+    assert!(
+        lib.contains("function : \"!Q_st\";"),
+        "QN should project over the complement of the internal:\n{lib}"
+    );
+    assert_eq!(
+        lib.matches("function : \"Q\";").count(),
+        0,
+        "no output may reference the output Q:\n{lib}"
+    );
+    assert!(
+        !lib.contains("function : \"!Q\";"),
+        "QN must not name the output Q — the coordinate lives on Q_st:\n{lib}"
     );
 }
 
