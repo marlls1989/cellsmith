@@ -17,6 +17,10 @@
 //! at the all-zero input (its reset is an input sequence, not a level) is initialised by the sequence
 //! that actually resolves it — the async pins, a clock edge, both requests high — rather than by an
 //! arbitrary held combination.
+//!
+//! The machine model, settling, cycle detection and start-state discovery are described concept-first in
+//! `state-machine-arc-engine.md`; this module records only the implementation specifics the concept
+//! doesn't need.
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 
@@ -105,7 +109,10 @@ pub fn settle<B: Brand, C: ManagerCell>(
 }
 
 /// Like [`settle`], but on oscillation returns the periodic cycle itself — the sequence of states
-/// from the first repeated state back around — so callers can name the oscillating variables.
+/// from the first repeated state back around — so callers can name the oscillating variables. The
+/// concept is in `state-machine-arc-engine.md` §5; the mechanics: `pos` maps each visited state to its
+/// index in `trace` (an O(1) revisit check), and `trace` preserves visitation order, so a revisit of a
+/// state already at index `p` slices the cycle out as `trace[p..]`.
 pub fn settle_or_cycle<B: Brand, C: ManagerCell>(
     deltas: &[Delta<B, C>],
     node: &Minterm<Symbol>,

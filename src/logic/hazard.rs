@@ -16,6 +16,15 @@
 //! enumerating state assignments (an undefined state variable simply means uninitialised). Metastability
 //! is the shared physical risk both create — the reason a constraint is generated — not a type and not a
 //! synonym for oscillation. This module carries only the resulting report types.
+//!
+//! **Implementation note:** deduplication is [`super::confluence`]'s job, not this module's.
+//! [`OrderDependence`] is keyed by the unordered `(pin,edge)|(pin,edge)` pair, keeping the min
+//! `(prevector.len, discovered)` representative; [`Oscillation`] is keyed by `group|condition`,
+//! first-insertion-wins (earliest reachable state, by exploration order), with every colliding pair-probe
+//! [`Race`] appended rather than dropped. `discovered` (on both [`Race`] and [`OrderDependence`]) is the
+//! probed state's index in exploration order — the determinism token that reproduces that tie-break and,
+//! downstream, [`super::confluence::constrain`]'s own constraint dedup. See `hazard-detection.md` for the
+//! concept.
 
 use espresso_logic::{Minterm, Symbol};
 

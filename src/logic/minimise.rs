@@ -95,6 +95,10 @@ fn signal_support<B: Brand, C: ManagerCell>(
 /// `order` is the `signals()` order (outputs then internals, as parsed) and `outputs` is the set of
 /// external-output names; both drive the scan and the alias-representative choice. The returned
 /// [`Minimised`] names the purged internals and the surviving signals whose function changed.
+///
+/// The alternating M1/M2 fixpoint (see (I4) above; concept in `state-space-minimisation.md`) is bounded
+/// at `2 * order.len() + 2` outer iterations — a `debug_assert` backstop against a runaway loop, not a
+/// behavioural limit reached in practice.
 pub fn minimise_state_space<B: Brand, C: ManagerCell>(
     bdds: &mut BTreeMap<Symbol, Bdd<B, C>>,
     order: &[Symbol],
