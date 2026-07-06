@@ -59,8 +59,7 @@ pub struct Race {
     /// The prevector: the input-assignment path that drives every state variable into the probed state
     /// (each node projected onto the inputs).
     pub prevector: Vec<Minterm<Symbol>>,
-    /// Index of the probed state in exploration order — the determinism token used to reproduce the
-    /// dedup tie-break (min by `(prevector.len, discovered)`).
+    /// Index of the probed state in `ex.order` (the sequential BFS exploration order).
     pub discovered: usize,
 }
 
@@ -81,8 +80,8 @@ pub struct OrderDependence {
     pub stable: Vec<Minterm<Symbol>>,
     /// The prevector: the input-assignment path that drives every state variable into the probed state.
     pub prevector: Vec<Minterm<Symbol>>,
-    /// Index of the probed state in exploration order — the determinism token used to reproduce the
-    /// dedup tie-break (min by `(prevector.len, discovered)`).
+    /// Index of the probed state in `ex.order` (the sequential BFS exploration order) — the secondary
+    /// tie-break key: on equal `prevector.len`, the earlier-discovered representative is kept.
     pub discovered: usize,
 }
 

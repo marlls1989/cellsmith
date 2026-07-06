@@ -230,7 +230,9 @@ pub(crate) fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) 
         // one toggle names no racing pair, so it generates no constraint). Recorded once per input per
         // state. Its `group|condition` key shares the report key space with the simultaneous-pair
         // observations below, so a colliding pair-probe [`Race`] is appended to the surviving entry
-        // (append-never-drop), never dropped; first-insertion-wins fixes only the reported representative.
+        // (append-never-drop), never dropped; the reported representative is an arbitrary equal-quality
+        // choice, made when merging per-state maps — only the races are exhaustively unioned across
+        // states.
         for (i, r) in single.iter().enumerate() {
             if let Err(cycle) = r {
                 let group = oscillating_group(cycle, state_vars);
@@ -473,8 +475,10 @@ fn record_order_dependence(map: &mut BTreeMap<String, OrderDependence>, od: Orde
     }
 }
 
-/// Record a detected oscillation hazard into the dedup map, keyed by `group|condition` and keeping the
-/// FIRST insertion (BFS order), while appending any pair-probe [`Race`] to the surviving entry.
+/// Record a detected oscillation hazard into one state's LOCAL dedup map, keyed by `group|condition`,
+/// while appending any pair-probe [`Race`] to the surviving entry. The cross-state representative is
+/// chosen later, when folding per-state maps together: [`merge_oscillation`] keeps whichever colliding
+/// representative it sees first (an arbitrary, equal-quality tie) and unions every state's races.
 fn record_oscillation(
     oscillation: &mut BTreeMap<String, Oscillation>,
     inputs: &[Symbol],

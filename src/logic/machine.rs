@@ -225,14 +225,14 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     // built in parallel across seed functions — set semantics make the union order-free.
     // ¬f's FR cover is f's with the F/R sides swapped, and `cover_inputs` pools `.cubes()`
     // type-blind, so `cover_inputs(&!f) == cover_inputs(f)` as a minterm set — no complement call.
-    let pool: BTreeSet<Minterm<Symbol>> = seed_funcs
-        .par_iter()
-        .flat_map_iter(cover_inputs)
-        .collect();
+    let pool: BTreeSet<Minterm<Symbol>> =
+        seed_funcs.par_iter().flat_map_iter(cover_inputs).collect();
 
     // Depth of each state variable from the inputs (shallowest dependency chain), for the ranking
     // tie-break. A variable driven purely by inputs is depth 1; others are 1 + the shallowest state
     // variable they reference. Pure cycles (no input-only base) stay at the max.
+    // Sequential: this is a relaxation — each pass's `depth` values feed the next pass — so passes
+    // cannot be parallelised.
     let support: Vec<BTreeSet<usize>> = state_deltas
         .iter()
         .map(|(_, d)| {
@@ -294,9 +294,10 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
             .then_with(|| a.0.cmp(&b.0))
     });
 
-    // Seed the BFS from the ranked candidates in parallel: widen each candidate input onto the full
-    // columns (the state columns arrive absent) and settle to a fixpoint. Metastable seeds (no
-    // fixpoint) are dropped.
+    // Seed the BFS from the ranked candidates: widen each candidate input onto the full columns (the
+    // state columns arrive absent) and settle to a fixpoint. Metastable seeds (no fixpoint) are dropped.
+    // Sequential: the Vacant-insertion order into `prev` fixes the order seeds are pushed onto the BFS
+    // queue.
     let mut prev: HashMap<Minterm<Symbol>, Option<Minterm<Symbol>>> = HashMap::new();
     let mut queue: VecDeque<Minterm<Symbol>> = VecDeque::new();
     for (x, _) in &ranked {
@@ -311,7 +312,8 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     }
 
     // BFS: from each node toggle one input at a time, hold the state, and settle. Metastable toggles
-    // (no fixpoint) are dropped.
+    // (no fixpoint) are dropped. Sequential: `queue`/`prev`/`order` and every prevector's shape are
+    // derived from discovery order.
     let mut order: Vec<Minterm<Symbol>> = Vec::new();
     while let Some(node) = queue.pop_front() {
         order.push(node.clone());
