@@ -242,6 +242,28 @@ Q = "A*B + Q*(A+B)"
     }
 
     #[test]
+    fn c2_arc_and_hidden_prevector_lengths_are_minimal() {
+        // multiset of per-key minimal prevector lengths — pins the min-by-len quality criterion;
+        // re-capture only for a deliberate algorithm change
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "C2"
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+"#,
+        );
+        let mut arc_lens: Vec<usize> = cell.arcs.iter().map(|a| a.prevector.len()).collect();
+        arc_lens.sort();
+        assert_eq!(arc_lens, vec![2, 2, 2, 2]);
+        let mut hidden_lens: Vec<usize> =
+            cell.hidden_arcs.iter().map(|h| h.prevector.len()).collect();
+        hidden_lens.sort();
+        assert_eq!(hidden_lens, vec![1, 1, 1, 1, 2, 2, 2, 2]);
+    }
+
+    #[test]
     fn and2_has_hidden_arc_when_output_held() {
         // A falling while B=0 settles with Y held at 0: an internal-power hidden arc, not a transition.
         let cell = analyse(
