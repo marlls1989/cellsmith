@@ -31,8 +31,9 @@
 //!   a combinational relay: at every stable state `s = δ_s(state)` with `s ∉ support(δ_s)`, so it is
 //!   composed into each of its consumers via [`Bdd::compose`] and dropped — *unless* the fold would
 //!   fabricate a register out of emergent memory (the arity-aware guard below). A bare ±alias is the
-//!   arity-1 case and always folds; an output that is a bare ±alias of a surviving internal is inverted
-//!   instead, keeping the coordinate on the output pin.
+//!   arity-1 case and always folds; when a bare ±alias `s` is an output whose target is a surviving
+//!   internal, that internal's definition is folded into `s` and the internal dropped, so the single
+//!   coordinate lands on the output pin (its sign carried through the composition — incidental).
 //!
 //! # Lockstep frame
 //!
@@ -48,10 +49,12 @@
 //! **(I1) alias / arity-1 fold soundness.** A bare ±var alias `s = ±var(t)` carries exactly one bit and
 //! is in lockstep with `t`, so it always folds: the old wire-collapse is now simply the **arity-1 case**
 //! of the guarded fold, composed away like any other relay. When the alias is an **output** whose target
-//! `t` is a *surviving internal*, the fold **inverts** rather than composing the output away: `s` is kept
-//! as the coordinate, `t` is purged, every `t` reference is rewritten `t ↦ ±var(s)`, and `t`'s definer is
-//! transferred to `s` with the parity applied — so the pin survives holding the coordinate `t` used to
-//! name. A bare ±alias **ring** is no longer refused: it collapses onto a single self-holding coordinate
+//! `t` is a *surviving internal*, the same fold lands the coordinate on the output rather than composing
+//! the output away: `t`'s definition is folded into `s`, `s` is kept as the coordinate, `t` is purged,
+//! every `t` reference is rewritten `t ↦ ±var(s)`, and `t`'s definer is transferred to `s` with the
+//! parity carried through — so the pin survives holding the coordinate `t` used to name (the sign is
+//! incidental, not a special inversion step). A bare ±alias **ring** is no longer refused: it collapses
+//! onto a single self-holding coordinate
 //! (`a="b", b="a"` → `b = var(b)`; `a="!b", b="a"` → `b = !var(b)`, a one-node oscillator), preserving
 //! the one bit — and any oscillation — the ring carried on that surviving coordinate, exactly as a
 //! self-holding `ROSC` register does.
@@ -151,8 +154,8 @@ pub struct Minimised {
 /// `Some((t, parity))` iff `f` is a bare ±alias of another surviving key.
 ///
 /// `parity` is `0` when `f == var(t)` and `1` when `f == !var(t)`. Serves [`fold_pass`]'s arity-1
-/// substitution decision (output-alias inversion): `!var(x)` is just an arity-1 function like
-/// `var(x)`, so a bare ±alias always collapses.
+/// substitution decision (folding the coordinate onto an output alias): `!var(x)` is just an arity-1
+/// function like `var(x)`, so a bare ±alias always collapses.
 fn alias_target<B: Brand, C: ManagerCell>(
     name: &Symbol,
     f: &Bdd<B, C>,
@@ -312,10 +315,11 @@ fn dedup_pass<B: Brand, C: ManagerCell>(
 
 /// One arity-aware fold pass. Returns whether it committed anything.
 ///
-/// For each `s` in scan order: first an **output-alias inversion** (an output that is a bare ±alias of
-/// an *internal* key absorbs that key's definer and purges it, breaking the alias 2-cycle the guard
-/// would otherwise refuse); then the **guarded relay elimination** — a signal that does not self-hold
-/// is composed into its consumers and dropped, unless the fold would fabricate a register.
+/// For each `s` in scan order: first the **coordinate-on-output fold** (an output that is a bare ±alias
+/// of an *internal* key folds that key's definer in and purges it, so the coordinate lands on the output
+/// pin, breaking the alias 2-cycle the guard would otherwise refuse); then the **guarded relay
+/// elimination** — a signal that does not self-hold is composed into its consumers and dropped, unless
+/// the fold would fabricate a register.
 fn fold_pass<B: Brand, C: ManagerCell>(
     bdds: &mut BTreeMap<Symbol, Bdd<B, C>>,
     order: &[Symbol],
@@ -330,10 +334,11 @@ fn fold_pass<B: Brand, C: ManagerCell>(
         let f_s = bdds[s].clone();
         let s_is_output = outputs.contains(s);
 
-        // Output-alias inversion (before the self-hold check). An output `s` that is a bare ±alias of an
-        // *internal* key `t` is the keeper of that coordinate: re-express `t`'s definer in terms of `s`
-        // (parity-corrected), fold it everywhere `t` was referenced, and purge `t`. This resolves the
-        // `s ↔ t` alias 2-cycle that the register guard below refuses (e.g. C-element `Q = !QN`).
+        // Coordinate-on-output fold (before the self-hold check). An output `s` that is a bare ±alias of
+        // an *internal* key `t` is the keeper of that coordinate: fold `t`'s definer into `s`'s equation
+        // (re-expressing `t` as ±s, parity-corrected), rewrite it everywhere `t` was referenced, and
+        // purge `t`, so the coordinate lands on the output pin. This resolves the `s ↔ t` alias 2-cycle
+        // that the register guard below refuses (e.g. C-element `Q = !QN`); the sign just carries through.
         if s_is_output {
             if let Some((t, parity)) = alias_target(s, &f_s, bdds) {
                 if !outputs.contains(&t) {
@@ -748,8 +753,8 @@ mod tests {
     fn buffered_c_element_dedups_then_folds_to_single_output_coordinate() {
         // Q and IQ both buffer !QN and are plain-BDD-equal: dedup now retires the internal duplicate IQ
         // outright (purged, consumers rewritten onto var(Q)) inside dedup_pass itself. QN then folds
-        // through via the fold's output-alias inversion, so the whole cell reduces to the single output
-        // coordinate Q = A*B + Q*(A+B).
+        // through via the fold landing the coordinate on the output alias, so the whole cell reduces to
+        // the single output coordinate Q = A*B + Q*(A+B).
         let (b, mut bdds, order, outputs) = system! {
             outputs: ["Q"],
             "Q" = "!QN",

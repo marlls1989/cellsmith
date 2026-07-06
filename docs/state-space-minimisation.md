@@ -130,19 +130,23 @@ whose value is fixed by the current inputs and coordinates — while refusing an
 *fabricate* a register out of emergent memory. It scans candidates in signal order and does three
 things.
 
-### Output-alias inversion
+### Landing the coordinate on an output alias
 
 A bare ±alias `s = ±var(t)` is exactly one coordinate shared by `s` and `t`. When `s` is an **external
-output** and `t` is an **internal** key, `s` is the keeper: re-express `t`'s definer in terms of `s`
-(parity-corrected), fold that everywhere `t` was referenced, and purge `t`. This breaks the `s ↔ t`
-alias 2-cycle that the register guard below would otherwise refuse.
+output** and `t` is an **internal** key, `s` is the keeper: fold `t`'s definer into `s`'s equation
+(re-expressing `t` as ±s, parity-corrected), fold that everywhere `t` was referenced, and purge `t`, so
+the coordinate lands on the output pin `s`. The sign of the alias simply carries through the composition
+arithmetic — there is no separate inversion step. This breaks the `s ↔ t` alias 2-cycle that the
+register guard below would otherwise refuse.
 
 This is what collapses the **gate-level C-element chain** `Q = IQ`, `IQ = !QN`, `QN = …`. Neither
-`Q = var(IQ)` nor `IQ = !var(QN)` is a duplicate, so dedup leaves them; the fold inverts them one link
-per round. Round one keeps output `Q`, folds `IQ`'s definer into it and purges `IQ`, leaving
-`Q = !QN`, `QN = !(A·B + Q·(A+B))`. Round two inverts `Q = !QN` onto the internal `QN`, purging it and
-leaving the single coordinate `δ_Q = A·B + Q·(A+B)`. (A **complement output pair** — where the alias
-target `t` is *itself* an output — is left to dedup/demotion instead: inversion never retires a pin.)
+`Q = var(IQ)` nor `IQ = !var(QN)` is a duplicate, so dedup leaves them; the fold folds each internal's
+definer into its consumer one link per round, the coordinate ending on the output `Q`. Round one keeps
+output `Q`, folds `IQ`'s definer into it and purges `IQ`, leaving `Q = !QN`, `QN = !(A·B + Q·(A+B))`.
+Round two folds `QN`'s definer into `Q = !QN`, purging the internal `QN`; the double negation cancels in
+the composition, leaving the single coordinate `δ_Q = A·B + Q·(A+B)` on the output. (A **complement
+output pair** — where the alias target `t` is *itself* an output — is left to dedup/demotion instead:
+the fold never retires a pin.)
 
 ### Guarded relay elimination
 
@@ -167,7 +171,7 @@ oscillator** whose register already self-holds is allowed.
 
 The first guard clause is the crux: **only a multi-input relay can fabricate a register**. A bare ±var
 alias (`arity(δ_s) == 1`) is in lockstep with its single target — it carries exactly that one bit at
-every state — so it *always* folds (or inverts), 2-cycle or not. The guard can only ever trip on a
+every state — so it *always* folds, 2-cycle or not. The guard can only ever trip on a
 relay with two or more inputs.
 
 ### Worked example — the ICM interlock relays
@@ -204,9 +208,10 @@ The two passes partition the aliasing they resolve by a hard interface rule, not
   aliased (demoted to `var(rep)`), and only when the group is recurrent. Fold owns everything dedup
   leaves as a singleton: substitute-and-drop for a signal not in its own support. A substitution that
   would create a self-reference is permitted **only** when the inserted function has support arity 1 —
-  that includes a bare ±alias `s = ±var(t)` (arity 1, `t` internal), which the fold resolves by
-  inversion, but arity 1 is just the general gate, not special "inverse handling": any arity-1 function
-  is lockstep with its sole input and always folds. So a signal is never contested between the passes.
+  that includes a bare ±alias `s = ±var(t)` (arity 1, `t` internal), which the fold resolves by landing
+  the coordinate on the output alias, but arity 1 is just the general gate, not special "inverse
+  handling": any arity-1 function is lockstep with its sole input and always folds. So a signal is never
+  contested between the passes.
 - **No output-output exclusion is needed.** Dedup may share a single coordinate between *two output
   pins* — it keeps one pin as representative and aliases the other to `var(rep)` when recurrent, and the
   pin is preserved either way. But dedup only ever aliases to a **self-reaching** representative (the
@@ -217,10 +222,11 @@ The two passes partition the aliasing they resolve by a hard interface rule, not
 
 ## Why the rewrite is behaviour-preserving
 
-- **(I1) Arity-1 fold + inversion soundness.** A bare ±var alias carries exactly one bit — it equals
-  `±` its target at every state — so folding it, or inverting an output alias of an internal target,
-  is exact renaming (parity-corrected via the BDD compose). Arity-1 is always lockstep, so this is
-  unconditional. An all-wire cycle is no longer refused: it **collapses** to a single keeper
+- **(I1) Arity-1 fold soundness.** A bare ±var alias carries exactly one bit — it equals
+  `±` its target at every state — so folding it, or folding an internal target's definition into an
+  output alias of it, is exact renaming (parity-corrected via the BDD compose; the sign is incidental).
+  Arity-1 is always lockstep, so this is unconditional. An all-wire cycle is no longer refused: it
+  **collapses** to a single keeper
   coordinate (`a="b"` → `b = var(b)`, a lone self-holding keeper) or a one-node oscillator
   (`a="!b"` → `b = !var(b)`), and the surviving node holds exactly the one bit the cycle carried, so
   its dynamics are preserved.
@@ -254,7 +260,7 @@ locked by the behaviour-preservation golden tests.
 
 The arity guard is a structural proxy for "removing `s` preserves the reachable-state cycle
 structure", and it inspects only `s ↔ c` **2-cycles**. The only residual case is an *emergent
-all-relay ring whose links are all arity > 1* — a longer inversion loop where **every** node is a
+all-relay ring whose links are all arity > 1* — a longer relay/fold loop where **every** node is a
 multi-input relay and none self-holds (e.g. `X1="!X3·A", X2="!X1·B", X3="!X2·C"`: no stable states, no
 committed fixture). Such a ring can admit a fold before any 2-cycle appears, shrinking a would-be
 oscillation group.
