@@ -86,7 +86,7 @@ fn step<B: Brand, C: ManagerCell>(
     // dependency (`Err` → `None`) writes `-` = absent.
     let mut next = node.clone();
     for (j, (_, d)) in deltas.iter().enumerate() {
-        next.set_value_at(split + j, d.evaluate(node).ok())
+        next.set_value_at(split + j, d.evaluate_fast(node))
             .expect("state column in range");
     }
     next
@@ -266,7 +266,7 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     let settlement = |x: &Minterm<Symbol>| -> Vec<Option<bool>> {
         state_deltas
             .iter()
-            .map(|(_, d)| d.evaluate(x).ok())
+            .map(|(_, d)| d.evaluate_fast(x))
             .collect()
     };
     let settle_count = |m: &[Option<bool>]| m.iter().filter(|o| o.is_some()).count();

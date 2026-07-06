@@ -166,7 +166,7 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
                 self.out_deltas.contains_key(name),
                 "output_value: output {name:?} has no entry in out_deltas"
             );
-            self.out_deltas[name].evaluate(node).ok()
+            self.out_deltas[name].evaluate_fast(node)
         }
     }
 }
