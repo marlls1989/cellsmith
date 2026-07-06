@@ -15,15 +15,18 @@
 //! parsed): `loop { dedup_pass; fold_pass; if neither committed break }`. Every transformation in either
 //! pass prefers to keep an output pin; an output is never purged.
 //!
-//! * **dedup — identical-δ merge.** Signals whose functions are the *exact same* BDD are one coordinate
-//!   seen more than once — but a group is merged *only when its shared function references a group
-//!   member* (the coordinate is **recurrent**, so the surviving rep self-holds and becomes a genuine
-//!   state variable). A merged group keeps a single representative (an external output where the group
-//!   holds one, so a pin is never lost), renames the others onto `var(rep)` everywhere via
-//!   [`Bdd::compose_map`], and retires them — internals purged, outputs demoted to a bare `var(rep)`
-//!   alias. A purely **combinational** duplicate (no member in the shared δ) is left untouched: aliasing
-//!   an output to a combinational rep would escape the state set the machine evaluates over (I3), so the
-//!   duplicates stay independent full-function signals. Bare ±aliases are left for the fold.
+//! * **dedup — plain-BDD-equal merge.** Signals whose functions are the *exact same* BDD (bare ±aliases
+//!   included — `!var(x)` is not special) are one coordinate seen more than once, and every such group
+//!   is merged. A merged group keeps a single representative (an external output where the group holds
+//!   one, so a pin is never lost) and renames the other members onto `var(rep)` everywhere via
+//!   [`Bdd::compose_map`]. An **internal** duplicate always retires — it is purged and its consumers
+//!   rewritten onto `var(rep)`. A duplicate **output** is never purged — it is only demoted to a bare
+//!   `var(rep)` alias, and only when the group is **recurrent** (the rep's current δ references a group
+//!   member, so the rep self-holds and the alias stays machine-evaluable — I3/I5); a non-recurrent
+//!   all-output group commits nothing, leaving the duplicates as independent full-function signals.
+//!   What remains for the fold is arity-1-gated substitution: a signal's function is composed into its
+//!   consumers and dropped, refused only when doing so would fabricate a register — and permitted
+//!   despite that risk when the folded function has support arity 1.
 //! * **guarded fold — relay/alias elimination.** A signal `s` that does not appear in its own support is
 //!   a combinational relay: at every stable state `s = δ_s(state)` with `s ∉ support(δ_s)`, so it is
 //!   composed into each of its consumers via [`Bdd::compose`] and dropped — *unless* the fold would
@@ -79,22 +82,27 @@
 //!
 //! **(I4) termination.** Every fold commit purges an internal or removes `s` from a support (`s` re-enters
 //! a support only via a demotion to `±var(rep)`, bounded by the output count). Every dedup commit purges
-//! an internal or **terminally** demotes an output to a bare `±var(rep)` alias — demotion is idempotent
-//! under the `!=` change-check, so a demoted output never re-commits — bounded by the internal-plus-output
-//! count. Both measures are bounded, and the outer loop's `2 * order.len() + 2` `debug_assert` backstops
-//! against a runaway.
+//! an **internal** (the map strictly shrinks) or aliases an **output** duplicate to `var(rep)` —
+//! terminally: the demotion is idempotent under the `!=` change-check, so a demoted output never
+//! re-commits, and the rep of any such alias is itself an output (never purged) and is left self-holding
+//! by the rename, so the fold never re-expands it. Both measures are bounded, and the outer loop's
+//! `2 * order.len() + 2` `debug_assert` backstops against a runaway.
 //!
 //! **(I5) dedup soundness.** If `δ_a == δ_b` as BDDs, then `a` and `b` are computed by the identical
 //! function and take equal values at *every* stable state — lockstep, the I1 wire generalised to any
-//! shared function. Merging is sound as a coordinate rename, but the surviving rep must be
-//! machine-evaluable: `analyse_machine` evaluates every signal over the primary inputs plus the
-//! self-reaching signals only, so the `var(rep)` an output demotes to must name a **state variable**.
-//! Dedup therefore merges a group **only when the shared function references a member** — the coordinate
-//! is *recurrent*, so after the rename `↦ var(rep)` (applied in every surviving δ, including the rep's
-//! own) the rep is self-referential and hence a genuine state variable. A purely combinational duplicate
-//! (no member in the shared δ) is **skipped**: merging it would alias an output to a combinational rep
-//! outside the state set (breaking I3), so the duplicates are left as independent full-function signals,
-//! the behaviour-preserving baseline. Genuine independent memories never collide: a real register
+//! shared function. Merging is sound as a coordinate rename in general, but recurrence now licenses only
+//! the **output**-aliasing half of the merge: **internal** retirement is unconditional (an internal
+//! never has to keep naming a state variable on its own), while a duplicate **output** demotes to
+//! `var(rep)` only when the group is *recurrent* — read from the rep's **current** δ at commit time, not
+//! the grouping-time snapshot, since an earlier same-pass group's rewrite can only *remove* references to
+//! this group's members, never add one. When recurrent, the rep is self-referential after the rename and
+//! hence a genuine state variable, keeping `analyse_machine`'s primary-inputs-plus-self-reaching-signals
+//! evaluation sound. A non-recurrent group with no internal member commits nothing, leaving the duplicate
+//! outputs as independent full-function signals — the behaviour-preserving baseline. A consumer that
+//! transiently references a combinational rep (e.g. after an internal in the same group already retired
+//! onto it) is resolved before the outer loop's fixpoint: either the same-round fold composes the
+//! reference away, or a refusal forms an `s ↔ c` 2-cycle that forces both members to self-reach — so I3
+//! holds at the fixpoint either way. Genuine independent memories never collide: a real register
 //! self-holds on its **own** variable, so two distinct registers have distinct δ, and two mutex grants
 //! differ (`!Qb·A ≠ !Qa·B`).
 //!
@@ -104,12 +112,14 @@
 //! # Dedup × fold interaction
 //!
 //! Dedup can demote one of two identical-δ **output** pins to `var(rep)`, deliberately sharing one
-//! coordinate across two pins. It only ever aliases to a **self-reaching** rep (the recurrence
-//! condition, I5), and the fold skips self-holding candidates — so a dedup alias is never a fold
-//! candidate and can never be re-expanded. No exclusion is needed. Conversely, an output-alias fold that
-//! *resolves* a combinational alias (an output that is a bare ±alias of a surviving internal) proceeds
-//! freely: the inversion keeps the coordinate on the pin (`t` must be internal, I1) and folds the alias
-//! away.
+//! coordinate across two pins — but only through the demotion gate, i.e. only when the group is
+//! recurrent (I5), so an aliased output only ever aliases a **self-reaching** rep, and the fold skips
+//! self-holding candidates: a dedup output-alias is never a fold candidate and can never be re-expanded.
+//! No exclusion is needed. Internal retirement carries no such gate: an internal-purge rewrite can rename
+//! a consumer's reference onto the rep mid-pass, handing the fold a fresh relay candidate the very same
+//! round. Conversely, an output that is a bare ±alias of a surviving internal is just the **arity-1**
+//! case of the fold: the substitution keeps the coordinate on the pin (`t` must be internal, I1) and
+//! folds the alias away.
 //!
 //! # Known limit
 //!
@@ -735,8 +745,10 @@ mod tests {
 
     #[test]
     fn buffered_c_element_dedups_then_folds_to_single_output_coordinate() {
-        // Q and IQ both buffer !QN. IQ (an internal duplicate/alias) is retired and QN folds through, so
-        // the whole cell reduces to the single output coordinate Q = A*B + Q*(A+B).
+        // Q and IQ both buffer !QN and are plain-BDD-equal: dedup now retires the internal duplicate IQ
+        // outright (purged, consumers rewritten onto var(Q)) inside dedup_pass itself. QN then folds
+        // through via the fold's output-alias inversion, so the whole cell reduces to the single output
+        // coordinate Q = A*B + Q*(A+B).
         let (b, mut bdds, order, outputs) = system! {
             outputs: ["Q"],
             "Q" = "!QN",
@@ -755,9 +767,10 @@ mod tests {
 
     #[test]
     fn duplicate_combinational_output_pins_are_left_independent() {
-        // Two output pins carry the identical *combinational* function (no member appears in δ=A*B).
-        // Merging would alias one pin to a combinational rep the machine cannot evaluate (I3), so dedup
-        // skips the group: both pins keep the full function and stay independent.
+        // Two output pins carry the identical *combinational* function (no member appears in δ=A*B) — a
+        // non-recurrent all-output group, so dedup's retire set is empty: aliasing either pin to a
+        // combinational rep the machine cannot evaluate would breach I3, so dedup commits nothing and
+        // both pins keep the full function and stay independent.
         let (b, mut bdds, order, outputs) = system! {
             outputs: ["Y1", "Y2"],
             "Y1" = "A*B",
@@ -802,5 +815,116 @@ mod tests {
         assert!(bdds[&Symbol::from("Q")].equivalent_to(&b.parse("A*B + Q*(A+B)").unwrap()));
         assert!(bdds[&Symbol::from("Qn")] == !&b.var("Q"));
         assert!(bdds[&Symbol::from("Qc")] == b.var("Q"));
+    }
+
+    #[test]
+    fn dedup_pass_retires_plain_equal_internal_alias() {
+        // Q and IQ are plain-BDD-equal (both !QN): a PASS-LOCAL dedup_pass call retires the internal
+        // duplicate IQ outright, during dedup itself — QN's IQ reference is rewritten onto var(Q) before
+        // the fold ever runs. The rep's own bare alias (Q = !QN) is left untouched, still the fold's job.
+        let (b, mut bdds, order, outputs) = system! {
+            outputs: ["Q"],
+            "Q" = "!QN",
+            "IQ" = "!QN",
+            "QN" = "!(A*B + IQ*(A+B))",
+        };
+        let mut result = Minimised::default();
+        let committed = dedup_pass(&mut bdds, &order, &outputs, &mut result);
+        assert!(committed);
+        assert!(!bdds.contains_key("IQ"));
+        assert!(result.purged.contains("IQ"));
+        assert_eq!(result.changed, [Symbol::from("QN")].into_iter().collect());
+        assert!(bdds[&Symbol::from("Q")] == !&b.var("QN"));
+        assert!(bdds[&Symbol::from("QN")].equivalent_to(&b.parse("!(A*B + Q*(A+B))").unwrap()));
+    }
+
+    #[test]
+    fn internal_cse_pair_dedups_onto_single_survivor() {
+        // I1 and I2 are both internal and plain-BDD-equal (A*B): a PASS-LOCAL dedup_pass call retires
+        // I2 onto I1 and rewrites L's I2 reference to var(I1), without ever reaching the fold.
+        let (b, mut bdds, order, outputs) = system! {
+            outputs: ["L"],
+            "I1" = "A*B",
+            "I2" = "A*B",
+            "L" = "!R*(I1+I2+L)",
+        };
+        let mut result = Minimised::default();
+        dedup_pass(&mut bdds, &order, &outputs, &mut result);
+        assert!(result.purged.contains("I2"));
+        assert!(bdds.contains_key("I1"));
+        assert!(!bdds.contains_key("I2"));
+        assert!(bdds[&Symbol::from("L")].equivalent_to(&b.parse("!R*(I1+L)").unwrap()));
+    }
+
+    #[test]
+    fn internal_cse_duplicates_merge_then_fold_into_consumers() {
+        // W1 and W2 are internal duplicates (A*B); dedup retires W2 onto W1, then the fold relays the
+        // survivor W1 into both its consumers.
+        let (b, mut bdds, order, outputs) = system! {
+            outputs: ["Z1", "Z2"],
+            "W1" = "A*B",
+            "W2" = "A*B",
+            "Z1" = "W1+C",
+            "Z2" = "W2*D",
+        };
+        let min = minimise(&mut bdds, &order, &outputs);
+        assert_eq!(
+            min.purged,
+            ["W1", "W2"].map(Symbol::from).into_iter().collect()
+        );
+        assert!(bdds[&Symbol::from("Z1")].equivalent_to(&b.parse("A*B+C").unwrap()));
+        assert!(bdds[&Symbol::from("Z2")].equivalent_to(&b.parse("A*B*D").unwrap()));
+    }
+
+    #[test]
+    fn internal_duplicate_of_combinational_output_retires() {
+        // W is an internal duplicate of the combinational output Y (A*B); the internal always retires
+        // regardless of recurrence, and the fold carries Y's function into its consumer Z.
+        let (b, mut bdds, order, outputs) = system! {
+            outputs: ["Y", "Z"],
+            "Y" = "A*B",
+            "W" = "A*B",
+            "Z" = "W+C",
+        };
+        let min = minimise(&mut bdds, &order, &outputs);
+        assert_eq!(min.purged, [Symbol::from("W")].into_iter().collect());
+        assert!(!bdds.contains_key("W"));
+        assert!(bdds[&Symbol::from("Y")].equivalent_to(&b.parse("A*B").unwrap()));
+        assert!(bdds[&Symbol::from("Z")].equivalent_to(&b.parse("A*B+C").unwrap()));
+    }
+
+    #[test]
+    fn recurrent_internal_duplicate_of_output_merges() {
+        // IQ is an internal duplicate of the recurrent output Q (the shared δ references IQ), so dedup
+        // merges it onto Q, making Q self-holding on its own name.
+        let (b, mut bdds, order, outputs) = system! {
+            outputs: ["Q"],
+            "Q" = "!R*(S+IQ)",
+            "IQ" = "!R*(S+IQ)",
+        };
+        let min = minimise(&mut bdds, &order, &outputs);
+        assert_eq!(min.purged, [Symbol::from("IQ")].into_iter().collect());
+        assert!(min.changed.contains("Q"));
+        assert!(bdds[&Symbol::from("Q")].equivalent_to(&b.parse("!R*(S+Q)").unwrap()));
+    }
+
+    #[test]
+    fn mixed_group_retires_internal_but_keeps_duplicate_outputs() {
+        // Y1, Y2 and W are all plain-BDD-equal (A*B); the group is non-recurrent, so the internal W
+        // still retires unconditionally while the duplicate output Y2 is left un-aliased, independent.
+        let (b, mut bdds, order, outputs) = system! {
+            outputs: ["Y1", "Y2", "Z"],
+            "Y1" = "A*B",
+            "Y2" = "A*B",
+            "W" = "A*B",
+            "Z" = "!W",
+        };
+        let min = minimise(&mut bdds, &order, &outputs);
+        assert_eq!(min.purged, [Symbol::from("W")].into_iter().collect());
+        assert!(min.changed.contains("Z"));
+        assert!(bdds[&Symbol::from("Y1")].equivalent_to(&b.parse("A*B").unwrap()));
+        assert!(bdds[&Symbol::from("Y2")].equivalent_to(&b.parse("A*B").unwrap()));
+        assert!(bdds[&Symbol::from("Y2")] != b.var("Y1"));
+        assert!(bdds[&Symbol::from("Z")].equivalent_to(&b.parse("!(A*B)").unwrap()));
     }
 }
