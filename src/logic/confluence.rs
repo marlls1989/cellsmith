@@ -664,6 +664,42 @@ Q = "A*B + Q*(A+B)"
     }
 
     #[test]
+    fn constraint_prevector_lengths_are_minimal() {
+        // multiset of per-key minimal prevector lengths — pins the min-by-len quality criterion;
+        // re-capture only for a deliberate algorithm change
+        let dff = analyse(
+            r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+constraint_arcs = true
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#,
+        );
+        let mut dff_lens: Vec<usize> = dff.constraints.iter().map(|c| c.prevector.len()).collect();
+        dff_lens.sort();
+        assert_eq!(dff_lens, vec![1, 1]);
+
+        let c2 = analyse(
+            r#"
+[[cell]]
+name = "C2"
+inputs = ["A", "B"]
+constraint_arcs = true
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+"#,
+        );
+        let mut c2_lens: Vec<usize> = c2.constraints.iter().map(|c| c.prevector.len()).collect();
+        c2_lens.sort();
+        assert_eq!(c2_lens, vec![2, 2]);
+    }
+
+    #[test]
     fn sr_latch_has_non_seq_constraint() {
         // The SR latch's simultaneous release (11→00) is a real order-hazard, filed as a non_seq S↔R.
         let cell = analyse(
