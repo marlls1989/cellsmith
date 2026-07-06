@@ -79,4 +79,4 @@ inputs = ["A", "B"]
 IQ = "!QN"
 QN = "!(A*B + IQ*(A+B))"
 [cell.outputs]
-Q = "IQ"                      # must minimise to the single coordinate Q, delta_Q = A*B + Q*(A+B)
+Q = "!QN"                      # must minimise to the single coordinate Q, delta_Q = A*B + Q*(A+B)
