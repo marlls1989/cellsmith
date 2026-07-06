@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use espresso_logic::{bdd_builder, BoolExpr, Symbol};
+use espresso_logic::{sync_bdd_builder, BoolExpr, Symbol};
 use indexmap::IndexMap;
 use serde::Deserialize;
 use thiserror::Error;
@@ -293,7 +293,7 @@ impl Cell {
         // fixpoint). It rewrites the map in place so every surviving signal is a genuine-memory
         // coordinate; the same map is then shared by the machine pass, the region cache and emission —
         // no signal function is ever rebuilt.
-        let builder = bdd_builder!();
+        let builder = sync_bdd_builder!();
         let mut bdds: BTreeMap<Symbol, _> = analysed
             .signals()
             .map(|s| (s.name.clone(), builder.build(&s.expr)))
@@ -364,8 +364,7 @@ pub fn parse_spec(toml_src: &str) -> Result<Spec, ModelError> {
 }
 
 /// Parse a single-cell TOML `src` and return its analysed form. The one canonical test helper, shared
-/// by the in-crate `#[cfg(test)]` modules (`tests/golden.rs` keeps its own copy — a separate crate
-/// cannot see `pub(crate)`).
+/// by the in-crate `#[cfg(test)]` modules.
 #[cfg(test)]
 pub(crate) fn analyse_one(src: &str) -> AnalysedCell {
     parse_spec(src).unwrap().cells.remove(0).analyse().unwrap()

@@ -82,7 +82,10 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
     pub(crate) fn build(
         cell: &'c AnalysedCell,
         bdds: &BTreeMap<Symbol, Bdd<B, C>>,
-    ) -> Option<Machine<'c, B, C>> {
+    ) -> Option<Machine<'c, B, C>>
+    where
+        C: Send + Sync,
+    {
         let inputs = &cell.inputs;
         let n = inputs.len();
 
@@ -172,7 +175,7 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
 /// shared exploration. The builder was minted once in [`crate::model::Cell::analyse`]; this pass only
 /// reads the shared map. Returns an empty [`MachineAnalysis`] when the cell is not explored (the blow-up
 /// guard).
-pub fn analyse_machine<B: Brand, C: ManagerCell>(
+pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     cell: &AnalysedCell,
     bdds: &BTreeMap<Symbol, Bdd<B, C>>,
 ) -> MachineAnalysis {

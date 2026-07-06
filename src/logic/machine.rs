@@ -187,7 +187,7 @@ impl Explored {
 /// refining further state as inputs toggle.
 ///
 /// Shared by [`super::arcs`] and [`super::confluence`], which re-walk `order`.
-pub fn explore<B: Brand, C: ManagerCell>(
+pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     state_deltas: &[Delta<B, C>],
     seed_funcs: &[Bdd<B, C>],
     input_names: &[Symbol],
@@ -328,7 +328,7 @@ pub fn explore<B: Brand, C: ManagerCell>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use espresso_logic::bdd_builder;
+    use espresso_logic::{bdd_builder, sync_bdd_builder};
 
     #[test]
     fn settles_a_c_element_hold() {
@@ -353,7 +353,7 @@ mod tests {
     fn seeds_are_the_forced_on_off_covers() {
         // C2 (2-input Muller-C): Q = A*B + Q*(A+B). The settled BFS seeds are exactly the two forced
         // covers — the on-set (A=1,B=1,Q=1) and the off-set (A=0,B=0,Q=0), both present.
-        let builder = bdd_builder!();
+        let builder = sync_bdd_builder!();
         let dq = builder.parse("A*B + Q*(A+B)").unwrap();
         let deltas = vec![(Symbol::from("Q"), dq.clone())];
         let inputs = [Symbol::from("A"), Symbol::from("B")];

@@ -81,7 +81,9 @@ pub struct HiddenArc {
 /// (see [`machine`] and [`Machine`]). A machine node is a fully-fixed [`Minterm<Symbol>`] over
 /// `[inputs…, state_vars…]`. Also derives the whole-cell internal-power ('hidden') arcs — single input
 /// toggles that settle but leave every output unchanged.
-pub(crate) fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> (Vec<Arc>, Vec<HiddenArc>) {
+pub(crate) fn derive<B: Brand, C: ManagerCell + Send + Sync>(
+    m: &Machine<B, C>,
+) -> (Vec<Arc>, Vec<HiddenArc>) {
     let cell = m.cell;
     let inputs = &cell.inputs;
     let deltas = &m.deltas;
