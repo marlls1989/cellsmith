@@ -50,8 +50,9 @@
 //! [`constrain`]'s own [`Constraint`] dedup ([`constraint_key`]) both keep the min
 //! `(prevector.len, discovered)` representative per canonical key — a total order, so the surviving entry
 //! is fixed regardless of merge order. [`detect`]'s `oscillation` dedup instead keeps an arbitrary colliding
-//! representative (`group`/`condition`/`stable` coincide by key, an equal-quality tie) and appends every
-//! colliding pair-probe [`Race`] to it — races are never dropped. All three dedup maps are [`BTreeMap`]s,
+//! representative — on a collision `group`/`condition` coincide (the key is injective in them) but
+//! `stable` does not, so it UNIONS `stable` as a set (collision-order-independent) and UNIONS the
+//! colliding pair-probe [`Race`]s — races are never dropped. All three dedup maps are [`BTreeMap`]s,
 //! so iteration order — and hence report/emission order — is deterministic independent of any hash map's
 //! order. A fold may only gain a constraint, never lose one.
 
@@ -506,16 +507,24 @@ fn record_oscillation(
     }
 }
 
-/// Merge one state's oscillation entry into the accumulator when folding the per-state maps: keep the
-/// incumbent representative (an equal-quality free tie — `group`/`condition`/`stable` coincide by key)
-/// and append the newcomer's [`Race`]s. Races are never dropped; they feed [`constrain`].
+/// Merge one state's oscillation entry into the accumulator when folding the per-state maps. On a key
+/// collision `group`/`condition` coincide (the key is injective in them), but `stable` does *not*: a
+/// single-toggle observation records an empty `stable` while a pair-probe records a non-empty set, and
+/// both share the key space. So keep the incumbent's remaining (key-determined) fields, UNION `stable`
+/// as a set (dedup + canonical sort — collision-order-independent) and UNION the [`Race`]s. Races are
+/// never dropped; they feed [`constrain`].
 fn merge_oscillation(map: &mut BTreeMap<String, Oscillation>, key: String, osc: Oscillation) {
     match map.entry(key) {
         std::collections::btree_map::Entry::Vacant(v) => {
             v.insert(osc);
         }
         std::collections::btree_map::Entry::Occupied(mut e) => {
-            e.get_mut().races.extend(osc.races);
+            let entry = e.get_mut();
+            let mut merged: BTreeSet<Minterm<Symbol>> =
+                std::mem::take(&mut entry.stable).into_iter().collect();
+            merged.extend(osc.stable);
+            entry.stable = merged.into_iter().collect();
+            entry.races.extend(osc.races);
         }
     }
 }
