@@ -1060,6 +1060,10 @@ fn internal_duplicate_of_combinational_output_dedups_and_both_emit_arcs() {
         "Y should carry A*B:\n{lib}"
     );
     assert!(
+        lib.contains("function : \"C + A*B\";"),
+        "Z should carry the composed A*B+C:\n{lib}"
+    );
+    assert!(
         !lib.contains("function : \"W"),
         "Z should not stay aliased to the purged internal W:\n{lib}"
     );
