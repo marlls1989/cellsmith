@@ -508,6 +508,7 @@ mod tests {
 name = "DFF"
 inputs = ["CLK", "D"]
 clock = ["CLK"]
+constraint_arcs = true
 [cell.internal]
 M = "!CLK*D + CLK*M"
 [cell.outputs]
@@ -554,6 +555,7 @@ Q = "CLK*M + !CLK*Q"
 [[cell]]
 name = "DFF"
 inputs = ["CLK", "D"]
+constraint_arcs = true
 [cell.internal]
 M = "!CLK*D + CLK*M"
 [cell.outputs]
@@ -580,6 +582,7 @@ Q = "CLK*M + !CLK*Q"
 [[cell]]
 name = "MUT"
 inputs = ["A", "B"]
+constraint_arcs = true
 [cell.outputs]
 Qa = "!Qb * A"
 Qb = "!Qa * B"
@@ -629,6 +632,7 @@ Qb = "!Qa * B"
 [[cell]]
 name = "C2"
 inputs = ["A", "B"]
+constraint_arcs = true
 [cell.outputs]
 Q = "A*B + Q*(A+B)"
 "#,
@@ -667,6 +671,7 @@ Q = "A*B + Q*(A+B)"
 [[cell]]
 name = "SR"
 inputs = ["S", "R"]
+constraint_arcs = true
 [cell.outputs]
 Q = "S + Q*!R"
 Qn = "R + Qn*!S"
@@ -694,6 +699,7 @@ Qn = "R + Qn*!S"
 [[cell]]
 name = "SYNC2"
 inputs = ["C1", "C2", "D"]
+constraint_arcs = true
 [cell.internal]
 M1 = "!C1*D + C1*M1"
 [cell.outputs]
@@ -730,11 +736,14 @@ Q = "!C2*M1 + C2*Q"
 
     #[test]
     fn combinational_has_no_constraints() {
+        // Opts in, so generation actually runs — the empty result is the confluence analysis finding no
+        // hazard to constrain, not the per-cell gate skipping generation.
         let cell = analyse(
             r#"
 [[cell]]
 name = "ND2"
 inputs = ["A", "B"]
+constraint_arcs = true
 [cell.outputs]
 Y = "!(A*B)"
 "#,

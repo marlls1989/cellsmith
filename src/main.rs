@@ -13,7 +13,6 @@ use clap::Parser;
 use cellsmith::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
 use cellsmith::emit::liberty::library_liberty;
 use cellsmith::emit::verilog::cell_verilog;
-use cellsmith::logic::confluence;
 use cellsmith::model::{parse_spec, AnalysedCell};
 
 /// Generate Cadence Liberate transition arcs (with prevectors), a behavioural Verilog model and a
@@ -65,7 +64,16 @@ fn main() {
 
 fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     let src = read_spec(&cli.spec)?;
-    let cells: Vec<AnalysedCell> = parse_spec(&src)?
+    let mut spec = parse_spec(&src)?;
+    // `--constraints` is a blanket opt-in: it enables constraint-arc generation for every cell,
+    // exactly as if each had declared `constraint_arcs = true`. Applied before analysis so the single
+    // per-cell flag gates both generation and emission downstream.
+    if cli.constraints {
+        for c in &mut spec.cells {
+            c.constraint_arcs = true;
+        }
+    }
+    let cells: Vec<AnalysedCell> = spec
         .cells
         .iter()
         .map(|c| c.analyse())
@@ -93,13 +101,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                     )
                 })
                 .unwrap_or_default();
-            eprintln!(
-                "cellsmith: warning: cell {:?}: nodes {{{}}} oscillate when {}{via} — risk of \
-                 metastability; annotated only, not modelled as timing.",
+            warn(&format!(
+                "cellsmith: warning: cell {:?}: nodes {{{}}} oscillate when {}{via}",
                 c.name,
                 a.group.join(", "),
                 a.condition_str(),
-            );
+            ));
         }
     }
 
@@ -122,47 +129,21 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             ));
         }
         for ((x, y), hazards) in &pairs {
-            eprintln!(
+            warn(&format!(
                 "cellsmith: warning: cell {:?}: inputs ({x}, {y}) race — the settled state depends \
                  on which edge lands first when {} — risk of metastability.",
                 c.name,
                 hazards.join("; "),
-            );
+            ));
         }
     }
 
-    // Diagnose every generated constraint, for any cell, listing the hazard conditions it was
-    // generated to avoid. Each input pin pair is uniformly one kind (setup/hold if it holds a declared
-    // clock, else non_seq), so its conditions are gathered and reported once.
-    type ConstraintPairs<'a> = BTreeMap<(&'a str, &'a str), (&'static str, Vec<String>)>;
-    for c in &cells {
-        let mut pairs: ConstraintPairs = BTreeMap::new();
-        for con in &c.constraints {
-            let (a, b) = (con.related.as_str(), con.pin.as_str());
-            let key = if a <= b { (a, b) } else { (b, a) };
-            let kind = match con.kind {
-                confluence::ConstraintKind::SetupHold => "setup/hold",
-                confluence::ConstraintKind::NonSeq => "non_seq",
-            };
-            pairs
-                .entry(key)
-                .or_insert((kind, Vec::new()))
-                .1
-                .push(con.condition());
-        }
-        for ((a, b), (kind, conditions)) in &pairs {
-            eprintln!(
-                "cellsmith: warning: cell {:?}: inputs ({a}, {b}): generated a {kind} constraint to \
-                 avoid the hazard when {}.",
-                c.name,
-                conditions.join("; "),
-            );
-        }
-    }
+    // Constraints are the *remedy* for a detected hazard, not a phenomenon of their own: the
+    // oscillation and order-dependence warnings above already report every hazard, so the constraint
+    // arcs are emitted (below, gated by the per-cell opt-in) without a separate diagnostic.
 
     let arc_opts = ArcsTclOptions {
         emit_when: !cli.no_when,
-        emit_constraints: cli.constraints,
         emit_internal: !cli.no_internal,
         emit_leakage: !cli.no_leakage,
     };
@@ -209,6 +190,18 @@ fn render(cells: &[AnalysedCell], mut one: impl FnMut(&AnalysedCell) -> String) 
 /// A stdout section banner for one artifact.
 fn banner(kind: &str, body: &str) -> String {
     format!("// ===== cellsmith {kind} =====\n{body}\n")
+}
+
+/// Emit a warning to stderr wrapped to 80 columns on word boundaries; continuation lines get a
+/// 2-space hanging indent so each warning reads as one grouped block. Long single tokens (pin names,
+/// brace-wrapped state strings) are kept intact rather than split.
+fn warn(msg: &str) {
+    let opts = textwrap::Options::new(80)
+        .break_words(false)
+        .subsequent_indent("  ");
+    for line in textwrap::wrap(msg, &opts) {
+        eprintln!("{line}");
+    }
 }
 
 /// The default output base name derived from the spec path (stem), or "cells" for stdin.
