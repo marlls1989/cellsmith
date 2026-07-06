@@ -13,7 +13,6 @@ toml = "1"
 clap = { version = "4", features = ["derive"] }
 thiserror = "2"
 indexmap = { version = "2", features = ["serde"] }
-textwrap = "0.16"
 
 [lib]
 name = "cellsmith"

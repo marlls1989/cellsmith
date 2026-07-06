@@ -84,57 +84,55 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     // expressed as deterministic timing.
     for c in &cells {
         for a in &c.oscillation {
-            // How the machine reached it: the path into the pre-hazard state and the simultaneous
-            // toggle that triggers the oscillation, from the representative pair-probe race (min by
-            // `(prevector.len, discovered)`, matching the constraint tie-break). A single-toggle
-            // oscillation carries no race, so its path/transition are omitted.
-            let via = a
-                .races
-                .iter()
-                .min_by_key(|r| (r.prevector.len(), r.discovered))
-                .map(|r| {
-                    format!(
-                        " (reached along {}; pre-hazard state {}; triggered by simultaneous toggle {})",
-                        r.path_str(),
-                        r.pre_state_str(),
-                        r.transition_str(),
-                    )
-                })
-                .unwrap_or_default();
-            warn(&format!(
-                "cellsmith: warning: cell {:?}: nodes {{{}}} oscillate when {}{via}",
+            let mut msg = format!(
+                "cellsmith: warning: cell {:?}: nodes {{{}}} oscillate when {}\n",
                 c.name,
                 a.group.join(", "),
                 a.condition_str(),
-            ));
+            );
+            // How the machine reached it: the path into the pre-hazard state and the simultaneous
+            // toggle that triggers the oscillation, from the representative pair-probe race (min by
+            // `(prevector.len, discovered)`, matching the constraint tie-break). A single-toggle
+            // oscillation carries no race, so its detail fields are omitted.
+            if let Some(r) = a
+                .races
+                .iter()
+                .min_by_key(|r| (r.prevector.len(), r.discovered))
+            {
+                msg.push_str(&field("reached along", &r.path_str()));
+                msg.push_str(&field("pre-hazard", &r.pre_state_str()));
+                msg.push_str(&field(
+                    "triggered by",
+                    &format!("simultaneous toggle {}", r.transition_str()),
+                ));
+            }
+            eprint!("{msg}");
         }
     }
 
     // Diagnose detected order-dependent hazards, grouped per racing pin pair: the settled state
-    // depends on which of the pair's edges lands first (non-confluence).
+    // depends on which of the pair's edges lands first (non-confluence). Each hazard on the pair
+    // renders as its own field-block (condition, path into the pre-hazard state, and the two settle
+    // orders whose outcomes diverge); multiple blocks are separated by a blank line.
     type RacePairs<'a> = BTreeMap<(&'a str, &'a str), Vec<String>>;
     for c in &cells {
         let mut pairs: RacePairs = BTreeMap::new();
         for od in &c.order_dependence {
             let (x, y) = (od.x.as_str(), od.y.as_str());
             let key = if x <= y { (x, y) } else { (y, x) };
-            // Each hazard states how the machine got there: the condition, the path into the pre-hazard
-            // state, and the two settle orders whose outcomes diverge.
-            pairs.entry(key).or_default().push(format!(
-                "{} (reached along {}; pre-hazard state {}; orders {})",
-                od.condition_str(),
-                od.path_str(),
-                od.pre_state_str(),
-                od.transition_str(),
-            ));
+            let mut block = field("when", &od.condition_str());
+            block.push_str(&field("reached along", &od.path_str()));
+            block.push_str(&field("pre-hazard", &od.pre_state_str()));
+            block.push_str(&field("orders", &od.transition_str()));
+            pairs.entry(key).or_default().push(block);
         }
-        for ((x, y), hazards) in &pairs {
-            warn(&format!(
-                "cellsmith: warning: cell {:?}: inputs ({x}, {y}) race — the settled state depends \
-                 on which edge lands first when {} — risk of metastability.",
+        for ((x, y), blocks) in &pairs {
+            let mut msg = format!(
+                "cellsmith: warning: cell {:?}: inputs ({x}, {y}) race\n",
                 c.name,
-                hazards.join("; "),
-            ));
+            );
+            msg.push_str(&blocks.join("\n"));
+            eprint!("{msg}");
         }
     }
 
@@ -192,16 +190,11 @@ fn banner(kind: &str, body: &str) -> String {
     format!("// ===== cellsmith {kind} =====\n{body}\n")
 }
 
-/// Emit a warning to stderr wrapped to 80 columns on word boundaries; continuation lines get a
-/// 2-space hanging indent so each warning reads as one grouped block. Long single tokens (pin names,
-/// brace-wrapped state strings) are kept intact rather than split.
-fn warn(msg: &str) {
-    let opts = textwrap::Options::new(80)
-        .break_words(false)
-        .subsequent_indent("  ");
-    for line in textwrap::wrap(msg, &opts) {
-        eprintln!("{line}");
-    }
+/// One indented detail line under a hazard-warning header: a colon-labelled field whose values are
+/// column-aligned across the block (the longest label, `reached along:`, sets the column). Includes a
+/// trailing newline so callers concatenate fields directly.
+fn field(label: &str, value: &str) -> String {
+    format!("    {:<14} {value}\n", format!("{label}:"))
 }
 
 /// The default output base name derived from the spec path (stem), or "cells" for stdin.
