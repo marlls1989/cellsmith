@@ -768,6 +768,20 @@ Q = "A*B + Q*(A+B)"
 QN = "!Q"
 "#;
 
+/// (6) An internal duplicate of a combinational output: dedup retires the internal onto the pin, the
+/// fold then relays the pin's function into its consumer — no internal survives and no output
+/// references another.
+const DUP_INT: &str = r#"
+[[cell]]
+name = "DUPI"
+inputs = ["A", "B", "C"]
+[cell.internal]
+W = "A*B"
+[cell.outputs]
+Y = "A*B"
+Z = "W+C"
+"#;
+
 /// (1) Duplicate combinational outputs survive as two independent combinational outputs — each emits
 /// its arcs, neither is aliased to the other, and no internal appears.
 #[test]
@@ -1007,6 +1021,54 @@ fn complement_c_element_pair_hoists_coordinate_to_internal() {
     );
 }
 
+/// (6) An internal duplicate of a combinational output: dedup retires the internal `W` onto the pin
+/// `Y`, and the fold relays `Y`'s function into its consumer `Z` — no internal survives and no output
+/// references another.
+#[test]
+fn internal_duplicate_of_combinational_output_dedups_and_both_emit_arcs() {
+    let cell = analyse_one(DUP_INT);
+    assert!(
+        cell.internals.is_empty(),
+        "internal W should be purged: {:?}",
+        cell.internals
+            .iter()
+            .map(|o| o.name.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+    assert_emits_arc(&tcl, "Y");
+    assert_emits_arc(&tcl, "Z");
+    // After the fold, Z's support is inputs only; no other pin starts with Y.
+    assert!(
+        !tcl.contains("-related_pin Y"),
+        "Z arc relates to the output Y:\n{tcl}"
+    );
+
+    let pins = liberty_pins(&cell);
+    assert!(pins.contains(&"Y".to_string()), "Y pin missing: {pins:?}");
+    assert!(pins.contains(&"Z".to_string()), "Z pin missing: {pins:?}");
+    assert!(
+        !pins.contains(&"W".to_string()),
+        "purged internal W still a pin: {pins:?}"
+    );
+
+    // Y carries the deduped A*B; Z carries the composed A*B+C, never an alias to Y.
+    let lib = cell_liberty(&cell);
+    assert!(
+        lib.contains("function : \"A*B\";"),
+        "Y should carry A*B:\n{lib}"
+    );
+    assert!(
+        !lib.contains("function : \"W"),
+        "Z should not stay aliased to the purged internal W:\n{lib}"
+    );
+    assert!(
+        !lib.contains("function : \"Y\";"),
+        "Z should not stay aliased to the output Y:\n{lib}"
+    );
+}
+
 /// Spec-conformance net over every fixture: the single-table sequential shape holds for each cell (at
 /// most one statetable; every output binds exactly one of function/state_function/internal_node; a plain
 /// `function` names only inputs; a `state_function` names only inputs or internal-node pins; every
@@ -1026,6 +1088,7 @@ Y = "!(A*B)"
 "#;
     for src in [
         C2, ND2, MUT, SR, DFF, ICM, ROSC, C2GATE, DUP_COMB, BUF_COMB, COMP_OUT, DUP_RECUR, CLATCH,
+        DUP_INT,
     ] {
         let cell = analyse_one(src);
         let frag = cell_liberty(&cell);
