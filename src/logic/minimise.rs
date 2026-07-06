@@ -139,8 +139,9 @@ pub struct Minimised {
 
 /// `Some((t, parity))` iff `f` is a bare ±alias of another surviving key.
 ///
-/// `parity` is `0` when `f == var(t)` and `1` when `f == !var(t)`. Used both to detect the aliases
-/// [`dedup_pass`] leaves alone and to drive [`fold_pass`]'s output-alias inversion.
+/// `parity` is `0` when `f == var(t)` and `1` when `f == !var(t)`. Serves [`fold_pass`]'s arity-1
+/// substitution decision (output-alias inversion): `!var(x)` is just an arity-1 function like
+/// `var(x)`, so a bare ±alias always collapses.
 fn alias_target<B: Brand, C: ManagerCell>(
     name: &Symbol,
     f: &Bdd<B, C>,
@@ -191,15 +192,21 @@ pub fn minimise_state_space<B: Brand, C: ManagerCell>(
     result
 }
 
-/// One dedup pass: collapse signals that share the *same* function onto a single coordinate. Returns
-/// whether it committed anything.
+/// One dedup pass: collapse every plain-BDD-equal group onto a single coordinate. Returns whether it
+/// committed anything.
 ///
-/// Bare aliases are skipped (they are [`fold_pass`]'s job) so the two passes cannot fight over them.
-/// Each duplicate group is merged only when its shared function references a member (a **recurrent**
-/// coordinate, so the surviving rep self-holds and stays machine-evaluable — I3/I5); a purely
-/// combinational duplicate is left independent. A merged group keeps one representative — an external
-/// output where the group holds one, so a pin is never lost — renames the others onto `var(rep)`
-/// everywhere, and retires them (internals purged, outputs demoted to `var(rep)`).
+/// Grouping is pure plain-BDD equality — bare ±aliases included, `!var(x)` is not special. Each group
+/// keeps one representative (an external output where the group holds one, so a pin is never lost) and
+/// rewrites the retired members' consumers onto `var(rep)`. An **internal** duplicate ALWAYS retires:
+/// it is purged and its consumers rewritten. A duplicate **output** is never purged — only aliased
+/// (demoted to `var(rep)`, pin preserved so it still emits arcs), and only when the group is
+/// **recurrent** (the rep's current δ references a group member, so the rep self-holds and the
+/// `var(rep)` aliases stay machine-evaluable — I3/I5). A non-recurrent all-output group commits
+/// nothing.
+///
+/// What is LEFT for [`fold_pass`]: signals whose definition must be SUBSTITUTED into consumers and
+/// dropped — fold permits such a substitution unless it would create a self-reference, and permits a
+/// self-reference-creating one only when the inserted function has support arity 1.
 fn dedup_pass<B: Brand, C: ManagerCell>(
     bdds: &mut BTreeMap<Symbol, Bdd<B, C>>,
     order: &[Symbol],
@@ -209,34 +216,44 @@ fn dedup_pass<B: Brand, C: ManagerCell>(
     let mut groups: Vec<(Bdd<B, C>, Vec<Symbol>)> = Vec::new();
     for s in order {
         let Some(f) = bdds.get(s) else { continue };
-        if alias_target(s, f, bdds).is_some() {
-            continue;
-        }
         match groups.iter_mut().find(|(g, _)| g == f) {
             Some((_, members)) => members.push(s.clone()),
             None => groups.push((f.clone(), vec![s.clone()])),
         }
     }
     let mut progress = false;
-    for (shared, members) in groups.into_iter().filter(|(_, m)| m.len() >= 2) {
-        // Only merge a recurrent coordinate: if the shared δ references a group member, the surviving
-        // rep becomes self-referential after the rename → var(rep) — a genuine state variable, so the
-        // var(rep) aliases are machine-evaluable (I3). A purely combinational duplicate (no member in
-        // δ) would leave an output aliased to a combinational rep, which the machine cannot evaluate;
-        // leave those independent (a later fold/relay pass handles any internal duplicate).
-        if !members.iter().any(|m| shared.variables().any(|v| v == *m)) {
-            continue;
-        }
+    for (_, members) in groups.into_iter().filter(|(_, m)| m.len() >= 2) {
         let rep = members
             .iter()
             .find(|m| outputs.contains(*m))
             .unwrap_or(&members[0])
             .clone();
-        let b = bdds[&rep].builder();
-        let rep_var = b.var(rep.as_str());
-        let rename: BTreeMap<Symbol, Bdd<B, C>> = members
+        // Recurrence is read from the rep's CURRENT map entry at commit time, not the grouping-time
+        // snapshot: an earlier group's compose_map in this same pass can only REMOVE references to
+        // this group's members (substitution targets are other groups' disjoint reps), so the
+        // snapshot can overstate recurrence and wrongly alias an output onto a non-self-holding rep.
+        // A recurrent group's rep self-holds after the rename → var(rep), so the aliases stay
+        // machine-evaluable (I3); an internal duplicate always retires regardless.
+        let recurrent = members
+            .iter()
+            .any(|m| bdds[&rep].variables().any(|v| v == *m));
+        // Internals always retire; an output retires (demoted to var(rep)) ONLY when recurrent. A
+        // non-recurrent all-output group (DUP_COMB) yields an empty retired set and commits nothing.
+        let retired: Vec<Symbol> = members
             .iter()
             .filter(|m| **m != rep)
+            .filter(|m| !outputs.contains(*m) || recurrent)
+            .cloned()
+            .collect();
+        if retired.is_empty() {
+            continue;
+        }
+        let b = bdds[&rep].builder();
+        let rep_var = b.var(rep.as_str());
+        // Rename only the RETIRED members' consumers — renaming a non-demoted output's consumers
+        // would wrongly rewire them onto the rep.
+        let rename: BTreeMap<Symbol, Bdd<B, C>> = retired
+            .iter()
             .map(|m| (m.clone(), rep_var.clone()))
             .collect();
         let names: Vec<Symbol> = order
@@ -262,17 +279,17 @@ fn dedup_pass<B: Brand, C: ManagerCell>(
                 progress = true;
             }
         }
-        for m in &members {
-            if *m == rep {
-                continue;
-            }
+        for m in &retired {
             if outputs.contains(m) {
+                // Duplicate output: demote to var(rep), pin kept — never purged.
                 if bdds[m] != rep_var {
                     result.changed.insert(m.clone());
                     bdds.insert(m.clone(), rep_var.clone());
                     progress = true;
                 }
             } else {
+                // Internal duplicate: purge. The interface is sacred — result.purged ∩ outputs = ∅.
+                debug_assert!(!outputs.contains(m), "dedup must never purge an output pin");
                 bdds.remove(m);
                 result.purged.insert(m.clone());
                 progress = true;
