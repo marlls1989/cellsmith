@@ -45,17 +45,19 @@
 //!
 //! **Implementation notes** (concept in `hazard-detection.md`, not restated here): each reachable state's
 //! per-input settle (`single`) is computed once and reused across every pair probe, so [`detect`] costs
-//! O(n) settles per state rather than O(n²). [`detect`]'s `order_dependence` dedup and [`constrain`]'s own
-//! [`Constraint`] dedup ([`constraint_key`]) both keep the min `(prevector.len, discovered)` representative
-//! per canonical key; [`detect`]'s `oscillation` dedup instead keeps the *first* insertion (earliest
-//! reachable state, by exploration order) and appends every colliding pair-probe [`Race`] to it. All three
-//! dedup maps are [`BTreeMap`]s, so iteration order — and hence report/emission order — is deterministic
-//! independent of any hash map's order. On the `ICM` cell, folding the `sela`/`selb` relays *gains* a
-//! `(CLKA, S)`/`(CLKB, S)` setup/hold pair the un-folded model lacks — a locked sentinel in
-//! `tests/golden.rs::icm_relays_fold_and_machine_is_preserved`, since a fold may only gain a constraint,
-//! never lose one.
+//! O(n) settles per state rather than O(n²). States are probed in parallel and their per-state dedup maps
+//! merged together; the merge is order-independent. [`detect`]'s `order_dependence` dedup and
+//! [`constrain`]'s own [`Constraint`] dedup ([`constraint_key`]) both keep the min
+//! `(prevector.len, discovered)` representative per canonical key — a total order, so the surviving entry
+//! is fixed regardless of merge order. [`detect`]'s `oscillation` dedup instead keeps an arbitrary colliding
+//! representative (`group`/`condition`/`stable` coincide by key, an equal-quality tie) and appends every
+//! colliding pair-probe [`Race`] to it — races are never dropped. All three dedup maps are [`BTreeMap`]s,
+//! so iteration order — and hence report/emission order — is deterministic independent of any hash map's
+//! order. A fold may only gain a constraint, never lose one.
 
 use std::collections::{BTreeMap, BTreeSet};
+
+use rayon::prelude::*;
 
 use espresso_logic::bdd::{Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
@@ -198,16 +200,21 @@ pub(crate) fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) 
             machine::settle_or_cycle(deltas, &toggled)
         };
 
-    // Dedup the order-dependent hazard by its unordered `(pin,edge)|(pin,edge)` key, keeping the min
-    // `(prevector.len, discovered)` representative; BTreeMap gives deterministic output order.
-    let mut order_dependence: BTreeMap<String, OrderDependence> = BTreeMap::new();
+    // The per-state probe body: for one reachable state `s` (its BFS index `discovered`), settle every
+    // single toggle and every unordered input pair, filling this state's own dedup maps. Each state is
+    // independent — the parallel unit — and the maps merge commutatively in the `reduce` below.
+    //
+    // `order_dependence` deduplicates by its unordered `(pin,edge)|(pin,edge)` key, keeping the min
+    // `(prevector.len, discovered)` representative; `oscillation` deduplicates by `group|condition`,
+    // keeping the incumbent representative while appending every colliding pair-probe [`Race`]. Both are
+    // BTreeMaps, so the final iteration order is deterministic regardless of merge order.
+    let per_state = |(discovered, s): (usize, &Minterm<Symbol>)| -> (
+        BTreeMap<String, OrderDependence>,
+        BTreeMap<String, Oscillation>,
+    ) {
+        let mut order_dependence: BTreeMap<String, OrderDependence> = BTreeMap::new();
+        let mut oscillation: BTreeMap<String, Oscillation> = BTreeMap::new();
 
-    // Dedup the oscillation hazard by `group|condition`, keeping the FIRST insertion (BFS order over
-    // `ex.order` → the earliest reachable state at which the oscillation is observed), but appending
-    // every colliding pair-probe observation's [`Race`] to the surviving entry.
-    let mut oscillation: BTreeMap<String, Oscillation> = BTreeMap::new();
-
-    for (discovered, s) in ex.order.iter().enumerate() {
         // `path_to` depends only on `s`: compute the prevector into `s` once and clone it per hazard.
         let prevector_s = ex.path_to(s, inputs);
 
@@ -346,7 +353,26 @@ pub(crate) fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) 
                 );
             }
         }
-    }
+
+        (order_dependence, oscillation)
+    };
+
+    // Probe every reachable state in parallel, then fold the per-state dedup maps together. The merge is
+    // associative and commutative: `record_order_dependence` keeps the min `(prevector.len, discovered)`
+    // — a total order per key — and `merge_oscillation` unions races into an arbitrary surviving
+    // representative, so the folded result equals the sequential one regardless of state/thread order.
+    let (order_dependence, oscillation) = ex.order.par_iter().enumerate().map(per_state).reduce(
+        || (BTreeMap::new(), BTreeMap::new()),
+        |(mut oa, mut osca), (ob, oscb)| {
+            for od in ob.into_values() {
+                record_order_dependence(&mut oa, od);
+            }
+            for (k, o) in oscb {
+                merge_oscillation(&mut osca, k, o);
+            }
+            (oa, osca)
+        },
+    );
 
     DetectedHazards {
         order_dependence: order_dependence.into_values().collect(),
@@ -473,6 +499,20 @@ fn record_oscillation(
     });
     if let Some(race) = race {
         entry.races.push(race);
+    }
+}
+
+/// Merge one state's oscillation entry into the accumulator when folding the per-state maps: keep the
+/// incumbent representative (an equal-quality free tie — `group`/`condition`/`stable` coincide by key)
+/// and append the newcomer's [`Race`]s. Races are never dropped; they feed [`constrain`].
+fn merge_oscillation(map: &mut BTreeMap<String, Oscillation>, key: String, osc: Oscillation) {
+    match map.entry(key) {
+        std::collections::btree_map::Entry::Vacant(v) => {
+            v.insert(osc);
+        }
+        std::collections::btree_map::Entry::Occupied(mut e) => {
+            e.get_mut().races.extend(osc.races);
+        }
     }
 }
 
