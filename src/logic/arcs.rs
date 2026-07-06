@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use espresso_logic::bdd::{Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
+use rayon::prelude::*;
 
 use crate::logic::analysis::Machine;
 use crate::logic::machine;
@@ -77,6 +78,47 @@ pub struct HiddenArc {
     pub outputs: Vec<(Symbol, bool)>, // each output's HELD logic value, in cell.outputs order
 }
 
+/// Dedup key for transition arcs: (output, related, edge-direction, start over the inputs).
+#[allow(clippy::type_complexity)]
+type ArcKey = (Symbol, Symbol, bool, Minterm<Symbol>);
+/// Dedup key for hidden arcs: (toggled pin, edge-direction, start over the inputs, held output values).
+#[allow(clippy::type_complexity)]
+type HiddenKey = (Symbol, bool, Minterm<Symbol>, Vec<(Symbol, bool)>);
+
+/// Merge one candidate arc into `best`, keeping the shortest prevector per key; equal-length ties
+/// keep the incumbent (a free equal-quality tie).
+fn keep_shorter_arc(best: &mut BTreeMap<ArcKey, Arc>, key: ArcKey, arc: Arc) {
+    match best.entry(key) {
+        std::collections::btree_map::Entry::Vacant(e) => {
+            e.insert(arc);
+        }
+        std::collections::btree_map::Entry::Occupied(mut e) => {
+            if arc.prevector.len() < e.get().prevector.len() {
+                e.insert(arc);
+            }
+        }
+    }
+}
+
+/// Merge one candidate hidden arc into `best`, keeping the shortest prevector per key; equal-length
+/// ties keep the incumbent (a free equal-quality tie).
+fn keep_shorter_hidden(
+    best: &mut BTreeMap<HiddenKey, HiddenArc>,
+    key: HiddenKey,
+    hidden: HiddenArc,
+) {
+    match best.entry(key) {
+        std::collections::btree_map::Entry::Vacant(e) => {
+            e.insert(hidden);
+        }
+        std::collections::btree_map::Entry::Occupied(mut e) => {
+            if hidden.prevector.len() < e.get().prevector.len() {
+                e.insert(hidden);
+            }
+        }
+    }
+}
+
 /// Derive transition arcs for every output of a cell by re-walking its shared asynchronous state machine
 /// (see [`machine`] and [`Machine`]). A machine node is a fully-fixed [`Minterm<Symbol>`] over
 /// `[inputs…, state_vars…]`. Also derives the whole-cell internal-power ('hidden') arcs — single input
@@ -90,112 +132,105 @@ pub(crate) fn derive<B: Brand, C: ManagerCell + Send + Sync>(
     let ex = &m.explored;
 
     let async_set: BTreeSet<&str> = cell.async_pins.iter().map(|s| s.as_str()).collect();
-    // The same arc can be reached from several start candidates; keep the one with the shortest
-    // prevector. Keyed by (output, related, edge-direction, start over the inputs).
-    let mut best_arc: BTreeMap<(Symbol, Symbol, bool, Minterm<Symbol>), Arc> = BTreeMap::new();
-    // Hidden ('hidden') arcs, deduped like `best_arc`: keyed by (toggled pin, edge-direction, start over
-    // the inputs, held output values), keeping the one with the shortest prevector. The held outputs are
-    // part of the key so distinct stored-value contexts of a state-holding cell (same input vector, different
-    // stored output) are kept as separate arcs; only contexts that differ solely in an unobservable
-    // internal-node value — which produce identical outputs — collapse to the shortest-prevector one.
-    #[allow(clippy::type_complexity)]
-    let mut best_hidden: BTreeMap<
-        (Symbol, bool, Minterm<Symbol>, Vec<(Symbol, bool)>),
-        HiddenArc,
-    > = BTreeMap::new();
-
-    // Re-walk the reachable stable states in BFS order; wherever a single input toggle flips an output,
-    // emit an arc.
-    for node in &ex.order {
-        for related in inputs {
-            // Toggle one input, hold the (partial) state, and let the state settle.
-            let toggled = machine::toggle(node, &[related.as_str()]);
-            let Some(np) = machine::settle(deltas, &toggled) else {
-                continue;
-            };
-            // An arc for every output that is defined at both ends and flips across this input toggle.
-            let start = node.project_to(inputs);
-            let end = np.project_to(inputs);
-            let prevector = ex.path_to(node, inputs);
-            // Collect each output's (before, after) once so both the transition and hidden paths read it.
-            let vals: Vec<(&AnalysedOutput, Option<bool>, Option<bool>)> = cell
-                .outputs
-                .iter()
-                .map(|o| {
-                    (
-                        o,
-                        m.output_value(&o.name, node),
-                        m.output_value(&o.name, &np),
-                    )
-                })
-                .collect();
-            for (o, before, after) in &vals {
-                let (Some(before), Some(after)) = (before, after) else {
+    // The same arc can be reached from several start candidates; keep the shortest prevector per key;
+    // equal-length ties keep either. Transition arcs are keyed by (output, related, edge-direction,
+    // start over the inputs); hidden ('hidden') arcs by (toggled pin, edge-direction, start over the
+    // inputs, held output values). The held outputs are part of the hidden key so distinct stored-value
+    // contexts of a state-holding cell (same input vector, different stored output) are kept as separate
+    // arcs; only contexts that differ solely in an unobservable internal-node value — which produce
+    // identical outputs — collapse to the shortest-prevector one.
+    //
+    // Each reachable stable state is explored independently into local dedup maps, then folded together
+    // by the same keep-shorter merge; the per-key minimum prevector length is order-independent.
+    let per_node =
+        |node: &Minterm<Symbol>| -> (BTreeMap<ArcKey, Arc>, BTreeMap<HiddenKey, HiddenArc>) {
+            let mut best_arc: BTreeMap<ArcKey, Arc> = BTreeMap::new();
+            let mut best_hidden: BTreeMap<HiddenKey, HiddenArc> = BTreeMap::new();
+            for related in inputs {
+                // Toggle one input, hold the (partial) state, and let the state settle.
+                let toggled = machine::toggle(node, &[related.as_str()]);
+                let Some(np) = machine::settle(deltas, &toggled) else {
                     continue;
                 };
-                if before == after {
-                    continue;
-                }
-                let edge = if *after { Edge::Rise } else { Edge::Fall };
-                let key = (o.name.clone(), related.clone(), *after, start.clone());
-                let arc = Arc {
-                    edge,
-                    output: o.name.clone(),
-                    related: related.clone(),
-                    start: start.clone(),
-                    end: end.clone(),
-                    prevector: prevector.clone(),
-                    is_async: async_set.contains(related.as_str()),
-                };
-                match best_arc.entry(key) {
-                    std::collections::btree_map::Entry::Vacant(e) => {
-                        e.insert(arc);
-                    }
-                    std::collections::btree_map::Entry::Occupied(mut e) => {
-                        if arc.prevector.len() < e.get().prevector.len() {
-                            e.insert(arc);
-                        }
-                    }
-                }
-            }
-
-            // Hidden path: a settled input toggle where every output is defined at both ends and none of
-            // them changed — internal-power characterisation.
-            if !vals.is_empty()
-                && vals
+                // An arc for every output that is defined at both ends and flips across this input toggle.
+                let start = node.project_to(inputs);
+                let end = np.project_to(inputs);
+                let prevector = ex.path_to(node, inputs);
+                // Collect each output's (before, after) once so both the transition and hidden paths read it.
+                let vals: Vec<(&AnalysedOutput, Option<bool>, Option<bool>)> = cell
+                    .outputs
                     .iter()
-                    .all(|(_, b, a)| matches!((b, a), (Some(b), Some(a)) if b == a))
-            {
-                let rose = end
-                    .value_of(related.as_str())
-                    .expect("toggled input is fully fixed in the settled end state");
-                let pin = related.clone();
-                let outputs: Vec<(Symbol, bool)> = vals
-                    .iter()
-                    .map(|(o, _, a)| (o.name.clone(), a.unwrap()))
+                    .map(|o| {
+                        (
+                            o,
+                            m.output_value(&o.name, node),
+                            m.output_value(&o.name, &np),
+                        )
+                    })
                     .collect();
-                let hidden = HiddenArc {
-                    pin: pin.clone(),
-                    edge: if rose { Edge::Rise } else { Edge::Fall },
-                    start: start.clone(),
-                    end: end.clone(),
-                    prevector: prevector.clone(),
-                    outputs: outputs.clone(),
-                };
-                let key = (pin, rose, start.clone(), outputs);
-                match best_hidden.entry(key) {
-                    std::collections::btree_map::Entry::Vacant(e) => {
-                        e.insert(hidden);
+                for (o, before, after) in &vals {
+                    let (Some(before), Some(after)) = (before, after) else {
+                        continue;
+                    };
+                    if before == after {
+                        continue;
                     }
-                    std::collections::btree_map::Entry::Occupied(mut e) => {
-                        if hidden.prevector.len() < e.get().prevector.len() {
-                            e.insert(hidden);
-                        }
-                    }
+                    let edge = if *after { Edge::Rise } else { Edge::Fall };
+                    let key = (o.name.clone(), related.clone(), *after, start.clone());
+                    let arc = Arc {
+                        edge,
+                        output: o.name.clone(),
+                        related: related.clone(),
+                        start: start.clone(),
+                        end: end.clone(),
+                        prevector: prevector.clone(),
+                        is_async: async_set.contains(related.as_str()),
+                    };
+                    keep_shorter_arc(&mut best_arc, key, arc);
+                }
+
+                // Hidden path: a settled input toggle where every output is defined at both ends and none of
+                // them changed — internal-power characterisation.
+                if !vals.is_empty()
+                    && vals
+                        .iter()
+                        .all(|(_, b, a)| matches!((b, a), (Some(b), Some(a)) if b == a))
+                {
+                    let rose = end
+                        .value_of(related.as_str())
+                        .expect("toggled input is fully fixed in the settled end state");
+                    let pin = related.clone();
+                    let outputs: Vec<(Symbol, bool)> = vals
+                        .iter()
+                        .map(|(o, _, a)| (o.name.clone(), a.unwrap()))
+                        .collect();
+                    let hidden = HiddenArc {
+                        pin: pin.clone(),
+                        edge: if rose { Edge::Rise } else { Edge::Fall },
+                        start: start.clone(),
+                        end: end.clone(),
+                        prevector: prevector.clone(),
+                        outputs: outputs.clone(),
+                    };
+                    let key = (pin, rose, start.clone(), outputs);
+                    keep_shorter_hidden(&mut best_hidden, key, hidden);
                 }
             }
-        }
-    }
+            (best_arc, best_hidden)
+        };
+
+    let (best_arc, best_hidden) = ex.order.par_iter().map(per_node).reduce(
+        || (BTreeMap::new(), BTreeMap::new()),
+        |(mut a, mut h), (b, hb)| {
+            for (k, v) in b {
+                keep_shorter_arc(&mut a, k, v);
+            }
+            for (k, v) in hb {
+                keep_shorter_hidden(&mut h, k, v);
+            }
+            (a, h)
+        },
+    );
 
     (
         best_arc.into_values().collect(),
