@@ -40,6 +40,7 @@ use liberty_parse::{
 };
 
 use espresso_logic::Symbol;
+use rayon::prelude::*;
 
 use crate::emit::statetable::{build_state_model, Next, StateModel};
 use crate::logic::hazard::Oscillation;
@@ -62,8 +63,9 @@ fn set_attr(group: &mut Group, name: &str, value: Value) {
 /// library.
 pub fn library_liberty(name: &str, cells: &[AnalysedCell]) -> String {
     let mut out = format!("library ({name}) {{\n");
-    for cell in cells {
-        for line in cell_liberty(cell).lines() {
+    let frags: Vec<String> = cells.par_iter().map(cell_liberty).collect();
+    for frag in &frags {
+        for line in frag.lines() {
             if line.is_empty() {
                 out.push('\n');
             } else {
