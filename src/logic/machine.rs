@@ -26,6 +26,7 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 
 use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
+use rayon::prelude::*;
 
 /// A state variable paired with its next-state function δ (over inputs + state variables).
 pub type Delta<B, C> = (Symbol, Bdd<B, C>);
@@ -220,13 +221,14 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
             .collect()
     };
 
-    // Candidate pool: the forced on/off input minterms of every seed function (one FR extraction each).
-    let mut pool: BTreeSet<Minterm<Symbol>> = BTreeSet::new();
-    for f in seed_funcs {
-        // ¬f's FR cover is f's with the F/R sides swapped, and `cover_inputs` pools `.cubes()`
-        // type-blind, so `cover_inputs(&!f) == cover_inputs(f)` as a minterm set — no complement call.
-        pool.extend(cover_inputs(f));
-    }
+    // Candidate pool: the forced on/off input minterms of every seed function (one FR extraction each),
+    // built in parallel across seed functions — set semantics make the union order-free.
+    // ¬f's FR cover is f's with the F/R sides swapped, and `cover_inputs` pools `.cubes()`
+    // type-blind, so `cover_inputs(&!f) == cover_inputs(f)` as a minterm set — no complement call.
+    let pool: BTreeSet<Minterm<Symbol>> = seed_funcs
+        .par_iter()
+        .flat_map_iter(cover_inputs)
+        .collect();
 
     // Depth of each state variable from the inputs (shallowest dependency chain), for the ranking
     // tie-break. A variable driven purely by inputs is depth 1; others are 1 + the shallowest state
@@ -279,8 +281,11 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     // Rank the candidates: most state variables settled first, ties toward state nearest the inputs,
     // then by minterm order for determinism.
     let mut ranked: Vec<(Minterm<Symbol>, Vec<Option<bool>>)> = pool
-        .into_iter()
-        .map(|x| (x.clone(), settlement(&x)))
+        .into_par_iter()
+        .map(|x| {
+            let m = settlement(&x);
+            (x, m)
+        })
         .collect();
     ranked.sort_by(|a, b| {
         settle_count(&b.1)
