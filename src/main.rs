@@ -9,6 +9,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
+use rayon::prelude::*;
 
 use cellsmith::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
 use cellsmith::emit::liberty::library_liberty;
@@ -75,7 +76,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     }
     let cells: Vec<AnalysedCell> = spec
         .cells
-        .iter()
+        .par_iter()
         .map(|c| c.analyse())
         .collect::<Result<_, _>>()?;
 
@@ -187,12 +188,15 @@ fn read_spec(spec: &str) -> io::Result<String> {
 }
 
 /// Concatenate one artifact across every cell.
-fn render(cells: &[AnalysedCell], mut one: impl FnMut(&AnalysedCell) -> String) -> String {
-    let mut out = String::new();
-    for cell in cells {
-        out.push_str(&one(cell));
-    }
-    out
+// `one` is only `Sync` (not `Send`); passing it by value into `par_iter().map()` would additionally
+// require `Send`, so it is called through a closure that captures it by reference instead.
+#[allow(clippy::redundant_closure)]
+fn render(cells: &[AnalysedCell], one: impl (Fn(&AnalysedCell) -> String) + Sync) -> String {
+    cells
+        .par_iter()
+        .map(|c| one(c))
+        .collect::<Vec<String>>()
+        .concat()
 }
 
 /// A stdout section banner for one artifact.
