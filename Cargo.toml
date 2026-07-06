@@ -6,6 +6,8 @@ description = "Generate Cadence Liberate transition arcs (with prevectors) for l
 license = "MIT"
 repository = "https://github.com/marlls1989/cellsmith"
 readme = "README.md"
+keywords = ["eda", "liberty", "cadence", "asic", "timing"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 espresso-logic = "5.5"
