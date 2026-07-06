@@ -84,9 +84,9 @@
 //! a support only via a demotion to `±var(rep)`, bounded by the output count). Every dedup commit purges
 //! an **internal** (the map strictly shrinks) or aliases an **output** duplicate to `var(rep)` —
 //! terminally: the demotion is idempotent under the `!=` change-check, so a demoted output never
-//! re-commits, and the rep of any such alias is itself an output (never purged) and is left self-holding
-//! by the rename, so the fold never re-expands it. Both measures are bounded, and the outer loop's
-//! `2 * order.len() + 2` `debug_assert` backstops against a runaway.
+//! re-commits, and the renamed-away member never re-enters any support — folding substitutes `var(rep)`
+//! for the member, never the member's own name — so no dedup group can re-form on it. Both measures
+//! are bounded, and the outer loop's `2 * order.len() + 2` `debug_assert` backstops against a runaway.
 //!
 //! **(I5) dedup soundness.** If `δ_a == δ_b` as BDDs, then `a` and `b` are computed by the identical
 //! function and take equal values at *every* stable state — lockstep, the I1 wire generalised to any
@@ -95,10 +95,11 @@
 //! never has to keep naming a state variable on its own), while a duplicate **output** demotes to
 //! `var(rep)` only when the group is *recurrent* — read from the rep's **current** δ at commit time, not
 //! the grouping-time snapshot, since an earlier same-pass group's rewrite can only *remove* references to
-//! this group's members, never add one. When recurrent, the rep is self-referential after the rename and
-//! hence a genuine state variable, keeping `analyse_machine`'s primary-inputs-plus-self-reaching-signals
-//! evaluation sound. A non-recurrent group with no internal member commits nothing, leaving the duplicate
-//! outputs as independent full-function signals — the behaviour-preserving baseline. A consumer that
+//! this group's members, never add one. When recurrent, the renamed-away member never re-enters any
+//! support — folding substitutes `var(rep)` for the member, never the member's own name — so no dedup
+//! group can re-form on it, and the demotion is idempotent under the `!=` change-check (I4). A
+//! non-recurrent group with no internal member commits nothing, leaving the duplicate outputs as
+//! independent full-function signals — the behaviour-preserving baseline. A consumer that
 //! transiently references a combinational rep (e.g. after an internal in the same group already retired
 //! onto it) is resolved before the outer loop's fixpoint: either the same-round fold composes the
 //! reference away, or a refusal forms an `s ↔ c` 2-cycle that forces both members to self-reach — so I3
