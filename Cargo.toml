@@ -13,6 +13,7 @@ toml = "1"
 clap = { version = "4", features = ["derive"] }
 thiserror = "2"
 indexmap = { version = "2", features = ["serde"] }
+rayon = "1"
 
 [lib]
 name = "cellsmith"
