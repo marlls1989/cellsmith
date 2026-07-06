@@ -22,9 +22,6 @@ pub struct ArcsTclOptions {
     /// a (related, pin, edge) collapse to one — a single prevector exercises the transition, so the
     /// distinct held contexts (which only `-when` would distinguish) are redundant.
     pub emit_when: bool,
-    /// Emit derived constraint arcs (setup/hold, non_seq) from state-machine confluence. Off by default;
-    /// a cell can opt in individually via `constraint_arcs = true`. See [`crate::logic::confluence`].
-    pub emit_constraints: bool,
     /// Emit hidden (whole-cell internal-power) arcs — an input toggles but no output changes — as
     /// `-type hidden` blocks. **On by default.**
     pub emit_internal: bool,
@@ -37,7 +34,6 @@ impl Default for ArcsTclOptions {
     fn default() -> Self {
         Self {
             emit_when: true,
-            emit_constraints: false,
             emit_internal: true,
             emit_leakage: true,
         }
@@ -46,8 +42,9 @@ impl Default for ArcsTclOptions {
 
 /// All `define_arc` blocks for a cell, concatenated. A cell with a detected oscillation hazard is
 /// prefixed with a comment recording the racing condition and the competing settled outcomes — the
-/// metastability risk timing arcs cannot express. When enabled, derived constraint arcs (setup/hold,
-/// non_seq) follow the delay arcs.
+/// metastability risk timing arcs cannot express. Any derived constraint arcs (setup/hold, non_seq)
+/// the cell opted into — its `constraint_arcs` was set, so generation populated `cell.constraints` —
+/// follow the delay arcs.
 pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     let mut out = oscillation_comment(cell);
     // Without `-when`, arcs of the same (related, pin, edge) that differ only in the held-input context
@@ -77,10 +74,11 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
             out.push_str(&format_leakage(cell, l));
         }
     }
-    if opts.emit_constraints || cell.constraint_arcs_declared {
-        for c in &cell.constraints {
-            out.push_str(&format_constraint(cell, c));
-        }
+    // Constraint arcs emit whatever generation produced: `cell.constraints` is populated only when the
+    // cell opted in (per-cell `constraint_arcs`, or the global `--constraints` flag), and is empty
+    // otherwise — so this loop is its own gate.
+    for c in &cell.constraints {
+        out.push_str(&format_constraint(cell, c));
     }
     out
 }
@@ -678,7 +676,9 @@ Y = "A*B + B*C + A*C"
 
     #[test]
     fn dff_constraint_arcs_gated_and_setup_hold_under_declared_clock() {
-        let cell = analyse(
+        // Constraint generation is gated on the per-cell opt-in, so gating is exercised by two cells
+        // rather than an emit-time toggle. Off: no `constraint_arcs`, so none are generated or emitted.
+        let off_cell = analyse(
             r#"
 [[cell]]
 name = "DFF"
@@ -690,20 +690,27 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 "#,
         );
-        // Off by default: no constraint arcs.
-        let off = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        let off = cell_arcs_tcl(&off_cell, ArcsTclOptions::default());
         assert!(!off.contains("-type setup"));
         assert!(!off.contains("-type hold"));
 
-        // Enabled: separate setup and hold blocks of D w.r.t. CLK. With CLK declared a clock the CLK/D
-        // constraint is a setup/hold, so no non_seq is produced for the pair.
-        let on = cell_arcs_tcl(
-            &cell,
-            ArcsTclOptions {
-                emit_constraints: true,
-                ..Default::default()
-            },
+        // On: the same DFF with `constraint_arcs = true` generates separate setup and hold blocks of D
+        // w.r.t. CLK. With CLK declared a clock the CLK/D constraint is a setup/hold, so no non_seq is
+        // produced for the pair.
+        let on_cell = analyse(
+            r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+constraint_arcs = true
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#,
         );
+        let on = cell_arcs_tcl(&on_cell, ArcsTclOptions::default());
         eprintln!("{on}");
         assert!(on.contains("-type setup \\"));
         assert!(on.contains("-type hold \\"));
@@ -719,18 +726,13 @@ Q = "CLK*M + !CLK*Q"
 [[cell]]
 name = "MUT"
 inputs = ["A", "B"]
+constraint_arcs = true
 [cell.outputs]
 Qa = "!Qb * A"
 Qb = "!Qa * B"
 "#,
         );
-        let on = cell_arcs_tcl(
-            &cell,
-            ArcsTclOptions {
-                emit_constraints: true,
-                ..Default::default()
-            },
-        );
+        let on = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{on}");
         assert!(on.contains("-type non_seq_setup \\"));
         assert!(on.contains("-type non_seq_hold \\"));

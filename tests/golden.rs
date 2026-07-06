@@ -371,6 +371,7 @@ const ICM: &str = r#"
 name = "ICM"
 inputs = ["CLKA", "CLKB", "RA", "RB", "S"]
 clock = ["CLKA", "CLKB"]
+constraint_arcs = true
 
 [cell.internal]
 # selection interlock
@@ -395,6 +396,7 @@ const ICM_FOLDED: &str = r#"
 name = "ICM"
 inputs = ["CLKA", "CLKB", "RA", "RB", "S"]
 clock = ["CLKA", "CLKB"]
+constraint_arcs = true
 
 [cell.internal]
 # CLKA synchroniser

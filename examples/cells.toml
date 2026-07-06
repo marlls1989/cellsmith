@@ -45,7 +45,8 @@ Qb  = "!Qa * B"
 name = "DFF"
 inputs = ["CLK", "D"]
 clock = ["CLK"]                # CLK is a clock: setup/hold of D is characterised w.r.t. it, and the
-                               #   concomitant non_seq hazard on (CLK, D) is suppressed as redundant
+                               #   concomitant non_seq hazard on (CLK, D) is subsumed by the setup/hold
+constraint_arcs = true         # opt in: emit the derived setup/hold constraint arcs of D w.r.t. CLK
 [cell.internal]                # internal master latch: a state node with no external pin
 M = "!CLK*D + CLK*M"           #   transparent when CLK low, holds when high
 [cell.outputs]

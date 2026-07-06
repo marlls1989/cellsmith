@@ -181,8 +181,16 @@ pub fn analyse_machine<B: Brand, C: ManagerCell>(
     };
     let (arcs, hidden_arcs) = arcs::derive(&m);
     // Detect the hazards, then generate the constraints that avoid them — two separate stages.
+    // Hazards are always detected (they drive the oscillation/race warnings and annotations);
+    // constraint generation is gated on the cell's opt-in (the per-cell `constraint_arcs`, also set
+    // for every cell by the global `--constraints` flag), so no constraint is generated — hence none
+    // emitted — unless the cell requested it.
     let detected = confluence::detect(&m);
-    let constraints = confluence::constrain(&detected, &m.cell.clock_pins);
+    let constraints = if cell.constraint_arcs_declared {
+        confluence::constrain(&detected, &m.cell.clock_pins)
+    } else {
+        Vec::new()
+    };
     MachineAnalysis {
         arcs,
         hidden_arcs,
@@ -211,8 +219,11 @@ mod tests {
             .map(|i| format!("\"I{i}\""))
             .collect::<Vec<_>>()
             .join(", ");
-        let src =
-            format!("[[cell]]\nname = \"WIDE\"\ninputs = [{list}]\n[cell.outputs]\nY = \"I0\"\n");
+        // Opt in to constraints so the empty result below is the *guard* suppressing generation
+        // (MachineAnalysis::default), not merely the per-cell gate leaving `constraints` untouched.
+        let src = format!(
+            "[[cell]]\nname = \"WIDE\"\nconstraint_arcs = true\ninputs = [{list}]\n[cell.outputs]\nY = \"I0\"\n"
+        );
         let cell = analyse_one(&src);
         assert!(cell.arcs.is_empty(), "guard must suppress arcs");
         assert!(
@@ -279,6 +290,7 @@ name = "DFFR"
 inputs = ["CLK", "D", "R"]
 async = ["R"]
 clock = ["CLK"]
+constraint_arcs = true
 [cell.internal]
 M = "!R*(!CLK*D + CLK*M)"
 [cell.outputs]
@@ -300,13 +312,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
             !cell.constraints.is_empty(),
             "the CLK/D setup-hold hazard is constrained",
         );
-        let tcl = cell_arcs_tcl(
-            &cell,
-            ArcsTclOptions {
-                emit_constraints: true,
-                ..Default::default()
-            },
-        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         assert!(tcl.contains("define_arc"));
     }
 }

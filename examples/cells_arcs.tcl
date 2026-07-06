@@ -6331,6 +6331,46 @@ define_arc \
 define_leakage -when "!CLK*!D" DFF
 define_leakage -when "!CLK*D" DFF
 define_arc \
+	-type setup \
+	-prevector_pinlist {CLK D} \
+	-prevector {01} \
+	-pinlist {CLK D Q} \
+	-vector {R F X} \
+	-related_pin CLK \
+	-pin D \
+	{ DFF }
+
+define_arc \
+	-type hold \
+	-prevector_pinlist {CLK D} \
+	-prevector {01} \
+	-pinlist {CLK D Q} \
+	-vector {R F X} \
+	-related_pin CLK \
+	-pin D \
+	{ DFF }
+
+define_arc \
+	-type setup \
+	-prevector_pinlist {CLK D} \
+	-prevector {00} \
+	-pinlist {CLK D Q} \
+	-vector {R R X} \
+	-related_pin CLK \
+	-pin D \
+	{ DFF }
+
+define_arc \
+	-type hold \
+	-prevector_pinlist {CLK D} \
+	-prevector {00} \
+	-pinlist {CLK D Q} \
+	-vector {R R X} \
+	-related_pin CLK \
+	-pin D \
+	{ DFF }
+
+define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00010 10010 00010 10010 10000} \
 	-type combinational \
