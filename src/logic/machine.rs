@@ -64,8 +64,8 @@ pub fn toggle(node: &Minterm<Symbol>, names: &[&str]) -> Minterm<Symbol> {
     next
 }
 
-/// One parallel next-state step: every state variable takes its δ evaluated at `node` — `Ok(v)` fixes
-/// it, `Err` (δ still depends on an absent variable) leaves it **absent** (`-`). Inputs (and anything
+/// One parallel next-state step: every state variable takes its δ evaluated at `node` — `Some(v)` fixes
+/// it, `None` (δ still depends on an absent variable) leaves it **absent** (`-`). Inputs (and anything
 /// else in the node) keep their current field.
 fn step<B: Brand, C: ManagerCell>(
     deltas: &[Delta<B, C>],
@@ -83,7 +83,7 @@ fn step<B: Brand, C: ManagerCell>(
         "step: deltas must be the trailing state-variable columns of the node, in order"
     );
     // Each δ is evaluated against the pre-mutation `node` (a parallel next-state), and an absent
-    // dependency (`Err` → `None`) writes `-` = absent.
+    // dependency (`evaluate_fast` returning `None`) writes `-` = absent.
     let mut next = node.clone();
     for (j, (_, d)) in deltas.iter().enumerate() {
         next.set_value_at(split + j, d.evaluate_fast(node))
@@ -260,9 +260,10 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     }
 
     // Settlement map of a candidate input: per state variable, the value its δ takes when the fixed
-    // inputs already determine it (evaluate → `Ok`), or absent when the δ still depends on unresolved
-    // state (`Err`). This is the membership test on(w)/off(w) done directly against each δ, and is used
-    // only to RANK the candidates below (the seed itself is extracted and widened, not rebuilt from it).
+    // inputs already determine it (`evaluate_fast` → `Some(v)`), or absent when the δ still depends
+    // on unresolved state (`None`). This is the membership test on(w)/off(w) done directly against
+    // each δ, and is used only to RANK the candidates below (the seed itself is extracted and widened,
+    // not rebuilt from it).
     let settlement = |x: &Minterm<Symbol>| -> Vec<Option<bool>> {
         state_deltas
             .iter()
