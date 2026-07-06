@@ -118,9 +118,10 @@ unconditional.
 `Q = !QN`, `IQ = !QN`, `QN = !(A·B + IQ·(A+B))`. `Q` and `IQ` are plain-BDD-equal — both compute
 `!var(QN)` — so dedup groups `{Q, IQ}`. `Q` is the external output and so the representative; `IQ` is
 internal, so it retires unconditionally: it is purged, and `QN`'s reference to `IQ` is rewritten to
-`var(Q)`, leaving `QN = !(A·B + Q·(A+B))`. Dedup's job is done; the (untouched) fold pass then inverts
-the bare ±alias `Q = !QN` onto the internal `QN`, purging it and landing the single coordinate
-`δ_Q = A·B + Q·(A+B)` — one bit, exactly the physical cell.
+`var(Q)`, leaving `QN = !(A·B + Q·(A+B))`. Dedup's job is done; the (untouched) fold pass then
+eliminates the internal `QN` by folding its definition `QN = !(A·B + Q·(A+B))` into the alias
+`Q = !QN` and purging `QN`. The double negation cancels — `Q = !(!(A·B + Q·(A+B)))` — collapsing onto
+the single coordinate `δ_Q = A·B + Q·(A+B)` on the output `Q`: one bit, exactly the physical cell.
 
 ## Guarded arity-aware fold
 
