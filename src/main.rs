@@ -82,58 +82,68 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     // Diagnose detected oscillation hazards: a periodic, non-settling cycle rather than a fixpoint,
     // naming the nodes (outputs or internals) that oscillate — the user should know, as this is never
     // expressed as deterministic timing.
+    // Each warning is one contiguous block of lines (a header plus its indented detail fields);
+    // distinct warnings are separated by a single blank line when printed, so a block reads as a unit.
+    let mut warnings: Vec<String> = Vec::new();
     for c in &cells {
         for a in &c.oscillation {
-            let mut msg = format!(
-                "cellsmith: warning: cell {:?}: nodes {{{}}} oscillate when {}\n",
-                c.name,
-                a.group.join(", "),
-                a.condition_str(),
-            );
-            // How the machine reached it: the path into the pre-hazard state and the simultaneous
-            // toggle that triggers the oscillation, from the representative pair-probe race (min by
-            // `(prevector.len, discovered)`, matching the constraint tie-break). A single-toggle
-            // oscillation carries no race, so its detail fields are omitted.
+            // The condition leads the sub-block as `when` (as in the race warning). How the machine
+            // reached it — path into the pre-hazard state and the simultaneous toggle that triggers the
+            // oscillation — comes from the representative pair-probe race (min by `(prevector.len,
+            // discovered)`, matching the constraint tie-break). A single-toggle oscillation carries no
+            // race, so only `when` is shown.
+            let mut fields = vec![("when", a.condition_str())];
             if let Some(r) = a
                 .races
                 .iter()
                 .min_by_key(|r| (r.prevector.len(), r.discovered))
             {
-                msg.push_str(&field("reached along", &r.path_str()));
-                msg.push_str(&field("pre-hazard", &r.pre_state_str()));
-                msg.push_str(&field(
+                fields.push(("reached along", r.path_str()));
+                fields.push(("pre-hazard", r.pre_state_str()));
+                fields.push((
                     "triggered by",
-                    &format!("simultaneous toggle {}", r.transition_str()),
+                    format!("simultaneous toggle {}", r.transition_str()),
                 ));
             }
-            eprint!("{msg}");
+            let mut lines = vec![format!(
+                "cellsmith: warning: cell {:?}: nodes {{{}}} oscillate",
+                c.name,
+                a.group.join(", "),
+            )];
+            lines.extend(subblock(&fields));
+            warnings.push(lines.join("\n"));
         }
     }
 
     // Diagnose detected order-dependent hazards, grouped per racing pin pair: the settled state
-    // depends on which of the pair's edges lands first (non-confluence). Each hazard on the pair
-    // renders as its own field-block (condition, path into the pre-hazard state, and the two settle
-    // orders whose outcomes diverge); multiple blocks are separated by a blank line.
-    type RacePairs<'a> = BTreeMap<(&'a str, &'a str), Vec<String>>;
+    // depends on which of the pair's edges lands first (non-confluence). Each hazard on the pair is its
+    // own `-`-bulleted sub-block (condition, path into the pre-hazard state, and the two settle orders
+    // whose outcomes diverge), so multiple hazards on one pair read as a list.
+    type RacePairs<'a> = BTreeMap<(&'a str, &'a str), Vec<Vec<String>>>;
     for c in &cells {
         let mut pairs: RacePairs = BTreeMap::new();
         for od in &c.order_dependence {
             let (x, y) = (od.x.as_str(), od.y.as_str());
             let key = if x <= y { (x, y) } else { (y, x) };
-            let mut block = field("when", &od.condition_str());
-            block.push_str(&field("reached along", &od.path_str()));
-            block.push_str(&field("pre-hazard", &od.pre_state_str()));
-            block.push_str(&field("orders", &od.transition_str()));
-            pairs.entry(key).or_default().push(block);
+            pairs.entry(key).or_default().push(subblock(&[
+                ("when", od.condition_str()),
+                ("reached along", od.path_str()),
+                ("pre-hazard", od.pre_state_str()),
+                ("orders", od.transition_str()),
+            ]));
         }
-        for ((x, y), blocks) in &pairs {
-            let mut msg = format!(
-                "cellsmith: warning: cell {:?}: inputs ({x}, {y}) race\n",
+        for ((x, y), hazards) in &pairs {
+            let mut lines = vec![format!(
+                "cellsmith: warning: cell {:?}: inputs ({x}, {y}) race",
                 c.name,
-            );
-            msg.push_str(&blocks.join("\n"));
-            eprint!("{msg}");
+            )];
+            lines.extend(hazards.iter().flatten().cloned());
+            warnings.push(lines.join("\n"));
         }
+    }
+
+    if !warnings.is_empty() {
+        eprintln!("{}", warnings.join("\n\n"));
     }
 
     // Constraints are the *remedy* for a detected hazard, not a phenomenon of their own: the
@@ -190,11 +200,18 @@ fn banner(kind: &str, body: &str) -> String {
     format!("// ===== cellsmith {kind} =====\n{body}\n")
 }
 
-/// One indented detail line under a hazard-warning header: a colon-labelled field whose values are
-/// column-aligned across the block (the longest label, `reached along:`, sets the column). Includes a
-/// trailing newline so callers concatenate fields directly.
-fn field(label: &str, value: &str) -> String {
-    format!("    {:<14} {value}\n", format!("{label}:"))
+/// Render one hazard detail sub-block as its lines: the first is `-`-bulleted, the rest indented to
+/// align under it. Each is a colon-labelled field whose values are column-aligned (the longest label,
+/// `reached along:`, sets the column). No trailing newline — callers join a warning's lines with `\n`.
+fn subblock(fields: &[(&str, String)]) -> Vec<String> {
+    fields
+        .iter()
+        .enumerate()
+        .map(|(i, (label, value))| {
+            let marker = if i == 0 { "  - " } else { "    " };
+            format!("{marker}{:<14} {value}", format!("{label}:"))
+        })
+        .collect()
 }
 
 /// The default output base name derived from the spec path (stem), or "cells" for stdin.
