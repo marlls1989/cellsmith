@@ -56,28 +56,40 @@ This pass recognises signals that are the **same coordinate** because they compu
 transition function*: two signals whose BDDs are equal. BDD equality is a cheap canonical handle
 compare — structurally identical functions share one node — so the grouping is exact, not a heuristic.
 
-1. **Group by function.** Scan the signals in order and bucket each one by its BDD. Bare ±aliases
-   (`f == ±var(t)` for another key `t`) are **skipped** — they are the fold pass's job — so the two
-   passes never fight over the same signal. A group with a single member carries no duplicate and is
-   skipped.
+1. **Group by function.** Scan the signals in order and bucket each one by its BDD — plain BDD
+   equality only, no inverse/complement matching. Bare ±aliases are grouped exactly like any other
+   signal: a bare alias that happens to share its BDD with another key falls into that key's group like
+   any duplicate. A lone bare alias with no BDD-equal peer forms a singleton group, which carries no
+   duplicate and falls through to the fold pass.
 
-2. **Merge only a recurrent group.** A group is merged **only when its shared function references one
-   of the group's own members** — the coordinate is *recurrent*. Once every non-rep member is renamed
-   to `var(rep)`, the representative is self-referential and so a genuine **state variable**, which is
-   what makes the resulting `var(rep)` aliases machine-evaluable. A purely **combinational** duplicate
-   — no member in the shared δ, e.g. two pins both computing `A·B` — is **left independent**: an
-   alias's target must be a state variable, because the machine evaluates each signal over the primary
-   inputs plus the state variables only (invariant **I3**), so aliasing an output to a combinational
-   signal would make it unevaluable. Those duplicates stay independent full-function signals.
+2. **Split by interface: internals always retire, outputs only when recurrent.** A group with more
+   than one member holds a duplicate, and every duplicate that is an **internal** (non-output) signal
+   is unconditionally retired onto the representative — the cell interface is sacred, but an internal
+   has none to protect, so plain BDD equality alone is enough to purge it and rewrite its consumers onto
+   `var(rep)`. A duplicate that is an **output**, by contrast, is never purged — its pin always survives
+   — and is only *aliased* (demoted to `var(rep)`) when the group is **recurrent**: its shared function
+   references one of the group's own members. Recurrence is evaluated against the representative's
+   *current* function at commit time, so an internal retirement earlier in the same pass (which can only
+   remove member references, never add one) is already reflected when an output's recurrence is judged.
+   Once every aliased member is renamed to `var(rep)`, the representative is self-referential and so a
+   genuine **state variable**, which is what makes the resulting `var(rep)` aliases machine-evaluable. A
+   purely **combinational** output duplicate — no member in the shared δ, e.g. two output pins both
+   computing `A·B` — is **left independent**: an alias's target must be a state variable, because the
+   machine evaluates each signal over the primary inputs plus the state variables only (invariant
+   **I3**), so aliasing an output to a combinational signal would make it unevaluable. Those output
+   duplicates stay independent full-function signals; an *internal* duplicate in the same group would
+   still retire regardless of recurrence.
 
 3. **Choose the representative:** the first external output in the group, else the first member in
    scan order. This guarantees an external pin is preserved wherever the group holds one.
 
 4. **Merge onto the representative:**
-   - Build a rename map sending every non-rep member to `var(rep)`.
-   - Every surviving signal that references a group member is rewritten with that rename map, so all
+   - Build a rename map covering exactly the *retired* members: every non-rep **internal** (always),
+     plus every non-rep **output** that is retired because the group is recurrent. A non-recurrent
+     output duplicate is not in the map — it stays independent and its consumers are not rewritten.
+   - Every surviving signal that references a retired member is rewritten with that rename map, so all
      references now point at the representative.
-   - Non-rep members are retired: internals are removed and purged; **outputs are demoted** to
+   - Retired members are handled per kind: internals are removed and purged; **outputs are demoted** to
      `var(rep)` — they keep their pin but become a combinational function of the representative, and
      are marked changed.
 
@@ -96,12 +108,19 @@ representative, and `Q1` is left self-holding — a genuine state variable, so t
 machine-evaluable.
 
 Two output pins that instead both compute a purely **combinational** `A·B` share no member in their δ,
-so dedup leaves them independent full-function signals rather than alias one pin to a non-state rep.
+so dedup leaves them independent full-function signals rather than alias one pin to a non-state rep —
+outputs stay independent. Had one member of that pair instead been an *internal* signal computing the
+same `A·B`, dedup would still retire it onto the other regardless of recurrence: internal retirement is
+unconditional.
 
-The **buffered C-element** `Q = !QN`, `IQ = !QN`, `QN = !(A·B + IQ·(A+B))` is *not* a dedup case: `Q`
-and `IQ` are each a bare ±alias of `QN`, which dedup skips. The fold's inversion resolves them (see
-below), collapsing the cell to the single output coordinate `δ_Q = A·B + Q·(A+B)` — one bit, exactly
-the physical cell.
+### Worked example — the buffered C-element
+
+`Q = !QN`, `IQ = !QN`, `QN = !(A·B + IQ·(A+B))`. `Q` and `IQ` are plain-BDD-equal — both compute
+`!var(QN)` — so dedup groups `{Q, IQ}`. `Q` is the external output and so the representative; `IQ` is
+internal, so it retires unconditionally: it is purged, and `QN`'s reference to `IQ` is rewritten to
+`var(Q)`, leaving `QN = !(A·B + Q·(A+B))`. Dedup's job is done; the (untouched) fold pass then inverts
+the bare ±alias `Q = !QN` onto the internal `QN`, purging it and landing the single coordinate
+`δ_Q = A·B + Q·(A+B)` — one bit, exactly the physical cell.
 
 ## Guarded arity-aware fold
 
@@ -175,18 +194,25 @@ carry `enB`/`enA` and `S` in their statetable columns.
 
 ## How dedup and fold interact
 
-The two passes partition the aliasing they resolve, and each defers the other's cases:
+The two passes partition the aliasing they resolve by a hard interface rule, not by function shape:
 
-- **Dedup owns identical functions; fold owns bare ±var aliases.** Dedup explicitly skips a signal
-  that is a bare ±alias of another key, leaving it for the fold; the fold's inversion, in turn, only
-  fires when the alias *target* is internal. So a signal is never contested.
+- **Dedup owns every plain-BDD equality, including between bare ±aliases, and never removes an output
+  pin.** Dedup groups signals by plain BDD equality with no special case for bare ±aliases — a bare
+  alias that is BDD-equal to another key is a duplicate like any other and is grouped with it. Within a
+  group, every internal duplicate is purged unconditionally; a duplicate output is never purged, only
+  aliased (demoted to `var(rep)`), and only when the group is recurrent. Fold owns everything dedup
+  leaves as a singleton: substitute-and-drop for a signal not in its own support. A substitution that
+  would create a self-reference is permitted **only** when the inserted function has support arity 1 —
+  that includes a bare ±alias `s = ±var(t)` (arity 1, `t` internal), which the fold resolves by
+  inversion, but arity 1 is just the general gate, not special "inverse handling": any arity-1 function
+  is lockstep with its sole input and always folds. So a signal is never contested between the passes.
 - **No output-output exclusion is needed.** Dedup may share a single coordinate between *two output
-  pins* — it keeps one pin as representative and demotes the other to `var(rep)`. But dedup only ever
-  aliases to a **self-reaching** representative (the recurrence condition above), and the fold skips
-  self-holding candidates, so a dedup alias is never a fold candidate and can never be re-expanded — no
-  special exclusion is required. Conversely, an output-alias fold that *resolves* a combinational alias
-  — an output buffer or inverter of a combinational output — has no shared coordinate to protect and
-  proceeds normally.
+  pins* — it keeps one pin as representative and aliases the other to `var(rep)` when recurrent, and the
+  pin is preserved either way. But dedup only ever aliases to a **self-reaching** representative (the
+  recurrence condition above), and the fold skips self-holding candidates, so a dedup alias is never a
+  fold candidate and can never be re-expanded — no special exclusion is required. Conversely, an
+  output-alias fold that *resolves* a combinational alias — an output buffer or inverter of a
+  combinational output — has no shared coordinate to protect and proceeds normally.
 
 ## Why the rewrite is behaviour-preserving
 
@@ -205,14 +231,17 @@ The two passes partition the aliasing they resolve, and each defers the other's 
   the primary inputs plus the self-reaching signals: any consumed non-self-holding signal is a fold
   candidate, and a refusal implies a 2-cycle whose members self-reach. So state-variable
   classification identifies exactly the coordinates and the machine's δ is a direct map lookup.
-- **(I4) Termination.** Every commit either purges a signal, demotes an alias/duplicate output
-  idempotently (a re-classified output produces no further commit), or removes a signal from every
-  support (a signal re-enters a support only via a demotion, bounded by the output count), so the
-  fixpoint is reached within the asserted bound.
+- **(I4) Termination.** Every dedup commit either purges an **internal** duplicate (the signal map
+  strictly shrinks) or idempotently aliases an **output** duplicate onto an output representative (the
+  output is never purged, so a re-classified output produces no further commit); every fold commit
+  removes a signal from every support (a signal re-enters a support only via an alias/demotion, bounded
+  by the output count). So the fixpoint is reached within the asserted bound.
 - **(I5) Dedup soundness.** Two signals with the *same* BDD compute the same transition function, so
-  they are `=` the same underlying coordinate at every state; renaming the non-rep members onto
-  `var(rep)` is exact. The output-preferring representative keeps a pin wherever the group holds one,
-  and a demoted output remains a combinational function of the representative.
+  they are `=` the same underlying coordinate at every state; renaming the retired members onto
+  `var(rep)` is exact. Internal retirement is unconditional and purges the internal; output aliasing is
+  licensed only by recurrence — read against the representative's function at commit time — and never
+  purges the pin, so the output-preferring representative keeps a pin wherever the group holds one, and
+  an aliased output remains a combinational function of the representative.
 
 The safety boundary is about *behaviour*, not names: a cell's derived arcs, hidden arcs, and the
 **existence and condition** of every oscillation group must match the un-reduced cell — a folded relay
