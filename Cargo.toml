@@ -2,12 +2,17 @@
 name = "cellsmith"
 version = "0.1.0"
 edition = "2021"
+authors = ["Marcos Sartori <code@msartori.uk>"]
 description = "Generate Cadence Liberate transition arcs (with prevectors) for logic cells, including state-holding/hysteretic cells"
 license = "MIT"
+repository = "https://github.com/marlls1989/cellsmith"
+readme = "README.md"
+keywords = ["eda", "liberty", "cadence", "asic", "timing"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 espresso-logic = "5.5"
-liberty-parse = { git = "https://github.com/marlls1989/liberty-parse.git", rev = "8e2e3532cdde5a1fa592e0b033b6d748b92d40b3" }
+liberty-parse = { package = "liberty-parser", version = "0.2" }
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 clap = { version = "4", features = ["derive"] }
