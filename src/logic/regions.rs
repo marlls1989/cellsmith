@@ -17,8 +17,8 @@
 //! - `off  = ∀self. ¬f`   — the `F` side of `(!f).cover_over_fr(cols)`,
 //! - `hold = ¬(on ∨ off)` — the undef gap the two leave behind; a `-`/`N` no-change entry. A signal can
 //!   be hysteretic (a state variable) yet have an *empty* hold set: cross-coupled emergent memory (a
-//!   mutex or SR latch) holds via its coupling cycle, not a direct self-hold gap. Hysteresis is decided
-//!   by the machine's state-variable set (see `is_state` below), not by hold emptiness.
+//!   mutex or SR latch) holds via its coupling cycle. Hysteresis is decided by the machine's
+//!   state-variable set (see `is_state` below), independent of hold emptiness.
 //!
 //! Each region is then Espresso-minimised **independently** as its own onset — safe because none
 //! carries a don't-care set, so minimisation reproduces that exact region and never absorbs the hold

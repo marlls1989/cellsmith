@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
 use espresso_logic::{sync_bdd_builder, BoolExpr, Symbol};
 use indexmap::IndexMap;
 use serde::Deserialize;
@@ -183,6 +184,45 @@ impl Cell {
     /// Validate the cell and parse its functions, classifying each referenced variable as a primary
     /// input, an output, or an internal signal (feedback/state = a signal-name reference).
     pub fn analyse(&self) -> Result<AnalysedCell, ModelError> {
+        let mut analysed = self.analyse_signals()?;
+
+        // One-shot state-space rewrite: mint the cell's single builder, build every signal's BDD once,
+        // and run the minimisation (identical-δ dedup + guarded relay/alias fold, alternated to a
+        // fixpoint). It rewrites the map in place so every surviving signal is a genuine-memory
+        // coordinate; the same map is then shared by the machine pass, the region cache and emission —
+        // no signal function is ever rebuilt.
+        let builder = sync_bdd_builder!();
+        let mut bdds = build_signal_bdds(&analysed, &builder);
+        let order: Vec<Symbol> = analysed.signals().map(|s| s.name.clone()).collect();
+        let output_set: BTreeSet<Symbol> =
+            analysed.outputs.iter().map(|o| o.name.clone()).collect();
+        let min = crate::logic::minimise::minimise_state_space(&mut bdds, &order, &output_set);
+
+        recompute_signal_metadata(&mut analysed, &bdds, &min);
+
+        // Build the cell's state machine once and derive both its transition arcs and its hazards from
+        // the shared exploration over the minimised model: the two detected hazards (order-dependence,
+        // oscillation) and the constraints — setup/hold, non_seq — generated to avoid them. Clock
+        // suppression and emission gating are applied downstream.
+        let analysis = crate::logic::analysis::analyse_machine(&analysed, &bdds);
+        analysed.arcs = analysis.arcs;
+        analysed.hidden_arcs = analysis.hidden_arcs;
+        analysed.leakage = analysis.leakage;
+        analysed.constraints = analysis.constraints;
+        analysed.order_dependence = analysis.order_dependence;
+        analysed.oscillation = analysis.oscillation;
+
+        // Cache each signal's state-table regions once, in `signals()` order, from the shared folded
+        // BDDs, so downstream emitters don't rebuild the BDDs per call site.
+        analysed.regions = derive_regions(&analysed, &bdds);
+        Ok(analysed)
+    }
+
+    /// Validate the cell and parse its functions into the pre-minimise [`AnalysedCell`]: every signal's
+    /// parse-time support and feedback classification, with all derived analysis fields
+    /// (arcs/hidden_arcs/leakage/order_dependence/oscillation/constraints/regions) still empty. The
+    /// state-space rewrite and machine/region passes are layered on by [`Cell::analyse`].
+    pub fn analyse_signals(&self) -> Result<AnalysedCell, ModelError> {
         let mut input_set = BTreeSet::new();
         for pin in &self.inputs {
             if !input_set.insert(pin.clone()) {
@@ -272,7 +312,7 @@ impl Cell {
         let internals = all.split_off(n_outputs);
         let outputs = all;
 
-        let mut analysed = AnalysedCell {
+        let analysed = AnalysedCell {
             name: self.name.clone(),
             inputs: self.inputs.clone(),
             outputs,
@@ -288,74 +328,75 @@ impl Cell {
             constraint_arcs_declared: self.constraint_arcs,
             regions: Vec::new(),
         };
-        // One-shot state-space rewrite: mint the cell's single builder, build every signal's BDD once,
-        // and run the minimisation (identical-δ dedup + guarded relay/alias fold, alternated to a
-        // fixpoint). It rewrites the map in place so every surviving signal is a genuine-memory
-        // coordinate; the same map is then shared by the machine pass, the region cache and emission —
-        // no signal function is ever rebuilt.
-        let builder = sync_bdd_builder!();
-        let mut bdds: BTreeMap<Symbol, _> = analysed
-            .signals()
-            .map(|s| (s.name.clone(), builder.build(&s.expr)))
-            .collect();
-        let order: Vec<Symbol> = analysed.signals().map(|s| s.name.clone()).collect();
-        let output_set: BTreeSet<Symbol> =
-            analysed.outputs.iter().map(|o| o.name.clone()).collect();
-        let min = crate::logic::minimise::minimise_state_space(&mut bdds, &order, &output_set);
-
-        // Drop the internals the fold purged (outputs are never purged).
-        analysed.internals.retain(|s| !min.purged.contains(&s.name));
-
-        // Recompute every surviving signal from its folded BDD: its support (now semantic, not the
-        // parse-time syntactic support) and the feedback/state references among the survivors. The
-        // display expression is regenerated only when the rewrite actually changed the function.
-        let surviving: Vec<Symbol> = analysed.signals().map(|s| s.name.clone()).collect();
-        for sig in analysed
-            .outputs
-            .iter_mut()
-            .chain(analysed.internals.iter_mut())
-        {
-            sig.vars = bdds[&sig.name].variables().collect();
-            sig.feedback = surviving
-                .iter()
-                .filter(|n| sig.vars.contains(n.as_str()))
-                .cloned()
-                .collect();
-            if min.changed.contains(&sig.name) {
-                sig.expr = bdds[&sig.name].to_expr();
-            }
-        }
-
-        // Build the cell's state machine once and derive both its transition arcs and its hazards from
-        // the shared exploration over the minimised model: the two detected hazards (order-dependence,
-        // oscillation) and the constraints — setup/hold, non_seq — generated to avoid them. Clock
-        // suppression and emission gating are applied downstream.
-        let analysis = crate::logic::analysis::analyse_machine(&analysed, &bdds);
-        analysed.arcs = analysis.arcs;
-        analysed.hidden_arcs = analysis.hidden_arcs;
-        analysed.leakage = analysis.leakage;
-        analysed.constraints = analysis.constraints;
-        analysed.order_dependence = analysis.order_dependence;
-        analysed.oscillation = analysis.oscillation;
-        // Cache each signal's state-table regions once, in `signals()` order, from the shared folded
-        // BDDs, so downstream emitters don't rebuild the BDDs per call site. The cyclic state-variable
-        // set (over the recomputed feedback) decides each region's `hysteretic` flag — a state variable
-        // must emit a `statetable`, never a combinational `function`. This is the cheap pure-graph
-        // classifier, computed here so it still holds even for cells the machine-width guard skips.
-        let signals: Vec<&AnalysedOutput> = analysed.signals().collect();
-        let state_set = crate::logic::resolve::state_variables(&signals);
-        analysed.regions = analysed
-            .signals()
-            .map(|s| {
-                crate::logic::regions::state_regions(
-                    &s.name,
-                    &bdds[&s.name],
-                    state_set.contains(&s.name),
-                )
-            })
-            .collect();
         Ok(analysed)
     }
+}
+
+/// Build every signal's BDD once from the shared per-cell `builder`, keyed by signal name in
+/// `signals()` order (outputs then internals).
+///
+/// Pure over `signals()`/`expr`, so it yields the same map whether `cell` is pre-minimise (parse-time
+/// functions) or post-minimise (folded functions) — the caller re-derives from whichever `expr` each
+/// signal currently holds. The builder is minted exactly once per cell in [`Cell::analyse`].
+pub fn build_signal_bdds<B: Brand, C: ManagerCell>(
+    cell: &AnalysedCell,
+    builder: &BddBuilder<B, C>,
+) -> BTreeMap<Symbol, Bdd<B, C>> {
+    cell.signals()
+        .map(|s| (s.name.clone(), builder.build(&s.expr)))
+        .collect()
+}
+
+/// Recompute each surviving signal's metadata from the minimised `bdds` after
+/// [`crate::logic::minimise::minimise_state_space`].
+///
+/// First drop the internals the fold purged (outputs are never purged), then recompute every surviving
+/// signal from its folded BDD: its support (now semantic, not the parse-time syntactic support) and the
+/// feedback/state references among the survivors. The display expression is regenerated only when the
+/// rewrite actually changed the function.
+pub fn recompute_signal_metadata<B: Brand, C: ManagerCell>(
+    cell: &mut AnalysedCell,
+    bdds: &BTreeMap<Symbol, Bdd<B, C>>,
+    min: &crate::logic::minimise::Minimised,
+) {
+    cell.internals.retain(|s| !min.purged.contains(&s.name));
+
+    let surviving: Vec<Symbol> = cell.signals().map(|s| s.name.clone()).collect();
+    for sig in cell.outputs.iter_mut().chain(cell.internals.iter_mut()) {
+        sig.vars = bdds[&sig.name].variables().collect();
+        sig.feedback = surviving
+            .iter()
+            .filter(|n| sig.vars.contains(n.as_str()))
+            .cloned()
+            .collect();
+        if min.changed.contains(&sig.name) {
+            sig.expr = bdds[&sig.name].to_expr();
+        }
+    }
+}
+
+/// Derive each signal's state-table regions from the shared folded `bdds`, in `signals()` order
+/// (outputs then internals).
+///
+/// The cyclic state-variable set (over the recomputed feedback) decides each region's `hysteretic`
+/// flag — a state variable must emit a `statetable`, never a combinational `function`. This is the
+/// cheap pure-graph classifier, so it holds even for cells the machine-width guard skips. Returns the
+/// region vector; it does not mutate `cell`.
+pub fn derive_regions<B: Brand, C: ManagerCell>(
+    cell: &AnalysedCell,
+    bdds: &BTreeMap<Symbol, Bdd<B, C>>,
+) -> Vec<crate::logic::regions::StateRegions> {
+    let signals: Vec<&AnalysedOutput> = cell.signals().collect();
+    let state_set = crate::logic::resolve::state_variables(&signals);
+    cell.signals()
+        .map(|s| {
+            crate::logic::regions::state_regions(
+                &s.name,
+                &bdds[&s.name],
+                state_set.contains(&s.name),
+            )
+        })
+        .collect()
 }
 
 /// Parse a TOML spec into a [`Spec`].

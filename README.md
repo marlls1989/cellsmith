@@ -4,10 +4,9 @@ Generate Cadence Liberate **transition arcs** (with prevectors) for logic cells 
 state-holding / hysteretic cells (C-elements, latches, cross-coupled pairs, mutexes, and flip-flops
 with internal state) that Liberate cannot auto-detect on non-standard nodes (e.g. nMOS).
 
-cellsmith is an arc **generator**, not a characteriser: it derives the arcs, the behavioural model
-and a Liberty stub; Liberate still does the actual characterisation inside your existing harness. It
-is a focused Rust rebuild of the core of hsNCL's `genLiberateTemplate`, with the entire
-YAML/library layer dropped in favour of a minimal, general (any-gate) TOML input.
+cellsmith is an arc **generator**: it derives the arcs, the behavioural model and a Liberty stub;
+Liberate performs the characterisation inside your existing harness. It is a focused Rust tool driven
+by a minimal, general (any-gate) TOML input.
 
 ## What it produces
 
@@ -27,8 +26,8 @@ some **internal** functions. Two rules make state-holding cells work with no spe
 - **any signal name referenced inside a function is that signal's feedback/delayed value** — so a
   C-element referencing `Q`, an SR pair referencing each other, and a flop's slave referencing its
   master are all just ordinary references;
-- an **internal** signal (declared under `[cell.internal]`) *may* become a **state node**, but is not
-  automatically one: before the machine is built, cellsmith **minimises** the model — a pure alias or
+- whether an **internal** signal (declared under `[cell.internal]`) becomes a **state node** is decided
+  by minimisation: before the machine is built, cellsmith **minimises** the model — a pure alias or
   complement of another signal collapses onto that signal's coordinate, and a non-self-holding
   combinational relay is composed into its consumers and dropped. Only internals that survive as
   genuine memory (e.g. a flip-flop's master latch) remain first-class state nodes with **no external
@@ -48,7 +47,7 @@ signals down to 11.
 Timing arcs are derived by exploring that state machine:
 
 1. each state variable's next-state δ is built (folding away combinational signals but **keeping every
-   state cycle** — a tight loop is legitimate held state, never substituted);
+   state cycle** — a tight loop is legitimate held state, kept through folding);
 2. a breadth-first search runs from stable start states discovered from the signals' forced on/off
    covers, stepping **one input at a time** and letting the state settle;
 3. wherever a single input toggle flips an **output**, an arc is emitted.
@@ -75,10 +74,10 @@ condition, the group of nodes involved and the states it can settle to:
 ```
 
 (and the equivalent `/* oscillation: ... */` form in the `.lib`). cellsmith always emits a stderr
-warning for the same hazard, noting that it is annotated only, not modelled as timing. The hazard is
-derived from the functions themselves; there is no spec key to declare or silence it. The arbitration
-*choice* itself is a physical property Liberate characterises separately — it is not, and cannot be,
-expressed as a deterministic timing arc.
+warning for the same hazard, noting that the hazard is recorded as a comment annotation only. The
+hazard is derived from the functions themselves; there is no spec key to declare or silence it. The
+arbitration *choice* itself is a physical property Liberate characterises separately, outside
+cellsmith's deterministic timing arcs.
 
 The Verilog UDP and Liberty `statetable` are both the **functional** view, but Liberty's spec forces a
 different shape. Verilog keeps one sequential UDP per signal, and an output's table may reference
@@ -88,8 +87,8 @@ output pin, so no output pin ever carries state directly there: instead the emit
 sequential cell's state into **one joint `statetable`**, whose rows give the joint next-state of every
 state node (genuine internals plus an emission-minted `_st` alias for each state output), and each
 output pin is re-expressed as a spec-legal projection onto that one table. Internal nodes appear as
-internal `wire`s in the Verilog and `direction : internal` pins in the Liberty — modelled, but not
-exposed as ports.
+internal `wire`s in the Verilog and `direction : internal` pins in the Liberty, kept off the port
+list.
 
 ## Input format
 
@@ -222,6 +221,43 @@ Requirements:
 - Git dependencies are fetched through the system `git` (configured in `.cargo/config.toml` via
   `net.git-fetch-with-cli`), so a working `git` on `PATH` is needed for the first build.
 
+## Benchmarks
+
+The [Criterion](https://crates.io/crates/criterion) suite times every pipeline stage across a rayon
+thread sweep, from a serial `n=1` baseline up to `max` threads (`rayon::current_num_threads()`).
+cellsmith runs multithreaded, and parallelism can regress a stage's cost — intra-cell BDD parallelism
+once slowed ~3.7x under write-lock contention — so each stage is reported across the full sweep.
+
+Two targets cover the pipeline at different granularities, both driven off the 9 cells in
+`examples/cells.toml`:
+
+- `benches/stages.rs` — per-stage timings, grouped by fixture: `signal` (`parse`, `build_signal_bdds`,
+  `minimise`), `machine` (`machine_build`, `arcs_derive`, `confluence_detect`, `analyse_machine`,
+  `leakage_derive`, `derive_regions`), and `emit` (`cell_arcs_tcl`, `cell_verilog`, `cell_liberty`).
+- `benches/aggregate.rs` — whole-pipeline timings: `whole_cell` (`Cell::analyse` per cell) and
+  `whole_run` (the full 9-cell run: `analyse` plus all three emitters and `library_liberty`).
+
+Sweep width follows each stage's cost and parallelism, via `benches/common/mod.rs::sweep`: internally
+parallel stages (`machine_build`, `arcs_derive`, `confluence_detect`, `analyse_machine`, and both
+aggregate targets) sweep the full `{1, 2, 4, 8, max}` range on the two `HEAVY` cells (`ICM`,
+`RACELEM21`); serial stages sweep the flat `{1, max}` on those same cells as a flatness check; every
+stage on every cell is additionally measured at `n=max` so the cost gradient across cells is visible
+(`max` is `rayon::current_num_threads()`, e.g. `{1, 2, 4, 8}` on an 8-core host).
+
+```sh
+cargo bench                    # both targets
+cargo bench --bench stages     # per-stage only
+cargo bench --bench aggregate  # whole-pipeline only
+```
+
+Results (with HTML reports) land under `target/criterion`. To compare before/after a change:
+
+```sh
+cargo bench -- --save-baseline before
+# make the change
+cargo bench -- --baseline before
+```
+
 ## Dependencies
 
 - [`espresso-logic`](https://crates.io/crates/espresso-logic) `5.4` — the maintainer's own crate; it
@@ -232,9 +268,8 @@ Requirements:
 
 ## Status and scope
 
-Deliberate divergences from the hsNCL reference: pins are emitted in **declaration order** (not
-alphabetically), the `vclk`/alias/library layer is dropped, and don't-care cubes are factored via BDD
-paths rather than Quine–McCluskey — so a function may render correctly but non-minimally.
+Pins are emitted in **declaration order**. Don't-care cubes are factored via BDD paths, so a function
+may render correctly but non-minimally.
 
 The **state-machine** arc engine supports state-holding cells of these shapes: self-holding
 C-elements and latches, cross-coupled SR pairs, mutexes / arbiters, and cells with **internal state
@@ -246,13 +281,12 @@ measured start state.
 The engine detects two kinds of hazard: an **order-dependent** hazard (non-confluence — the settled
 state depends on which of a racing input pair's edges lands first; seen on C-elements, DFFs and SR
 latches) and an **oscillation** hazard (a bistable condition where the machine picks a settled state
-non-deterministically instead of converging on one, as in a mutex/arbiter). Metastability is the
-shared *physical risk* of both — never a name for either hazard on its own. From a detected hazard,
+non-deterministically instead of converging on one, as in a mutex/arbiter). From a detected hazard,
 cellsmith can **generate** a timing constraint (setup/hold for a pair holding a declared clock,
 otherwise a symmetric `non_seq`) to avoid it, gated by the `--constraints` flag or a cell's
-`constraint_arcs = true`; the constraint is the remedy, not the hazard. cellsmith emits three
-kinds of per-cell stderr diagnostic: the oscillation hazards, the order-dependent hazards (grouped
-per racing input pair, a pair's conditions joined), and the constraints generated to avoid them.
+`constraint_arcs = true`. cellsmith emits three kinds of per-cell stderr diagnostic: the oscillation 
+hazards, the order-dependent hazards (grouped per racing input pair, a pair's conditions joined), 
+and the constraints generated to avoid them.
 
 ## Licence
 

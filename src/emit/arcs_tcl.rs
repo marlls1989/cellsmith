@@ -1,8 +1,7 @@
 //! Emit Cadence Liberate `define_arc` blocks for a cell's transition arcs.
 //!
-//! The layout mirrors hsNCL `genRiseTransition`/`genFallTransition`, including the quirk that rise
-//! arcs place `-type` first while fall arcs place it after the prevector. Pins are emitted in
-//! declaration order (cellsmith's deliberate divergence from hsNCL's alphabetical sort).
+//! The layout places `-type` first on rise arcs and after the prevector on fall arcs, with pins
+//! emitted in declaration order.
 
 use espresso_logic::Symbol;
 
@@ -241,7 +240,7 @@ fn format_arc(cell: &AnalysedCell, arc: &Arc, opts: ArcsTclOptions) -> String {
 
     let mut s = String::from("define_arc \\\n");
     match arc.edge {
-        // Rise: -type, then prevector. Fall: prevector, then -type (matches hsNCL).
+        // Rise: -type, then prevector. Fall: prevector, then -type.
         Edge::Rise => {
             s.push_str(&type_line);
             s.push_str(&prevector_pinlist);
@@ -423,7 +422,7 @@ fn hidden_when_str(h: &HiddenArc) -> Option<String> {
 }
 
 /// One-line `define_leakage` for a static leakage state: the stable condition over the cell's
-/// inputs and its settled (resolved) outputs. Mirrors hsNCL's genLeakage.
+/// inputs and its settled (resolved) outputs.
 fn format_leakage(cell: &AnalysedCell, l: &LeakageState) -> String {
     let mut lits: Vec<(Symbol, bool)> = assignment(&l.inputs).into_iter().collect();
     lits.extend(l.outputs.iter().cloned());

@@ -3,7 +3,7 @@
 //! A cell is a state machine over `inputs × state-variables`. A **node** is a self-describing
 //! [`Minterm<Symbol>`] — it carries its own ordered columns ([`Minterm::vars`]), so there is no shared
 //! header object. Every input carries a concrete value and each state variable is either **defined** (a
-//! concrete `0`/`1`) or **absent** — encoded as the don't-care `-`, never a placeholder value. Power-on
+//! concrete `0`/`1`) or **absent** — encoded as the don't-care `-`. Power-on
 //! is the inputs-only node: no state fixed. The next-state map settles the state columns (via each state
 //! variable's minimised next-state function, read directly from the model (see [`super::minimise`]))
 //! using [`Bdd::evaluate`], which reads a δ under the node's

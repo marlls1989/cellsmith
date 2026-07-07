@@ -147,9 +147,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         eprintln!("{}", warnings.join("\n\n"));
     }
 
-    // Constraints are the *remedy* for a detected hazard, not a phenomenon of their own: the
-    // oscillation and order-dependence warnings above already report every hazard, so the constraint
-    // arcs are emitted (below, gated by the per-cell opt-in) without a separate diagnostic.
+    // Constraints are the remedy for a hazard already reported by the oscillation and
+    // order-dependence warnings above, so the constraint arcs are emitted (below, gated by the
+    // per-cell opt-in) without a separate diagnostic.
 
     let arc_opts = ArcsTclOptions {
         emit_when: !cli.no_when,

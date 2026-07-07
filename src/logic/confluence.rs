@@ -1,7 +1,7 @@
 //! Hazard **detection** and constraint **generation** over **confluence** of the asynchronous state
 //! machine. Detection ([`detect`]) finds the two hazards two closely-timed input edges can create;
 //! constraint generation ([`constrain`]) turns each detected hazard into the timing separation that
-//! removes it. A hazard is detected; a constraint is generated from it — never the reverse.
+//! removes it. Detection happens first; constraint generation follows from each detected hazard.
 //!
 //! A delay arc ([`super::arcs`]) records a single input edge that *causes* an output edge. A
 //! **constraint** arc instead records that two inputs must not change too close together — a setup/hold
@@ -27,18 +27,19 @@
 //! (or, degenerately, a single input toggle) can drive the state into a **periodic oscillation** rather
 //! than a fixpoint ([`machine::settle_or_cycle`] returning the cycle instead of settling). That is
 //! reported as an [`Oscillation`]. A mutex is order-dependent by design (that is its function as an
-//! arbiter); the hazard it *detects* is the oscillation at simultaneity, not the ordinary settling of
-//! one request before the other — and each pair-probe observation records a [`Race`] so the generated
+//! arbiter); the hazard it *detects* is the oscillation at simultaneity; ordinary settling of one
+//! request before the other is the normal, hazard-free case — and each pair-probe observation records a
+//! [`Race`] so the generated
 //! constraint has the racing pins/edges its divergence-derived constraint (discarded by the
 //! combinational-neighbourhood filter) would otherwise have supplied.
 //!
 //! [`constrain`] then generates one [`Constraint`] per detected hazard. A constraint's **kind is decided
-//! solely by the declared clock**, not by the geometry of the race: a pair containing exactly one
-//! declared clock is a directed **setup/hold** (clock ← data — the DFF's `D` around `CLK`); any other
-//! pair is a symmetric **non_seq** (a mutex's `A`/`B`, a C-element's `A↓`/`B↑`, an SR latch's
-//! simultaneous release). Clocks are *declared*, never inferred: inferring one from the race order is
-//! state-dependent — the same pins read one way from one held state and the other way from another — so
-//! it distinguishes nothing real and is not used.
+//! solely by the declared clock**: a pair containing exactly one declared clock is a directed
+//! **setup/hold** (clock ← data — the DFF's `D` around `CLK`); any other pair is a symmetric **non_seq**
+//! (a mutex's `A`/`B`, a C-element's `A↓`/`B↑`, an SR latch's simultaneous release). Clocks are
+//! *declared* inputs; the race geometry is left out of the decision because inferring a clock from race
+//! order would be state-dependent — the same pins read one way from one held state and the other way
+//! from another — so it would distinguish nothing real.
 //!
 //! The reachable states and the prevector into `s` come from the shared [`machine::explore`], the same
 //! exploration the delay-arc BFS uses.
@@ -171,7 +172,7 @@ fn oscillating_group(cycle: &[Minterm<Symbol>], state_vars: &[Symbol]) -> Vec<Sy
 /// [`Oscillation`] — but generates no constraint (that is [`constrain`]'s job). Empty for confluent
 /// cells (ordinary combinational / self-holding gates without oscillation) and for cells with too few
 /// inputs or no state to latch.
-pub(crate) fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> DetectedHazards {
+pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> DetectedHazards {
     let cell = m.cell;
     let inputs = &cell.inputs;
     let n = inputs.len();
@@ -329,8 +330,8 @@ pub(crate) fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) 
                 // Non-confluent and interacting ⇒ an order-dependent hazard: the divergent state
                 // variables and their two competing settled outcomes, at the input condition where the
                 // pair races. The constraint generated from it (see [`constrain`]) has its kind decided
-                // solely by the declared clock — not recorded here, as the hazard is a property of the
-                // cell, not of the declaration.
+                // there, solely by the declared clock, since the hazard is a property of the cell rather
+                // than of the declaration.
                 let group: Vec<Symbol> = state_vars
                     .iter()
                     .filter(|w| s_xy.value_of(w.as_str()) != s_yx.value_of(w.as_str()))

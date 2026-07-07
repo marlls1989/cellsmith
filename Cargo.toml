@@ -23,7 +23,20 @@ rayon = "1"
 [lib]
 name = "cellsmith"
 path = "src/lib.rs"
+bench = false
 
 [[bin]]
 name = "cellsmith"
 path = "src/main.rs"
+bench = false
+
+[dev-dependencies]
+criterion = { version = "0.8.2", features = ["html_reports"] }
+
+[[bench]]
+name = "stages"
+harness = false
+
+[[bench]]
+name = "aggregate"
+harness = false
