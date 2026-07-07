@@ -673,9 +673,9 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "liberty-parser"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c96a214d540f043826464f1f19260dd2d6b2fc3ae16b31c1766ed00e4f2b029"
+checksum = "4707399cdd6096b47b753daa46a90b5538d98dee50c44a61e93c7019215c1f71"
 dependencies = [
  "gpoint",
  "indexmap 1.9.3",

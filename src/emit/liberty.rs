@@ -248,7 +248,8 @@ fn statetable_group(model: &StateModel) -> Group {
 }
 
 /// Render the joint table body: one `<inputs> : <current> : <next>` row per [`StateModel::rows`] entry,
-/// comma-joined in model (deterministic) order. Inputs/current use `H`/`L`/`-`; next uses `H`/`L`/`N`.
+/// comma-and-newline-joined (one statetable row per line in the emitted Liberty) in model (deterministic)
+/// order. Inputs/current use `H`/`L`/`-`; next uses `H`/`L`/`N`.
 fn table_string(model: &StateModel) -> String {
     model
         .rows
@@ -262,7 +263,7 @@ fn table_string(model: &StateModel) -> String {
             )
         })
         .collect::<Vec<_>>()
-        .join(" , ")
+        .join(" ,\n")
 }
 
 /// Render a per-node next-state action vector as space-separated `H`/`L`/`N`/`-` symbols. A `None` slot
