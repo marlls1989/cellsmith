@@ -8,7 +8,7 @@
 //! variables get an emission-time `{name}_st` alias node so no state-table node ever names an external
 //! output pin; internal state nodes keep their own name.
 //!
-//! CONSTRUCTION. The rows are built by **cover algebra**, not a cube cross-product. Each node's three
+//! CONSTRUCTION. The rows are built by **cover algebra**. Each node's three
 //! minimised region covers (on/off/hold, cached on [`StateRegions`]) are re-based onto one **shared
 //! header** — the input nodes followed by the state signals' original names — renamed so their single
 //! output column carries the node's original name, then stacked (`Cover::extend`) into three

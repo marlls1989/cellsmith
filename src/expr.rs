@@ -1,6 +1,6 @@
 //! Parse a Boolean function's surface syntax into an espresso-logic [`BoolExpr`].
 //!
-//! Delegates to [`BoolExpr::parse`], whose grammar is a superset of the `a*b+!c` form hsNCL uses:
+//! Delegates to [`BoolExpr::parse`], whose grammar is a superset of the `a*b+!c` form:
 //! `*`/`&` AND, `+`/`|` OR, `!`/`~` NOT, `^` XOR, `0`/`1`/`true`/`false` constants, and parentheses
 //! for grouping. Precedence, tightest first: NOT > AND > XOR > OR. Identifiers are a letter/`_`
 //! followed by letters/digits/`_` (so pin names like `M1`, `P2`, `Q` are fine).

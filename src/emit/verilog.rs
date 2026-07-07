@@ -2,18 +2,16 @@
 //! three-valued next-state table built from the on/off/hold regions) wrapped in a `celldefine`d
 //! `module` that instantiates the primitives and carries a `specify` block of path delays.
 //!
-//! Mirrors hsNCL `outPinUDP`/`cellAliasModule` (`Circuit/NCLCell.hs`), including its structure: the
-//! UDP for output `x` takes the pin's own state as the `reg`/current-state column and every other
+//! The UDP for output `x` takes the pin's own state as the `reg`/current-state column and every other
 //! signal (primary inputs + other outputs) as an input column, so a self-holding cell keeps its
-//! hysteresis as `-` (no-change) rows. Pins are emitted in declaration order (cellsmith's deliberate
-//! divergence from hsNCL's alphabetical sort).
+//! hysteresis as `-` (no-change) rows. Pins are emitted in declaration order.
 
 use espresso_logic::Symbol;
 
 use crate::logic::regions::{StateCube, StateRegions};
 use crate::model::AnalysedCell;
 
-/// Fixed rise/fall path delay stamped on every `specify` arc, matching the hsNCL template.
+/// Fixed rise/fall path delay stamped on every `specify` arc.
 const PATH_DELAY: &str = "(0.1, 0.1)";
 
 /// The full Verilog model for a cell: a UDP primitive per signal (outputs **and** internal state

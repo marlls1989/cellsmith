@@ -3,7 +3,8 @@
 //! Two closely-timed input changes can drive a cell into metastability. Detection
 //! ([`super::confluence`]) finds the two shapes that risk takes and reports each here; a
 //! [`super::confluence::Constraint`] is then *generated* from a detected hazard to specify the timing
-//! separation that removes it. A hazard is detected; a constraint is generated — never the reverse.
+//! separation that removes it. Detection happens first; constraint generation follows from each
+//! detected hazard.
 //!
 //! - An [`OrderDependence`] hazard: the settled state depends on which of two input edges lands first
 //!   (non-confluence). Detected when two settle orders diverge and the divergence interacts with the
@@ -12,12 +13,11 @@
 //!   the state into a periodic, non-settling cycle rather than a fixpoint. Detected when
 //!   [`super::machine::settle_or_cycle`] returns the cycle instead of settling.
 //!
-//! Both are *detected* during the state-space exploration in [`super::confluence`], never by
-//! enumerating state assignments (an undefined state variable simply means uninitialised). Metastability
-//! is the shared physical risk both create — the reason a constraint is generated — not a type and not a
-//! synonym for oscillation. This module carries only the resulting report types.
+//! Both are *detected* during the state-space exploration in [`super::confluence`]; an undefined state
+//! variable simply means uninitialised. Metastability is the shared physical risk both create — the
+//! reason a constraint is generated. This module carries only the resulting report types.
 //!
-//! **Implementation note:** deduplication is [`super::confluence`]'s job, not this module's.
+//! **Implementation note:** deduplication is handled by [`super::confluence`].
 //! [`OrderDependence`] is keyed by the unordered `(pin,edge)|(pin,edge)` pair, keeping the min
 //! `(prevector.len, discovered)` representative; [`Oscillation`] is keyed by `group|condition`, keeping an
 //! arbitrary colliding representative (`group`/`condition`/`stable` coincide by key) with every colliding
