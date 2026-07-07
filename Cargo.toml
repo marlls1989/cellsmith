@@ -27,3 +27,14 @@ path = "src/lib.rs"
 [[bin]]
 name = "cellsmith"
 path = "src/main.rs"
+
+[dev-dependencies]
+criterion = { version = "0.8.2", features = ["html_reports"] }
+
+[[bench]]
+name = "stages"
+harness = false
+
+[[bench]]
+name = "aggregate"
+harness = false

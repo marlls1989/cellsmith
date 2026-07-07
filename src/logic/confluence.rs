@@ -171,7 +171,7 @@ fn oscillating_group(cycle: &[Minterm<Symbol>], state_vars: &[Symbol]) -> Vec<Sy
 /// [`Oscillation`] — but generates no constraint (that is [`constrain`]'s job). Empty for confluent
 /// cells (ordinary combinational / self-holding gates without oscillation) and for cells with too few
 /// inputs or no state to latch.
-pub(crate) fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> DetectedHazards {
+pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> DetectedHazards {
     let cell = m.cell;
     let inputs = &cell.inputs;
     let n = inputs.len();

@@ -59,7 +59,7 @@ pub(crate) const MAX_MACHINE_VARS: usize = 22;
 
 /// A cell's asynchronous state machine, built once and shared by the arc and confluence derivations. The
 /// BDD brand is a generic parameter scoped to the builder that minted these handles.
-pub(crate) struct Machine<'c, B: Brand, C: ManagerCell> {
+pub struct Machine<'c, B: Brand, C: ManagerCell> {
     pub(crate) cell: &'c AnalysedCell,
     /// State variables in signal order (outputs first, then internals).
     pub(crate) state_vars: Vec<Symbol>,
@@ -79,7 +79,7 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
     /// Build the shared machine for `cell` from the minimised `bdds` map (built once in
     /// [`crate::model::Cell::analyse`]). Returns `None` — leaving the cell unexplored — when the machine
     /// width would exceed [`MAX_MACHINE_VARS`] (the combinatorial blow-up guard).
-    pub(crate) fn build(
+    pub fn build(
         cell: &'c AnalysedCell,
         bdds: &BTreeMap<Symbol, Bdd<B, C>>,
     ) -> Option<Machine<'c, B, C>>
