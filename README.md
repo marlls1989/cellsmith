@@ -285,13 +285,12 @@ measured start state.
 The engine detects two kinds of hazard: an **order-dependent** hazard (non-confluence — the settled
 state depends on which of a racing input pair's edges lands first; seen on C-elements, DFFs and SR
 latches) and an **oscillation** hazard (a bistable condition where the machine picks a settled state
-non-deterministically instead of converging on one, as in a mutex/arbiter). Metastability is the
-shared *physical risk* of both — never a name for either hazard on its own. From a detected hazard,
+non-deterministically instead of converging on one, as in a mutex/arbiter). From a detected hazard,
 cellsmith can **generate** a timing constraint (setup/hold for a pair holding a declared clock,
 otherwise a symmetric `non_seq`) to avoid it, gated by the `--constraints` flag or a cell's
-`constraint_arcs = true`; the constraint is the remedy, not the hazard. cellsmith emits three
-kinds of per-cell stderr diagnostic: the oscillation hazards, the order-dependent hazards (grouped
-per racing input pair, a pair's conditions joined), and the constraints generated to avoid them.
+`constraint_arcs = true`. cellsmith emits three kinds of per-cell stderr diagnostic: the oscillation 
+hazards, the order-dependent hazards (grouped per racing input pair, a pair's conditions joined), 
+and the constraints generated to avoid them.
 
 ## Licence
 
