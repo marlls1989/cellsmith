@@ -19,7 +19,7 @@ fn bench_cell_analyse(c: &mut Criterion) {
     let mut g = c.benchmark_group("whole_cell");
     let cells = common::raw_cells();
     for cell in &cells {
-        for &n in &common::sweep(true, common::is_heavy(cell.name.as_ref())) {
+        for &n in &common::sweep(true, common::is_heavy(cell.name.as_str())) {
             g.bench_with_input(
                 BenchmarkId::new("cell_analyse", format!("{}/n{}", cell.name, n)),
                 &n,
