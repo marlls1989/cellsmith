@@ -222,6 +222,45 @@ Requirements:
 - Git dependencies are fetched through the system `git` (configured in `.cargo/config.toml` via
   `net.git-fetch-with-cli`), so a working `git` on `PATH` is needed for the first build.
 
+## Benchmarks
+
+The [Criterion](https://crates.io/crates/criterion) suite treats every benchmark target as a pipeline
+stage measured across a rayon thread sweep. Multithreaded execution is cellsmith's production mode, so
+the swept numbers are the primary signal; `n=1` is simply the baseline point of that same sweep, not a
+separate single-thread mode. A per-stage regression under parallelism can be invisible at `n=1` — intra-cell
+BDD parallelism once regressed ~3.7x from write-lock contention while single-thread timings stayed flat —
+which is why the swept multithread measurements, not a single-thread snapshot, are what the suite reports.
+
+Two targets cover the pipeline at different granularities, both driven off the 9 cells in
+`examples/cells.toml`:
+
+- `benches/stages.rs` — per-stage timings, grouped by fixture: `signal` (`parse`, `build_signal_bdds`,
+  `minimise`), `machine` (`machine_build`, `arcs_derive`, `confluence_detect`, `analyse_machine`,
+  `leakage_derive`, `derive_regions`), and `emit` (`cell_arcs_tcl`, `cell_verilog`, `cell_liberty`).
+- `benches/aggregate.rs` — whole-pipeline timings: `whole_cell` (`Cell::analyse` per cell) and
+  `whole_run` (the full 9-cell run: `analyse` plus all three emitters and `library_liberty`).
+
+Sweep width follows each stage's cost and parallelism, via `benches/common/mod.rs::sweep`: internally
+parallel stages (`machine_build`, `arcs_derive`, `confluence_detect`, `analyse_machine`, and both
+aggregate targets) sweep the full `{1, 2, 4, 8, max}` range on the two `HEAVY` cells (`ICM`,
+`RACELEM21`); serial stages sweep the flat `{1, max}` on those same cells as a flatness check; every
+stage on every cell is additionally measured at `n=max` so the cost gradient across cells is visible
+(`max` is `rayon::current_num_threads()`, e.g. `{1, 2, 4, 8}` on an 8-core host).
+
+```sh
+cargo bench                    # both targets
+cargo bench --bench stages     # per-stage only
+cargo bench --bench aggregate  # whole-pipeline only
+```
+
+Results (with HTML reports) land under `target/criterion`. To compare before/after a change:
+
+```sh
+cargo bench -- --save-baseline before
+# make the change
+cargo bench -- --baseline before
+```
+
 ## Dependencies
 
 - [`espresso-logic`](https://crates.io/crates/espresso-logic) `5.4` — the maintainer's own crate; it
