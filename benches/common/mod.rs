@@ -22,8 +22,8 @@ pub fn raw_cells() -> Vec<Cell> {
         .cells
 }
 
-/// Analyse every cell in parallel; a serial fixture-prep helper for stages that need an
-/// already-analysed cell as input.
+/// Analyse every cell in parallel; a fixture-prep helper for stages that need an already-analysed
+/// cell as input, run outside the timed region.
 pub fn analyse_all(cells: &[Cell]) -> Vec<AnalysedCell> {
     cells.par_iter().map(|c| c.analyse().unwrap()).collect()
 }
