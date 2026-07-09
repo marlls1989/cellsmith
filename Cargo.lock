@@ -403,9 +403,9 @@ dependencies = [
 
 [[package]]
 name = "espresso-logic"
-version = "5.6.1"
+version = "5.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ab1a4c1a46205764df03928065e4e5f68680a3ae1d5679370dd751799ba129d"
+checksum = "1c99c242f509399ed49865a8dc7af00fd80b6a6d4c33d65f9c41ab5633369be4"
 dependencies = [
  "bindgen",
  "cc",
