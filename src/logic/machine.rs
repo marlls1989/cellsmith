@@ -99,7 +99,7 @@ pub fn is_stable<B: Brand, C: ManagerCell>(deltas: &[Delta<B, C>], node: &Minter
     step(deltas, node) == *node
 }
 
-/// Settle the state under `node`'s fixed inputs: iterate [`step`] to a fixpoint. The fixpoint may still
+/// Settle the state under `node`'s fixed inputs: iterate `step` to a fixpoint. The fixpoint may still
 /// leave state variables absent — those the inputs (and resolved state) do not determine. Returns `None`
 /// if the state oscillates without settling (an oscillation hazard, which risks metastability).
 pub fn settle<B: Brand, C: ManagerCell>(

@@ -24,7 +24,7 @@
 //! pair-probe [`Race`] appended rather than dropped. `discovered` (on both [`Race`] and [`OrderDependence`])
 //! is the probed state's index in exploration order — one half of the min `(prevector.len, discovered)`
 //! tie-break that fixes the surviving [`OrderDependence`] and, downstream,
-//! [`super::confluence::constrain`]'s own constraint dedup. See `hazard-detection.md` for the concept.
+//! `confluence::constrain`'s own constraint dedup. See `hazard-detection.md` for the concept.
 
 use espresso_logic::{Minterm, Symbol};
 

@@ -32,7 +32,7 @@ use crate::model::AnalysedCell;
 
 /// The plain-data outcome of the shared machine pass: the transition arcs, the two detected hazards
 /// (order-dependent and oscillation), and the constraints generated to avoid them. Empty when the cell
-/// is not explored (the combinatorial blow-up guard, see [`MAX_MACHINE_VARS`]).
+/// is not explored (the combinatorial blow-up guard, see `MAX_MACHINE_VARS`).
 ///
 /// `MachineAnalysis` itself never escapes this module: [`analyse_machine`]'s result is copied field-for-
 /// field into the matching [`crate::model::AnalysedCell`] fields by `Cell::analyse` (see `model.rs`).
@@ -78,7 +78,7 @@ pub struct Machine<'c, B: Brand, C: ManagerCell> {
 impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
     /// Build the shared machine for `cell` from the minimised `bdds` map (built once in
     /// [`crate::model::Cell::analyse`]). Returns `None` — leaving the cell unexplored — when the machine
-    /// width would exceed [`MAX_MACHINE_VARS`] (the combinatorial blow-up guard).
+    /// width would exceed `MAX_MACHINE_VARS` (the combinatorial blow-up guard).
     pub fn build(
         cell: &'c AnalysedCell,
         bdds: &BTreeMap<Symbol, Bdd<B, C>>,
