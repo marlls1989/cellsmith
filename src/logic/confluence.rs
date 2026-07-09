@@ -1,6 +1,6 @@
 //! Hazard **detection** and constraint **generation** over **confluence** of the asynchronous state
 //! machine. Detection ([`detect`]) finds the two hazards two closely-timed input edges can create;
-//! constraint generation ([`constrain`]) turns each detected hazard into the timing separation that
+//! constraint generation (`constrain`) turns each detected hazard into the timing separation that
 //! removes it. Detection happens first; constraint generation follows from each detected hazard.
 //!
 //! A delay arc ([`super::arcs`]) records a single input edge that *causes* an output edge. A
@@ -33,7 +33,7 @@
 //! constraint has the racing pins/edges its divergence-derived constraint (discarded by the
 //! combinational-neighbourhood filter) would otherwise have supplied.
 //!
-//! [`constrain`] then generates one [`Constraint`] per detected hazard. A constraint's **kind is decided
+//! `constrain` then generates one [`Constraint`] per detected hazard. A constraint's **kind is decided
 //! solely by the declared clock**: a pair containing exactly one declared clock is a directed
 //! **setup/hold** (clock ← data — the DFF's `D` around `CLK`); any other pair is a symmetric **non_seq**
 //! (a mutex's `A`/`B`, a C-element's `A↓`/`B↑`, an SR latch's simultaneous release). Clocks are
@@ -48,7 +48,7 @@
 //! per-input settle (`single`) is computed once and reused across every pair probe, so [`detect`] costs
 //! O(n) settles per state rather than O(n²). States are probed in parallel and their per-state dedup maps
 //! merged together; the merge is order-independent. [`detect`]'s `order_dependence` dedup and
-//! [`constrain`]'s own [`Constraint`] dedup ([`constraint_key`]) both keep the min
+//! `constrain`'s own [`Constraint`] dedup (`constraint_key`) both keep the min
 //! `(prevector.len, discovered)` representative per canonical key — a total order, so the surviving entry
 //! is fixed regardless of merge order. [`detect`]'s `oscillation` dedup instead keeps an arbitrary colliding
 //! representative — on a collision `group`/`condition` coincide (the key is injective in them) but
@@ -143,7 +143,7 @@ fn constraint_key(c: &Constraint) -> String {
 }
 
 /// The detected hazards of one pass over the reachable state machine: the two shapes the metastability
-/// risk takes, reported symmetrically. No generated constraint is nested here — [`constrain`] turns
+/// risk takes, reported symmetrically. No generated constraint is nested here — `constrain` turns
 /// these into [`Constraint`]s downstream.
 #[derive(Debug, Default)]
 pub struct DetectedHazards {
@@ -169,7 +169,7 @@ fn oscillating_group(cycle: &[Minterm<Symbol>], state_vars: &[Symbol]) -> Vec<Sy
 
 /// Detect a cell's hazards by re-walking its shared state machine ([`Machine`]) and testing pairwise
 /// input-order confluence. Produces the two detected hazards symmetrically — [`OrderDependence`] and
-/// [`Oscillation`] — but generates no constraint (that is [`constrain`]'s job). Empty for confluent
+/// [`Oscillation`] — but generates no constraint (that is `constrain`'s job). Empty for confluent
 /// cells (ordinary combinational / self-holding gates without oscillation) and for cells with too few
 /// inputs or no state to latch.
 pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> DetectedHazards {

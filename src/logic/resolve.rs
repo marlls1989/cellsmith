@@ -3,7 +3,7 @@
 //! A cell is an asynchronous state machine over `inputs × state-variables`. Every signal (an external
 //! **output** or an **internal** variable) is a Boolean function that may reference primary inputs and
 //! other signals (delayed/feedback values). This module provides only the reference graph
-//! ([`dependency_map`], [`transitive_closure`]) and the **state-variable** classifier
+//! ([`dependency_map`], `transitive_closure`) and the **state-variable** classifier
 //! ([`state_variables`]) over the already-**minimised** model — a signal on a dependency cycle
 //! (self-reference or a larger coupling cycle) is a held coordinate of the state machine, and one on
 //! no cycle is purely combinational.

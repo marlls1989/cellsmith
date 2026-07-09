@@ -1,11 +1,11 @@
 //! Transition-arc derivation over the cell's **asynchronous state machine**.
 //!
 //! A cell is a state machine over `inputs × state-variables` (each output's own feedback and every
-//! internal state node; see [`resolve`]). A node is a fully-fixed [`Minterm<Symbol>`] over
+//! internal state node; see [`resolve`](super::resolve)). A node is a fully-fixed [`Minterm<Symbol>`] over
 //! `inputs…, state_vars…` ([`machine`]). Arcs are derived by exploring it:
 //!
 //!   1. Each state variable's δ comes directly from the cell's minimised signal functions; [`machine::settle`] applies them
-//!      via [`Bdd::evaluate`] until the state stops changing.
+//!      via [`Bdd::evaluate`](espresso_logic::bdd::Bdd::evaluate) until the state stops changing.
 //!   2. BFS from the reachable stable states — which are not assumed but discovered by [`machine::explore`]
 //!      from the on/off covers of the signal characteristic functions (never an assumed all-zero state) —
 //!      stepping one input at a time and letting the state settle. Oscillating transitions (the state

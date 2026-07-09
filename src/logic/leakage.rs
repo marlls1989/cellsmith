@@ -1,6 +1,6 @@
 //! Static leakage states for Cadence Liberate `define_leakage`, derived from the **settled seed
 //! states** of the machine exploration — the forced on/off-set cover states that initialise the BFS
-//! (see [`machine::explore`]) — the settled subset of reachable states.
+//! (see [`machine::explore`](super::machine::explore)) — the settled subset of reachable states.
 //!
 //! Each seed is a settled node: its primary inputs are fully fixed, and every state variable it forces
 //! carries a concrete value (unforced ones stay absent). A leakage state records the seed's input
