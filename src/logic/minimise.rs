@@ -18,8 +18,10 @@
 //! * **dedup — plain-BDD-equal merge.** Signals whose functions are the *exact same* BDD (bare ±aliases
 //!   included — `!var(x)` is not special) are one coordinate seen more than once, and every such group
 //!   is merged. A merged group keeps a single representative (an external output where the group holds
-//!   one, so a pin is never lost) and renames the other members onto `var(rep)` everywhere via
-//!   [`Bdd::compose_map`]. An **internal** duplicate always retires — it is purged and its consumers
+//!   one, so a pin is never lost) and renames the other members onto `var(rep)` everywhere. Every
+//!   group's rename is unioned across the whole pass and applied at pass end in one
+//!   [`Composer::compose_map`] stream over the surviving functions, sharing a single memo rather than
+//!   re-walking the map per group, per signal. An **internal** duplicate always retires — it is purged and its consumers
 //!   rewritten onto `var(rep)`. A duplicate **output** is never purged — it is only demoted to a bare
 //!   `var(rep)` alias, and only when the group is **recurrent** (the rep's current δ references a group
 //!   member, so the rep self-holds and the alias stays machine-evaluable — I3/I5); a non-recurrent
@@ -29,7 +31,8 @@
 //!   despite that risk when the folded function has support arity 1.
 //! * **guarded fold — relay/alias elimination.** A signal `s` that does not appear in its own support is
 //!   a combinational relay: at every stable state `s = δ_s(state)` with `s ∉ support(δ_s)`, so it is
-//!   composed into each of its consumers via [`Bdd::compose`] and dropped — *unless* the fold would
+//!   composed into all of its consumers at once — one [`Composer::compose`] stream sharing a single
+//!   memo — and dropped — *unless* the fold would
 //!   fabricate a register out of emergent memory (the arity-aware guard below). A bare ±alias is the
 //!   arity-1 case and always folds; when a bare ±alias `s` is an output whose target is a surviving
 //!   internal, that internal's definition is folded into `s` and the internal dropped, so the single
@@ -138,7 +141,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
+use espresso_logic::bdd::{Bdd, Brand, Composer, ManagerCell};
 use espresso_logic::Symbol;
 
 /// The outcome of [`minimise_state_space`]: the internal signals that were folded away, and the
@@ -235,19 +238,26 @@ fn dedup_pass<B: Brand, C: ManagerCell>(
             None => groups.push((f.clone(), vec![s.clone()])),
         }
     }
-    let mut progress = false;
+    // Accumulate every committed group's equation-field edits, then apply them ONCE at pass end. The
+    // `var(rep)` rename of the retired members' consumers is unioned into a single simultaneous
+    // substitution and pushed through one stream compose ([`Composer::compose_map`]) that shares a
+    // single memo across all surviving functions, instead of re-walking the map per group, per signal.
+    let mut rename: BTreeMap<Symbol, Bdd<B, C>> = BTreeMap::new();
+    let mut demoted: Vec<(Symbol, Bdd<B, C>)> = Vec::new();
+    let mut purged: Vec<Symbol> = Vec::new();
     for (_, members) in groups.into_iter().filter(|(_, m)| m.len() >= 2) {
         let rep = members
             .iter()
             .find(|m| outputs.contains(*m))
             .unwrap_or(&members[0])
             .clone();
-        // Recurrence is read from the rep's CURRENT map entry at commit time, not the grouping-time
-        // snapshot: an earlier group's compose_map in this same pass can only REMOVE references to
-        // this group's members (substitution targets are other groups' disjoint reps), so the
-        // snapshot can overstate recurrence and wrongly alias an output onto a non-self-holding rep.
-        // A recurrent group's rep self-holds after the rename → var(rep), so the aliases stay
-        // machine-evaluable (I3); an internal duplicate always retires regardless.
+        // Recurrence reads the grouping-time snapshot — equal here to the commit-time read the former
+        // incremental pass took. Groups are DISJOINT and a group's rename substitutes only its own
+        // members with its own rep, which can neither add nor remove a reference to another group's
+        // members inside that group's rep, so no earlier group's edit can flip this predicate:
+        // deferring the whole pass keeps the value the incremental read produced. A recurrent group's
+        // rep self-holds after the rename → var(rep), so the aliases stay machine-evaluable (I3); an
+        // internal duplicate always retires regardless.
         let recurrent = members
             .iter()
             .any(|m| bdds[&rep].variables().any(|v| v == *m));
@@ -264,50 +274,67 @@ fn dedup_pass<B: Brand, C: ManagerCell>(
         }
         let b = bdds[&rep].builder();
         let rep_var = b.var(rep.as_str());
-        // Rename only the RETIRED members' consumers — renaming a non-demoted output's consumers
-        // would wrongly rewire them onto the rep.
-        let rename: BTreeMap<Symbol, Bdd<B, C>> = retired
-            .iter()
-            .map(|m| (m.clone(), rep_var.clone()))
-            .collect();
-        let names: Vec<Symbol> = order
-            .iter()
-            .filter(|n| bdds.contains_key(*n))
-            .cloned()
-            .collect();
-        for s in names {
-            let f = bdds[&s].clone();
-            let sup: BTreeSet<Symbol> = f.variables().collect();
-            let entries: Vec<(&str, &Bdd<B, C>)> = rename
-                .iter()
-                .filter(|(k, _)| sup.contains(*k))
-                .map(|(k, v)| (k.as_str(), v))
-                .collect();
-            if entries.is_empty() {
-                continue;
-            }
-            let new = f.compose_map(entries);
-            if new != f {
-                result.changed.insert(s.clone());
-                bdds.insert(s, new);
-                progress = true;
+        for m in retired {
+            // Rename only the RETIRED members' consumers — renaming a non-demoted output's consumers
+            // would wrongly rewire them onto the rep. Members are disjoint across groups, so no key
+            // collides in the unioned map.
+            rename.insert(m.clone(), rep_var.clone());
+            if outputs.contains(&m) {
+                // Duplicate output: demoted to var(rep) at pass end, pin kept — never purged.
+                demoted.push((m, rep_var.clone()));
+            } else {
+                // Internal duplicate: purged. The interface is sacred — result.purged ∩ outputs = ∅.
+                debug_assert!(
+                    !outputs.contains(&m),
+                    "dedup must never purge an output pin"
+                );
+                purged.push(m);
             }
         }
-        for m in &retired {
-            if outputs.contains(m) {
-                // Duplicate output: demote to var(rep), pin kept — never purged.
-                if bdds[m] != rep_var {
-                    result.changed.insert(m.clone());
-                    bdds.insert(m.clone(), rep_var.clone());
-                    progress = true;
-                }
-            } else {
-                // Internal duplicate: purge. The interface is sacred — result.purged ∩ outputs = ∅.
-                debug_assert!(!outputs.contains(m), "dedup must never purge an output pin");
-                bdds.remove(m);
-                result.purged.insert(m.clone());
-                progress = true;
-            }
+    }
+
+    if rename.is_empty() {
+        return false;
+    }
+
+    // Purge the retired internals first, so the rewrite stream excludes them.
+    let mut progress = !purged.is_empty();
+    for m in &purged {
+        bdds.remove(m);
+        result.purged.insert(m.clone());
+    }
+
+    // Rewrite every surviving consumer of a retired member in one shared-memo stream pass. Functions
+    // referencing no retired member are held out (an untouched no-op); demoted outputs are held out too
+    // — their whole entry is overwritten with var(rep) below, not composed.
+    let demoted_names: BTreeSet<&Symbol> = demoted.iter().map(|(m, _)| m).collect();
+    let names: Vec<Symbol> = order
+        .iter()
+        .filter(|n| bdds.contains_key(*n) && !demoted_names.contains(*n))
+        .filter(|n| bdds[*n].variables().any(|v| rename.contains_key(&v)))
+        .cloned()
+        .collect();
+    let originals: Vec<Bdd<B, C>> = names.iter().map(|n| bdds[n].clone()).collect();
+    let entries: Vec<(&str, Bdd<B, C>)> = rename
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.clone()))
+        .collect();
+    let composed: Vec<Bdd<B, C>> = originals.clone().into_iter().compose_map(entries).collect();
+    for (name, (orig, new)) in names.iter().zip(originals.into_iter().zip(composed)) {
+        if new != orig {
+            result.changed.insert(name.clone());
+            bdds.insert(name.clone(), new);
+            progress = true;
+        }
+    }
+
+    // Demote each duplicate output to var(rep) (pin kept). Its entry is still the snapshot original, so
+    // the change-check is against the pre-pass function.
+    for (m, rep_var) in demoted {
+        if bdds[&m] != rep_var {
+            result.changed.insert(m.clone());
+            bdds.insert(m, rep_var);
+            progress = true;
         }
     }
     progress
@@ -357,18 +384,25 @@ fn fold_pass<B: Brand, C: ManagerCell>(
                         result.changed.insert(s.clone());
                     }
                     bdds.insert(s.clone(), new_s);
+                    // Rewrite every other function that references `t` (`t := g`) in one shared-memo
+                    // stream compose — the same substitution across all of them, composed once.
                     let others: Vec<Symbol> = bdds
                         .keys()
                         .filter(|k| **k != *s && **k != t)
+                        .filter(|k| bdds[*k].variables().any(|v| v == t))
                         .cloned()
                         .collect();
-                    for k in others {
-                        if bdds[&k].variables().any(|v| v == t) {
-                            let nw = bdds[&k].compose(t.as_str(), &g);
-                            if nw != bdds[&k] {
-                                result.changed.insert(k.clone());
-                                bdds.insert(k, nw);
-                            }
+                    let originals: Vec<Bdd<B, C>> =
+                        others.iter().map(|k| bdds[k].clone()).collect();
+                    let rewritten: Vec<Bdd<B, C>> = originals
+                        .clone()
+                        .into_iter()
+                        .compose(t.as_str(), g)
+                        .collect();
+                    for (k, (orig, nw)) in others.iter().zip(originals.into_iter().zip(rewritten)) {
+                        if nw != orig {
+                            result.changed.insert(k.clone());
+                            bdds.insert(k.clone(), nw);
                         }
                     }
                     bdds.remove(&t);
@@ -419,11 +453,18 @@ fn fold_pass<B: Brand, C: ManagerCell>(
             continue;
         }
 
-        for c in &consumers {
-            let new = bdds[c].compose(s.as_str(), &f_s);
+        // Fold the relay into all its consumers (`s := f_s`) in one shared-memo stream compose — the
+        // same substitution across every consumer, composed once.
+        let originals: Vec<Bdd<B, C>> = consumers.iter().map(|c| bdds[c].clone()).collect();
+        let folded: Vec<Bdd<B, C>> = originals
+            .clone()
+            .into_iter()
+            .compose(s.as_str(), f_s)
+            .collect();
+        for (c, (orig, new)) in consumers.iter().zip(originals.into_iter().zip(folded)) {
             if arity > 1 {
                 debug_assert!(
-                    !new.variables().any(|v| v == *c) || bdds[c].variables().any(|v| v == *c),
+                    !new.variables().any(|v| v == *c) || orig.variables().any(|v| v == *c),
                     "fold_pass: folding {s:?} introduced a new self-reference for {c:?}"
                 );
             }
@@ -860,6 +901,38 @@ mod tests {
         assert!(bdds.contains_key("I1"));
         assert!(!bdds.contains_key("I2"));
         assert!(bdds[&Symbol::from("L")].equivalent_to(&b.parse("!R*(I1+L)").unwrap()));
+    }
+
+    #[test]
+    fn dedup_pass_merges_two_disjoint_groups_in_one_pass() {
+        // Two independent plain-BDD-equal internal pairs — {I1,I2}=A*B and {J1,J2}=C+D — retire in a
+        // SINGLE dedup_pass. Their renames {I2 → var(I1), J2 → var(J1)} are unioned and applied to every
+        // survivor in one end-of-pass stream compose, rewriting Z1's I2 reference and Z2's J2 reference
+        // together — the combined-map path a single group could not exercise.
+        let (b, mut bdds, order, outputs) = system! {
+            outputs: ["Z1", "Z2"],
+            "I1" = "A*B",
+            "I2" = "A*B",
+            "J1" = "C+D",
+            "J2" = "C+D",
+            "Z1" = "I2 + X",
+            "Z2" = "J2 * Y",
+        };
+        let mut result = Minimised::default();
+        let committed = dedup_pass(&mut bdds, &order, &outputs, &mut result);
+        assert!(committed);
+        assert_eq!(
+            result.purged,
+            ["I2", "J2"].map(Symbol::from).into_iter().collect()
+        );
+        assert!(bdds.contains_key("I1") && bdds.contains_key("J1"));
+        assert!(!bdds.contains_key("I2") && !bdds.contains_key("J2"));
+        assert!(bdds[&Symbol::from("Z1")].equivalent_to(&b.parse("I1 + X").unwrap()));
+        assert!(bdds[&Symbol::from("Z2")].equivalent_to(&b.parse("J1 * Y").unwrap()));
+        assert_eq!(
+            result.changed,
+            ["Z1", "Z2"].map(Symbol::from).into_iter().collect()
+        );
     }
 
     #[test]

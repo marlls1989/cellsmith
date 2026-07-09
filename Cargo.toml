@@ -11,7 +11,7 @@ keywords = ["eda", "liberty", "cadence", "asic", "timing"]
 categories = ["command-line-utilities"]
 
 [dependencies]
-espresso-logic = "5.5"
+espresso-logic = "5.6"
 liberty-parse = { package = "liberty-parser", version = "0.3" }
 serde = { version = "1", features = ["derive"] }
 toml = "1"
