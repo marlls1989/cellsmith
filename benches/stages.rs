@@ -58,10 +58,8 @@ fn bench_signal_stages(c: &mut Criterion) {
         });
 
         // A fresh signal-BDD map per iteration (minted and dropped in setup — the Bdd handles survive
-        // the builder drop), since minimise_state_space rewrites the map in place. minimise is not
-        // parallelised, so every cell runs the flat [1, max] sweep: single thread vs all threads
-        // measures the same work, and any divergence is pure multithread contention — itself data.
-        for &n in &common::flat_sweep() {
+        // the builder drop), since minimise_state_space rewrites the map in place.
+        for &n in &common::sweep(false, heavy) {
             g.bench_with_input(
                 BenchmarkId::new("minimise", format!("{}/n{}", cell.name, n)),
                 &n,
