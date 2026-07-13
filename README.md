@@ -2,7 +2,7 @@
 
 Generate Cadence Liberate **transition arcs** (with prevectors) for logic cells — including
 state-holding / hysteretic cells (C-elements, latches, cross-coupled pairs, mutexes, and flip-flops
-with internal state) that Liberate cannot auto-detect on non-standard nodes (e.g. nMOS).
+with internal state) that Liberate cannot auto-detect on non-standard nodes (e.g. nMOS or pMOS only, dynamic logic).
 
 cellsmith is an arc **generator**: it derives the arcs, the behavioural model and a Liberty stub;
 Liberate performs the characterisation inside your existing harness. It is a focused Rust tool driven
