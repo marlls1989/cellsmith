@@ -93,15 +93,18 @@ pub fn cell_liberty(cell: &AnalysedCell) -> String {
             states.join(" | "),
         ));
     }
-    out.push_str(&format!("{}\n", Liberty(vec![cell_group(cell)])));
+    let groups: Vec<Group> = cell.name.iter().map(|n| cell_group(cell, n)).collect();
+    out.push_str(&format!("{}\n", Liberty(groups)));
     out
 }
 
 /// Build the `cell` group: one input `pin` per primary input, then — for a sequential cell — the single
 /// joint `statetable`, its output pins (in declaration order), and its genuine-internal pins. A purely
-/// combinational cell (no state model) emits each output as a plain `function` pin instead.
-fn cell_group(cell: &AnalysedCell) -> Group {
-    let mut group = Group::new("cell", cell.repr_name());
+/// combinational cell (no state model) emits each output as a plain `function` pin instead. `name` is
+/// the cell name this group is emitted under; a cell with several declared names yields one identical
+/// group per name.
+fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
+    let mut group = Group::new("cell", name);
 
     for input in &cell.inputs {
         group.subgroups.push(input_pin(input));
@@ -523,5 +526,53 @@ Y = "A*B + !C"
         // Must be a valid product-of-literals sum mentioning the pins.
         assert!(f.contains('+') || f.contains('*') || f.contains('!'));
         assert!(f.contains('A') || f.contains('C'));
+    }
+
+    #[test]
+    fn multi_name_emits_one_identical_cell_group_per_name() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = ["INVX1", "INVX2"]
+inputs = ["A"]
+[cell.outputs]
+Y = "!A"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        assert!(frag.contains("cell (INVX1)"));
+        assert!(frag.contains("cell (INVX2)"));
+        let lib = parse_frag(&frag);
+        let cell_groups: Vec<_> = lib
+            .iter()
+            .flat_map(|g| g.subgroups.iter())
+            .filter(|g| g.type_ == "cell")
+            .collect();
+        let invx1 = cell_groups
+            .iter()
+            .find(|g| g.name == "INVX1")
+            .expect("INVX1 cell present");
+        let invx2 = cell_groups
+            .iter()
+            .find(|g| g.name == "INVX2")
+            .expect("INVX2 cell present");
+        // Identical pin sets: same pin names and directions, differing only in the group name.
+        let pins = |g: &&Group| -> Vec<(String, String)> {
+            g.subgroups
+                .iter()
+                .filter(|p| p.type_ == "pin")
+                .map(|p| {
+                    (
+                        p.name.clone(),
+                        p.attributes
+                            .get("direction")
+                            .map(|v| format!("{v:?}"))
+                            .unwrap_or_default(),
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(pins(invx1), pins(invx2));
     }
 }
