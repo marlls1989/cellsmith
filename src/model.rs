@@ -30,9 +30,10 @@ pub struct Spec {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Cell {
-    /// Physical cell name used in the emitted arcs.
-    #[serde(deserialize_with = "de_symbol")]
-    pub name: Symbol,
+    /// Physical cell name(s) used in the emitted arcs. A scalar or a list; the first entry is the
+    /// representative name for single-name contexts.
+    #[serde(deserialize_with = "de_name_list")]
+    pub name: Vec<Symbol>,
     /// Primary input pins. Order matters: it defines the pinlist/vector order.
     #[serde(deserialize_with = "de_symbol_vec")]
     pub inputs: Vec<Symbol>,
@@ -60,10 +61,34 @@ pub struct Cell {
     pub constraint_arcs: bool,
 }
 
-/// Deserialize a name field as a [`Symbol`]. `Symbol` has no `serde` impl, so a name is read as a
-/// `String` and interned (Display/Debug/Ord delegate to `str`, so the emitted bytes are unchanged).
-fn de_symbol<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Symbol, D::Error> {
-    String::deserialize(d).map(Symbol::from)
+/// Deserialize the cell `name` field as a non-empty `Vec<Symbol>` (order preserving). Accepts either a
+/// scalar (`name = "INV"`) or a list (`name = ["INVX1", "INVX2"]`); `Symbol` has no `serde` impl, so
+/// each entry is read as a `String` and interned (Display/Debug/Ord delegate to `str`, so the emitted
+/// bytes are unchanged). Duplicates are dropped keeping the first occurrence, and an empty list is a
+/// hard error.
+fn de_name_list<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Symbol>, D::Error> {
+    // String variant FIRST so a TOML scalar matches `One` rather than being probed as a sequence.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+    let names = match OneOrMany::deserialize(d)? {
+        OneOrMany::One(s) => vec![s],
+        OneOrMany::Many(v) => v,
+    };
+    let mut out: Vec<Symbol> = Vec::new();
+    for s in names {
+        let sym = Symbol::from(s);
+        if !out.contains(&sym) {
+            out.push(sym);
+        }
+    }
+    if out.is_empty() {
+        return Err(serde::de::Error::custom("cell name list must be non-empty"));
+    }
+    Ok(out)
 }
 
 /// Deserialize a list of name fields as `Vec<Symbol>` (order preserved), interning each entry.
@@ -126,7 +151,7 @@ pub struct AnalysedOutput {
 /// A cell after validation/analysis.
 #[derive(Debug)]
 pub struct AnalysedCell {
-    pub name: Symbol,
+    pub name: Vec<Symbol>,
     pub inputs: Vec<Symbol>,
     pub outputs: Vec<AnalysedOutput>,
     /// Internal state variables: driven state signals with no external pin. Referenceable by any
@@ -166,6 +191,12 @@ pub struct AnalysedCell {
 }
 
 impl AnalysedCell {
+    /// The representative (first-as-written) cell name, for single-name contexts (diagnostics and the
+    /// still-single-name emitter paths). Safe to index: `de_name_list` rejects empty name lists.
+    pub fn repr_name(&self) -> &Symbol {
+        &self.name[0]
+    }
+
     /// Every state-bearing signal: outputs first, then internals, in declaration order.
     pub fn signals(&self) -> impl Iterator<Item = &AnalysedOutput> {
         self.outputs.iter().chain(self.internals.iter())
@@ -227,7 +258,7 @@ impl Cell {
         for pin in &self.inputs {
             if !input_set.insert(pin.clone()) {
                 return Err(ModelError::DuplicateInput {
-                    cell: self.name.clone(),
+                    cell: self.name[0].clone(),
                     pin: pin.clone(),
                 });
             }
@@ -241,7 +272,7 @@ impl Cell {
         for pin in &self.inputs {
             if output_set.contains(pin) {
                 return Err(ModelError::InputOutputClash {
-                    cell: self.name.clone(),
+                    cell: self.name[0].clone(),
                     pin: pin.clone(),
                 });
             }
@@ -249,7 +280,7 @@ impl Cell {
         for name in &internal_names {
             if input_set.contains(name) || output_set.contains(name) {
                 return Err(ModelError::InternalClash {
-                    cell: self.name.clone(),
+                    cell: self.name[0].clone(),
                     pin: name.clone(),
                 });
             }
@@ -257,7 +288,7 @@ impl Cell {
         for pin in &self.async_pins {
             if !input_set.contains(pin) {
                 return Err(ModelError::AsyncNotInput {
-                    cell: self.name.clone(),
+                    cell: self.name[0].clone(),
                     pin: pin.clone(),
                 });
             }
@@ -265,7 +296,7 @@ impl Cell {
         for pin in &self.clock {
             if !input_set.contains(pin) {
                 return Err(ModelError::ClockNotInput {
-                    cell: self.name.clone(),
+                    cell: self.name[0].clone(),
                     pin: pin.clone(),
                 });
             }
@@ -283,14 +314,14 @@ impl Cell {
         let mut all: Vec<AnalysedOutput> = Vec::with_capacity(n_outputs + self.internal.len());
         for (name, func) in self.outputs.iter().chain(self.internal.iter()) {
             let parsed = expr::parse(func).map_err(|source| ModelError::Function {
-                cell: self.name.clone(),
+                cell: self.name[0].clone(),
                 output: name.clone(),
                 source,
             })?;
             for v in &parsed.vars {
                 if !input_set.contains(v) && !output_set.contains(v) && !internal_set.contains(v) {
                     return Err(ModelError::UnknownVar {
-                        cell: self.name.clone(),
+                        cell: self.name[0].clone(),
                         output: name.clone(),
                         var: v.clone(),
                     });
@@ -435,7 +466,7 @@ Y = "!A"
         assert_eq!(spec.cells.len(), 2);
 
         let c2 = spec.cells[0].analyse().unwrap();
-        assert_eq!(c2.name, "C2");
+        assert_eq!(c2.name[0], "C2");
         assert_eq!(c2.inputs, ["A", "B"]);
         assert_eq!(c2.outputs.len(), 1);
         assert_eq!(c2.outputs[0].feedback, ["Q"]); // Q references itself => feedback/state
@@ -588,6 +619,64 @@ Q = "A + Q"
 "#;
         let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
         assert!(matches!(err, ModelError::InternalClash { .. }));
+    }
+
+    #[test]
+    fn name_scalar_parses_as_single_entry() {
+        let s = r#"
+[[cell]]
+name = "INV"
+inputs = ["A"]
+[cell.outputs]
+Y = "!A"
+"#;
+        let cell = parse_spec(s).unwrap().cells.remove(0).analyse().unwrap();
+        assert_eq!(cell.name, vec![Symbol::from("INV")]);
+    }
+
+    #[test]
+    fn name_list_preserves_written_order() {
+        let s = r#"
+[[cell]]
+name = ["INVX1", "INVX2"]
+inputs = ["A"]
+[cell.outputs]
+Y = "!A"
+"#;
+        let cell = parse_spec(s).unwrap().cells.remove(0).analyse().unwrap();
+        assert_eq!(
+            cell.name,
+            vec![Symbol::from("INVX1"), Symbol::from("INVX2")]
+        );
+    }
+
+    #[test]
+    fn name_list_dedups_preserving_order() {
+        let s = r#"
+[[cell]]
+name = ["A", "A", "B"]
+inputs = ["I"]
+[cell.outputs]
+Y = "I"
+"#;
+        let cell = parse_spec(s).unwrap().cells.remove(0).analyse().unwrap();
+        assert_eq!(cell.name, vec![Symbol::from("A"), Symbol::from("B")]);
+    }
+
+    #[test]
+    fn empty_name_list_is_rejected() {
+        let s = r#"
+[[cell]]
+name = []
+inputs = ["A"]
+[cell.outputs]
+Y = "A"
+"#;
+        let err = parse_spec(s).unwrap_err().to_string();
+        assert!(
+            err.contains("cell name list must be non-empty"),
+            "unexpected error: {err}",
+        );
     }
 
     #[test]

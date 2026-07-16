@@ -28,7 +28,7 @@ pub fn cell_verilog(cell: &AnalysedCell) -> String {
 
 /// `<cell>_<pin>` — the UDP primitive name for one output pin.
 fn prim_name(cell: &AnalysedCell, pin: &str) -> String {
-    format!("{}_{}", cell.name, pin)
+    format!("{}_{}", cell.repr_name(), pin)
 }
 
 /// One output pin's UDP. A constant function lowers to a plain `module` with a continuous `assign`;
@@ -111,7 +111,7 @@ fn wrapper_module(cell: &AnalysedCell) -> String {
         .join(", ");
 
     let mut s = String::from("`celldefine\n");
-    s.push_str(&format!("module {}({ports});\n", cell.name));
+    s.push_str(&format!("module {}({ports});\n", cell.repr_name()));
     s.push_str(&format!("output {};\n", outputs.join(", ")));
     if !cell.inputs.is_empty() {
         s.push_str(&format!("input  {};\n", cell.inputs.join(", ")));

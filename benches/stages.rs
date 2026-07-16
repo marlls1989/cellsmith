@@ -39,20 +39,20 @@ macro_rules! sweep_bench {
 fn bench_signal_stages(c: &mut Criterion) {
     let mut g = c.benchmark_group("signal");
     for cell in common::raw_cells() {
-        let heavy = common::is_heavy(cell.name.as_str());
+        let heavy = common::is_heavy(cell.name[0].as_str());
         // Pre-minimise fixture, plus the signal order and output set the minimise pass needs.
         let pre = cell.analyse_signals().unwrap();
         let order: Vec<Symbol> = pre.signals().map(|s| s.name.clone()).collect();
         let outputs: BTreeSet<Symbol> = pre.outputs.iter().map(|o| o.name.clone()).collect();
 
         // Re-parse and re-classify the cell's signals each iteration.
-        sweep_bench!(g, "parse", cell.name, false, heavy, || cell
+        sweep_bench!(g, "parse", cell.name[0], false, heavy, || cell
             .analyse_signals()
             .unwrap());
 
         // Mint the per-cell builder inside the timed closure so the BDD memo does not warm across
         // iterations.
-        sweep_bench!(g, "build_signal_bdds", cell.name, false, heavy, || {
+        sweep_bench!(g, "build_signal_bdds", cell.name[0], false, heavy, || {
             let builder = sync_bdd_builder!();
             build_signal_bdds(&pre, &builder)
         });
@@ -61,7 +61,7 @@ fn bench_signal_stages(c: &mut Criterion) {
         // the builder drop), since minimise_state_space rewrites the map in place.
         for &n in &common::sweep(false, heavy) {
             g.bench_with_input(
-                BenchmarkId::new("minimise", format!("{}/n{}", cell.name, n)),
+                BenchmarkId::new("minimise", format!("{}/n{}", cell.name[0], n)),
                 &n,
                 |b, &n| {
                     let p = common::pool(n);
@@ -85,7 +85,7 @@ fn bench_signal_stages(c: &mut Criterion) {
 fn bench_machine_stages(c: &mut Criterion) {
     let mut g = c.benchmark_group("machine");
     for cell in common::raw_cells() {
-        let heavy = common::is_heavy(cell.name.as_str());
+        let heavy = common::is_heavy(cell.name[0].as_str());
         // Fixture built once per cell: analyse folds the exprs post-minimise, so this map equals the
         // minimised map Machine::build consumes. The else-continue guards MAX_MACHINE_VARS.
         let ac = cell.analyse().unwrap();
@@ -95,22 +95,27 @@ fn bench_machine_stages(c: &mut Criterion) {
             continue;
         };
 
-        sweep_bench!(g, "machine_build", cell.name, true, heavy, || {
+        sweep_bench!(g, "machine_build", cell.name[0], true, heavy, || {
             Machine::build(&ac, &bdds).unwrap()
         });
-        sweep_bench!(g, "arcs_derive", cell.name, true, heavy, || arcs::derive(
-            &m
-        ));
-        sweep_bench!(g, "confluence_detect", cell.name, true, heavy, || {
+        sweep_bench!(
+            g,
+            "arcs_derive",
+            cell.name[0],
+            true,
+            heavy,
+            || arcs::derive(&m)
+        );
+        sweep_bench!(g, "confluence_detect", cell.name[0], true, heavy, || {
             confluence::detect(&m)
         });
-        sweep_bench!(g, "analyse_machine", cell.name, true, heavy, || {
+        sweep_bench!(g, "analyse_machine", cell.name[0], true, heavy, || {
             analyse_machine(&ac, &bdds)
         });
-        sweep_bench!(g, "leakage_derive", cell.name, false, heavy, || {
+        sweep_bench!(g, "leakage_derive", cell.name[0], false, heavy, || {
             leakage::derive(&m)
         });
-        sweep_bench!(g, "derive_regions", cell.name, false, heavy, || {
+        sweep_bench!(g, "derive_regions", cell.name[0], false, heavy, || {
             derive_regions(&ac, &bdds)
         });
     }
@@ -120,18 +125,18 @@ fn bench_machine_stages(c: &mut Criterion) {
 fn bench_emit_stages(c: &mut Criterion) {
     let mut g = c.benchmark_group("emit");
     for cell in common::raw_cells() {
-        let heavy = common::is_heavy(cell.name.as_str());
+        let heavy = common::is_heavy(cell.name[0].as_str());
         let ac = cell.analyse().unwrap();
 
-        sweep_bench!(g, "cell_arcs_tcl", cell.name, false, heavy, || {
+        sweep_bench!(g, "cell_arcs_tcl", cell.name[0], false, heavy, || {
             cell_arcs_tcl(&ac, ArcsTclOptions::default())
         });
-        sweep_bench!(g, "cell_verilog", cell.name, false, heavy, || cell_verilog(
-            &ac
-        ));
-        sweep_bench!(g, "cell_liberty", cell.name, false, heavy, || cell_liberty(
-            &ac
-        ));
+        sweep_bench!(g, "cell_verilog", cell.name[0], false, heavy, || {
+            cell_verilog(&ac)
+        });
+        sweep_bench!(g, "cell_liberty", cell.name[0], false, heavy, || {
+            cell_liberty(&ac)
+        });
     }
     g.finish();
 }

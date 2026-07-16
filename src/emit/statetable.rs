@@ -537,7 +537,7 @@ Y = "C*L"
                 assert!(
                     keys.insert(key),
                     "duplicate (inputs, current) row key in {}",
-                    cell.name
+                    cell.repr_name()
                 );
             }
 
@@ -573,7 +573,7 @@ Y = "C*L"
                         got.equivalent_to(reference),
                         "{} region mismatch for {}.{}",
                         label,
-                        cell.name,
+                        cell.repr_name(),
                         sig.name
                     );
                 }
