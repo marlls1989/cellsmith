@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
 use espresso_logic::{sync_bdd_builder, BoolExpr, Symbol};
 use indexmap::IndexMap;
+use rayon::prelude::*;
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -109,6 +110,10 @@ fn de_symbol_map<'de, D: serde::Deserializer<'de>>(
 pub enum ModelError {
     #[error("cannot parse spec: {0}")]
     Spec(#[from] toml::de::Error),
+    #[error("cell name list must be non-empty")]
+    EmptyName,
+    #[error("duplicate cell name {name:?} used by more than one cell")]
+    DuplicateCellName { name: Symbol },
     #[error("cell {cell:?}: cannot parse function for output {output:?}: {source}")]
     Function {
         cell: Symbol,
@@ -211,6 +216,27 @@ impl AnalysedCell {
     }
 }
 
+impl Spec {
+    /// Validate cross-cell name uniqueness, then analyse every cell.
+    ///
+    /// The union of all cells' name lists must contain no name twice: a collision would emit duplicate
+    /// Liberty `cell()` groups, duplicate Verilog modules and conflicting `define_arc` trailers. Intra-cell
+    /// duplicates are already deduped by `de_name_list`, so the set-insert here catches inter-cell
+    /// collisions (an alias colliding with another cell's name included). The per-cell analyses then run
+    /// in parallel, matching the single machine pass minted per cell in [`Cell::analyse`].
+    pub fn analyse(&self) -> Result<Vec<AnalysedCell>, ModelError> {
+        let mut seen: BTreeSet<Symbol> = BTreeSet::new();
+        for cell in &self.cells {
+            for name in &cell.name {
+                if !seen.insert(name.clone()) {
+                    return Err(ModelError::DuplicateCellName { name: name.clone() });
+                }
+            }
+        }
+        self.cells.par_iter().map(|c| c.analyse()).collect()
+    }
+}
+
 impl Cell {
     /// Validate the cell and parse its functions, classifying each referenced variable as a primary
     /// input, an output, or an internal signal (feedback/state = a signal-name reference).
@@ -254,6 +280,13 @@ impl Cell {
     /// (arcs/hidden_arcs/leakage/order_dependence/oscillation/constraints/regions) still empty. The
     /// state-space rewrite and machine/region passes are layered on by [`Cell::analyse`].
     pub fn analyse_signals(&self) -> Result<AnalysedCell, ModelError> {
+        // Programmatic guard: `de_name_list` rejects an empty name list on deserialisation, but `Cell`
+        // has all-pub fields, so a hand-built `Cell { name: vec![], .. }` bypasses it and would panic on
+        // the pervasive `self.name[0]` / `repr_name()` indexing. Reject it here, before the first index.
+        if self.name.is_empty() {
+            return Err(ModelError::EmptyName);
+        }
+
         let mut input_set = BTreeSet::new();
         for pin in &self.inputs {
             if !input_set.insert(pin.clone()) {
@@ -677,6 +710,86 @@ Y = "A"
             err.contains("cell name list must be non-empty"),
             "unexpected error: {err}",
         );
+    }
+
+    #[test]
+    fn duplicate_cell_name_across_cells_is_rejected() {
+        // The same physical name declared by two cells would emit duplicate Liberty/Verilog groups.
+        let s = r#"
+[[cell]]
+name = "DUP"
+inputs = ["A"]
+[cell.outputs]
+Y = "A"
+
+[[cell]]
+name = "DUP"
+inputs = ["A"]
+[cell.outputs]
+Z = "A"
+"#;
+        let err = parse_spec(s).unwrap().analyse().unwrap_err();
+        assert!(matches!(err, ModelError::DuplicateCellName { name } if name == "DUP"));
+    }
+
+    #[test]
+    fn alias_colliding_with_another_cell_name_is_rejected() {
+        // An alias in one cell's list colliding with a second cell's scalar name is still a collision.
+        let s = r#"
+[[cell]]
+name = ["FOO", "BAR"]
+inputs = ["A"]
+[cell.outputs]
+Y = "A"
+
+[[cell]]
+name = "BAR"
+inputs = ["A"]
+[cell.outputs]
+Z = "A"
+"#;
+        let err = parse_spec(s).unwrap().analyse().unwrap_err();
+        assert!(matches!(err, ModelError::DuplicateCellName { name } if name == "BAR"));
+    }
+
+    #[test]
+    fn programmatic_empty_name_errors_instead_of_panicking() {
+        // `Cell` has all-pub fields, so a hand-built empty name list bypasses `de_name_list` and would
+        // otherwise panic on `self.name[0]`. The guard returns `EmptyName` rather than panicking.
+        let mut outputs = IndexMap::new();
+        outputs.insert(Symbol::from("Y"), "A".to_string());
+        let cell = Cell {
+            name: vec![],
+            inputs: vec![Symbol::from("A")],
+            outputs,
+            internal: IndexMap::new(),
+            async_pins: vec![],
+            clock: vec![],
+            constraint_arcs: false,
+        };
+        let spec = Spec { cells: vec![cell] };
+        let err = spec.analyse().unwrap_err();
+        assert!(matches!(err, ModelError::EmptyName));
+    }
+
+    #[test]
+    fn distinct_multi_name_cells_analyse_ok() {
+        // A valid spec of several cells whose name lists are all distinct still analyses cleanly.
+        let s = r#"
+[[cell]]
+name = ["INVX1", "INVX2"]
+inputs = ["A"]
+[cell.outputs]
+Y = "!A"
+
+[[cell]]
+name = "BUF"
+inputs = ["A"]
+[cell.outputs]
+Z = "A"
+"#;
+        let cells = parse_spec(s).unwrap().analyse().unwrap();
+        assert_eq!(cells.len(), 2);
     }
 
     #[test]
