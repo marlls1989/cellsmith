@@ -101,7 +101,7 @@ pub fn cell_liberty(cell: &AnalysedCell) -> String {
 /// joint `statetable`, its output pins (in declaration order), and its genuine-internal pins. A purely
 /// combinational cell (no state model) emits each output as a plain `function` pin instead.
 fn cell_group(cell: &AnalysedCell) -> Group {
-    let mut group = Group::new("cell", &cell.name);
+    let mut group = Group::new("cell", cell.repr_name());
 
     for input in &cell.inputs {
         group.subgroups.push(input_pin(input));

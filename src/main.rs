@@ -108,7 +108,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             }
             let mut lines = vec![format!(
                 "cellsmith: warning: cell {:?}: nodes {{{}}} oscillate",
-                c.name,
+                c.repr_name(),
                 a.group.join(", "),
             )];
             lines.extend(subblock(&fields));
@@ -136,7 +136,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         for ((x, y), hazards) in &pairs {
             let mut lines = vec![format!(
                 "cellsmith: warning: cell {:?}: inputs ({x}, {y}) race",
-                c.name,
+                c.repr_name(),
             )];
             lines.extend(hazards.iter().flatten().cloned());
             warnings.push(lines.join("\n"));

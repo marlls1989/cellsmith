@@ -342,19 +342,19 @@ Q = "(P1*P2*C+Q*(M1+M2+C))*!R"
                 assert!(
                     reconstruct(&builder, &sr.cols, &sr.on).equivalent_to(&on_bdd),
                     "on region mismatch for {}.{}",
-                    cell.name,
+                    cell.repr_name(),
                     sig.name
                 );
                 assert!(
                     reconstruct(&builder, &sr.cols, &sr.off).equivalent_to(&off_bdd),
                     "off region mismatch for {}.{}",
-                    cell.name,
+                    cell.repr_name(),
                     sig.name
                 );
                 assert!(
                     reconstruct(&builder, &sr.cols, &sr.hold).equivalent_to(&hold_bdd),
                     "hold region mismatch for {}.{}",
-                    cell.name,
+                    cell.repr_name(),
                     sig.name
                 );
             }

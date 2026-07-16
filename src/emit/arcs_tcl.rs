@@ -117,7 +117,7 @@ fn constraint_block(cell: &AnalysedCell, c: &Constraint, arc_type: &str) -> Stri
     ));
     s.push_str(&format!("\t-related_pin {} \\\n", c.related));
     s.push_str(&format!("\t-pin {} \\\n", c.pin));
-    s.push_str(&format!("\t{{ {} }}\n", cell.name));
+    s.push_str(&format!("\t{{ {} }}\n", cell.repr_name()));
     s.push('\n');
     s
 }
@@ -236,7 +236,7 @@ fn format_arc(cell: &AnalysedCell, arc: &Arc, opts: ArcsTclOptions) -> String {
     };
     let related = format!("\t-related_pin {} \\\n", arc.related);
     let pin = format!("\t-pin {} \\\n", arc.output);
-    let name = format!("\t{{ {} }}\n", cell.name);
+    let name = format!("\t{{ {} }}\n", cell.repr_name());
 
     let mut s = String::from("define_arc \\\n");
     match arc.edge {
@@ -310,7 +310,7 @@ fn format_hidden_arc(cell: &AnalysedCell, h: &HiddenArc, opts: ArcsTclOptions) -
         s.push_str(&format!("\t-when \"{w}\" \\\n"));
     }
     s.push_str(&format!("\t-pin {} \\\n", h.pin.as_str()));
-    s.push_str(&format!("\t{{ {} }}\n", cell.name));
+    s.push_str(&format!("\t{{ {} }}\n", cell.repr_name()));
     s.push('\n');
     s
 }
@@ -433,7 +433,7 @@ fn format_leakage(cell: &AnalysedCell, l: &LeakageState) -> String {
     format!(
         "define_leakage -when \"{}\" {}\n",
         literal_product(&lits),
-        cell.name
+        cell.repr_name()
     )
 }
 
