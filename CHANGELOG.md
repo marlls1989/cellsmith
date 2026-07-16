@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The cell `name` field now accepts either a single string or a list of strings. A list generates
+  arcs and models for multiple physical cell variants that share the same function and interface.
+  Multiple names fan across the emitted Tcl arcs (a braced list in `define_arc` and `define_leakage`
+  trailers), Liberty (one `cell(...)` group per name with shared pin bodies), and Verilog (one
+  wrapper `module` per name over a single shared set of UDP primitives). The scalar form remains
+  backward-compatible.
+
 ## [0.1.1] - 2026-07-09
 
 ### Changed

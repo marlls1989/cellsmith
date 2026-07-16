@@ -92,7 +92,10 @@ list.
 
 ## Input format
 
-A TOML file describing many cells:
+A TOML file describing many cells. The `name` field accepts either a single string or a list of
+strings; a list generates arcs and models for multiple physical cell variants that share the same
+function and interface but differ in drive strength or electrical properties. Cadence Liberate groups
+these as a braced list in the arc trailer (e.g. `define_arc ... { INVX1 INVX2 }`).
 
 ```toml
 [[cell]]
@@ -100,6 +103,12 @@ name = "C2"                    # physical cell name used in the arcs
 inputs = ["A", "B"]            # ordered: defines pinlist/vector order
 [cell.outputs]
 Q = "A*B + Q*(A+B)"            # Q on the RHS => feedback/delayed Q (a 2-input C-element)
+
+[[cell]]
+name = ["C2X1", "C2X2", "C2X4"] # list form: generates arcs for multiple drive strengths
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
 
 [[cell]]
 name = "RCELEM2"

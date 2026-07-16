@@ -74,11 +74,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             c.constraint_arcs = true;
         }
     }
-    let cells: Vec<AnalysedCell> = spec
-        .cells
-        .par_iter()
-        .map(|c| c.analyse())
-        .collect::<Result<_, _>>()?;
+    let cells: Vec<AnalysedCell> = spec.analyse()?;
 
     // Diagnose detected oscillation hazards: a periodic, non-settling cycle rather than a fixpoint,
     // naming the nodes (outputs or internals) that oscillate — the user should know, as this is never
