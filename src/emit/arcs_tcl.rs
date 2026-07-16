@@ -82,6 +82,11 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     out
 }
 
+/// The cell's name(s), braced as a Tcl list: `{ C2 }` for a single name, `{ C2A C2B }` for several.
+fn name_block(cell: &AnalysedCell) -> String {
+    format!("{{ {} }}", cell.name.join(" "))
+}
+
 /// A constraint arc as a pair of `define_arc` blocks — the setup member and the hold member (Liberate
 /// characterises them as separate arcs): `setup`/`hold` for a directed clock↔data constraint,
 /// `non_seq_setup`/`non_seq_hold` for a symmetric (oscillation / mutual-exclusion) one.
@@ -117,7 +122,7 @@ fn constraint_block(cell: &AnalysedCell, c: &Constraint, arc_type: &str) -> Stri
     ));
     s.push_str(&format!("\t-related_pin {} \\\n", c.related));
     s.push_str(&format!("\t-pin {} \\\n", c.pin));
-    s.push_str(&format!("\t{{ {} }}\n", cell.repr_name()));
+    s.push_str(&format!("\t{}\n", name_block(cell)));
     s.push('\n');
     s
 }
@@ -236,7 +241,7 @@ fn format_arc(cell: &AnalysedCell, arc: &Arc, opts: ArcsTclOptions) -> String {
     };
     let related = format!("\t-related_pin {} \\\n", arc.related);
     let pin = format!("\t-pin {} \\\n", arc.output);
-    let name = format!("\t{{ {} }}\n", cell.repr_name());
+    let name = format!("\t{}\n", name_block(cell));
 
     let mut s = String::from("define_arc \\\n");
     match arc.edge {
@@ -310,7 +315,7 @@ fn format_hidden_arc(cell: &AnalysedCell, h: &HiddenArc, opts: ArcsTclOptions) -
         s.push_str(&format!("\t-when \"{w}\" \\\n"));
     }
     s.push_str(&format!("\t-pin {} \\\n", h.pin.as_str()));
-    s.push_str(&format!("\t{{ {} }}\n", cell.repr_name()));
+    s.push_str(&format!("\t{}\n", name_block(cell)));
     s.push('\n');
     s
 }
@@ -433,7 +438,7 @@ fn format_leakage(cell: &AnalysedCell, l: &LeakageState) -> String {
     format!(
         "define_leakage -when \"{}\" {}\n",
         literal_product(&lits),
-        cell.repr_name()
+        name_block(cell)
     )
 }
 
@@ -780,8 +785,8 @@ Q = "A*B + Q*(A+B)"
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
         assert_eq!(tcl.matches("define_leakage").count(), 2);
-        assert!(tcl.contains("define_leakage -when \"A*B*Q\" C2"));
-        assert!(tcl.contains("define_leakage -when \"!A*!B*!Q\" C2"));
+        assert!(tcl.contains("define_leakage -when \"A*B*Q\" { C2 }"));
+        assert!(tcl.contains("define_leakage -when \"!A*!B*!Q\" { C2 }"));
     }
 
     #[test]
@@ -838,6 +843,44 @@ Y = "A*B"
         let last_hidden = tcl.rfind("-type hidden").expect("hidden arc present");
         let first_leakage = tcl.find("define_leakage").expect("leakage present");
         assert!(first_leakage > last_hidden);
+    }
+
+    #[test]
+    fn multi_name_cell_fans_names_into_one_trailer() {
+        // A cell with several names emits one braced list carrying all of them per arc trailer and
+        // per define_leakage — not one arc per name.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = ["C2A", "C2B"]
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+"#,
+        );
+        let single = analyse(
+            r#"
+[[cell]]
+name = "C2"
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+"#,
+        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        let single_tcl = cell_arcs_tcl(&single, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        assert!(single_tcl.contains("{ C2 }"));
+        assert!(tcl.contains("{ C2A C2B }"));
+        assert!(!tcl.contains("{ C2A }"));
+        assert!(!tcl.contains("{ C2B }"));
+        assert!(tcl.contains("define_leakage -when \"A*B*Q\" { C2A C2B }"));
+        // Same arc count regardless of how many names the cell carries — one arc per transition, a
+        // single trailer names both.
+        assert_eq!(
+            tcl.matches("define_arc").count(),
+            single_tcl.matches("define_arc").count()
+        );
     }
 
     #[test]

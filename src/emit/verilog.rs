@@ -22,7 +22,10 @@ pub fn cell_verilog(cell: &AnalysedCell) -> String {
     for (sig, sr) in cell.signal_regions() {
         out.push_str(&primitive(&prim_name(cell, &sig.name), &sig.name, sr));
     }
-    out.push_str(&wrapper_module(cell));
+    // One `celldefine`d wrapper per name; all wrappers instantiate the same shared primitives.
+    for name in &cell.name {
+        out.push_str(&wrapper_module(cell, name));
+    }
     out
 }
 
@@ -99,7 +102,7 @@ fn pattern(cube: &StateCube) -> String {
 
 /// The `celldefine`d wrapper module: declares the cell's ports, a `specify` path delay from every
 /// input to every output, and instantiates each output pin's UDP with that pin's own column set.
-fn wrapper_module(cell: &AnalysedCell) -> String {
+fn wrapper_module(cell: &AnalysedCell, name: &Symbol) -> String {
     let outputs: Vec<Symbol> = cell.outputs.iter().map(|o| o.name.clone()).collect();
     let internals: Vec<Symbol> = cell.internals.iter().map(|o| o.name.clone()).collect();
     // Ports are the external face only: outputs and primary inputs. Internal state nodes are not ports.
@@ -111,7 +114,7 @@ fn wrapper_module(cell: &AnalysedCell) -> String {
         .join(", ");
 
     let mut s = String::from("`celldefine\n");
-    s.push_str(&format!("module {}({ports});\n", cell.repr_name()));
+    s.push_str(&format!("module {name}({ports});\n"));
     s.push_str(&format!("output {};\n", outputs.join(", ")));
     if !cell.inputs.is_empty() {
         s.push_str(&format!("input  {};\n", cell.inputs.join(", ")));
@@ -227,6 +230,28 @@ Q = "CLK*M + !CLK*Q"
         // M is never declared as a module output.
         assert!(!v.contains("output Q, M"));
         assert!(!v.contains("module DFF(Q, M,"));
+    }
+
+    #[test]
+    fn multiple_names_share_primitives_with_one_wrapper_each() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = ["INVX1", "INVX2"]
+inputs = ["A"]
+[cell.outputs]
+Y = "!A"
+"#,
+        );
+        let v = cell_verilog(&cell);
+        eprintln!("{v}");
+        // The primitive keys off the representative name and is emitted exactly once.
+        assert_eq!(v.matches("primitive INVX1_Y(").count(), 1);
+        assert!(!v.contains("primitive INVX2_Y("));
+        // One wrapper module per name, both instantiating the same shared primitive.
+        assert!(v.contains("module INVX1(Y, A);"));
+        assert!(v.contains("module INVX2(Y, A);"));
+        assert_eq!(v.matches("INVX1_Y u_INVX1_Y (Y, A);").count(), 2);
     }
 
     #[test]
