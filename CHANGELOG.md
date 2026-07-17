@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-07-17
+
 ### Added
 
 - The cell `name` field now accepts either a single string or a list of strings. A list generates
@@ -15,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trailers), Liberty (one `cell(...)` group per name with shared pin bodies), and Verilog (one
   wrapper `module` per name over a single shared set of UDP primitives). The scalar form remains
   backward-compatible.
+- Reject a cell name that appears in more than one cell (or as an alias colliding with another
+  cell's name), which would otherwise emit duplicate Liberty groups and Verilog modules.
+
+### Changed
+
+- cellsmith is a command-line tool. The library target is now documented as an internal build
+  artifact shared by the binary and its benchmarks — it is not a supported public API and carries
+  no stability guarantee; using cellsmith as a library is at the caller's own risk.
 
 ## [0.1.1] - 2026-07-09
 
@@ -46,6 +56,7 @@ Initial release.
 - Emit Liberty, Verilog, and Tcl (arc) artefacts from a TOML cell specification.
 - Multi-threaded analysis with rayon.
 
-[Unreleased]: https://github.com/marlls1989/cellsmith/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/marlls1989/cellsmith/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/marlls1989/cellsmith/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/marlls1989/cellsmith/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/marlls1989/cellsmith/releases/tag/v0.1.0

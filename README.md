@@ -8,6 +8,11 @@ cellsmith is an arc **generator**: it derives the arcs, the behavioural model an
 Liberate performs the characterisation inside your existing harness. It is a focused Rust tool driven
 by a minimal, general (any-gate) TOML input.
 
+> **cellsmith is a command-line tool.** It is distributed as a CLI binary. A library target exists
+> only as an internal build artifact (shared by the binary and its benchmarks) and is **not a stable
+> or supported API** — it carries no compatibility guarantee across versions, and using cellsmith as a
+> library is entirely at your own risk.
+
 ## What it produces
 
 For every cell in the input spec, cellsmith emits three artifacts:
