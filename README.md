@@ -129,7 +129,7 @@ name = "MUT"
 inputs = ["A", "B"]
 [cell.outputs]
 Qa = "!Qb * A"                 # genuine cross-coupling: each grant references the *other*
-Qb = "!Qa * B"                 #   the resulting oscillation hazard is auto-detected (no spec key)
+Qb = "!Qa * B"                 #   the resulting oscillation hazard is auto-detected
 
 [[cell]]
 name = "DFF"
