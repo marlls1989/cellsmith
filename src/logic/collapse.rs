@@ -176,7 +176,6 @@ fn classify_latch<B: Brand, C: ManagerCell>(
     f: &Bdd<B, C>,
     clocks: &[Symbol],
 ) -> Option<Latch<B, C>> {
-    let b = f.builder();
     let vars: BTreeSet<Symbol> = f.variables().collect();
     let mut found: Option<Latch<B, C>> = None;
     let mut count = 0usize;
@@ -187,8 +186,8 @@ fn classify_latch<B: Brand, C: ManagerCell>(
         // At most one phase can be transparent-without-self for a given clock (both would force the
         // hold cofactor to be self-free too), so the first match settles this clock.
         for &p in &[true, false] {
-            let transparent = f.compose(c.as_str(), &b.constant(p));
-            let hold = f.compose(c.as_str(), &b.constant(!p));
+            let transparent = f.restrict(c.as_str(), p);
+            let hold = f.restrict(c.as_str(), !p);
             let t_self = transparent.variables().any(|v| v == *name);
             let h_self = hold.variables().any(|v| v == *name);
             if !t_self && h_self {
@@ -217,9 +216,8 @@ fn valid_master<B: Brand, C: ManagerCell>(
     latches: &BTreeMap<Symbol, Latch<B, C>>,
     bdds: &BTreeMap<Symbol, Bdd<B, C>>,
 ) -> Option<Symbol> {
-    let b = ls.transparent.builder();
-    let hs_s0 = ls.hold.compose(s.as_str(), &b.constant(false));
-    let hs_s1 = ls.hold.compose(s.as_str(), &b.constant(true));
+    let hs_s0 = ls.hold.restrict(s.as_str(), false);
+    let hs_s1 = ls.hold.restrict(s.as_str(), true);
     for m in ls.transparent.variables().filter(|v| v != s) {
         let Some(lm) = latches.get(&m) else { continue };
         if lm.clock != ls.clock || lm.phase == ls.phase {
@@ -238,14 +236,14 @@ fn valid_master<B: Brand, C: ManagerCell>(
             continue;
         }
         // F1: the captured-through value equals the held value.
-        let ts_m0 = ls.transparent.compose(m.as_str(), &b.constant(false));
-        let ts_m1 = ls.transparent.compose(m.as_str(), &b.constant(true));
+        let ts_m0 = ls.transparent.restrict(m.as_str(), false);
+        let ts_m1 = ls.transparent.restrict(m.as_str(), true);
         if ts_m0 != hs_s0 || ts_m1 != hs_s1 {
             continue;
         }
         // F2: master and slave hold the same value.
-        let hm_m0 = lm.hold.compose(m.as_str(), &b.constant(false));
-        let hm_m1 = lm.hold.compose(m.as_str(), &b.constant(true));
+        let hm_m0 = lm.hold.restrict(m.as_str(), false);
+        let hm_m1 = lm.hold.restrict(m.as_str(), true);
         if hm_m0 != hs_s0 || hm_m1 != hs_s1 {
             continue;
         }
@@ -295,9 +293,8 @@ fn has_master_structural<B: Brand, C: ManagerCell>(
 
 /// Whether the hold cofactor `h` is monotone in `x`: `h|x=0 ∧ ¬h|x=1 == false`.
 fn monotone_hold<B: Brand, C: ManagerCell>(h: &Bdd<B, C>, x: &Symbol) -> bool {
-    let b = h.builder();
-    let h0 = h.compose(x.as_str(), &b.constant(false));
-    let h1 = h.compose(x.as_str(), &b.constant(true));
+    let h0 = h.restrict(x.as_str(), false);
+    let h1 = h.restrict(x.as_str(), true);
     h0.and(&!&h1).is_contradiction()
 }
 
