@@ -7,6 +7,10 @@
 //! The two-latch model stays the source of truth: [`recognise_edge_registers`] is strictly READ-ONLY
 //! over the shared per-cell BDD map and mutates nothing.
 //!
+//! See `docs/edge-collapse.md` for the concept-first walkthrough — pipeline placement, the recognition
+//! rule and its guards, the N−1 edge-element invariant, the ICM shared-boundary case, the
+//! exploration-unchanged invariant, and the opt-outs.
+//!
 //! Recognition is **functional from the start** and keys off **declared clocks only**: a cell without a
 //! declared clock never collapses. A candidate pair is nominated structurally (opposite-phase latches on
 //! one clock, master feeding the slave's transparent cofactor) and then confirmed by exact BDD equality

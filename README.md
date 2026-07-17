@@ -144,12 +144,22 @@ clock = ["CLK"]                # optional: input pins that are clocks. A hazard 
                                #   any other pair yields a symmetric non_seq
 constraint_arcs = true         # optional: opt this cell in to emitting the derived constraint arcs
                                #   (equivalent to the global --constraints flag, per cell)
+# no_edge_collapse = true      # optional: opt this cell OUT of the edge-register collapse below
+                               #   (equivalent to the global --no-edge-collapse flag, per cell)
 [cell.internal]                # internal state node: referenceable, but emits no external pin
 M = "!CLK*D + CLK*M"           #   the master latch (transparent low)
 [cell.outputs]
 Q = "CLK*M + !CLK*Q"           # the slave references the internal master; CLK→Q arcs are discovered,
                                #   and each prevector drives D to load the master first
 ```
+
+`M` and `Q` are an opposite-phase latch pair on the declared clock `CLK`, so by default cellsmith
+recognises them, after exploration, as a single rising-edge register on `Q`: `M` is elided from every
+emitted artifact (no UDP, no `statetable` row, no internal-power arc), `Q`'s capture is re-expressed
+combinationally in terms of `D`, and its Liberate arc carries `-type edge`. Setting
+`no_edge_collapse = true` (or passing `--no-edge-collapse`) keeps the two-latch form written above
+exactly as it stands, with `M` staying a separate internal node and `Q`'s arcs discovered by prevector
+as before. See `docs/edge-collapse.md` for the recognition rule and its invariants.
 
 Function syntax: the primary operators are `*` (AND), `+` (OR), `!` (NOT), the constants `1`/`0`, and
 parentheses for grouping. The parser is a superset of that form: it also accepts `&` for AND, `|` for
@@ -176,6 +186,8 @@ Options:
                          machine's settled seed states (emitted by default)
       --constraints      Emit derived setup/hold & non_seq constraint arcs (off by default; a cell can
                          opt in with `constraint_arcs = true`)
+      --no-edge-collapse Suppress the master-slave latch -> edge-register collapse (on by default); a
+                         cell can opt out individually with `no_edge_collapse = true`
       --stdout           Write all three artifacts to stdout (with banners) instead of files
   -h, --help             Print help
   -V, --version          Print version

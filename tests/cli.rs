@@ -149,6 +149,70 @@ fn multi_cell_spec_covers_all_cells() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// Run the MULTI spec through the built binary in `--stdout` mode, optionally with
+/// `--no-edge-collapse`, and return its stdout.
+fn run_multi(no_edge_collapse: bool) -> String {
+    let dir = scratch_dir(if no_edge_collapse {
+        "multi_no_collapse"
+    } else {
+        "multi_collapse"
+    });
+    let spec = dir.join("cells.toml");
+    std::fs::write(&spec, MULTI).unwrap();
+
+    let mut cmd = Command::new(BIN);
+    cmd.arg("--stdout").arg("--constraints");
+    if no_edge_collapse {
+        cmd.arg("--no-edge-collapse");
+    }
+    let out = cmd.arg(&spec).output().expect("run cellsmith");
+    assert!(out.status.success(), "exit: {:?}", out.status);
+
+    std::fs::remove_dir_all(&dir).ok();
+    String::from_utf8(out.stdout).unwrap()
+}
+
+/// The `cell (DFF)` Liberty fragment, from its header up to the next `cell (` (or end of string).
+fn dff_liberty_fragment(stdout: &str) -> &str {
+    let liberty = stdout
+        .split("// ===== cellsmith liberty =====")
+        .nth(1)
+        .expect("liberty banner present");
+    let start = liberty.find("cell (DFF)").expect("DFF cell present");
+    let rest = &liberty[start..];
+    match rest[1..].find("cell (") {
+        Some(off) => &rest[..off + 1],
+        None => rest,
+    }
+}
+
+/// `--no-edge-collapse` flips the MULTI spec's DFF between its collapsed edge-register Liberty form
+/// (a `R` token statetable row, no `pin (M)`) and its two-latch level form (`pin (M)` with
+/// `internal_node : "M"`, no edge token). Existing multi-cell CLI assertions (cell-name presence,
+/// oscillate/race hazard warnings) still hold under default (on) collapse -- collapse only re-expresses
+/// already-explored behaviour, it does not change the hazard diagnostics.
+#[test]
+fn no_edge_collapse_flag_flips_dff_liberty_between_edge_and_level_forms() {
+    let collapsed = run_multi(false);
+    let uncollapsed = run_multi(true);
+
+    let collapsed_dff = dff_liberty_fragment(&collapsed);
+    assert!(collapsed_dff.contains("statetable (\"CLK D\", \"Q\")"));
+    assert!(collapsed_dff.split_whitespace().any(|t| t == "R"));
+    assert!(!collapsed_dff.contains("pin (M)"));
+
+    let uncollapsed_dff = dff_liberty_fragment(&uncollapsed);
+    assert!(uncollapsed_dff.contains("statetable (\"CLK D\", \"Q M\")"));
+    assert!(uncollapsed_dff.contains("pin (M)"));
+    assert!(uncollapsed_dff.contains("internal_node : \"M\";"));
+    assert!(!uncollapsed_dff.split_whitespace().any(|t| t == "R"));
+
+    // Existing multi-cell assertions still pass, unmodified, under default collapse.
+    for cell in ["C2", "MUT", "DFF"] {
+        assert!(collapsed.contains(cell), "cell {cell} missing from stdout");
+    }
+}
+
 #[test]
 fn bad_spec_exits_non_zero() {
     let dir = scratch_dir("bad");

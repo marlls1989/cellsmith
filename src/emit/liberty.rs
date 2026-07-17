@@ -41,7 +41,7 @@ use liberty_parse::{
 use espresso_logic::Symbol;
 use rayon::prelude::*;
 
-use crate::emit::statetable::{build_state_model, Next, StateModel};
+use crate::emit::statetable::{build_state_model, EdgeRow, EdgeTok, Next, StateModel};
 use crate::logic::hazard::Oscillation;
 use crate::logic::regions::{StateCube, StateRegions};
 use crate::model::AnalysedCell;
@@ -134,7 +134,9 @@ fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
                 }
             }
             for (i, (sig, _)) in cell.signal_regions().enumerate() {
-                if i >= n_out {
+                // A folded master carries no node in the collapsed model — skip its internal pin so only
+                // surviving state nodes (`node_of` members) get a pin group.
+                if i >= n_out && model.node_of.contains_key(&sig.name) {
                     group.subgroups.push(internal_pin(&sig.name));
                 }
             }
@@ -227,10 +229,11 @@ fn statetable_group(model: &StateModel) -> Group {
 }
 
 /// Render the joint table body: one `<inputs> : <current> : <next>` row per [`StateModel::rows`] entry,
-/// comma-and-newline-joined (one statetable row per line in the emitted Liberty) in model (deterministic)
-/// order. Inputs/current use `H`/`L`/`-`; next uses `H`/`L`/`N`.
+/// then the edge-triggered rows ([`StateModel::edge_rows`]), comma-and-newline-joined (one statetable row
+/// per line in the emitted Liberty) in model (deterministic) order. Inputs/current use `H`/`L`/`-`; an
+/// edge row's clock column instead carries the token `R`/`F`/`~R`/`~F`; next uses `H`/`L`/`N`.
 fn table_string(model: &StateModel) -> String {
-    model
+    let mut rows: Vec<String> = model
         .rows
         .iter()
         .map(|row| {
@@ -241,8 +244,43 @@ fn table_string(model: &StateModel) -> String {
                 next_pattern(&row.next),
             )
         })
+        .collect();
+    for er in &model.edge_rows {
+        rows.push(format!(
+            "{} : {} : {}",
+            edge_input_pattern(er, &model.input_nodes),
+            state_pattern(&er.current),
+            next_pattern(&er.next),
+        ));
+    }
+    rows.join(" ,\n")
+}
+
+/// Render an edge row's input field: the ordinary `H`/`L`/`-` level symbols, except the register's clock
+/// column carries the edge token (`R`/`F`/`~R`/`~F`) in place of a level.
+fn edge_input_pattern(er: &EdgeRow, input_nodes: &[Symbol]) -> String {
+    input_nodes
+        .iter()
+        .zip(er.inputs.iter())
+        .map(|(node, val)| {
+            if *node == er.clock {
+                edge_token(er.token)
+            } else {
+                level_symbol(val)
+            }
+        })
         .collect::<Vec<_>>()
-        .join(" ,\n")
+        .join(" ")
+}
+
+/// The Liberty state-table symbol for a clock-edge token.
+fn edge_token(token: EdgeTok) -> &'static str {
+    match token {
+        EdgeTok::Rise => "R",
+        EdgeTok::Fall => "F",
+        EdgeTok::NotRise => "~R",
+        EdgeTok::NotFall => "~F",
+    }
 }
 
 /// Render a per-node next-state action vector as space-separated `H`/`L`/`N`/`-` symbols. A `None` slot
@@ -271,14 +309,16 @@ fn join_nodes(nodes: &[Symbol]) -> String {
 
 /// Render a cube as space-separated `H`/`L`/`-` symbols (Liberty state-table input levels).
 fn state_pattern(cube: &StateCube) -> String {
-    cube.iter()
-        .map(|c| match c {
-            Some(true) => "H",
-            Some(false) => "L",
-            None => "-",
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    cube.iter().map(level_symbol).collect::<Vec<_>>().join(" ")
+}
+
+/// The Liberty state-table level symbol for one cube value: `H`/`L`/`-`.
+fn level_symbol(val: &Option<bool>) -> &'static str {
+    match val {
+        Some(true) => "H",
+        Some(false) => "L",
+        None => "-",
+    }
 }
 
 /// Render the on-region as a Liberty function string: a sum (`+`) of product (`*`) cubes, each a
@@ -392,11 +432,15 @@ Q = "A*B + Q*(A+B)"
 
     #[test]
     fn dff_emits_one_joint_statetable() {
+        // MIGRATED two-latch coverage: the same DFF with a declared clock but collapse opted OUT keeps
+        // its master-slave statetable (`Q M` nodes, six per-output rows, a `pin (M)`).
         let cell = analyse(
             r#"
 [[cell]]
 name = "DFF"
 inputs = ["CLK", "D"]
+clock = ["CLK"]
+no_edge_collapse = true
 [cell.internal]
 M = "!CLK*D + CLK*M"
 [cell.outputs]
@@ -432,6 +476,100 @@ Q = "CLK*M + !CLK*Q"
             .subgroups
             .iter()
             .any(|g| g.type_ == "pin" && g.name == "M"));
+    }
+
+    #[test]
+    fn dff_collapses_to_edge_statetable() {
+        // Default (collapse ON) with a declared clock: the master-slave DFF becomes ONE rising-edge
+        // register Q, folding M away. The table carries only the register's node `Q` and edge rows.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        assert_eq!(frag.matches("statetable").count(), 1);
+        assert!(frag.contains("statetable (\"CLK D\", \"Q\")"));
+        // Rising-edge capture (R) drives Q from D; the off-edge face (~R) holds.
+        assert!(frag.contains("R H : - : H"));
+        assert!(frag.contains("R L : - : L"));
+        assert!(frag.contains("~R - : - : N"));
+        // The folded master M keeps no pin group and no node column in the statetable header.
+        assert!(!frag.contains("pin (M)"));
+        assert!(!frag.contains("\"Q M\""));
+        assert!(!frag.contains("function : "));
+        let lib = parse_frag(&frag);
+        let cellg = find_cell(&lib, "DFF");
+        assert!(!cellg
+            .subgroups
+            .iter()
+            .any(|g| g.type_ == "pin" && g.name == "M"));
+        // Q binds its own node exactly as an uncollapsed state output would.
+        let q = find_pin(cellg, "Q");
+        assert_eq!(attr_string(q, "internal_node").as_deref(), Some("Q"));
+    }
+
+    #[test]
+    fn icm_collapses_shared_boundary_registers_with_both_edges() {
+        // Two three-latch synchronisers collapse to four edge registers (sela2/enA on CLKA,
+        // selb2/enB on CLKB); the folded relays sela1/selb1 vanish, and GCLK stays a state_function.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "ICM"
+inputs = ["CLKA", "CLKB", "RA", "RB", "S"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+sela = "!enB*!S"
+selb = "!enA*S"
+sela1 = "!RA*(!CLKA*sela+CLKA*sela1)"
+sela2 = "!RA*(CLKA*sela1+!CLKA*sela2)"
+enA   = "!RA*(!CLKA*sela2+CLKA*enA)"
+selb1 = "!RB*(!CLKB*selb+CLKB*selb1)"
+selb2 = "!RB*(CLKB*selb1+!CLKB*selb2)"
+enB   = "!RB*(!CLKB*selb2+CLKB*enB)"
+[cell.outputs]
+GCLK = "enA*CLKA+enB*CLKB"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        // Both a rising (sela2/selb2) and a falling (enA/enB) register are present.
+        assert!(frag.contains("R "));
+        assert!(frag.contains("F "));
+        let lib = parse_frag(&frag);
+        let cellg = find_cell(&lib, "ICM");
+        // The surviving state nodes are exactly the four registers — no folded relays.
+        for node in ["sela2", "enA", "selb2", "enB"] {
+            assert!(
+                cellg
+                    .subgroups
+                    .iter()
+                    .any(|g| g.type_ == "pin" && g.name == node),
+                "expected pin {node}"
+            );
+        }
+        for gone in ["sela1", "selb1"] {
+            assert!(
+                !cellg
+                    .subgroups
+                    .iter()
+                    .any(|g| g.type_ == "pin" && g.name == gone),
+                "folded relay {gone} must not emit a pin"
+            );
+        }
+        // GCLK depends on the register nodes: a state_function (branch B), never its own node.
+        let gclk = find_pin(cellg, "GCLK");
+        assert!(gclk.attributes.contains_key("state_function"));
+        assert!(!gclk.attributes.contains_key("internal_node"));
     }
 
     #[test]
@@ -698,5 +836,137 @@ Qn = "!Q"
         assert_eq!(attr_string(qn, "state_function").as_deref(), Some("!Q"));
         assert!(!qn.attributes.contains_key("function"));
         assert!(!qn.attributes.contains_key("internal_node"));
+    }
+
+    /// Parse the single-cell `src` and analyse it twice: once as written, once with
+    /// `no_edge_collapse` forced true on every cell -- the same blanket mutation the
+    /// `--no-edge-collapse` CLI flag applies (main.rs:82-88). Proves the per-cell TOML switch and
+    /// the CLI flag are the identical code path, not two independently-tested mechanisms.
+    fn analyse_both(src: &str) -> (crate::model::AnalysedCell, crate::model::AnalysedCell) {
+        let default = crate::model::parse_spec(src)
+            .unwrap()
+            .cells
+            .remove(0)
+            .analyse()
+            .unwrap();
+        let mut spec = crate::model::parse_spec(src).unwrap();
+        for c in &mut spec.cells {
+            c.no_edge_collapse = true;
+        }
+        let forced = spec.cells.remove(0).analyse().unwrap();
+        (default, forced)
+    }
+
+    /// Five shapes that recognise NO edge register even under default (on) collapse: a single latch, a
+    /// gated (self-referencing) latch, a master/slave pair split across two DIFFERENT declared clocks,
+    /// an exposed master (a second output), and a two-latch DFF whose clock is never declared. Mirrors
+    /// `statetable.rs`'s and `collapse.rs`'s fixtures of the same shapes.
+    const NON_COLLAPSIBLE: [&str; 5] = [
+        r#"
+[[cell]]
+name = "DLAT"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.outputs]
+Q = "CLK*D + !CLK*Q"
+"#,
+        r#"
+[[cell]]
+name = "GLAT"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.outputs]
+Q = "CLK*(D+Q) + !CLK*Q"
+"#,
+        r#"
+[[cell]]
+name = "MCDFF"
+inputs = ["CLKA", "CLKB", "D"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+M = "!CLKA*D + CLKA*M"
+[cell.outputs]
+Q = "CLKB*M + !CLKB*Q"
+"#,
+        r#"
+[[cell]]
+name = "EMDFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+M = "!CLK*D + CLK*M"
+"#,
+        r#"
+[[cell]]
+name = "UCDFF"
+inputs = ["CLK", "D"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#,
+    ];
+
+    #[test]
+    fn non_collapsible_suite_liberty_matches_the_no_edge_collapse_flag() {
+        // No `R`/`F`/`~R`/`~F` edge token appears as its own statetable field, whether the flag is
+        // left off (default collapse, a no-op on these shapes) or forced on -- and the two runs emit
+        // byte-identical Liberty.
+        fn has_edge_token(frag: &str) -> bool {
+            frag.split_whitespace()
+                .any(|tok| matches!(tok, "R" | "F" | "~R" | "~F"))
+        }
+        for src in NON_COLLAPSIBLE {
+            let (default, forced) = analyse_both(src);
+            let frag_default = cell_liberty(&default);
+            let frag_forced = cell_liberty(&forced);
+            assert!(
+                !has_edge_token(&frag_default),
+                "unexpected edge token in {}",
+                default.repr_name()
+            );
+            assert!(!has_edge_token(&frag_forced));
+            assert_eq!(frag_default, frag_forced);
+            parse_frag(&frag_default);
+        }
+    }
+
+    #[test]
+    fn dff_opt_out_restores_pin_m_internal_node_via_either_switch() {
+        // The two-latch DFF, opted out directly (`no_edge_collapse = true` in the TOML) versus opted
+        // out via the CLI-flag-equivalent blanket mutation over the whole spec: both switches restore
+        // the SAME two-latch Liberty -- a genuine `pin (M)` carrying `internal_node : "M"`.
+        const DFF: &str = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+        let direct = {
+            let mut spec = crate::model::parse_spec(DFF).unwrap();
+            spec.cells[0].no_edge_collapse = true;
+            spec.cells.remove(0).analyse().unwrap()
+        };
+        let via_flag = {
+            // Mirrors main.rs:82-88's blanket application of `--no-edge-collapse` over every cell.
+            let mut spec = crate::model::parse_spec(DFF).unwrap();
+            for c in &mut spec.cells {
+                c.no_edge_collapse = true;
+            }
+            spec.cells.remove(0).analyse().unwrap()
+        };
+
+        let frag_direct = cell_liberty(&direct);
+        let frag_via_flag = cell_liberty(&via_flag);
+        for frag in [&frag_direct, &frag_via_flag] {
+            assert!(frag.contains("pin (M)"));
+            assert!(frag.contains("internal_node : \"M\";"));
+        }
+        assert_eq!(frag_direct, frag_via_flag);
     }
 }

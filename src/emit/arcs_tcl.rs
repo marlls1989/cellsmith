@@ -55,8 +55,9 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     } else {
         collapse_conditions(&cell.arcs)
     };
+    let edge_clocks = edge_register_clocks(cell);
     for arc in &arcs {
-        out.push_str(&format_arc(cell, arc, opts));
+        out.push_str(&format_arc(cell, arc, opts, &edge_clocks));
     }
     if opts.emit_internal {
         let hidden = if opts.emit_when {
@@ -219,11 +220,30 @@ fn collapse_hidden(arcs: &[HiddenArc]) -> Vec<HiddenArc> {
     best.into_values().cloned().collect()
 }
 
-fn format_arc(cell: &AnalysedCell, arc: &Arc, opts: ArcsTclOptions) -> String {
+/// Lookup from a register node (an `edge_registers` entry's `node`) to the declared clock it's keyed
+/// off. A delay arc whose output is one of these nodes and whose `-related_pin` is that clock is the
+/// register's clock-to-output arc — `format_arc` re-labels it `-type edge` (a Liberate edge-register
+/// delay arc) instead of `-type combinational`.
+fn edge_register_clocks(cell: &AnalysedCell) -> std::collections::BTreeMap<Symbol, Symbol> {
+    cell.edge_registers
+        .iter()
+        .map(|r| (r.node.clone(), r.clock.clone()))
+        .collect()
+}
+
+fn format_arc(
+    cell: &AnalysedCell,
+    arc: &Arc,
+    opts: ArcsTclOptions,
+    edge_clocks: &std::collections::BTreeMap<Symbol, Symbol>,
+) -> String {
+    let is_edge = !arc.is_async && edge_clocks.get(&arc.output) == Some(&arc.related);
     let type_line = format!(
         "\t-type {} \\\n",
         if arc.is_async {
             "async"
+        } else if is_edge {
+            "edge"
         } else {
             "combinational"
         }
@@ -723,6 +743,101 @@ Q = "CLK*M + !CLK*Q"
         assert!(!on.contains("non_seq"));
     }
 
+    /// The same two-latch DFF, with edge collapse explicitly suppressed (`no_edge_collapse = true`) —
+    /// preserves the pre-collapse two-latch coverage: every delay arc on Q stays `-type combinational`,
+    /// none is re-labelled `-type edge`.
+    #[test]
+    fn dff_no_edge_collapse_keeps_combinational_type_on_q_arcs() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+no_edge_collapse = true
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#,
+        );
+        assert!(cell.edge_registers.is_empty());
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        assert_eq!(tcl.matches("-type edge").count(), 0);
+        assert!(tcl.contains("-pin Q"));
+    }
+
+    /// The same two-latch DFF under default (on) edge collapse: the CLK-related delay arc(s) on Q are
+    /// re-labelled `-type edge`; the D-related hidden arc and the setup/hold constraint blocks are
+    /// unaffected by the re-label.
+    #[test]
+    fn dff_default_collapse_marks_clk_to_q_arcs_edge_type() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+constraint_arcs = true
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#,
+        );
+        assert!(!cell.edge_registers.is_empty());
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        assert!(tcl.matches("-type edge").count() >= 1);
+        // Every CLK-related, Q-pinned delay arc is `-type edge`, never `-type combinational`.
+        for frag in tcl.split("define_arc") {
+            if frag.contains("-pin Q") && frag.contains("-related_pin CLK") {
+                assert!(frag.contains("-type edge"));
+                assert!(!frag.contains("-type combinational"));
+            }
+        }
+        // The D-related hidden arc(s) are untouched: still `-type hidden`, never `-type edge`.
+        for frag in tcl.split("define_arc") {
+            if frag.contains("-type hidden") {
+                assert!(!frag.contains("-type edge"));
+            }
+        }
+        // Setup/hold constraint blocks are unaffected by the re-label.
+        assert!(tcl.contains("-type setup \\"));
+        assert!(tcl.contains("-type hold \\"));
+    }
+
+    /// The ICM interlock's registers are all internal nodes (never a Liberty output), so it has no
+    /// output arcs to re-label — its Tcl carries zero `-type edge` blocks even though it recognises
+    /// edge registers.
+    #[test]
+    fn icm_internal_registers_emit_zero_edge_type_arcs() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "ICM"
+inputs = ["CLKA", "CLKB", "RA", "RB", "S"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+sela = "!enB*!S"
+selb = "!enA*S"
+sela1 = "!RA*(!CLKA*sela+CLKA*sela1)"
+sela2 = "!RA*(CLKA*sela1+!CLKA*sela2)"
+enA   = "!RA*(!CLKA*sela2+CLKA*enA)"
+selb1 = "!RB*(!CLKB*selb+CLKB*selb1)"
+selb2 = "!RB*(CLKB*selb1+!CLKB*selb2)"
+enB   = "!RB*(!CLKB*selb2+CLKB*enB)"
+[cell.outputs]
+GCLK = "enA*CLKA+enB*CLKB"
+"#,
+        );
+        assert!(!cell.edge_registers.is_empty());
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        assert_eq!(tcl.matches("-type edge").count(), 0);
+    }
+
     #[test]
     fn mutex_emits_non_seq_constraint_arcs_when_enabled() {
         let cell = analyse(
@@ -898,5 +1013,127 @@ Q = "(A*B + Q*(A+B))*!R"
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         assert!(tcl.contains("-type async"));
         assert!(tcl.contains("-related_pin R"));
+    }
+
+    /// Parse the single-cell `src` and analyse it twice: once as written, once with
+    /// `no_edge_collapse` forced true on every cell -- the same blanket mutation the
+    /// `--no-edge-collapse` CLI flag applies (main.rs:82-88). Proves the per-cell TOML switch and
+    /// the CLI flag are the identical code path, not two independently-tested mechanisms.
+    fn analyse_both(src: &str) -> (crate::model::AnalysedCell, crate::model::AnalysedCell) {
+        let default = crate::model::parse_spec(src)
+            .unwrap()
+            .cells
+            .remove(0)
+            .analyse()
+            .unwrap();
+        let mut spec = crate::model::parse_spec(src).unwrap();
+        for c in &mut spec.cells {
+            c.no_edge_collapse = true;
+        }
+        let forced = spec.cells.remove(0).analyse().unwrap();
+        (default, forced)
+    }
+
+    /// Five shapes that recognise NO edge register even under default (on) collapse: a single latch, a
+    /// gated (self-referencing) latch, a master/slave pair split across two DIFFERENT declared clocks,
+    /// an exposed master (a second output), and a two-latch DFF whose clock is never declared. Mirrors
+    /// `statetable.rs`'s and `collapse.rs`'s fixtures of the same shapes.
+    const NON_COLLAPSIBLE: [&str; 5] = [
+        r#"
+[[cell]]
+name = "DLAT"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.outputs]
+Q = "CLK*D + !CLK*Q"
+"#,
+        r#"
+[[cell]]
+name = "GLAT"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.outputs]
+Q = "CLK*(D+Q) + !CLK*Q"
+"#,
+        r#"
+[[cell]]
+name = "MCDFF"
+inputs = ["CLKA", "CLKB", "D"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+M = "!CLKA*D + CLKA*M"
+[cell.outputs]
+Q = "CLKB*M + !CLKB*Q"
+"#,
+        r#"
+[[cell]]
+name = "EMDFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+M = "!CLK*D + CLK*M"
+"#,
+        r#"
+[[cell]]
+name = "UCDFF"
+inputs = ["CLK", "D"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#,
+    ];
+
+    #[test]
+    fn non_collapsible_suite_tcl_matches_the_no_edge_collapse_flag() {
+        // Zero `-type edge` blocks, whether the flag is left off (default collapse, a no-op on these
+        // shapes) or forced on -- and the two runs emit byte-identical Tcl.
+        for src in NON_COLLAPSIBLE {
+            let (default, forced) = analyse_both(src);
+            let tcl_default = cell_arcs_tcl(&default, ArcsTclOptions::default());
+            let tcl_forced = cell_arcs_tcl(&forced, ArcsTclOptions::default());
+            assert_eq!(tcl_default.matches("-type edge").count(), 0);
+            assert_eq!(tcl_forced.matches("-type edge").count(), 0);
+            assert_eq!(tcl_default, tcl_forced);
+        }
+    }
+
+    #[test]
+    fn dff_opt_out_restores_combinational_type_via_either_switch() {
+        // The two-latch DFF, opted out directly (`no_edge_collapse = true` in the TOML) versus opted
+        // out via the CLI-flag-equivalent blanket mutation over the whole spec: both switches restore
+        // the SAME Tcl -- zero `-type edge` blocks.
+        const DFF: &str = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+        let direct = {
+            let mut spec = crate::model::parse_spec(DFF).unwrap();
+            spec.cells[0].no_edge_collapse = true;
+            spec.cells.remove(0).analyse().unwrap()
+        };
+        let via_flag = {
+            // Mirrors main.rs:82-88's blanket application of `--no-edge-collapse` over every cell.
+            let mut spec = crate::model::parse_spec(DFF).unwrap();
+            for c in &mut spec.cells {
+                c.no_edge_collapse = true;
+            }
+            spec.cells.remove(0).analyse().unwrap()
+        };
+
+        let tcl_direct = cell_arcs_tcl(&direct, ArcsTclOptions::default());
+        let tcl_via_flag = cell_arcs_tcl(&via_flag, ArcsTclOptions::default());
+        for tcl in [&tcl_direct, &tcl_via_flag] {
+            assert_eq!(tcl.matches("-type edge").count(), 0);
+            assert!(tcl.contains("-pin Q"));
+        }
+        assert_eq!(tcl_direct, tcl_via_flag);
     }
 }
