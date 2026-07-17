@@ -4,9 +4,8 @@
 //! A cell's hysteretic signals (its **state variables**: outputs and internal nodes on a dependency
 //! cycle, as classified in [`crate::logic::regions`]) are folded into ONE joint next-state table. Each
 //! [`StateRow`] pairs a primary-input pattern and a current-state pattern with a per-node next-state
-//! action (`H`/`L`/`N` = drive-high/drive-low/hold, or `-` = unconstrained here). Output state
-//! variables get an emission-time `{name}_st` alias node so no state-table node ever names an external
-//! output pin; internal state nodes keep their own name.
+//! action (`H`/`L`/`N` = drive-high/drive-low/hold, or `-` = unconstrained here). Every state variable,
+//! whether output or internal, keeps its own name as its state-table node.
 //!
 //! CONSTRUCTION. The rows are built by **cover algebra**. Each node's three
 //! minimised region covers (on/off/hold, cached on [`StateRegions`]) are re-based onto one **shared
@@ -29,9 +28,8 @@
 //! - Within each table field, node values are **space-separated**; whole rows are **comma-separated**.
 //!   Master-slave example:
 //!   `statetable ("D CP CPN", "MQ SQ") { table : "H/L R ~F : - - : H/L N,\ ..." }`
-//! - The statetable node namespace is **isolated** from the pin namespace; each node is resolved to a
-//!   port through a pin's `internal_node` attribute. An output pin therefore reads its `_st` node, and
-//!   the node name may differ from any pin name.
+//! - The statetable node namespace is resolved to a port through a pin's `internal_node` attribute;
+//!   node names now equal the signal names, so an output pin's `internal_node` reads its own name.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -71,30 +69,12 @@ pub struct StateModel {
     /// Primary-input columns, ordered by the cell's input-pin order.
     pub input_nodes: Vec<Symbol>,
     /// State-node columns (`current`/`next` order): the state signals in `signals()` order, each mapped
-    /// to its node name (`{name}_st` alias for an output, own name for an internal).
+    /// to its own name as its node name.
     pub internal_nodes: Vec<Symbol>,
     /// Each state signal's ORIGINAL name → its state-table node name.
     pub node_of: BTreeMap<Symbol, Symbol>,
     /// The joint next-state rows, deduplicated and sorted.
     pub rows: Vec<StateRow>,
-}
-
-/// Mint a fresh state-node name for an output state variable: `{name}_st`, escalating `{name}_st2`,
-/// `{name}_st3`, … until it collides with no `reserved` name. (Naming lifted from the deleted minimiser
-/// hoist, old `minimise.rs:476-495`.)
-fn mint_node(name: &Symbol, reserved: &BTreeSet<Symbol>) -> Symbol {
-    let mut i = 1usize;
-    loop {
-        let cand = if i == 1 {
-            Symbol::from(format!("{name}_st"))
-        } else {
-            Symbol::from(format!("{name}_st{i}"))
-        };
-        if !reserved.contains(&cand) {
-            break cand;
-        }
-        i += 1;
-    }
 }
 
 /// Build the joint state-table model of a cell, or `None` if the cell has no state variable (a purely
@@ -114,29 +94,16 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
         return None;
     }
 
-    // (b) node_of: an OUTPUT state variable mints a fresh `{name}_st` node so the table never names an
-    // external output pin; a genuine INTERNAL state node keeps its own name. `reserved` is the cell's
-    // inputs ∪ all output names ∪ all internal names ∪ mints-so-far.
-    let mut reserved: BTreeSet<Symbol> = cell.inputs.iter().cloned().collect();
-    reserved.extend(cell.outputs.iter().map(|o| o.name.clone()));
-    reserved.extend(cell.internals.iter().map(|s| s.name.clone()));
-
-    let n_out = cell.outputs.len();
+    // (b) node_of: every hysteretic signal keeps its own name as its state-table node, whether it is an
+    // output or a genuine internal state node.
     let mut node_of: BTreeMap<Symbol, Symbol> = BTreeMap::new();
     let mut internal_nodes: Vec<Symbol> = Vec::new();
-    for (i, (sig, sr)) in cell.signal_regions().enumerate() {
+    for (sig, sr) in cell.signal_regions() {
         if !sr.hysteretic {
             continue;
         }
-        let node = if i < n_out {
-            let m = mint_node(&sig.name, &reserved);
-            reserved.insert(m.clone());
-            m
-        } else {
-            sig.name.clone()
-        };
-        node_of.insert(sig.name.clone(), node.clone());
-        internal_nodes.push(node);
+        node_of.insert(sig.name.clone(), sig.name.clone());
+        internal_nodes.push(sig.name.clone());
     }
 
     // (c) Column partition: a state-signal-named col is a current-value column (middle field); every
@@ -312,7 +279,7 @@ Q = "A*B + Q*(A+B)"
         );
         let m = build_state_model(&cell).expect("C2 is sequential");
         assert_eq!(names(&m.input_nodes), ["A", "B"]);
-        assert_eq!(names(&m.internal_nodes), ["Q_st"]);
+        assert_eq!(names(&m.internal_nodes), ["Q"]);
         // One node, so every row carries a definite action (no deferral). On A*B, off !A*!B, hold A^B.
         assert_eq!(m.rows.len(), 4);
         assert!(m.rows.contains(&row(&[T, T], &[X], &[HI])));
@@ -335,10 +302,10 @@ Q = "CLK*M + !CLK*Q"
 "#,
         );
         let m = build_state_model(&cell).expect("DFF is sequential");
-        // Q is aliased to Q_st; the internal master M keeps its own name.
-        assert_eq!(names(&m.internal_nodes), ["Q_st", "M"]);
+        // Both the output Q and the internal master M keep their own names as their nodes.
+        assert_eq!(names(&m.internal_nodes), ["Q", "M"]);
         assert_eq!(m.node_of[&Symbol::from("M")], "M");
-        assert_eq!(m.node_of[&Symbol::from("Q")], "Q_st");
+        assert_eq!(m.node_of[&Symbol::from("Q")], "Q");
         // Per-output rows: Q rows are keyed by CLK/M (M slot deferred `-`); M rows keyed by CLK/D
         // (Q slot deferred `-`). Six rows in all.
         assert_eq!(m.rows.len(), 6);
@@ -365,7 +332,7 @@ Qb = "!Qa * B"
 "#,
         );
         let m = build_state_model(&cell).expect("MUT is sequential");
-        assert_eq!(names(&m.internal_nodes), ["Qa_st", "Qb_st"]);
+        assert_eq!(names(&m.internal_nodes), ["Qa", "Qb"]);
         // The old joint race row `H H : L L : H H` is now two per-output rows: each grant drives high
         // off its own request and the other grant being currently low, the other slot deferred `-`.
         assert!(m.rows.contains(&row(&[T, X], &[X, F], &[HI, DC])));
@@ -386,12 +353,12 @@ Qn = "!(S + Q)"
         );
         let m = build_state_model(&cell).expect("SR is sequential");
         assert_eq!(names(&m.input_nodes), ["S", "R"]);
-        assert_eq!(names(&m.internal_nodes), ["Q_st", "Qn_st"]);
+        assert_eq!(names(&m.internal_nodes), ["Q", "Qn"]);
     }
 
     #[test]
-    fn collision_escalates_past_reserved_input() {
-        // A reserved input named `Q_st` forces the mint to escalate to `Q_st2`.
+    fn output_keeps_own_name_despite_similar_input() {
+        // Output Q with an unrelated input named Q_st still yields node Q, no mangling.
         let cell = analyse(
             r#"
 [[cell]]
@@ -402,8 +369,8 @@ Q = "A*Q_st + Q*(A+Q_st)"
 "#,
         );
         let m = build_state_model(&cell).expect("COLL is sequential");
-        assert_eq!(names(&m.internal_nodes), ["Q_st2"]);
-        assert_eq!(m.node_of[&Symbol::from("Q")], "Q_st2");
+        assert_eq!(names(&m.internal_nodes), ["Q"]);
+        assert_eq!(m.node_of[&Symbol::from("Q")], "Q");
     }
 
     #[test]
