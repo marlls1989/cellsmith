@@ -51,6 +51,11 @@ struct Cli {
     #[arg(long)]
     constraints: bool,
 
+    /// Suppress the master-slave latch → edge-register collapse (on by default); a cell can opt out
+    /// individually with `no_edge_collapse = true`.
+    #[arg(long)]
+    no_edge_collapse: bool,
+
     /// Write all three artifacts to stdout (with banners) instead of writing files.
     #[arg(long)]
     stdout: bool,
@@ -72,6 +77,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     if cli.constraints {
         for c in &mut spec.cells {
             c.constraint_arcs = true;
+        }
+    }
+    // `--no-edge-collapse` is a blanket disable: it opts every cell out of the edge-register collapse,
+    // exactly as if each had declared `no_edge_collapse = true`.
+    if cli.no_edge_collapse {
+        for c in &mut spec.cells {
+            c.no_edge_collapse = true;
         }
     }
     let cells: Vec<AnalysedCell> = spec.analyse()?;

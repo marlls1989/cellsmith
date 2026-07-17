@@ -2,6 +2,7 @@
 
 pub mod analysis;
 pub mod arcs;
+pub mod collapse;
 pub mod confluence;
 pub mod hazard;
 pub mod leakage;
