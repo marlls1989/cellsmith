@@ -12,17 +12,20 @@
 //! row, per Liberty's per-output next-state resolution). A purely combinational cell has no state
 //! table: each output emits a plain `function`.
 //!
-//! Pin attributes bind state-table nodes to ports:
-//! - an OUTPUT state variable binds `internal_node : "<own name>"` — the node carries the output's own
-//!   name, so no alias is minted;
-//! - a GENUINE INTERNAL state node keeps its own name and is emitted as a
-//!   `direction : internal; internal_node : "<name>";` pin (Liberty UG Vol.1 `pin(n1)` example);
-//! - any other output of a sequential cell carries `state_function : "<sop>"`, which names PIN ports
-//!   (inputs, internal pins, or output pins carrying an `internal_node`) — including a former
+//! 'Sequential' is a property of an OUTPUT, not of the cell: each output pin is classified per output
+//! (Liberty UG Vol.1 pp.5-31..5-33):
+//! - (A) an output that IS a state variable binds `internal_node : "<own name>"` — the node carries
+//!   the output's own name, so no alias is minted;
+//! - (B) an output whose regions reference a state node carries `state_function : "<sop>"`, which names
+//!   PIN ports (inputs, internal pins, or output pins carrying an `internal_node`) — including a former
 //!   feedthrough or inverter of a single state node, rendered by the ordinary SOP renderer as a plain
-//!   or negated literal (e.g. `Q'`) (Liberty UG Vol.1 p.5-31, and the `pin(QNZ){state_function:"QN"}`
-//!   / feedthrough `pin(Y){state_function:"A"}` examples on p.5-33). A cell with a state table has no
-//!   plain `function` attribute anywhere.
+//!   or negated literal (e.g. `!Q`) (Liberty UG Vol.1 p.5-31, and the `pin(QNZ){state_function:"QN"}`
+//!   / feedthrough `pin(Y){state_function:"A"}` examples on p.5-33);
+//! - (C) an output over primary inputs only carries a plain `function : "<sop>"`, EVEN inside a cell
+//!   that has a statetable.
+//!
+//! A GENUINE INTERNAL state node keeps its own name and is emitted as a
+//! `direction : internal; internal_node : "<name>";` pin (Liberty UG Vol.1 `pin(n1)` example).
 //!
 //! `cell_liberty` renders one cell as a bare `cell (...) { ... }` group; `library_liberty` wraps all of
 //! a run's cells in a single `library (<name>) { ... }` group — the `.lib` file cellsmith writes. Groups
@@ -95,10 +98,11 @@ pub fn cell_liberty(cell: &AnalysedCell) -> String {
 }
 
 /// Build the `cell` group: one input `pin` per primary input, then — for a sequential cell — the single
-/// joint `statetable`, its output pins (in declaration order), and its genuine-internal pins. A purely
-/// combinational cell (no state model) emits each output as a plain `function` pin instead. `name` is
-/// the cell name this group is emitted under; a cell with several declared names yields one identical
-/// group per name.
+/// joint `statetable`, its output pins (in declaration order), and its genuine-internal pins. Output
+/// pins are classified per output (see [`output_pin`]): a state variable, a state-dependent function,
+/// or a plain combinational `function` even alongside a statetable. A purely combinational cell (no
+/// state model) emits each output as a plain `function` pin instead. `name` is the cell name this group
+/// is emitted under; a cell with several declared names yields one identical group per name.
 fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
     let mut group = Group::new("cell", name);
 
@@ -109,6 +113,10 @@ fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
     match build_state_model(cell) {
         // Purely combinational: every signal is an output carrying a plain `function`.
         None => {
+            debug_assert!(
+                cell.internals.is_empty(),
+                "combinational cell (no state model) has no surviving internals -- minimise I3"
+            );
             for (sig, sr) in cell.signal_regions() {
                 group
                     .subgroups
@@ -155,10 +163,11 @@ fn function_pin(name: &str, func: &str) -> Group {
     pin
 }
 
-/// The output pin of a sequential cell, bound to the joint statetable. Two cases (Liberty UG Vol.1
+/// An output pin of a cell that has a joint statetable, classified per output (Liberty UG Vol.1
 /// pp.5-31..5-33):
-/// - a state variable (`sig` is itself a table node) reads its own node;
-/// - any other output names PIN ports through `state_function`.
+/// - (A) an output that IS a state variable (a table node) reads its own node via `internal_node`;
+/// - (B) an output that references a state node names PIN ports through `state_function`;
+/// - (C) an output over primary inputs only carries a plain `function`.
 fn output_pin(name: &Symbol, sr: &StateRegions, model: &StateModel) -> Group {
     let mut pin = Group::new("pin", name);
     set_attr(
@@ -168,15 +177,21 @@ fn output_pin(name: &Symbol, sr: &StateRegions, model: &StateModel) -> Group {
     );
 
     if let Some(node) = model.node_of.get(name) {
-        // (1) This output is itself a state variable — read its own node.
+        // (A) This output IS a state variable — read its own node. (Its cols may reference other
+        // nodes, so this must be checked before the state-dependence predicate below.)
         set_attr(
             &mut pin,
             "internal_node",
             Value::String(node.as_str().to_owned()),
         );
-    } else {
-        // (2) Any other output — a combinational function over PIN ports, never a table node.
+    } else if sr.cols.iter().any(|c| model.node_of.contains_key(c)) {
+        // (B) This output DEPENDS on a state node — a state_function over PIN ports.
         set_attr(&mut pin, "state_function", Value::String(function_sop(sr)));
+    } else {
+        // (C) Combinational output over primary inputs only — a plain `function`. By minimise
+        // invariant I3 a surviving combinational output's support is inputs + state nodes only, so
+        // 'no node_of column' == 'no transitive state dependence' (ref statetable.rs:112-122).
+        set_attr(&mut pin, "function", Value::String(function_sop(sr)));
     }
     pin
 }
@@ -311,6 +326,39 @@ mod tests {
     fn parse_frag(frag: &str) -> Liberty {
         let wrapped = format!("library (test) {{\n{frag}}}\n");
         liberty_parse::parse_lib(&wrapped).expect("emitted Liberty must parse")
+    }
+
+    /// Locate a cell group by name in a parsed library.
+    fn find_cell<'a>(lib: &'a Liberty, name: &str) -> &'a Group {
+        lib.iter()
+            .flat_map(|g| g.subgroups.iter())
+            .find(|g| g.type_ == "cell" && g.name == name)
+            .unwrap_or_else(|| panic!("{name} cell present"))
+    }
+
+    /// Locate a pin group by name inside a cell group.
+    fn find_pin<'a>(cellg: &'a Group, name: &str) -> &'a Group {
+        cellg
+            .subgroups
+            .iter()
+            .find(|g| g.type_ == "pin" && g.name == name)
+            .unwrap_or_else(|| panic!("{name} pin present"))
+    }
+
+    /// The string value of a pin's simple `String` attribute, if present.
+    fn attr_string(pin: &Group, name: &str) -> Option<String> {
+        match pin.attributes.get(name)?.first()? {
+            Attribute::Simple(Value::String(s)) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
+    /// The keyword value of a pin's simple `Expression` attribute (e.g. `direction : internal`).
+    fn attr_expr(pin: &Group, name: &str) -> Option<String> {
+        match pin.attributes.get(name)?.first()? {
+            Attribute::Simple(Value::Expression(s)) => Some(s.clone()),
+            _ => None,
+        }
     }
 
     #[test]
@@ -534,5 +582,121 @@ Y = "!A"
                 .collect()
         };
         assert_eq!(pins(invx1), pins(invx2));
+    }
+
+    #[test]
+    fn mixed_cell_classifies_each_output_independently() {
+        // Internal latch L self-holds (a state node); output Y = C*L is state-dependent; output
+        // Z = A*B is combinational over primary inputs only — even inside a sequential cell.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "MIX"
+inputs = ["A", "B", "C", "D"]
+[cell.internal]
+L = "!C*D + C*L"
+[cell.outputs]
+Y = "C*L"
+Z = "A*B"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        let lib = parse_frag(&frag);
+        let cellg = find_cell(&lib, "MIX");
+
+        // Z is combinational over inputs only: plain `function`, exactly `A*B`, nothing sequential.
+        let z = find_pin(cellg, "Z");
+        assert_eq!(attr_string(z, "function").as_deref(), Some("A*B"));
+        assert!(!z.attributes.contains_key("state_function"));
+        assert!(!z.attributes.contains_key("internal_node"));
+
+        // Y depends on the state node L: `state_function`, never a plain function nor its own node.
+        let y = find_pin(cellg, "Y");
+        assert!(y.attributes.contains_key("state_function"));
+        assert!(!y.attributes.contains_key("function"));
+        assert!(!y.attributes.contains_key("internal_node"));
+
+        // L is the genuine internal state node.
+        let l = find_pin(cellg, "L");
+        assert_eq!(attr_expr(l, "direction").as_deref(), Some("internal"));
+        assert_eq!(attr_string(l, "internal_node").as_deref(), Some("L"));
+
+        // Exactly one statetable group in the cell.
+        assert_eq!(
+            cellg
+                .subgroups
+                .iter()
+                .filter(|g| g.type_ == "statetable")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn transitive_state_dependence_survives_fold() {
+        // Internal latch L self-holds; internal relay W = C*L merely feeds Z2 = W + E. minimise folds
+        // the relay W into its consumer Z2 (model.rs:163-165, minimise.rs:456-474), so Z2's cols
+        // contain the state node L directly — the transitive case collapses to the direct predicate.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "TRW"
+inputs = ["C", "D", "E"]
+[cell.internal]
+L = "!C*D + C*L"
+W = "C*L"
+[cell.outputs]
+Z2 = "W + E"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        let lib = parse_frag(&frag);
+        let cellg = find_cell(&lib, "TRW");
+
+        // Key check only (deterministic, independent of Espresso SOP ordering): Z2 is state-dependent.
+        let z2 = find_pin(cellg, "Z2");
+        assert!(z2.attributes.contains_key("state_function"));
+        assert!(!z2.attributes.contains_key("function"));
+    }
+
+    #[test]
+    fn projection_outputs_render_bare_state_literals() {
+        // C-element output Q self-holds (a state node); projection outputs Qc = Q and Qn = !Q are
+        // aliases of that single node. Outputs are never purged (model.rs:417), so both survive.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "C2P"
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+Qc = "Q"
+Qn = "!Q"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        let lib = parse_frag(&frag);
+        let cellg = find_cell(&lib, "C2P");
+
+        // Q IS a state variable — output_pin branch A binds its own node, no function/state_function.
+        let q = find_pin(cellg, "Q");
+        assert_eq!(attr_string(q, "internal_node").as_deref(), Some("Q"));
+        assert!(!q.attributes.contains_key("function"));
+        assert!(!q.attributes.contains_key("state_function"));
+
+        // Qc is a bare feedthrough of the state node: state_function exactly `Q`.
+        let qc = find_pin(cellg, "Qc");
+        assert_eq!(attr_string(qc, "state_function").as_deref(), Some("Q"));
+        assert!(!qc.attributes.contains_key("function"));
+        assert!(!qc.attributes.contains_key("internal_node"));
+
+        // Qn is the negated feedthrough: state_function exactly `!Q`.
+        let qn = find_pin(cellg, "Qn");
+        assert_eq!(attr_string(qn, "state_function").as_deref(), Some("!Q"));
+        assert!(!qn.attributes.contains_key("function"));
+        assert!(!qn.attributes.contains_key("internal_node"));
     }
 }
