@@ -51,7 +51,7 @@ struct Cli {
     #[arg(long)]
     constraints: bool,
 
-    /// Suppress the master-slave latch → edge-register collapse (on by default); a cell can opt out
+    /// Suppress the behavioural edge-register annotation (on by default); a cell can opt out
     /// individually with `no_edge_collapse = true`.
     #[arg(long)]
     no_edge_collapse: bool,
