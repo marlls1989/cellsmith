@@ -154,8 +154,9 @@ Q = "CLK*M + !CLK*Q"           # the slave references the internal master; CLKâ†
 ```
 
 `M` and `Q` are an opposite-phase latch pair on the declared clock `CLK`, so by default cellsmith
-recognises them, after exploration, as a single rising-edge register on `Q`: `M` is elided from every
-emitted artifact (no UDP, no `statetable` row, no internal-power arc), `Q`'s capture is re-expressed
+recognises them, after exploration, as a single rising-edge register on `Q`: `M`'s pin, UDP, and
+`statetable` row are elided from every emitted artifact, while its internal-power characterisation
+(carried by its primary-input hidden arcs) is unchanged; `Q`'s capture is re-expressed
 combinationally in terms of `D`, and its Liberate arc carries `-type edge`. Setting
 `no_edge_collapse = true` (or passing `--no-edge-collapse`) keeps the two-latch form written above
 exactly as it stands, with `M` staying a separate internal node and `Q`'s arcs discovered by prevector

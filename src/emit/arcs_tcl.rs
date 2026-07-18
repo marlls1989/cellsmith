@@ -221,23 +221,41 @@ fn collapse_hidden(arcs: &[HiddenArc]) -> Vec<HiddenArc> {
 }
 
 /// Lookup from a register node (an `edge_registers` entry's `node`) to the declared clock it's keyed
-/// off. A delay arc whose output is one of these nodes and whose `-related_pin` is that clock is the
-/// register's clock-to-output arc — `format_arc` re-labels it `-type edge` (a Liberate edge-register
-/// delay arc) instead of `-type combinational`.
-fn edge_register_clocks(cell: &AnalysedCell) -> std::collections::BTreeMap<Symbol, Symbol> {
+/// off and the register's capturing edge. A delay arc whose output is one of these nodes, whose
+/// `-related_pin` is that clock, and whose own edge matches the register's capturing edge is the
+/// register's clock-to-output edge arc — `format_arc` re-labels it `-type edge` (a Liberate
+/// edge-register delay arc) instead of `-type combinational`. An arc on the opposite (non-capturing)
+/// clock edge is level/latch behaviour and stays `-type combinational`.
+fn edge_register_clocks(cell: &AnalysedCell) -> std::collections::BTreeMap<Symbol, (Symbol, Edge)> {
     cell.edge_registers
         .iter()
-        .map(|r| (r.node.clone(), r.clock.clone()))
+        .map(|r| (r.node.clone(), (r.clock.clone(), r.edge)))
         .collect()
+}
+
+/// The edge the arc's `related` clock pin makes, read from its value in the end state — the same
+/// derivation the vector uses to render its `R`/`F`. `Rise` when the clock settles high, `Fall` when it
+/// settles low. Used to gate `-type edge`: only the clock-to-output arc on the register's *capturing*
+/// clock edge is the sequential edge arc; an arc on the opposite (non-capturing) clock edge is
+/// level/latch behaviour and stays `-type combinational`.
+fn related_edge(arc: &Arc) -> Edge {
+    if *assignment(&arc.end).get(&arc.related).unwrap_or(&false) {
+        Edge::Rise
+    } else {
+        Edge::Fall
+    }
 }
 
 fn format_arc(
     cell: &AnalysedCell,
     arc: &Arc,
     opts: ArcsTclOptions,
-    edge_clocks: &std::collections::BTreeMap<Symbol, Symbol>,
+    edge_clocks: &std::collections::BTreeMap<Symbol, (Symbol, Edge)>,
 ) -> String {
-    let is_edge = !arc.is_async && edge_clocks.get(&arc.output) == Some(&arc.related);
+    let is_edge = !arc.is_async
+        && edge_clocks
+            .get(&arc.output)
+            .is_some_and(|(clock, edge)| arc.related == *clock && related_edge(arc) == *edge);
     let type_line = format!(
         "\t-type {} \\\n",
         if arc.is_async {
@@ -787,14 +805,37 @@ Q = "CLK*M + !CLK*Q"
 "#,
         );
         assert!(!cell.edge_registers.is_empty());
+        // The recognised register captures on the rising clock seam (transparent-high slave).
+        assert!(cell.edge_registers.iter().all(|r| r.edge == Edge::Rise));
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
         assert!(tcl.matches("-type edge").count() >= 1);
-        // Every CLK-related, Q-pinned delay arc is `-type edge`, never `-type combinational`.
+        // A CLK-related, Q-pinned delay arc is `-type edge` only on the register's *capturing* clock
+        // edge (CLK rising here). An arc on the opposite (falling) clock edge is level behaviour and
+        // must stay `-type combinational`. The vector renders CLK first (pinlist {CLK D Q}): `R` is the
+        // capturing edge, `F` the non-capturing one.
         for frag in tcl.split("define_arc") {
-            if frag.contains("-pin Q") && frag.contains("-related_pin CLK") {
-                assert!(frag.contains("-type edge"));
+            if !(frag.contains("-pin Q") && frag.contains("-related_pin CLK")) {
+                continue;
+            }
+            let clk_field = frag
+                .lines()
+                .find(|l| l.contains("-vector"))
+                .and_then(|l| l.split('{').nth(1))
+                .and_then(|v| v.split_whitespace().next())
+                .expect("delay arc renders a CLK vector field");
+            if clk_field == "R" {
+                assert!(
+                    frag.contains("-type edge"),
+                    "capturing-edge CLK->Q arc: {frag}"
+                );
                 assert!(!frag.contains("-type combinational"));
+            } else {
+                assert!(
+                    frag.contains("-type combinational"),
+                    "opposite-edge CLK->Q arc must stay combinational: {frag}"
+                );
+                assert!(!frag.contains("-type edge"));
             }
         }
         // The D-related hidden arc(s) are untouched: still `-type hidden`, never `-type edge`.
@@ -836,6 +877,29 @@ GCLK = "enA*CLKA+enB*CLKB"
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
         assert_eq!(tcl.matches("-type edge").count(), 0);
+    }
+
+    /// A lone level-sensitive latch whose ENABLE is a declared clock, driving an output node. A single
+    /// latch is not a master-slave pair, so nothing collapses (no edge registers) and its level
+    /// enable->output arcs stay `-type combinational` — never `-type edge` — even though the enable is a
+    /// declared clock. The sharpest guard that a latch/level arc is never mischaracterised as an edge arc.
+    #[test]
+    fn latch_with_declared_clock_enable_emits_zero_edge_type_arcs() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DLAT"
+inputs = ["EN", "D"]
+clock = ["EN"]
+[cell.outputs]
+Q = "EN*D + !EN*Q"
+"#,
+        );
+        assert!(cell.edge_registers.is_empty());
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        assert_eq!(tcl.matches("-type edge").count(), 0);
+        assert!(tcl.contains("-pin Q"));
     }
 
     #[test]
