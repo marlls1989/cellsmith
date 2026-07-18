@@ -82,10 +82,10 @@ define_arc \
 	-pin B \
 	{ AND2 }
 
-define_leakage -when "!A*!B*!Y" AND2
-define_leakage -when "!A*B*!Y" AND2
-define_leakage -when "A*!B*!Y" AND2
-define_leakage -when "A*B*Y" AND2
+define_leakage -when "!A*!B*!Y" { AND2 }
+define_leakage -when "!A*B*!Y" { AND2 }
+define_leakage -when "A*!B*!Y" { AND2 }
+define_leakage -when "A*B*Y" { AND2 }
 define_arc \
 	-prevector_pinlist {A B} \
 	-prevector {11 10} \
@@ -210,8 +210,8 @@ define_arc \
 	-pin B \
 	{ C2 }
 
-define_leakage -when "!A*!B*!Q" C2
-define_leakage -when "A*B*Q" C2
+define_leakage -when "!A*!B*!Q" { C2 }
+define_leakage -when "A*B*Q" { C2 }
 define_arc \
 	-prevector_pinlist {A B R} \
 	-prevector {110 100} \
@@ -520,12 +520,12 @@ define_arc \
 	-pin R \
 	{ RCELEM2 }
 
-define_leakage -when "!A*!B*!Q*!R" RCELEM2
-define_leakage -when "!A*!B*!Q*R" RCELEM2
-define_leakage -when "!A*B*!Q*R" RCELEM2
-define_leakage -when "A*!B*!Q*R" RCELEM2
-define_leakage -when "A*B*Q*!R" RCELEM2
-define_leakage -when "A*B*!Q*R" RCELEM2
+define_leakage -when "!A*!B*!Q*!R" { RCELEM2 }
+define_leakage -when "!A*!B*!Q*R" { RCELEM2 }
+define_leakage -when "!A*B*!Q*R" { RCELEM2 }
+define_leakage -when "A*!B*!Q*R" { RCELEM2 }
+define_leakage -when "A*B*Q*!R" { RCELEM2 }
+define_leakage -when "A*B*!Q*R" { RCELEM2 }
 define_arc \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
 	-prevector {001110 000110 000010} \
@@ -5862,46 +5862,46 @@ define_arc \
 	-pin R \
 	{ RACELEM21 }
 
-define_leakage -when "!C*!M1*!M2*!P1*!P2*!Q*!R" RACELEM21
-define_leakage -when "!C*!M1*!M2*!P1*!P2*!Q*R" RACELEM21
-define_leakage -when "!C*!M1*!M2*!P1*P2*!Q*!R" RACELEM21
-define_leakage -when "!C*!M1*!M2*!P1*P2*!Q*R" RACELEM21
-define_leakage -when "!C*!M1*!M2*P1*!P2*!Q*!R" RACELEM21
-define_leakage -when "!C*!M1*!M2*P1*!P2*!Q*R" RACELEM21
-define_leakage -when "!C*!M1*!M2*P1*P2*!Q*!R" RACELEM21
-define_leakage -when "!C*!M1*!M2*P1*P2*!Q*R" RACELEM21
-define_leakage -when "!C*!M1*M2*!P1*!P2*!Q*R" RACELEM21
-define_leakage -when "!C*!M1*M2*!P1*P2*!Q*R" RACELEM21
-define_leakage -when "!C*!M1*M2*P1*!P2*!Q*R" RACELEM21
-define_leakage -when "!C*!M1*M2*P1*P2*!Q*R" RACELEM21
-define_leakage -when "!C*M1*!M2*!P1*!P2*!Q*R" RACELEM21
-define_leakage -when "!C*M1*!M2*!P1*P2*!Q*R" RACELEM21
-define_leakage -when "!C*M1*!M2*P1*!P2*!Q*R" RACELEM21
-define_leakage -when "!C*M1*!M2*P1*P2*!Q*R" RACELEM21
-define_leakage -when "!C*M1*M2*!P1*!P2*!Q*R" RACELEM21
-define_leakage -when "!C*M1*M2*!P1*P2*!Q*R" RACELEM21
-define_leakage -when "!C*M1*M2*P1*!P2*!Q*R" RACELEM21
-define_leakage -when "!C*M1*M2*P1*P2*!Q*R" RACELEM21
-define_leakage -when "C*!M1*!M2*!P1*!P2*!Q*R" RACELEM21
-define_leakage -when "C*!M1*!M2*!P1*P2*!Q*R" RACELEM21
-define_leakage -when "C*!M1*!M2*P1*!P2*!Q*R" RACELEM21
-define_leakage -when "C*!M1*!M2*P1*P2*Q*!R" RACELEM21
-define_leakage -when "C*!M1*!M2*P1*P2*!Q*R" RACELEM21
-define_leakage -when "C*!M1*M2*!P1*!P2*!Q*R" RACELEM21
-define_leakage -when "C*!M1*M2*!P1*P2*!Q*R" RACELEM21
-define_leakage -when "C*!M1*M2*P1*!P2*!Q*R" RACELEM21
-define_leakage -when "C*!M1*M2*P1*P2*Q*!R" RACELEM21
-define_leakage -when "C*!M1*M2*P1*P2*!Q*R" RACELEM21
-define_leakage -when "C*M1*!M2*!P1*!P2*!Q*R" RACELEM21
-define_leakage -when "C*M1*!M2*!P1*P2*!Q*R" RACELEM21
-define_leakage -when "C*M1*!M2*P1*!P2*!Q*R" RACELEM21
-define_leakage -when "C*M1*!M2*P1*P2*Q*!R" RACELEM21
-define_leakage -when "C*M1*!M2*P1*P2*!Q*R" RACELEM21
-define_leakage -when "C*M1*M2*!P1*!P2*!Q*R" RACELEM21
-define_leakage -when "C*M1*M2*!P1*P2*!Q*R" RACELEM21
-define_leakage -when "C*M1*M2*P1*!P2*!Q*R" RACELEM21
-define_leakage -when "C*M1*M2*P1*P2*Q*!R" RACELEM21
-define_leakage -when "C*M1*M2*P1*P2*!Q*R" RACELEM21
+define_leakage -when "!C*!M1*!M2*!P1*!P2*!Q*!R" { RACELEM21 }
+define_leakage -when "!C*!M1*!M2*!P1*!P2*!Q*R" { RACELEM21 }
+define_leakage -when "!C*!M1*!M2*!P1*P2*!Q*!R" { RACELEM21 }
+define_leakage -when "!C*!M1*!M2*!P1*P2*!Q*R" { RACELEM21 }
+define_leakage -when "!C*!M1*!M2*P1*!P2*!Q*!R" { RACELEM21 }
+define_leakage -when "!C*!M1*!M2*P1*!P2*!Q*R" { RACELEM21 }
+define_leakage -when "!C*!M1*!M2*P1*P2*!Q*!R" { RACELEM21 }
+define_leakage -when "!C*!M1*!M2*P1*P2*!Q*R" { RACELEM21 }
+define_leakage -when "!C*!M1*M2*!P1*!P2*!Q*R" { RACELEM21 }
+define_leakage -when "!C*!M1*M2*!P1*P2*!Q*R" { RACELEM21 }
+define_leakage -when "!C*!M1*M2*P1*!P2*!Q*R" { RACELEM21 }
+define_leakage -when "!C*!M1*M2*P1*P2*!Q*R" { RACELEM21 }
+define_leakage -when "!C*M1*!M2*!P1*!P2*!Q*R" { RACELEM21 }
+define_leakage -when "!C*M1*!M2*!P1*P2*!Q*R" { RACELEM21 }
+define_leakage -when "!C*M1*!M2*P1*!P2*!Q*R" { RACELEM21 }
+define_leakage -when "!C*M1*!M2*P1*P2*!Q*R" { RACELEM21 }
+define_leakage -when "!C*M1*M2*!P1*!P2*!Q*R" { RACELEM21 }
+define_leakage -when "!C*M1*M2*!P1*P2*!Q*R" { RACELEM21 }
+define_leakage -when "!C*M1*M2*P1*!P2*!Q*R" { RACELEM21 }
+define_leakage -when "!C*M1*M2*P1*P2*!Q*R" { RACELEM21 }
+define_leakage -when "C*!M1*!M2*!P1*!P2*!Q*R" { RACELEM21 }
+define_leakage -when "C*!M1*!M2*!P1*P2*!Q*R" { RACELEM21 }
+define_leakage -when "C*!M1*!M2*P1*!P2*!Q*R" { RACELEM21 }
+define_leakage -when "C*!M1*!M2*P1*P2*Q*!R" { RACELEM21 }
+define_leakage -when "C*!M1*!M2*P1*P2*!Q*R" { RACELEM21 }
+define_leakage -when "C*!M1*M2*!P1*!P2*!Q*R" { RACELEM21 }
+define_leakage -when "C*!M1*M2*!P1*P2*!Q*R" { RACELEM21 }
+define_leakage -when "C*!M1*M2*P1*!P2*!Q*R" { RACELEM21 }
+define_leakage -when "C*!M1*M2*P1*P2*Q*!R" { RACELEM21 }
+define_leakage -when "C*!M1*M2*P1*P2*!Q*R" { RACELEM21 }
+define_leakage -when "C*M1*!M2*!P1*!P2*!Q*R" { RACELEM21 }
+define_leakage -when "C*M1*!M2*!P1*P2*!Q*R" { RACELEM21 }
+define_leakage -when "C*M1*!M2*P1*!P2*!Q*R" { RACELEM21 }
+define_leakage -when "C*M1*!M2*P1*P2*Q*!R" { RACELEM21 }
+define_leakage -when "C*M1*!M2*P1*P2*!Q*R" { RACELEM21 }
+define_leakage -when "C*M1*M2*!P1*!P2*!Q*R" { RACELEM21 }
+define_leakage -when "C*M1*M2*!P1*P2*!Q*R" { RACELEM21 }
+define_leakage -when "C*M1*M2*P1*!P2*!Q*R" { RACELEM21 }
+define_leakage -when "C*M1*M2*P1*P2*Q*!R" { RACELEM21 }
+define_leakage -when "C*M1*M2*P1*P2*!Q*R" { RACELEM21 }
 # oscillation: !S*!R risks metastability in {Q, Qn}, settling to one of {Q=0, Qn=1} | {Q=1, Qn=0}
 define_arc \
 	-prevector_pinlist {S R} \
@@ -6031,9 +6031,9 @@ define_arc \
 	-pin S \
 	{ SR }
 
-define_leakage -when "Q*!Qn*!R*S" SR
-define_leakage -when "!Q*Qn*R*!S" SR
-define_leakage -when "!Q*!Qn*R*S" SR
+define_leakage -when "Q*!Qn*!R*S" { SR }
+define_leakage -when "!Q*Qn*R*!S" { SR }
+define_leakage -when "!Q*!Qn*R*S" { SR }
 # oscillation: A*B risks metastability in {Qa, Qb}, settling to one of {Qa=0, Qb=1} | {Qa=1, Qb=0}
 define_arc \
 	-prevector_pinlist {A B} \
@@ -6163,9 +6163,9 @@ define_arc \
 	-pin B \
 	{ MUT }
 
-define_leakage -when "!A*!B*!Qa*!Qb" MUT
-define_leakage -when "!A*B*!Qa*Qb" MUT
-define_leakage -when "A*!B*Qa*!Qb" MUT
+define_leakage -when "!A*!B*!Qa*!Qb" { MUT }
+define_leakage -when "!A*B*!Qa*Qb" { MUT }
+define_leakage -when "A*!B*Qa*!Qb" { MUT }
 define_arc \
 	-prevector_pinlist {CLK D} \
 	-prevector {01 11 01 00} \
@@ -6328,8 +6328,8 @@ define_arc \
 	-pin D \
 	{ DFF }
 
-define_leakage -when "!CLK*!D" DFF
-define_leakage -when "!CLK*D" DFF
+define_leakage -when "!CLK*!D" { DFF }
+define_leakage -when "!CLK*D" { DFF }
 define_arc \
 	-type setup \
 	-prevector_pinlist {CLK D} \
@@ -8958,34 +8958,34 @@ define_arc \
 	-pin S \
 	{ ICM }
 
-define_leakage -when "!CLKA*!CLKB*!GCLK*!RA*!RB*!S" ICM
-define_leakage -when "!CLKA*!CLKB*!GCLK*!RA*!RB*S" ICM
-define_leakage -when "!CLKA*!CLKB*!GCLK*!RA*RB*!S" ICM
-define_leakage -when "!CLKA*!CLKB*!GCLK*!RA*RB*S" ICM
-define_leakage -when "!CLKA*!CLKB*!GCLK*RA*!RB*!S" ICM
-define_leakage -when "!CLKA*!CLKB*!GCLK*RA*!RB*S" ICM
-define_leakage -when "!CLKA*!CLKB*!GCLK*RA*RB*!S" ICM
-define_leakage -when "!CLKA*!CLKB*!GCLK*RA*RB*S" ICM
-define_leakage -when "!CLKA*CLKB*!RA*!RB*S" ICM
-define_leakage -when "!CLKA*CLKB*!GCLK*!RA*RB*!S" ICM
-define_leakage -when "!CLKA*CLKB*!GCLK*!RA*RB*S" ICM
-define_leakage -when "!CLKA*CLKB*RA*!RB*!S" ICM
-define_leakage -when "!CLKA*CLKB*RA*!RB*S" ICM
-define_leakage -when "!CLKA*CLKB*!GCLK*RA*RB*!S" ICM
-define_leakage -when "!CLKA*CLKB*!GCLK*RA*RB*S" ICM
-define_leakage -when "CLKA*!CLKB*!RA*!RB*!S" ICM
-define_leakage -when "CLKA*!CLKB*!RA*RB*!S" ICM
-define_leakage -when "CLKA*!CLKB*!RA*RB*S" ICM
-define_leakage -when "CLKA*!CLKB*!GCLK*RA*!RB*!S" ICM
-define_leakage -when "CLKA*!CLKB*!GCLK*RA*!RB*S" ICM
-define_leakage -when "CLKA*!CLKB*!GCLK*RA*RB*!S" ICM
-define_leakage -when "CLKA*!CLKB*!GCLK*RA*RB*S" ICM
-define_leakage -when "CLKA*CLKB*!RA*RB*!S" ICM
-define_leakage -when "CLKA*CLKB*!RA*RB*S" ICM
-define_leakage -when "CLKA*CLKB*RA*!RB*!S" ICM
-define_leakage -when "CLKA*CLKB*RA*!RB*S" ICM
-define_leakage -when "CLKA*CLKB*!GCLK*RA*RB*!S" ICM
-define_leakage -when "CLKA*CLKB*!GCLK*RA*RB*S" ICM
+define_leakage -when "!CLKA*!CLKB*!GCLK*!RA*!RB*!S" { ICM }
+define_leakage -when "!CLKA*!CLKB*!GCLK*!RA*!RB*S" { ICM }
+define_leakage -when "!CLKA*!CLKB*!GCLK*!RA*RB*!S" { ICM }
+define_leakage -when "!CLKA*!CLKB*!GCLK*!RA*RB*S" { ICM }
+define_leakage -when "!CLKA*!CLKB*!GCLK*RA*!RB*!S" { ICM }
+define_leakage -when "!CLKA*!CLKB*!GCLK*RA*!RB*S" { ICM }
+define_leakage -when "!CLKA*!CLKB*!GCLK*RA*RB*!S" { ICM }
+define_leakage -when "!CLKA*!CLKB*!GCLK*RA*RB*S" { ICM }
+define_leakage -when "!CLKA*CLKB*!RA*!RB*S" { ICM }
+define_leakage -when "!CLKA*CLKB*!GCLK*!RA*RB*!S" { ICM }
+define_leakage -when "!CLKA*CLKB*!GCLK*!RA*RB*S" { ICM }
+define_leakage -when "!CLKA*CLKB*RA*!RB*!S" { ICM }
+define_leakage -when "!CLKA*CLKB*RA*!RB*S" { ICM }
+define_leakage -when "!CLKA*CLKB*!GCLK*RA*RB*!S" { ICM }
+define_leakage -when "!CLKA*CLKB*!GCLK*RA*RB*S" { ICM }
+define_leakage -when "CLKA*!CLKB*!RA*!RB*!S" { ICM }
+define_leakage -when "CLKA*!CLKB*!RA*RB*!S" { ICM }
+define_leakage -when "CLKA*!CLKB*!RA*RB*S" { ICM }
+define_leakage -when "CLKA*!CLKB*!GCLK*RA*!RB*!S" { ICM }
+define_leakage -when "CLKA*!CLKB*!GCLK*RA*!RB*S" { ICM }
+define_leakage -when "CLKA*!CLKB*!GCLK*RA*RB*!S" { ICM }
+define_leakage -when "CLKA*!CLKB*!GCLK*RA*RB*S" { ICM }
+define_leakage -when "CLKA*CLKB*!RA*RB*!S" { ICM }
+define_leakage -when "CLKA*CLKB*!RA*RB*S" { ICM }
+define_leakage -when "CLKA*CLKB*RA*!RB*!S" { ICM }
+define_leakage -when "CLKA*CLKB*RA*!RB*S" { ICM }
+define_leakage -when "CLKA*CLKB*!GCLK*RA*RB*!S" { ICM }
+define_leakage -when "CLKA*CLKB*!GCLK*RA*RB*S" { ICM }
 define_arc \
 	-prevector_pinlist {A B} \
 	-prevector {11 10} \
@@ -9110,5 +9110,5 @@ define_arc \
 	-pin B \
 	{ C2GATE }
 
-define_leakage -when "!A*!B*!Q" C2GATE
-define_leakage -when "A*B*Q" C2GATE
+define_leakage -when "!A*!B*!Q" { C2GATE }
+define_leakage -when "A*B*Q" { C2GATE }
