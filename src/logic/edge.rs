@@ -25,9 +25,12 @@
 //! * **level** — some *data* input is transparent to the node in one clock phase but not the other (the
 //!   node follows an input during a phase). A level node emits its ordinary hysteretic regions and takes
 //!   no annotation; an internal level node is a foldable master.
-//! * **register** — exactly one declared clock's edge(s) change the node, and no data input is
-//!   transparent to it. The node captures a next-state value at each active edge and holds otherwise.
-//! * **none** — combinational, or changed by two or more distinct clocks: no annotation.
+//! * **register** — a declared clock's edge(s) change the node and the node's stable value is
+//!   independent of that clock's LEVEL (its exact off-edge synthesises cleanly — off-edge phase
+//!   agreement — so no data input is transparent to it). The node captures a next-state value at each
+//!   active edge and holds otherwise. A node combinational in a clock's level is never a register on
+//!   that clock, whatever the clock count.
+//! * **none** — combinational: no annotation.
 //!
 //! The capture (per active edge) and the off-edge (hold + async set/clear) functions are synthesised
 //! from the sampled pre-states and stable states over a deterministic two-tier header, reusing the
@@ -246,6 +249,10 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Ed
     let mut registers: Vec<EdgeRegister> = Vec::new();
     // Internal level nodes pulled back into a tier-2 header survive (become unfoldable).
     let mut tier2_kept: BTreeSet<Symbol> = BTreeSet::new();
+    // Candidates that actually landed in `registers` (synth_register succeeded). A `Class::Register`
+    // candidate whose synthesis returned `None` has no edge annotation, so its RAW function is still
+    // emitted and it must be treated as a surviving raw-function emitter, not a register.
+    let mut actually_registered: BTreeSet<Symbol> = BTreeSet::new();
 
     for (i, class) in classes.iter().enumerate() {
         let Class::Register { clock, rise, fall } = class else {
@@ -274,6 +281,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Ed
                 tier2_kept.extend(internal_level.iter().cloned());
             }
             let cols = register_cols(&captures, &off_edge);
+            actually_registered.insert(name.clone());
             registers.push(EdgeRegister {
                 node: name.clone(),
                 clock: clock.clone(),
@@ -297,16 +305,17 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Ed
     for (n, d) in &m.out_deltas {
         fn_of.insert(n.as_str(), d);
     }
-    // Every surviving signal whose RAW function is still emitted — level nodes AND `Class::None`
-    // hysteretic survivors (combinational or ≥2-clock nodes, whose region cols come straight from their
-    // function support). Register nodes are excluded: their raw function is replaced by the edge seam, so
-    // their cols are already accounted for via `ref_reg`. A folded master must not be referenced by any of
-    // these, or the survivor's cols would name a dropped node (statetable invariant I3).
+    // Every surviving signal whose RAW function is still emitted — level nodes, `Class::None` hysteretic
+    // survivors (combinational or ≥2-clock nodes, whose region cols come straight from their function
+    // support), AND `Class::Register` candidates whose synthesis failed (no edge annotation, so the raw
+    // function is emitted as a fallback). Only candidates that actually landed in `registers` are excluded:
+    // their raw function is replaced by the edge seam, so their cols are already accounted for via
+    // `ref_reg`. A folded master must not be referenced by ANY node whose raw function is emitted,
+    // including registration fallbacks, or the survivor's cols would name a dropped node (statetable
+    // invariant I3).
     let survivor_names: Vec<&Symbol> = candidates
         .iter()
-        .zip(&classes)
-        .filter(|(_, c)| !matches!(c, Class::Register { .. }))
-        .map(|(n, _)| n)
+        .filter(|n| !actually_registered.contains(*n))
         .collect();
 
     let folded: Vec<Symbol> = candidates
@@ -336,8 +345,12 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Ed
     EdgeSensitivity { registers, folded }
 }
 
-/// Classify one candidate from its aggregated observations. The phase-symmetric permit/block decision
-/// consults the EXACT off-edge synthesis, so the shared `builder` and the cell `inputs` are threaded in.
+/// Classify one candidate from its aggregated observations. The discriminator is level-vs-edge: a
+/// register's stable value is independent of its clock's LEVEL — its exact off-edge synthesises cleanly
+/// (off-edge phase agreement) — whereas a node that is combinational in a clock's level (or transparent
+/// to a data input) is never a register on that clock, regardless of how many clocks change it. The
+/// phase-symmetric permit/block decision and the per-clock viability both consult the EXACT off-edge
+/// synthesis, so the shared `builder` and the cell `inputs` are threaded in.
 fn classify_one<B: Brand, C: ManagerCell>(
     builder: &BddBuilder<B, C>,
     inputs: &[Symbol],
@@ -390,23 +403,56 @@ fn classify_one<B: Brand, C: ManagerCell>(
     if level {
         return Class::Level;
     }
-    // A register keys off exactly one clock; two or more distinct clocks ⇒ no annotation.
-    if agg.changed_clocks.len() != 1 {
-        return Class::None;
+    // Per-clock viability, reusing the level check's lazily-filled off-edge cache. A changed clock `k` is
+    // a viable register key iff its EXACT off-edge synthesises cleanly (off-edge phase AGREEMENT ⇒ the
+    // node's stable value is independent of `k`'s level, not combinational in it) AND every OTHER changed
+    // clock `j` is a level forcer carried by `k`'s off-edge (`j` appears in `off_edge.cols`). A node that
+    // is combinational in `k`'s level yields no clean off-edge (phase disagreement) and is never a
+    // register on `k`, whatever the clock count.
+    let viable: Vec<Symbol> = agg
+        .changed_clocks
+        .iter()
+        .filter(|k| {
+            let off = off_edge_cache.entry((*k).clone()).or_insert_with(|| {
+                let header_off: Vec<Symbol> = inputs
+                    .iter()
+                    .filter(|p| p.as_str() != k.as_str())
+                    .cloned()
+                    .collect();
+                synth_off_edge(builder, &header_off, k, &agg.stable)
+            });
+            match off {
+                Some(sr) => agg
+                    .changed_clocks
+                    .iter()
+                    .filter(|j| j.as_str() != k.as_str())
+                    .all(|j| sr.cols.iter().any(|c| c == j)),
+                None => false,
+            }
+        })
+        .cloned()
+        .collect();
+
+    match viable.len() {
+        1 => {
+            let clock = viable.into_iter().next().unwrap();
+            let rise = agg
+                .captures
+                .get(&(clock.clone(), true))
+                .is_some_and(|c| c.changed);
+            let fall = agg
+                .captures
+                .get(&(clock.clone(), false))
+                .is_some_and(|c| c.changed);
+            if !rise && !fall {
+                return Class::None;
+            }
+            Class::Register { clock, rise, fall }
+        }
+        0 => Class::None,
+        // TODO(scope-a wave 3): recognise multi-clock via the joint phase-vector off-edge
+        _ => Class::None,
     }
-    let clock = agg.changed_clocks.iter().next().unwrap().clone();
-    let rise = agg
-        .captures
-        .get(&(clock.clone(), true))
-        .is_some_and(|c| c.changed);
-    let fall = agg
-        .captures
-        .get(&(clock.clone(), false))
-        .is_some_and(|c| c.changed);
-    if !rise && !fall {
-        return Class::None;
-    }
-    Class::Register { clock, rise, fall }
 }
 
 /// Synthesise a register's captures and off-edge for a candidate, escalating tier-1 → tier-2 on a
@@ -1288,6 +1334,89 @@ Q = "!(R*G)*(CLK*M + !CLK*Q)"
                 );
             });
         }
+    }
+
+    // === Wave 1 batch 3: multi-clock-shaped fixtures for the per-clock viability discriminator ===
+
+    const RDFF_TOML: &str = r#"
+[[cell]]
+name = "RDFF"
+inputs = ["CLK", "D", "R"]
+clock = ["CLK", "R"]
+[cell.internal]
+M = "!R*(!CLK*D + CLK*M)"
+[cell.outputs]
+Q = "!R*(CLK*M + !CLK*Q)"
+"#;
+
+    #[test]
+    fn edge_rdff_recognised_despite_two_declared_clocks() {
+        // R is declared a clock alongside CLK, but only CLK's off-edge synthesises cleanly (R's own
+        // off-edge disagrees phase-wise) ⇒ Q is a Rise register keyed on CLK, R landing as its async clear.
+        with_machine!(RDFF_TOML, |builder, _a, _m2, m| {
+            let es = classify(&m);
+            let q = reg(&es, "Q");
+            assert_eq!(q.clock, "CLK");
+            assert_eq!(q.captures[0].0, Edge::Rise);
+            let off = builder.build_cover(&q.off_edge.off_cover);
+            let r = builder.var("R");
+            assert!(off.equivalent_to(&r), "off_edge.off must cover R");
+            let cols = q.cols.iter().map(Symbol::as_str).collect::<Vec<_>>();
+            for c in ["D", "R"] {
+                assert!(cols.contains(&c), "col {c} missing from {cols:?}");
+            }
+        });
+    }
+
+    const ICG_TOML: &str = r#"
+[[cell]]
+name = "ICG"
+inputs = ["CLK", "EN"]
+clock = ["CLK"]
+[cell.internal]
+EL = "!CLK*EN + CLK*EL"
+[cell.outputs]
+GCLK = "CLK*EL"
+"#;
+
+    #[test]
+    fn edge_icg_gclk_blocked_el_survives_as_level() {
+        // GCLK is combinational in EL, which is itself held (memory) across CLK's high phase ⇒ GCLK's
+        // off-edge synthesis hits a phase disagreement and is blocked — NOT by a declared-clock-count gate.
+        // EL is the classic transparent latch (level, phase-asymmetric to EN) and survives unfolded because
+        // GCLK's raw function still references it.
+        with_machine!(ICG_TOML, |_b, _a, _m2, m| {
+            let es = classify(&m);
+            assert!(
+                !node_list(&es).contains(&"GCLK"),
+                "GCLK must not be a register: {:?}",
+                node_list(&es)
+            );
+            assert!(
+                !node_list(&es).contains(&"EL"),
+                "EL carries no edge annotation: {:?}",
+                node_list(&es)
+            );
+            assert!(
+                !folded_list(&es).contains(&"EL"),
+                "EL survives unfolded, folded={:?}",
+                folded_list(&es)
+            );
+        });
+    }
+
+    #[test]
+    fn edge_master_only_reset_async_protects_master_from_fold() {
+        // Q's registration fails (see edge_master_only_reset_async_still_blocks), so Q's raw function is
+        // emitted and still references the master M ⇒ M must not be folded away.
+        with_machine!(MOR_ASYNC_TOML, |_b, _a, _m2, m| {
+            let es = classify(&m);
+            assert!(
+                !folded_list(&es).contains(&"M"),
+                "failed-registration master M must survive, folded={:?}",
+                folded_list(&es)
+            );
+        });
     }
 
     // === Step 3 (7): blow-up guard ===
