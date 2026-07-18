@@ -1179,11 +1179,13 @@ Q = "(A*B + Q*(A+B))*!R"
         (default, forced)
     }
 
-    /// Five shapes that recognise NO edge register even under default (on) collapse: a single latch, a
-    /// gated (self-referencing) latch, a master/slave pair split across two DIFFERENT declared clocks,
-    /// an exposed master (a second output), and a two-latch DFF whose clock is never declared. Mirrors
-    /// `statetable.rs`'s and `collapse.rs`'s fixtures of the same shapes.
-    const NON_COLLAPSIBLE: [&str; 5] = [
+    /// Four shapes that recognise NO edge register even under default (on) collapse: a single latch, a
+    /// gated (self-referencing) latch, a master/slave pair split across two DIFFERENT declared clocks
+    /// (a genuine two-clock master-slave: a node changing on >=2 declared clocks is not annotated), and
+    /// a two-latch DFF whose clock is never declared. The exposed-master DFF (EMDFF) is NO LONGER here
+    /// -- its slave Q is now a recognised edge register (see `emdff_marks_only_the_slave_qs_clk_arc_edge_type`),
+    /// matching the sibling emitters' fixture suites.
+    const NON_COLLAPSIBLE: [&str; 4] = [
         r#"
 [[cell]]
 name = "DLAT"
@@ -1212,15 +1214,6 @@ Q = "CLKB*M + !CLKB*Q"
 "#,
         r#"
 [[cell]]
-name = "EMDFF"
-inputs = ["CLK", "D"]
-clock = ["CLK"]
-[cell.outputs]
-Q = "CLK*M + !CLK*Q"
-M = "!CLK*D + CLK*M"
-"#,
-        r#"
-[[cell]]
 name = "UCDFF"
 inputs = ["CLK", "D"]
 [cell.internal]
@@ -1241,6 +1234,37 @@ Q = "CLK*M + !CLK*Q"
             assert_eq!(tcl_default.matches("-type edge").count(), 0);
             assert_eq!(tcl_forced.matches("-type edge").count(), 0);
             assert_eq!(tcl_default, tcl_forced);
+        }
+    }
+
+    /// The exposed-master DFF: the behavioural pass recognises the slave `Q` as a rising-edge register
+    /// while the declared-output master `M` survives as a level node. `Q`'s CLK-related delay arc is
+    /// re-labelled `-type edge` (default collapse, no TOML opt-out); `M`'s own arcs are unaffected --
+    /// never re-labelled edge.
+    #[test]
+    fn emdff_marks_only_the_slave_qs_clk_arc_edge_type() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "EMDFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+M = "!CLK*D + CLK*M"
+"#,
+        );
+        assert!(!cell.edge.registers.is_empty());
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        assert!(tcl.matches("-type edge").count() >= 1);
+        for frag in tcl.split("define_arc") {
+            if frag.contains("-type edge") {
+                assert!(frag.contains("-pin Q"), "edge type only on Q: {frag}");
+            }
+            if frag.contains("-pin M") {
+                assert!(!frag.contains("-type edge"), "M stays non-edge: {frag}");
+            }
         }
     }
 

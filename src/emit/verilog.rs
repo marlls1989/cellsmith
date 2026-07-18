@@ -259,7 +259,7 @@ fn region_row(
         .map(|&c| level_at(c, region_cols, cube))
         .collect();
     cells.push(clock_cell);
-    let reg = if er.cols.iter().any(|c| *c == er.node) {
+    let reg = if er.cols.contains(&er.node) {
         level_at(&er.node, region_cols, cube)
     } else {
         "?"

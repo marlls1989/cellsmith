@@ -1260,7 +1260,10 @@ Q = "CLK*L1 + !CLK*L2"
                     assert_eq!(
                         format!("{:?}", off.$field),
                         format!("{:?}", on.$field),
-                        concat!("edge classification changed AnalysedCell::", stringify!($field)),
+                        concat!(
+                            "edge classification changed AnalysedCell::",
+                            stringify!($field)
+                        ),
                     );
                 };
             }
