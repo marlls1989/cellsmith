@@ -130,7 +130,7 @@ pub fn state_regions<B: Brand, C: ManagerCell>(
 }
 
 /// The F (ON-set) cubes of an FR cover, re-collected as an independent single-output F cover.
-fn f_side(fr: &Cover<Symbol, Anonymous>) -> Cover<Symbol, Anonymous> {
+pub(crate) fn f_side(fr: &Cover<Symbol, Anonymous>) -> Cover<Symbol, Anonymous> {
     Cover::from_cubes(
         CoverType::F,
         fr.cubes().filter(|c| c.cube_type() == CubeType::F).cloned(),
@@ -140,19 +140,19 @@ fn f_side(fr: &Cover<Symbol, Anonymous>) -> Cover<Symbol, Anonymous> {
 /// Espresso-minimise a region's own F cover, falling back to the un-minimised cover on error. An empty
 /// cover minimises to empty, so region emptiness — and thus the emitters' constant-detection — is
 /// preserved.
-fn minimise(cover: Cover<Symbol, Anonymous>) -> Cover<Symbol, Anonymous> {
+pub(crate) fn minimise(cover: Cover<Symbol, Anonymous>) -> Cover<Symbol, Anonymous> {
     cover.minimize().unwrap_or(cover)
 }
 
 /// Espresso-minimise a region given as a BDD (the hold gap), as an F cover.
-fn minimise_bdd<B: Brand, C: ManagerCell>(bdd: &Bdd<B, C>) -> Cover<Symbol, Anonymous> {
+pub(crate) fn minimise_bdd<B: Brand, C: ManagerCell>(bdd: &Bdd<B, C>) -> Cover<Symbol, Anonymous> {
     bdd.minimize().unwrap_or_else(|_| bdd.cover())
 }
 
 /// Read each cube of a region cover as a [`StateCube`] aligned to `cols` by variable name: a column
 /// the cube does not constrain (absent from its support) reads as `None` (don't-care). Reading by name
 /// with [`Minterm::value_of`] is order-independent, so no re-homing/projection of the cube is needed.
-fn region_cubes(cover: &Cover<Symbol, Anonymous>, cols: &[Symbol]) -> Vec<StateCube> {
+pub(crate) fn region_cubes(cover: &Cover<Symbol, Anonymous>, cols: &[Symbol]) -> Vec<StateCube> {
     cover
         .cubes()
         .map(|cube| cols.iter().map(|v| cube.inputs().value_of(v)).collect())
