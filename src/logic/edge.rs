@@ -230,8 +230,12 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Ed
     );
 
     // Classify every node BEFORE any synthesis, so the header (which excludes internal level nodes) is
-    // settled first.
-    let classes: Vec<Class> = aggs.iter().map(classify_one).collect();
+    // settled first. The phase-symmetric permit/block decision consults the EXACT off-edge synthesis
+    // (`synth_off_edge` over the non-clock inputs), so it needs the builder and the input header.
+    let classes: Vec<Class> = aggs
+        .iter()
+        .map(|agg| classify_one(&builder, inputs, agg))
+        .collect();
     let internal_level: BTreeSet<Symbol> = candidates
         .iter()
         .zip(&classes)
@@ -332,23 +336,56 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Ed
     EdgeSensitivity { registers, folded }
 }
 
-/// Classify one candidate from its aggregated observations.
-fn classify_one(agg: &CandAgg) -> Class {
+/// Classify one candidate from its aggregated observations. The phase-symmetric permit/block decision
+/// consults the EXACT off-edge synthesis, so the shared `builder` and the cell `inputs` are threaded in.
+fn classify_one<B: Brand, C: ManagerCell>(
+    builder: &BddBuilder<B, C>,
+    inputs: &[Symbol],
+    agg: &CandAgg,
+) -> Class {
     // Level: a data input is transparent to the node, against a clock that actually gates it (a clock
     // whose own toggle moves the node). Restricting to those clocks avoids a uniform reset reading as
     // transparent against an unrelated clock it is independent of. Two transparency signatures block a
     // register:
     //   * phase-ASYMMETRIC (`f != t`): the node follows the input during one phase only — the classic
     //     latch signature.
-    //   * phase-SYMMETRIC (`f == t`, both phases): the input moves the node in both phases yet never
-    //     forces it to a constant off-edge — it lands Held, so it is genuine data transparency (e.g. the
-    //     XOR of two opposite-phase latches on D), NOT an async set/clear. Were this permitted, the node
-    //     would key off the single clock and drop the data input, emitting a self-contradictory register
-    //     that ALSO carries combinational data arcs. A phase-symmetric FORCER (an async-style reset that
-    //     lands Forced0/Forced1, e.g. ICM's sync-declared RA) is permitted: it is real set/clear, not
-    //     transparency, and the node stays a register.
+    //   * phase-SYMMETRIC (`f == t`, both phases): the input moves the node in both phases. Whether that
+    //     is genuine data transparency or a real set/clear is decided by the EXACT off-edge synthesis
+    //     (`synth_off_edge` — the same synthesis the emitter binds to): the input BLOCKS a register only
+    //     if it lands purely Held, i.e. it never appears in a Forced projection of the synthesised
+    //     off-edge (`off_edge.cols`, the support of the forced set/clear covers). A pure-transparency
+    //     input (e.g. XLAT's D, the XOR of two opposite-phase latches, forcing the node to no constant)
+    //     drops out of `off_edge.cols` and blocks: were it permitted the node would key off the single
+    //     clock and drop the data input, emitting a self-contradictory register that ALSO carries
+    //     combinational data arcs. A phase-symmetric FORCER — an async-style set/clear that lands
+    //     Forced0/Forced1, single-literal, disjunctive `R+G` OR conjunctive `R*G` (GATEDR's gated clear)
+    //     alike — appears in `off_edge.cols` and is permitted: it is real set/clear, and the node stays a
+    //     register. Grounding in the exact per-projection synthesis (which marks Forced only where the
+    //     observed samples of a projection actually agree to a constant) also avoids the marginal test's
+    //     mirror risk of KEEPING a register on an unreachable/partial projection.
+    let mut off_edge_cache: BTreeMap<Symbol, Option<StateRegions>> = BTreeMap::new();
     let level = agg.changed_data.iter().any(|((d, k), (f, t))| {
-        agg.changed_clocks.contains(k) && (f != t || !data_input_forces(agg, d, k))
+        if !agg.changed_clocks.contains(k) {
+            return false;
+        }
+        if f != t {
+            return true; // phase-asymmetric ⇒ the classic latch signature
+        }
+        // Phase-symmetric: permit iff `d` participates in a Forced projection of the exact off-edge.
+        let off = off_edge_cache.entry(k.clone()).or_insert_with(|| {
+            let header_off: Vec<Symbol> = inputs
+                .iter()
+                .filter(|p| p.as_str() != k.as_str())
+                .cloned()
+                .collect();
+            synth_off_edge(builder, &header_off, k, &agg.stable)
+        });
+        match off {
+            // `d` lands in a forced set/clear cover ⇒ real set/clear ⇒ permitted (not level).
+            Some(sr) => !sr.cols.iter().any(|c| c == d),
+            // No clean off-edge synthesis (phase disagreement) ⇒ forcing cannot be confirmed ⇒ block.
+            None => true,
+        }
     });
     if level {
         return Class::Level;
@@ -370,36 +407,6 @@ fn classify_one(agg: &CandAgg) -> Class {
         return Class::None;
     }
     Class::Register { clock, rise, fall }
-}
-
-/// Whether a phase-symmetric toggle-changing data input `d` is an off-edge FORCER on a node keyed off
-/// clock `k` — some value of `d` drives the node to a single forced constant (Forced0/Forced1), agreeing
-/// across the observed phases, i.e. an async-style set/clear rather than mere data transparency (Held).
-/// Reuses the off-edge [`phase_class`] landing over the same stable-state samples that [`synth_off_edge`]
-/// consumes; marginalising the other inputs is conservative (a partial forcer reads as Held ⇒ level).
-fn data_input_forces(agg: &CandAgg, d: &Symbol, k: &Symbol) -> bool {
-    for want in [false, true] {
-        let (mut low, mut high) = (Vec::new(), Vec::new());
-        for (state, val) in &agg.stable {
-            if state.value_of(d.as_str()) != Some(want) {
-                continue;
-            }
-            match state.value_of(k.as_str()) {
-                Some(false) => low.push(*val),
-                Some(true) => high.push(*val),
-                None => {}
-            }
-        }
-        let forced = match (phase_class(&low), phase_class(&high)) {
-            (Some(a), Some(b)) => a == b && a != Phase::Held,
-            (Some(a), None) | (None, Some(a)) => a != Phase::Held,
-            (None, None) => false,
-        };
-        if forced {
-            return true;
-        }
-    }
-    false
 }
 
 /// Synthesise a register's captures and off-edge for a candidate, escalating tier-1 → tier-2 on a
@@ -1187,6 +1194,100 @@ T = "M*!M2 + !M*M2"
             });
             assert!(d_drives_t, "D must remain a live data dependency of T");
         });
+    }
+
+    // === Conjunctive / disjunctive / single-literal clear consistency ===
+
+    // A gated conjunctive clear: R*G forces both latches to 0 (needs G high too). The clear is not
+    // marginally forcing — the R=1,G=0 states hold — so a marginal forcing test wrongly reads it Held and
+    // blocks. The EXACT off-edge synthesis lands R*G Forced0, so R and G each participate in a Forced
+    // projection and Q stays a register with the conjunctive clear carried in off_edge.off.
+    const GATEDR_TOML: &str = r#"
+[[cell]]
+name = "GATEDR"
+inputs = ["CLK", "D", "R", "G"]
+clock = ["CLK"]
+[cell.internal]
+M = "!(R*G)*(!CLK*D + CLK*M)"
+[cell.outputs]
+Q = "!(R*G)*(CLK*M + !CLK*Q)"
+"#;
+
+    // The single-literal sync clear: R alone forces both latches to 0.
+    const SYNC_R_CLEAR_TOML: &str = r#"
+[[cell]]
+name = "SYNCR"
+inputs = ["CLK", "D", "R"]
+clock = ["CLK"]
+[cell.internal]
+M = "!R*(!CLK*D + CLK*M)"
+[cell.outputs]
+Q = "!R*(CLK*M + !CLK*Q)"
+"#;
+
+    // The disjunctive sync clear: R+G forces both latches to 0.
+    const SYNC_RG_OR_CLEAR_TOML: &str = r#"
+[[cell]]
+name = "SYNCRG"
+inputs = ["CLK", "D", "R", "G"]
+clock = ["CLK"]
+[cell.internal]
+M = "!(R+G)*(!CLK*D + CLK*M)"
+[cell.outputs]
+Q = "!(R+G)*(CLK*M + !CLK*Q)"
+"#;
+
+    // The async-declared conjunctive clear: same construct as GATEDR with R and G declared async.
+    const ASYNC_RG_AND_CLEAR_TOML: &str = r#"
+[[cell]]
+name = "AGATEDR"
+inputs = ["CLK", "D", "R", "G"]
+clock = ["CLK"]
+async = ["R", "G"]
+[cell.internal]
+M = "!(R*G)*(!CLK*D + CLK*M)"
+[cell.outputs]
+Q = "!(R*G)*(CLK*M + !CLK*Q)"
+"#;
+
+    #[test]
+    fn edge_gated_conjunctive_clear_recognised() {
+        with_machine!(GATEDR_TOML, |builder, _a, _m2, m| {
+            let es = classify(&m);
+            let q = reg(&es, "Q");
+            assert_eq!(q.clock, "CLK");
+            // The conjunctive clear is carried faithfully: off_edge.off is forced-0 exactly where R*G.
+            let off = builder.build_cover(&q.off_edge.off_cover);
+            let rg = builder.var("R").and(&builder.var("G"));
+            assert!(off.equivalent_to(&rg), "off_edge.off must cover R*G");
+            // D (captured value) and the clear's R, G all survive as register columns.
+            let cols = q.cols.iter().map(Symbol::as_str).collect::<Vec<_>>();
+            for c in ["D", "R", "G"] {
+                assert!(cols.contains(&c), "col {c} missing from {cols:?}");
+            }
+        });
+    }
+
+    #[test]
+    fn edge_clear_variants_consistently_registers() {
+        // The SAME clear construct — single-literal, disjunctive, conjunctive; sync or async-declared — is
+        // recognised consistently as an edge register. Grounding the permit decision in the exact off-edge
+        // synthesis removes the R+G-vs-R*G and sync-vs-async inconsistency of the marginal test.
+        for (src, label) in [
+            (SYNC_R_CLEAR_TOML, "sync single-literal R"),
+            (SYNC_RG_OR_CLEAR_TOML, "sync disjunctive R+G"),
+            (GATEDR_TOML, "sync conjunctive R*G"),
+            (ASYNC_RG_AND_CLEAR_TOML, "async conjunctive R*G"),
+        ] {
+            with_machine!(src, |_b, _a, _m2, m| {
+                let es = classify(&m);
+                assert!(
+                    node_list(&es).contains(&"Q"),
+                    "{label}: Q must be a register, got {:?}",
+                    node_list(&es)
+                );
+            });
+        }
     }
 
     // === Step 3 (7): blow-up guard ===
