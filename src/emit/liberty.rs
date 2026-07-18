@@ -273,13 +273,15 @@ fn edge_input_pattern(er: &EdgeRow, input_nodes: &[Symbol]) -> String {
         .join(" ")
 }
 
-/// The Liberty state-table symbol for a clock-edge token.
+/// The Liberty state-table symbol for a clock-edge token. A dual-edge register's off-edge row owns
+/// neither clock face, so its clock column prints the level don't-care `-`.
 fn edge_token(token: EdgeTok) -> &'static str {
     match token {
         EdgeTok::Rise => "R",
         EdgeTok::Fall => "F",
         EdgeTok::NotRise => "~R",
         EdgeTok::NotFall => "~F",
+        EdgeTok::Level => "-",
     }
 }
 
@@ -857,11 +859,12 @@ Qn = "!Q"
         (default, forced)
     }
 
-    /// Five shapes that recognise NO edge register even under default (on) collapse: a single latch, a
-    /// gated (self-referencing) latch, a master/slave pair split across two DIFFERENT declared clocks,
-    /// an exposed master (a second output), and a two-latch DFF whose clock is never declared. Mirrors
-    /// `statetable.rs`'s and `collapse.rs`'s fixtures of the same shapes.
-    const NON_COLLAPSIBLE: [&str; 5] = [
+    /// Three shapes the behavioural classifier leaves fully level (no edge token) even under default (on)
+    /// collapse: a single latch, a gated (self-referencing) latch, and a two-latch DFF whose clock is
+    /// never declared. Mirrors `statetable.rs`'s shrunk fixtures. The structural pass's MCDFF/EMDFF are no
+    /// longer here -- EMDFF's slave Q is now a recognised register (see `emdff_emits_edge_statetable`),
+    /// and MCDFF stays level for a different reason (two clocks, see `mcdff_two_clock_stays_level`).
+    const NON_COLLAPSIBLE: [&str; 3] = [
         r#"
 [[cell]]
 name = "DLAT"
@@ -877,25 +880,6 @@ inputs = ["CLK", "D"]
 clock = ["CLK"]
 [cell.outputs]
 Q = "CLK*(D+Q) + !CLK*Q"
-"#,
-        r#"
-[[cell]]
-name = "MCDFF"
-inputs = ["CLKA", "CLKB", "D"]
-clock = ["CLKA", "CLKB"]
-[cell.internal]
-M = "!CLKA*D + CLKA*M"
-[cell.outputs]
-Q = "CLKB*M + !CLKB*Q"
-"#,
-        r#"
-[[cell]]
-name = "EMDFF"
-inputs = ["CLK", "D"]
-clock = ["CLK"]
-[cell.outputs]
-Q = "CLK*M + !CLK*Q"
-M = "!CLK*D + CLK*M"
 "#,
         r#"
 [[cell]]
@@ -968,5 +952,103 @@ Q = "CLK*M + !CLK*Q"
             assert!(frag.contains("internal_node : \"M\";"));
         }
         assert_eq!(frag_direct, frag_via_flag);
+    }
+
+    #[test]
+    fn emdff_emits_edge_statetable_over_surviving_master() {
+        // The exposed-master DFF: the behavioural pass recognises the slave Q as a rising-edge register
+        // while the declared-output master M survives as a level node. The statetable carries both nodes;
+        // Q's rows are edge rows (an `R` token), M's are level rows, and M keeps its own output pin.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "EMDFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+M = "!CLK*D + CLK*M"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        assert_eq!(frag.matches("statetable").count(), 1);
+        // Node order follows signals() (outputs sorted: M before Q).
+        assert!(frag.contains("statetable (\"CLK D\", \"M Q\")"));
+        // Q (second column) captures the master M's current value at the rising edge; the ~R face holds.
+        assert!(frag.contains("R - : H - : - H"));
+        assert!(frag.contains("R - : L - : - L"));
+        assert!(frag.contains("~R - : - - : - N"));
+        // M (first column) is a level latch on CLK, sampling D while transparent-low.
+        assert!(frag.contains("L H : - - : H -"));
+        assert!(frag.contains("L L : - - : L -"));
+        let lib = parse_frag(&frag);
+        let cellg = find_cell(&lib, "EMDFF");
+        // M is a surviving output binding its own node.
+        let m = find_pin(cellg, "M");
+        assert_eq!(attr_string(m, "internal_node").as_deref(), Some("M"));
+        let q = find_pin(cellg, "Q");
+        assert_eq!(attr_string(q, "internal_node").as_deref(), Some("Q"));
+    }
+
+    #[test]
+    fn mcdff_two_clock_stays_level() {
+        // A master/slave pair split across two declared clocks: Q depends transitively on both clocks, so
+        // no single clock keys it and the classifier recognises no register -- a fully level joint table.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "MCDFF"
+inputs = ["CLKA", "CLKB", "D"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+M = "!CLKA*D + CLKA*M"
+[cell.outputs]
+Q = "CLKB*M + !CLKB*Q"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        let has_edge_token = frag
+            .split_whitespace()
+            .any(|t| matches!(t, "R" | "F" | "~R" | "~F"));
+        assert!(!has_edge_token, "two-clock pair stays level, no edge token");
+        assert!(frag.contains("statetable (\"CLKA CLKB D\", \"Q M\")"));
+        parse_frag(&frag);
+    }
+
+    #[test]
+    fn det_dual_edge_renders_both_tokens_and_level_off_edge() {
+        // Dual-edge mux-DET: Q captures D on BOTH clock edges (L1/L2 fold away). The statetable carries an
+        // `R` and an `F` capture group, then the off-edge hold as a `-` Level clock column (captures win
+        // at the edges by Liberty first-match priority).
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DET"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+L1 = "!CLK*D + CLK*L1"
+L2 = "CLK*D + !CLK*L2"
+[cell.outputs]
+Q = "CLK*L1 + !CLK*L2"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        assert_eq!(frag.matches("statetable").count(), 1);
+        assert!(frag.contains("statetable (\"CLK D\", \"Q\")"));
+        // Both clock faces capture D.
+        assert!(frag.contains("R H : - : H"));
+        assert!(frag.contains("R L : - : L"));
+        assert!(frag.contains("F H : - : H"));
+        assert!(frag.contains("F L : - : L"));
+        // The off-edge hold row prints `-` in the clock column (a Level token) and holds.
+        assert!(frag.contains("- - : - : N"));
+        // The folded latches L1/L2 keep no pin and no node column.
+        assert!(!frag.contains("pin (L1)"));
+        assert!(!frag.contains("pin (L2)"));
+        parse_frag(&frag);
     }
 }

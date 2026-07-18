@@ -31,12 +31,16 @@
 //! - The statetable node namespace is resolved to a port through a pin's `internal_node` attribute;
 //!   node names now equal the signal names, so an output pin's `internal_node` reads its own name.
 //!
-//! EDGE REGISTERS. When [`crate::logic::collapse`] has recognised a master-slave pair as an
-//! edge-triggered register, that register's node keeps its column but its rows come from the annotation
-//! ([`EdgeRow`]) rather than the level cover pass: a capture cube stamps the active edge token
-//! (`R`/`F`) with the register's next action, an off-edge cube the inactive face (`~R`/`~F`) with the
-//! hold/async action. The folded master vanishes entirely — no node, no column, no rows. The clock sits
-//! in the input header; the renderer prints the token there, e.g. `... R H : - : H` / `... ~R - : - : N`.
+//! EDGE REGISTERS. When [`crate::logic::edge`] has recognised a node as an edge-triggered register, that
+//! register's node keeps its column but its rows come from the annotation ([`EdgeRow`]) rather than the
+//! level cover pass: a capture cube stamps the active edge token (`R`/`F`) with the register's next
+//! action, an off-edge cube the hold/async action. A single-edge register prints the off-edge on its
+//! inactive face (`~R`/`~F`); a dual-edge register (both edges capture) prints its off-edge with a
+//! `Level` `-` token AFTER the two capture groups, so first-match priority keeps the captures winning at
+//! the edges. Any folded master vanishes entirely — no node, no column, no rows. The clock sits in the
+//! input header; the renderer prints the token there, e.g. `... R H : - : H` / `... ~R - : - : N`. A
+//! register node is a state-table node even when its region is non-hysteretic (a combinational output
+//! made sequential — the dual-edge mux-DET Q).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -71,7 +75,8 @@ pub struct StateRow {
 }
 
 /// The clock-edge token an [`EdgeRow`] prints in its clock column: the active edge (`Rise`/`Fall`) of a
-/// capture row, or its inactive face (`NotRise`/`NotFall`) for an off-edge (hold / async) row.
+/// capture row, the inactive face (`NotRise`/`NotFall`) of a single-edge register's off-edge (hold /
+/// async) row, or `Level` for a dual-edge register's off-edge row (which owns neither clock face).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum EdgeTok {
     /// Rising clock edge — Liberty `R`.
@@ -82,9 +87,12 @@ pub enum EdgeTok {
     NotRise,
     /// The non-falling face of a fall register — Liberty `~F`.
     NotFall,
+    /// A dual-edge register's off-edge (hold/async) row: neither clock face, printed as `-` in the clock
+    /// column. Both edges capture, so Liberty first-match priority keeps the capture rows winning there.
+    Level,
 }
 
-/// One edge-triggered row of the joint state table: an [`EdgeRegister`](crate::logic::collapse::EdgeRegister)'s
+/// One edge-triggered row of the joint state table: an [`EdgeRegister`](crate::logic::edge::EdgeRegister)'s
 /// capture or off-edge behaviour. `inputs` is aligned to [`StateModel::input_nodes`], `current`/`next` to
 /// [`StateModel::internal_nodes`] — the same layout as [`StateRow`]. The register's `clock` sits in
 /// `inputs` as a `None` placeholder; the renderer prints `token` in that column instead of a level. Every
@@ -124,34 +132,37 @@ pub struct StateModel {
 /// identical to [`crate::logic::resolve::state_variables`] by construction, so this reads the cached
 /// `hysteretic` flag rather than re-running the classifier.
 pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
-    // Master-slave pairs recognised as edge registers (empty when the cell opted out or has no pair).
-    // A folded master vanishes entirely — no node, no column, no rows; an edge-register node keeps its
-    // column but its rows come from the annotation in (e), never the level cover pass in (d).
-    let edge_regs = &cell.edge_registers;
-    let folded: BTreeSet<Symbol> = edge_regs
-        .iter()
-        .filter_map(|er| er.folded_master.clone())
-        .collect();
+    // Behavioural edge annotation: the cell's recognised edge registers and the cell-level set of
+    // internal level-sensitive masters folded away (empty when the cell opted out). A folded master
+    // vanishes entirely — no node, no column, no rows; an edge-register node keeps its column but its
+    // rows come from the annotation in (e), never the level cover pass in (d).
+    let edge_regs = &cell.edge.registers;
+    let folded: BTreeSet<Symbol> = cell.edge.folded.iter().cloned().collect();
     let edge_nodes: BTreeSet<Symbol> = edge_regs.iter().map(|er| er.node.clone()).collect();
+    // A register node is ALWAYS a state-table node, whether or not its region is hysteretic: a
+    // combinational output made sequential (the dual-edge mux-DET Q) is still a register column.
+    let is_node = |sig: &Symbol, sr: &StateRegions| {
+        (sr.hysteretic || edge_nodes.contains(sig)) && !folded.contains(sig)
+    };
 
-    // (a) State signals = the hysteretic signals, in `signals()` order, minus any folded master (which
-    // is absorbed into its register's capture and emits no column of its own).
+    // (a) State signals = the hysteretic signals plus the (possibly non-hysteretic) edge-register nodes,
+    // in `signals()` order, minus any folded master (absorbed into its register's capture, no column).
     let state_names: BTreeSet<Symbol> = cell
         .signal_regions()
-        .filter(|(_, sr)| sr.hysteretic)
+        .filter(|(sig, sr)| is_node(&sig.name, sr))
         .map(|(sig, _)| sig.name.clone())
-        .filter(|n| !folded.contains(n))
         .collect();
     if state_names.is_empty() {
         return None;
     }
 
-    // (b) node_of: every SURVIVING hysteretic signal keeps its own name as its state-table node, whether
-    // output or genuine internal state node. Folded masters are excluded.
+    // (b) node_of: every SURVIVING state node keeps its own name as its state-table node, whether output,
+    // genuine internal state node, or an edge register whose region is non-hysteretic. Folded masters are
+    // excluded.
     let mut node_of: BTreeMap<Symbol, Symbol> = BTreeMap::new();
     let mut internal_nodes: Vec<Symbol> = Vec::new();
     for (sig, sr) in cell.signal_regions() {
-        if !sr.hysteretic || folded.contains(&sig.name) {
+        if !is_node(&sig.name, sr) {
             continue;
         }
         node_of.insert(sig.name.clone(), sig.name.clone());
@@ -303,9 +314,13 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
         .collect();
 
     // (e) Edge rows from the register annotations, in `signals()` (register) order, cubes in cover order.
-    // A capture cube fires at the active edge (`Rise`/`Fall`): its on-cubes drive the register high, its
-    // off-cubes low. An off-edge cube fires at the inactive face (`NotRise`/`NotFall`): its on/off cubes
-    // are the async set/clear, its hold cube the quiescent no-change. Every other next slot stays `-`.
+    // Each active edge (`captures`, Rise before Fall) contributes a capture group: its on-cubes drive the
+    // register high at the active token, its off-cubes low. The off-edge follows: for a single-edge
+    // register it fires at the inactive face (`NotRise`/`NotFall`); for a dual-edge register (both edges
+    // capture) it carries a `Level` `-` clock column and is placed AFTER the capture groups, so Liberty
+    // first-match priority keeps the captures winning at the edges. Its on/off cubes are the async
+    // set/clear, its hold cube the quiescent no-change. Every next slot other than the register's own
+    // stays `-`; a capture cube that references the register's own node stamps that node's current column.
     let input_index: BTreeMap<&Symbol, usize> = input_nodes
         .iter()
         .enumerate()
@@ -314,31 +329,50 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     let mut edge_rows: Vec<EdgeRow> = Vec::new();
     for er in edge_regs {
         let reg = index_of[&er.node];
-        let (active, inactive) = match er.edge {
-            Edge::Rise => (EdgeTok::Rise, EdgeTok::NotRise),
-            Edge::Fall => (EdgeTok::Fall, EdgeTok::NotFall),
+        let dual = er.captures.len() == 2;
+        let mut push = |token: EdgeTok, action: Next, cube: &StateCube, cols: &[Symbol]| {
+            edge_rows.push(edge_row(
+                &er.clock,
+                token,
+                reg,
+                action,
+                cube,
+                cols,
+                &input_index,
+                &index_of,
+                input_nodes.len(),
+                k,
+            ));
         };
-        let sources: [(EdgeTok, Next, &Vec<StateCube>, &Vec<Symbol>); 5] = [
-            (active, Next::High, &er.capture.on, &er.capture.cols),
-            (active, Next::Low, &er.capture.off, &er.capture.cols),
-            (inactive, Next::High, &er.off_edge.on, &er.off_edge.cols),
-            (inactive, Next::Low, &er.off_edge.off, &er.off_edge.cols),
-            (inactive, Next::Hold, &er.off_edge.hold, &er.off_edge.cols),
-        ];
-        for (token, action, cubes, cols) in sources {
+        for (edge, capture) in &er.captures {
+            let active = match edge {
+                Edge::Rise => EdgeTok::Rise,
+                Edge::Fall => EdgeTok::Fall,
+            };
+            for (action, cubes) in [(Next::High, &capture.on), (Next::Low, &capture.off)] {
+                for cube in cubes {
+                    push(active, action, cube, &capture.cols);
+                }
+            }
+        }
+        // Off-edge token: the single-edge inactive face, or the `Level` `-` column for a dual-edge
+        // register (whose two capture groups already own both clock faces).
+        let off_token = if dual {
+            EdgeTok::Level
+        } else {
+            match er.captures[0].0 {
+                Edge::Rise => EdgeTok::NotRise,
+                Edge::Fall => EdgeTok::NotFall,
+            }
+        };
+        let off = &er.off_edge;
+        for (action, cubes) in [
+            (Next::High, &off.on),
+            (Next::Low, &off.off),
+            (Next::Hold, &off.hold),
+        ] {
             for cube in cubes {
-                edge_rows.push(edge_row(
-                    &er.clock,
-                    token,
-                    reg,
-                    action,
-                    cube,
-                    cols,
-                    &input_index,
-                    &index_of,
-                    input_nodes.len(),
-                    k,
-                ));
+                push(off_token, action, cube, &off.cols);
             }
         }
     }
@@ -823,13 +857,13 @@ Y = "C*L"
         (default, forced)
     }
 
-    /// Five shapes that recognise NO edge register even under default (on) collapse: a single latch
-    /// (no master to pair), a gated latch (self-referencing transparent cofactor), a master/slave pair
-    /// split across two DIFFERENT declared clocks, an exposed master (tapped as a second output), and a
-    /// two-latch DFF whose clock is never declared. Mirrors the fixtures in `collapse.rs`'s own guard
-    /// tests.
-    const NON_COLLAPSIBLE: [&str; 5] = [
-        // Single latch: Q has no master, so `valid_master` never fires.
+    /// Three shapes the behavioural classifier leaves fully level (no register, no fold) even under
+    /// default (on) collapse: a single latch (no seam to sample), a gated latch (self-referencing
+    /// transparent cofactor), and a two-latch DFF whose clock is never declared. The structural pass's
+    /// MCDFF and EMDFF fixtures are NO LONGER here: the behavioural pass recognises their slave Q as an
+    /// edge register (see `mcdff_and_emdff_recognise_slave_over_surviving_master`).
+    const NON_COLLAPSIBLE: [&str; 3] = [
+        // Single latch: Q has no master seam, so no clock edge captures it.
         r#"
 [[cell]]
 name = "DLAT"
@@ -838,7 +872,7 @@ clock = ["CLK"]
 [cell.outputs]
 Q = "CLK*D + !CLK*Q"
 "#,
-        // Gated latch: the transparent cofactor references Q itself -- not latch-shaped.
+        // Gated latch: D is transparent to Q while CLK high -- level, never a register.
         r#"
 [[cell]]
 name = "GLAT"
@@ -847,29 +881,7 @@ clock = ["CLK"]
 [cell.outputs]
 Q = "CLK*(D+Q) + !CLK*Q"
 "#,
-        // Multi-clock pair: M is transparent-low on CLKA, Q transparent-high on CLKB -- different
-        // clocks, so `valid_master` rejects the pairing.
-        r#"
-[[cell]]
-name = "MCDFF"
-inputs = ["CLKA", "CLKB", "D"]
-clock = ["CLKA", "CLKB"]
-[cell.internal]
-M = "!CLKA*D + CLKA*M"
-[cell.outputs]
-Q = "CLKB*M + !CLKB*Q"
-"#,
-        // Exposed-master DFF: M is also a declared output, so it can never fold.
-        r#"
-[[cell]]
-name = "EMDFF"
-inputs = ["CLK", "D"]
-clock = ["CLK"]
-[cell.outputs]
-Q = "CLK*M + !CLK*Q"
-M = "!CLK*D + CLK*M"
-"#,
-        // Undeclared-clock DFF: the same two-latch shape, but CLK is never declared a clock.
+        // Undeclared-clock DFF: the two-latch shape, but CLK is never declared a clock, so no edge.
         r#"
 [[cell]]
 name = "UCDFF"
@@ -886,7 +898,7 @@ Q = "CLK*M + !CLK*Q"
         for src in NON_COLLAPSIBLE {
             let (default, forced) = analyse_both(src);
             assert!(
-                default.edge_registers.is_empty(),
+                default.edge.registers.is_empty(),
                 "unexpected edge register recognised in {}",
                 default.repr_name()
             );
@@ -937,7 +949,7 @@ Q = "CLK*M + !CLK*Q"
         };
 
         for cell in [&direct, &via_flag] {
-            assert!(cell.edge_registers.is_empty());
+            assert!(cell.edge.registers.is_empty());
             let m = build_state_model(cell).expect("DFF is sequential");
             assert!(
                 m.edge_rows.is_empty(),
@@ -953,5 +965,222 @@ Q = "CLK*M + !CLK*Q"
             format!("{:?}", m_direct.rows),
             format!("{:?}", m_via_flag.rows),
         );
+    }
+
+    // A master/slave pair split across two DIFFERENT declared clocks: M is a CLKA latch, Q a CLKB latch.
+    // Exposed-master DFF: M is a declared output (never foldable). The behavioural pass recognises the
+    // slave Q as a rising-edge register keyed off CLK, over the surviving master M -- a NEW recognition
+    // the structural pass rejected.
+    const EMDFF: &str = r#"
+[[cell]]
+name = "EMDFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+M = "!CLK*D + CLK*M"
+"#;
+
+    #[test]
+    fn emdff_recognises_slave_over_surviving_master() {
+        // Q is an edge register keyed off CLK; the master M -- a surviving declared output -- keeps its
+        // own level column and is never folded. Q contributes edge rows, M the level rows.
+        let cell = analyse(EMDFF);
+        let q = cell
+            .edge
+            .registers
+            .iter()
+            .find(|r| r.node == "Q")
+            .expect("Q is recognised as an edge register");
+        assert_eq!(q.clock, "CLK");
+        assert!(
+            !cell.edge.folded.iter().any(|f| f == "M"),
+            "M survives as a level node, never folded"
+        );
+        let m = build_state_model(&cell).expect("sequential");
+        assert!(
+            m.node_of.contains_key(&Symbol::from("M")),
+            "M is a surviving level column"
+        );
+        assert!(names(&m.internal_nodes).contains(&"M"));
+        assert!(!m.edge_rows.is_empty(), "Q contributes edge rows");
+        assert!(!m.rows.is_empty(), "M contributes level rows");
+    }
+
+    // Master/slave pair split across two DIFFERENT declared clocks: M latches on CLKA, Q on CLKB. Q's
+    // value depends (transitively through settle) on BOTH clocks, so the behavioural classifier keys it
+    // off no single clock and recognises NO register -- it stays fully level. (NOTE: the wave-2 design
+    // note expected MCDFF to become a positive fixture with Q recognised; the already-landed classifier
+    // declines it, matching the structural pass. See the returned QUESTION.)
+    const MCDFF: &str = r#"
+[[cell]]
+name = "MCDFF"
+inputs = ["CLKA", "CLKB", "D"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+M = "!CLKA*D + CLKA*M"
+[cell.outputs]
+Q = "CLKB*M + !CLKB*Q"
+"#;
+
+    #[test]
+    fn mcdff_two_clock_pair_stays_level() {
+        let cell = analyse(MCDFF);
+        assert!(
+            cell.edge.registers.is_empty(),
+            "a two-clock pair keys off no single clock: {:?}",
+            cell.edge
+                .registers
+                .iter()
+                .map(|r| r.node.as_str())
+                .collect::<Vec<_>>()
+        );
+        let m = build_state_model(&cell).expect("sequential");
+        assert!(m.edge_rows.is_empty(), "no edge rows: stays level");
+        // Both latches keep their own level columns.
+        assert_eq!(names(&m.internal_nodes), ["Q", "M"]);
+    }
+
+    // Dual-edge mux-DET: two transparent-opposite latches feed a mux; Q captures D on BOTH clock edges and
+    // L1/L2 fold away. Q is a combinational output made sequential (its region is non-hysteretic).
+    const DET: &str = r#"
+[[cell]]
+name = "DET"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+L1 = "!CLK*D + CLK*L1"
+L2 = "CLK*D + !CLK*L2"
+[cell.outputs]
+Q = "CLK*L1 + !CLK*L2"
+"#;
+
+    #[test]
+    fn det_dual_edge_emits_both_tokens_then_level_hold() {
+        let cell = analyse(DET);
+        let m = build_state_model(&cell).expect("DET is sequential");
+        // Q is a state-table node despite its non-hysteretic (combinational-output) region; L1/L2 fold.
+        assert_eq!(names(&m.internal_nodes), ["Q"]);
+        assert!(
+            m.rows.is_empty(),
+            "no level rows: L1/L2 folded, Q is the register"
+        );
+
+        let cap = |token, d, next| EdgeRow {
+            clock: Symbol::from("CLK"),
+            token,
+            inputs: vec![X, d],
+            current: vec![X],
+            next: vec![next],
+        };
+        // Both clock faces capture D (Rise group then Fall group).
+        assert!(m.edge_rows.contains(&cap(EdgeTok::Rise, T, HI)));
+        assert!(m.edge_rows.contains(&cap(EdgeTok::Rise, F, LO)));
+        assert!(m.edge_rows.contains(&cap(EdgeTok::Fall, T, HI)));
+        assert!(m.edge_rows.contains(&cap(EdgeTok::Fall, F, LO)));
+        // Between edges the register holds: a Level (`-` clock column) off-edge row.
+        assert!(m.edge_rows.contains(&cap(EdgeTok::Level, None, NO)));
+        // The Level off-edge rows land AFTER every capture row (Liberty first-match priority).
+        let first_level = m
+            .edge_rows
+            .iter()
+            .position(|r| r.token == EdgeTok::Level)
+            .expect("a Level off-edge row");
+        let last_cap = m
+            .edge_rows
+            .iter()
+            .rposition(|r| matches!(r.token, EdgeTok::Rise | EdgeTok::Fall))
+            .expect("capture rows");
+        assert!(
+            last_cap < first_level,
+            "captures precede the Level off-edge"
+        );
+    }
+
+    // Inverting DFF: the slave captures !M (=!D) on the rising edge -- inversion recorded verbatim.
+    const INVERTING_DFF: &str = r#"
+[[cell]]
+name = "IDFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*!M + !CLK*Q"
+"#;
+
+    #[test]
+    fn inverting_dff_emits_not_d_capture_rows() {
+        let cell = analyse(INVERTING_DFF);
+        let m = build_state_model(&cell).expect("IDFF is sequential");
+        assert_eq!(names(&m.internal_nodes), ["Q"]);
+        assert!(m.rows.is_empty());
+        // Rising capture is !D: D low drives Q high, D high drives Q low.
+        let rise = |d, next| EdgeRow {
+            clock: Symbol::from("CLK"),
+            token: EdgeTok::Rise,
+            inputs: vec![X, d],
+            current: vec![X],
+            next: vec![next],
+        };
+        assert!(m.edge_rows.contains(&rise(F, HI)));
+        assert!(m.edge_rows.contains(&rise(T, LO)));
+        // Single-edge register: the off-edge holds on the inactive (~R) face, never a Level row.
+        assert!(m.edge_rows.contains(&EdgeRow {
+            clock: Symbol::from("CLK"),
+            token: EdgeTok::NotRise,
+            inputs: vec![X, X],
+            current: vec![X],
+            next: vec![NO],
+        }));
+        assert!(!m.edge_rows.iter().any(|r| r.token == EdgeTok::Level));
+    }
+
+    // Toggle flop: the self-fed master M and slave Q form a ring. With an async reset resolving the state,
+    // it decomposes into TWO edge registers -- Q captures M on the rising edge, M captures !Q (=!M) on the
+    // falling edge -- neither folds. M's capture references its OWN node (a current-state self column).
+    const TOGGLE_FLOP: &str = r#"
+[[cell]]
+name = "TFF"
+inputs = ["CLK", "R"]
+clock = ["CLK"]
+async = ["R"]
+[cell.internal]
+M = "!R*(!CLK*!Q + CLK*M)"
+[cell.outputs]
+Q = "!R*(CLK*M + !CLK*Q)"
+"#;
+
+    #[test]
+    fn toggle_flop_capture_stamps_own_current_column() {
+        let cell = analyse(TOGGLE_FLOP);
+        let m = build_state_model(&cell).expect("TFF is sequential");
+        // Two edge registers survive; the ring does NOT fold the self-fed master.
+        assert_eq!(names(&m.internal_nodes), ["Q", "M"]);
+        let qi = index_of_node(&m, "Q");
+        let mi = index_of_node(&m, "M");
+        // M's falling-edge capture is self-referential: it constrains M's OWN current column and drives
+        // M's next -- the edge_row self-column path (a capture cube carrying the register's own node).
+        assert!(
+            m.edge_rows
+                .iter()
+                .any(|r| r.next[mi].is_some() && r.current[mi].is_some()),
+            "toggle-flop M capture must stamp its own current column"
+        );
+        // Q's rising-edge capture references the master M (the ring), driving Q off M's current column.
+        assert!(
+            m.edge_rows.iter().any(|r| r.token == EdgeTok::Rise
+                && r.next[qi].is_some()
+                && r.current[mi].is_some()),
+            "Q's rising capture references the master M"
+        );
+    }
+
+    /// The node-order slot of a state node's own name in the joint model (`current`/`next` index).
+    fn index_of_node(m: &StateModel, name: &str) -> usize {
+        m.internal_nodes
+            .iter()
+            .position(|n| n == name)
+            .unwrap_or_else(|| panic!("{name} is a state node"))
     }
 }
