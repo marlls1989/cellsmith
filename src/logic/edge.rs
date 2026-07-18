@@ -1231,4 +1231,58 @@ Q = "CLK*L1 + !CLK*L2"
         );
         assert!(EdgeSensitivity::default().registers.is_empty());
     }
+
+    // === Permanent guard: the CRITICAL INVARIANT ===
+
+    /// Parse a single-cell spec and analyse it, forcing `no_edge_collapse` on every cell.
+    fn analyse_toggled(src: &str, no_collapse: bool) -> crate::model::AnalysedCell {
+        let mut spec = crate::model::parse_spec(src).unwrap();
+        for c in &mut spec.cells {
+            c.no_edge_collapse = no_collapse;
+        }
+        spec.cells[0].analyse().unwrap()
+    }
+
+    /// PERMANENT guard on the CRITICAL INVARIANT: behavioural edge classification re-expresses
+    /// already-explored behaviour and must change ONLY `edge` — every other `AnalysedCell` field (the
+    /// exploration, prevector/vector and hazard outputs) is byte-for-byte identical whether classification
+    /// is on or off.
+    #[test]
+    fn edge_classification_changes_only_the_edge_annotation() {
+        for src in [DFF_TOML, ICM_TOML] {
+            let off = analyse_toggled(src, true); // classification suppressed
+            let on = analyse_toggled(src, false); // classification active
+
+            // Every exploration-derived field is identical (Debug-string equality across all of them
+            // except `edge`).
+            macro_rules! unchanged {
+                ($field:ident) => {
+                    assert_eq!(
+                        format!("{:?}", off.$field),
+                        format!("{:?}", on.$field),
+                        concat!("edge classification changed AnalysedCell::", stringify!($field)),
+                    );
+                };
+            }
+            unchanged!(name);
+            unchanged!(inputs);
+            unchanged!(outputs);
+            unchanged!(internals);
+            unchanged!(async_pins);
+            unchanged!(arcs);
+            unchanged!(hidden_arcs);
+            unchanged!(leakage);
+            unchanged!(order_dependence);
+            unchanged!(oscillation);
+            unchanged!(clock_pins);
+            unchanged!(constraints);
+            unchanged!(constraint_arcs_declared);
+            unchanged!(regions);
+
+            // The guard has teeth: classification is a no-op when suppressed and does recognise registers
+            // on these fixtures when active.
+            assert!(off.edge.registers.is_empty());
+            assert!(!on.edge.registers.is_empty());
+        }
+    }
 }
