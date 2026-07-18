@@ -218,63 +218,61 @@ table
 	? ? 1 1 : ? : 1;
 endtable
 endprimitive
-primitive ICM_enA(enA, RA, sela2, CLKA); // clock CLKA is the last port
+primitive ICM_enA(enA, sela2, RA, CLKA); // clock CLKA is the last port
 output enA;
-input  RA, sela2, CLKA;
+input  sela2, RA, CLKA;
 reg    enA;
 table
 	(??) ? ? : ? : -;
-	0 1 (10) : ? : 1;
-	1 ? (10) : ? : 0;
-	1 ? ? : ? : 0;
+	0 ? (10) : ? : 0;
+	1 ? (10) : ? : 1;
 	? (??) ? : ? : -;
-	? 0 (10) : ? : 0;
+	? 1 ? : ? : 0;
 	? ? (01) : ? : -;
 endtable
 endprimitive
-primitive ICM_enB(enB, RB, selb2, CLKB); // clock CLKB is the last port
+primitive ICM_enB(enB, selb2, RB, CLKB); // clock CLKB is the last port
 output enB;
-input  RB, selb2, CLKB;
+input  selb2, RB, CLKB;
 reg    enB;
 table
 	(??) ? ? : ? : -;
-	0 1 (10) : ? : 1;
-	1 ? (10) : ? : 0;
-	1 ? ? : ? : 0;
+	0 ? (10) : ? : 0;
+	1 ? (10) : ? : 1;
 	? (??) ? : ? : -;
-	? 0 (10) : ? : 0;
+	? 1 ? : ? : 0;
 	? ? (01) : ? : -;
 endtable
 endprimitive
-primitive ICM_sela2(sela2, enB, RA, S, CLKA); // clock CLKA is the last port
+primitive ICM_sela2(sela2, RA, S, enB, CLKA); // clock CLKA is the last port
 output sela2;
-input  enB, RA, S, CLKA;
+input  RA, S, enB, CLKA;
 reg    sela2;
 table
 	(??) ? ? ? : ? : -;
 	0 0 0 (01) : ? : 1;
 	1 ? ? (01) : ? : 0;
+	1 ? ? ? : ? : 0;
 	? (??) ? ? : ? : -;
 	? 1 ? (01) : ? : 0;
-	? 1 ? ? : ? : 0;
 	? ? (??) ? : ? : -;
 	? ? 1 (01) : ? : 0;
 	? ? ? (10) : ? : -;
 endtable
 endprimitive
-primitive ICM_selb2(selb2, enA, RB, S, CLKB); // clock CLKB is the last port
+primitive ICM_selb2(selb2, RB, S, enA, CLKB); // clock CLKB is the last port
 output selb2;
-input  enA, RB, S, CLKB;
+input  RB, S, enA, CLKB;
 reg    selb2;
 table
 	(??) ? ? ? : ? : -;
-	0 0 1 (01) : ? : 1;
+	0 1 0 (01) : ? : 1;
 	1 ? ? (01) : ? : 0;
+	1 ? ? ? : ? : 0;
 	? (??) ? ? : ? : -;
-	? 1 ? (01) : ? : 0;
-	? 1 ? ? : ? : 0;
+	? 0 ? (01) : ? : 0;
 	? ? (??) ? : ? : -;
-	? ? 0 (01) : ? : 0;
+	? ? 1 (01) : ? : 0;
 	? ? ? (10) : ? : -;
 endtable
 endprimitive
@@ -291,10 +289,10 @@ specify
 	(S => GCLK) = (0.1, 0.1);
 endspecify
 ICM_GCLK u_ICM_GCLK (GCLK, enA, CLKA, enB, CLKB);
-ICM_enA u_ICM_enA (enA, RA, sela2, CLKA);
-ICM_enB u_ICM_enB (enB, RB, selb2, CLKB);
-ICM_sela2 u_ICM_sela2 (sela2, enB, RA, S, CLKA);
-ICM_selb2 u_ICM_selb2 (selb2, enA, RB, S, CLKB);
+ICM_enA u_ICM_enA (enA, sela2, RA, CLKA);
+ICM_enB u_ICM_enB (enB, selb2, RB, CLKB);
+ICM_sela2 u_ICM_sela2 (sela2, RA, S, enB, CLKA);
+ICM_selb2 u_ICM_selb2 (selb2, RB, S, enA, CLKB);
 endmodule
 `endcelldefine
 primitive C2GATE_Q(Q, A, B);

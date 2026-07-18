@@ -185,14 +185,12 @@ library (cells) {
       direction : input;
     }
     statetable ("CLKA CLKB RA RB S", "enA enB sela2 selb2") {
-      table : "F - L - - : - - H - : H - - - , \
+      table : "F - - - - : - - H - : H - - - , \
                F - - - - : - - L - : L - - - , \
-               F - H - - : - - - - : L - - - , \
                ~F - H - - : - - - - : L - - - , \
                ~F - L - - : - - - - : N - - - , \
-               - F - L - : - - - H : - H - - , \
+               - F - - - : - - - H : - H - - , \
                - F - - - : - - - L : - L - - , \
-               - F - H - : - - - - : - L - - , \
                - ~F - H - : - - - - : - L - - , \
                - ~F - L - : - - - - : - N - - , \
                R - L - L : - L - - : - - H - , \
