@@ -197,11 +197,11 @@ pub struct AnalysedCell {
     /// Each signal's state-table regions, precomputed once and cached in `signals()` order (outputs
     /// then internals), so emitters don't rebuild the BDDs per call site.
     pub regions: Vec<crate::logic::regions::StateRegions>,
-    /// The master-slave latch pairs recognised as edge-triggered registers, in `signals()` order. Empty
-    /// when the cell opted out (`no_edge_collapse`) or has no collapsible pair. Re-expresses the
-    /// already-explored two-latch behaviour as edge annotations for the emitters — it never alters the
-    /// exploration.
-    pub edge_registers: Vec<crate::logic::collapse::EdgeRegister>,
+    /// The cell's behavioural edge-sensitivity: its recognised edge-triggered registers and the
+    /// cell-level set of internal level-sensitive master nodes folded away. Default (empty) when the
+    /// cell opted out (`no_edge_collapse`). Computed purely from the already-explored machine — it
+    /// never alters the exploration.
+    pub edge: crate::logic::edge::EdgeSensitivity,
 }
 
 impl AnalysedCell {
@@ -277,26 +277,16 @@ impl Cell {
         analysed.constraints = analysis.constraints;
         analysed.order_dependence = analysis.order_dependence;
         analysed.oscillation = analysis.oscillation;
+        analysed.edge = if self.no_edge_collapse {
+            Default::default()
+        } else {
+            analysis.edge
+        };
 
         // Cache each signal's state-table regions once, in `signals()` order, from the shared folded
         // BDDs, so downstream emitters don't rebuild the BDDs per call site.
         analysed.regions = derive_regions(&analysed, &bdds);
 
-        // POST-EXPLORATION recognition of master-slave latch pairs as edge-triggered registers. This
-        // MUST stay after the machine/region passes and NEVER move earlier: it only reads the already-
-        // minimised `bdds` and the exploration outputs, re-expressing derived behaviour as edge
-        // annotations — the two-latch model remains the source of truth. `surviving_order` is the
-        // post-minimise `signals()` order (`order` above is the pre-minimise one). A cell that opted out
-        // (`no_edge_collapse`, also settable globally by `--no-edge-collapse`) keeps the field empty.
-        if !self.no_edge_collapse {
-            let surviving_order: Vec<Symbol> = analysed.signals().map(|s| s.name.clone()).collect();
-            analysed.edge_registers = crate::logic::collapse::recognise_edge_registers(
-                &bdds,
-                &surviving_order,
-                &output_set,
-                &analysed.clock_pins,
-            );
-        }
         Ok(analysed)
     }
 
@@ -416,7 +406,7 @@ impl Cell {
             constraints: Vec::new(),
             constraint_arcs_declared: self.constraint_arcs,
             regions: Vec::new(),
-            edge_registers: Vec::new(),
+            edge: Default::default(),
         };
         Ok(analysed)
     }
