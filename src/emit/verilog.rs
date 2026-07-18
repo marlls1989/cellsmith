@@ -6,18 +6,19 @@
 //! signal (primary inputs + other outputs) as an input column, so a self-holding cell keeps its
 //! hysteresis as `-` (no-change) rows. Pins are emitted in declaration order.
 //!
-//! A signal recognised as an edge-triggered register ([`crate::logic::collapse`]) emits an
+//! A signal recognised as an edge-triggered register ([`crate::logic::edge`]) emits an
 //! **edge-sensitive** UDP instead: the level-latch rows are replaced by clock-edge (`(01)`/`(10)`)
-//! capture rows, async set/clear level rows, and no-change rows for the opposite edge and for steady-
-//! clock data transitions. The clock is the primitive's LAST port. A pure master folded into such a
-//! register contributes nothing — no primitive, no wire, no instance.
+//! capture rows — one edge group per active edge, so a dual-edge register captures on both — plus async
+//! set/clear level rows, a no-change row for the opposite edge (single-edge registers only) and no-
+//! change rows for steady-clock data transitions. The clock is the primitive's LAST port. A pure master
+//! folded into such a register contributes nothing — no primitive, no wire, no instance.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use espresso_logic::Symbol;
 
 use crate::logic::arcs::Edge;
-use crate::logic::collapse::EdgeRegister;
+use crate::logic::edge::EdgeRegister;
 use crate::logic::regions::{StateCube, StateRegions};
 use crate::model::AnalysedCell;
 
@@ -31,15 +32,12 @@ pub fn cell_verilog(cell: &AnalysedCell) -> String {
     // Recognised edge registers, keyed by their output node, and the pure masters folded into them —
     // a folded master emits no primitive, no wire and no instance.
     let edge_by_node: BTreeMap<&str, &EdgeRegister> = cell
-        .edge_registers
+        .edge
+        .registers
         .iter()
         .map(|er| (er.node.as_str(), er))
         .collect();
-    let folded: BTreeSet<&str> = cell
-        .edge_registers
-        .iter()
-        .filter_map(|er| er.folded_master.as_deref())
-        .collect();
+    let folded: BTreeSet<&str> = cell.edge.folded.iter().map(Symbol::as_str).collect();
 
     let mut out = String::new();
     for (sig, sr) in cell.signal_regions() {
@@ -129,21 +127,31 @@ fn pattern(cube: &StateCube) -> String {
         .join(" ")
 }
 
+/// The register's DATA columns: `er.cols` with the register's own symbol removed. A self-referencing
+/// register (a toggle flop, whose capture depends on its own prior state) carries its own node in
+/// `er.cols`; that node is the UDP's `reg` current-state, not an input port, so it is excluded from the
+/// port/input lists and rendered in the current-state field instead.
+fn data_cols(er: &EdgeRegister) -> Vec<&Symbol> {
+    er.cols.iter().filter(|c| **c != er.node).collect()
+}
+
 /// One edge-register signal's UDP: an edge-sensitive sequential `primitive` whose ports are
-/// `(pin, cols…, clock)` with the clock LAST. The `reg` captures on the active clock edge (`(01)` for
-/// `Rise`, `(10)` for `Fall`) and honours async set/clear as clock-independent level rows.
+/// `(pin, data cols…, clock)` with the clock LAST. The `reg` captures on each active clock edge (`(01)`
+/// for `Rise`, `(10)` for `Fall`) and honours async set/clear as clock-independent level rows. The
+/// register's own symbol (a toggle flop's self-feedback) is excluded from the data columns — it is the
+/// `reg` current-state, not an input port.
 fn edge_primitive(name: &str, pin: &Symbol, er: &EdgeRegister) -> String {
     let clock = er.clock.as_str();
-    // Ports: the pin, its data columns, then the clock last.
+    let cols = data_cols(er);
+    // Ports: the pin, its data columns (self excluded), then the clock last.
     let ports = std::iter::once(pin.as_str())
-        .chain(er.cols.iter().map(Symbol::as_str))
+        .chain(cols.iter().map(|c| c.as_str()))
         .chain(std::iter::once(clock))
         .collect::<Vec<_>>()
         .join(", ");
-    let inputs = er
-        .cols
+    let inputs = cols
         .iter()
-        .map(Symbol::as_str)
+        .map(|c| c.as_str())
         .chain(std::iter::once(clock))
         .collect::<Vec<_>>()
         .join(", ");
@@ -161,43 +169,67 @@ fn edge_primitive(name: &str, pin: &Symbol, er: &EdgeRegister) -> String {
     s
 }
 
-/// The edge-register UDP table rows, sorted for determinism. Column order is `er.cols` then the clock;
-/// the current-state (`reg`) field is always `?`. At most one edge indicator appears per row.
+/// The edge-register UDP table rows, sorted for determinism. Column order is the data cols (`er.cols`
+/// minus the register's own symbol) then the clock; the current-state (`reg`) field is `?` except on a
+/// self-referencing register's capture rows, where it carries that register's own literal. Each capture
+/// row carries exactly ONE edge indicator; a dual-edge register emits one capture group per edge.
 fn edge_table_lines(er: &EdgeRegister) -> Vec<String> {
-    // Active edge captures; the opposite edge is a no-change (hold) row.
-    let (capture_edge, opposite_edge) = match er.edge {
-        Edge::Rise => ("(01)", "(10)"),
-        Edge::Fall => ("(10)", "(01)"),
-    };
+    let cols = data_cols(er);
     let mut lines: Vec<String> = Vec::new();
 
-    // (a) Capture rows: the combinational next-state sampled on the active clock edge.
-    for cube in &er.capture.on {
-        lines.push(region_row(er, &er.capture.cols, cube, capture_edge, "1"));
-    }
-    for cube in &er.capture.off {
-        lines.push(region_row(er, &er.capture.cols, cube, capture_edge, "0"));
+    // (a) Capture rows: the combinational next-state sampled on each active clock edge. A dual-edge
+    // register contributes two groups, one per edge, each keeping its own single edge indicator.
+    for (edge, capture) in &er.captures {
+        let capture_edge = match edge {
+            Edge::Rise => "(01)",
+            Edge::Fall => "(10)",
+        };
+        for cube in &capture.on {
+            lines.push(region_row(
+                er,
+                &cols,
+                &capture.cols,
+                cube,
+                capture_edge,
+                "1",
+            ));
+        }
+        for cube in &capture.off {
+            lines.push(region_row(
+                er,
+                &cols,
+                &capture.cols,
+                cube,
+                capture_edge,
+                "0",
+            ));
+        }
     }
 
     // (b) Async set/clear as LEVEL rows (clock `?`): by IEEE 1364 a level row dominates the edge rows,
     // and F1/F2 guarantee any overlap agrees, so the set/clear wins independent of the clock.
     for cube in &er.off_edge.on {
-        lines.push(region_row(er, &er.off_edge.cols, cube, "?", "1"));
+        lines.push(region_row(er, &cols, &er.off_edge.cols, cube, "?", "1"));
     }
     for cube in &er.off_edge.off {
-        lines.push(region_row(er, &er.off_edge.cols, cube, "?", "0"));
+        lines.push(region_row(er, &cols, &er.off_edge.cols, cube, "?", "0"));
     }
 
-    // (c) Opposite-edge ignore: any transition on the inactive clock edge holds the register.
-    {
-        let mut cells: Vec<&str> = er.cols.iter().map(|_| "?").collect();
+    // (c) Opposite-edge ignore: a single-edge register holds on any transition of the inactive clock
+    // edge. A dual-edge register has no inactive edge, so it emits no such row.
+    if er.captures.len() == 1 {
+        let opposite_edge = match er.captures[0].0 {
+            Edge::Rise => "(10)",
+            Edge::Fall => "(01)",
+        };
+        let mut cells: Vec<&str> = cols.iter().map(|_| "?").collect();
         cells.push(opposite_edge);
         lines.push(format!("{} : ? : -;", cells.join(" ")));
     }
 
     // (d) Steady-clock data-transition ignore: a change on any data column with a stable clock holds.
-    for i in 0..er.cols.len() {
-        let mut cells: Vec<&str> = (0..er.cols.len())
+    for i in 0..cols.len() {
+        let mut cells: Vec<&str> = (0..cols.len())
             .map(|j| if i == j { "(??)" } else { "?" })
             .collect();
         cells.push("?");
@@ -208,23 +240,31 @@ fn edge_table_lines(er: &EdgeRegister) -> Vec<String> {
     lines
 }
 
-/// One region row of an edge-register table: the data columns (`er.cols`) filled from `cube` by column
-/// name against `region_cols`, then the clock cell (`clock_cell`), the `?` current-state field and the
-/// `next` action. A column the cube does not constrain (or absent from `region_cols`) reads `?`.
+/// One region row of an edge-register table: the data columns (`cols`, self excluded) filled from `cube`
+/// by column name against `region_cols`, then the clock cell (`clock_cell`), the current-state (`reg`)
+/// field and the `next` action. A data column the cube does not constrain (or absent from `region_cols`)
+/// reads `?`. The `reg` field is `?` unless the register is self-referencing (its own symbol in
+/// `er.cols`), in which case it carries that node's literal from `cube` — the capture's dependence on the
+/// register's own prior state.
 fn region_row(
     er: &EdgeRegister,
+    cols: &[&Symbol],
     region_cols: &[Symbol],
     cube: &StateCube,
     clock_cell: &str,
     next: &str,
 ) -> String {
-    let mut cells: Vec<&str> = er
-        .cols
+    let mut cells: Vec<&str> = cols
         .iter()
-        .map(|c| level_at(c, region_cols, cube))
+        .map(|&c| level_at(c, region_cols, cube))
         .collect();
     cells.push(clock_cell);
-    format!("{} : ? : {next};", cells.join(" "))
+    let reg = if er.cols.iter().any(|c| *c == er.node) {
+        level_at(&er.node, region_cols, cube)
+    } else {
+        "?"
+    };
+    format!("{} : {reg} : {next};", cells.join(" "))
 }
 
 /// The `1`/`0`/`?` level of column `col` in `cube`, looked up by name against `region_cols` (a subset
@@ -295,7 +335,7 @@ fn wrapper_module(
         // own port; other sequential pins add their columns.
         let args = if let Some(er) = edge_by_node.get(sig.name.as_str()) {
             std::iter::once(sig.name.as_str())
-                .chain(er.cols.iter().map(Symbol::as_str))
+                .chain(data_cols(er).iter().map(|c| c.as_str()))
                 .chain(std::iter::once(er.clock.as_str()))
                 .collect::<Vec<_>>()
                 .join(", ")
@@ -465,12 +505,13 @@ GCLK = "enA*CLKA+enB*CLKB"
         // sela2 survives as a rising-edge register (folding sela1); enA as a falling-edge one.
         assert!(prim_block(&v, "primitive ICM_sela2(").contains("(01)"));
         assert!(prim_block(&v, "primitive ICM_enA(").contains("(10)"));
-        // The async reset RA emits a clock-independent LEVEL clear row (next 0) in enA's table.
-        assert!(prim_block(&v, "primitive ICM_enA(").contains("1 ? ? : ? : 0;"));
+        // The async reset RA emits a clock-independent LEVEL clear row (next 0) in enA's table; RA is
+        // enA's second data column (cols `sela2, RA`), so the clear pattern is `? 1 ?`.
+        assert!(prim_block(&v, "primitive ICM_enA(").contains("? 1 ? : ? : 0;"));
 
         // The surviving registers instantiate in port order (pin, cols…, clock).
-        assert!(v.contains("ICM_sela2 u_ICM_sela2 (sela2, enB, RA, S, CLKA);"));
-        assert!(v.contains("ICM_enA u_ICM_enA (enA, RA, sela2, CLKA);"));
+        assert!(v.contains("ICM_sela2 u_ICM_sela2 (sela2, RA, S, enB, CLKA);"));
+        assert!(v.contains("ICM_enA u_ICM_enA (enA, sela2, RA, CLKA);"));
     }
 
     /// The table body of one named `primitive` (from its header up to `endprimitive`), for asserting
@@ -539,11 +580,13 @@ Y = "!(A*B)"
         (default, forced)
     }
 
-    /// Five shapes that recognise NO edge register even under default (on) collapse: a single latch, a
-    /// gated (self-referencing) latch, a master/slave pair split across two DIFFERENT declared clocks,
-    /// an exposed master (a second output), and a two-latch DFF whose clock is never declared. Mirrors
-    /// `statetable.rs`'s and `collapse.rs`'s fixtures of the same shapes.
-    const NON_COLLAPSIBLE: [&str; 5] = [
+    /// Four shapes the behavioural classifier recognises as NO edge register even under default (on)
+    /// collapse: a single latch, a gated (self-referencing) latch, a master/slave pair split across two
+    /// DIFFERENT declared clocks (the slave stays level — its data is transparent in one phase of the
+    /// clock that gates it), and a two-latch DFF whose clock is never declared. The exposed-master DFF
+    /// (a master surfaced as a second output) now DOES collapse behaviourally and is covered as a
+    /// positive fixture in `exposed_master_collapses_slave_over_surviving_master`.
+    const NON_COLLAPSIBLE: [&str; 4] = [
         r#"
 [[cell]]
 name = "DLAT"
@@ -569,15 +612,6 @@ clock = ["CLKA", "CLKB"]
 M = "!CLKA*D + CLKA*M"
 [cell.outputs]
 Q = "CLKB*M + !CLKB*Q"
-"#,
-        r#"
-[[cell]]
-name = "EMDFF"
-inputs = ["CLK", "D"]
-clock = ["CLK"]
-[cell.outputs]
-Q = "CLK*M + !CLK*Q"
-M = "!CLK*D + CLK*M"
 "#,
         r#"
 [[cell]]
@@ -643,5 +677,133 @@ Q = "CLK*M + !CLK*Q"
             assert!(v.contains("wire   M;"));
         }
         assert_eq!(v_direct, v_via_flag);
+    }
+
+    #[test]
+    fn exposed_master_collapses_slave_over_surviving_master() {
+        // The exposed-master DFF: the master M is a second OUTPUT, so it survives (never folded) as its
+        // own level UDP, while the slave Q collapses to a rising-edge register capturing M.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "EMDFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+M = "!CLK*D + CLK*M"
+"#,
+        );
+        let v = cell_verilog(&cell);
+        eprintln!("{v}");
+        // Q is a rising-edge register over the surviving master M; the master keeps its own level UDP.
+        assert!(v.contains("primitive EMDFF_Q(Q, M, CLK);"));
+        assert!(prim_block(&v, "primitive EMDFF_Q(").contains("0 (01) : ? : 0;"));
+        assert!(prim_block(&v, "primitive EMDFF_Q(").contains("1 (01) : ? : 1;"));
+        assert!(v.contains("primitive EMDFF_M(M, CLK, D);"));
+        // M is an output, so it is a module port, not folded away.
+        assert!(v.contains("module EMDFF(M, Q, CLK, D);"));
+        assert!(!v.contains("wire   M;"));
+    }
+
+    #[test]
+    fn dual_edge_det_captures_on_both_edges_with_no_opposite_row() {
+        // A mux-based dual-edge flip-flop: Q captures D on BOTH clock edges. Each capture row carries
+        // exactly ONE edge token, and there is no opposite-edge no-change row (a dual-edge register has
+        // no inactive edge).
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DET"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+L1 = "!CLK*D + CLK*L1"
+L2 = "CLK*D + !CLK*L2"
+[cell.outputs]
+Q = "CLK*L1 + !CLK*L2"
+"#,
+        );
+        let v = cell_verilog(&cell);
+        eprintln!("{v}");
+        let q = prim_block(&v, "primitive DET_Q(");
+        // Both edges capture D; each row carries exactly one edge indicator.
+        assert!(q.contains("0 (01) : ? : 0;"));
+        assert!(q.contains("1 (01) : ? : 1;"));
+        assert!(q.contains("0 (10) : ? : 0;"));
+        assert!(q.contains("1 (10) : ? : 1;"));
+        for row in q.lines().filter(|l| l.contains("(0") || l.contains("(1")) {
+            let edges = row.matches("(01)").count() + row.matches("(10)").count();
+            assert!(edges <= 1, "row carries more than one edge token: {row}");
+        }
+        // No opposite-edge no-change row: the only `-` rows are the steady-clock data-ignore rows.
+        assert!(!q.contains("? (10) : ? : -;"));
+        assert!(!q.contains("? (01) : ? : -;"));
+        // Both internal latches fold away.
+        assert!(!v.contains("DET_L1"));
+        assert!(!v.contains("DET_L2"));
+    }
+
+    #[test]
+    fn inverting_dff_captures_not_d() {
+        // An inverting DFF: Q captures !D on the rising edge, recorded verbatim (inversion is not
+        // special-cased) -- the capture rows map D=0 to next 1 and D=1 to next 0.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "IDFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*!M + !CLK*Q"
+"#,
+        );
+        let v = cell_verilog(&cell);
+        eprintln!("{v}");
+        let q = prim_block(&v, "primitive IDFF_Q(");
+        assert!(v.contains("primitive IDFF_Q(Q, D, CLK);"));
+        assert!(q.contains("0 (01) : ? : 1;"));
+        assert!(q.contains("1 (01) : ? : 0;"));
+        // Single-edge register keeps the opposite-edge no-change row and folds its master.
+        assert!(q.contains("? (10) : ? : -;"));
+        assert!(!v.contains("IDFF_M"));
+    }
+
+    #[test]
+    fn toggle_flop_self_column_is_reg_field_not_input_port() {
+        // A resettable toggle flip-flop decomposes into TWO edge registers: Q captures the master M on
+        // the rising edge, and M captures !Q (== !M over the reachable pre-fall states) on the falling
+        // edge. M is SELF-referencing: its own symbol must NOT become a UDP input port -- it is the
+        // `reg` current-state field, carrying M's own literal in the capture rows.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "TFF"
+inputs = ["CLK", "R"]
+clock = ["CLK"]
+async = ["R"]
+[cell.internal]
+M = "!R*(!CLK*!Q + CLK*M)"
+[cell.outputs]
+Q = "!R*(CLK*M + !CLK*Q)"
+"#,
+        );
+        let v = cell_verilog(&cell);
+        eprintln!("{v}");
+        // Two edge registers: Q (rising, captures M) and the self-fed master M (falling).
+        assert!(v.contains("primitive TFF_Q(Q, M, R, CLK);"));
+        // M's own symbol is excluded from its ports/inputs: the self column is the reg, not an input.
+        assert!(v.contains("primitive TFF_M(M, R, CLK);"));
+        let m = prim_block(&v, "primitive TFF_M(");
+        assert!(m.contains("input  R, CLK;"), "self M is not an input port");
+        // The falling capture prints M's own literal in the current-state (reg) field, not `?`.
+        assert!(m.contains("0 (10) : 0 : 1;"));
+        assert!(m.contains("? (10) : 1 : 0;"));
+        // The self-fed master survives as an internal wire, and neither instance duplicates M.
+        assert!(v.contains("wire   M;"));
+        assert!(v.contains("TFF_M u_TFF_M (M, R, CLK);"));
+        assert!(v.contains("TFF_Q u_TFF_Q (Q, M, R, CLK);"));
     }
 }
