@@ -1,102 +1,163 @@
-# Master-slave latch → edge-register collapse
+# Behavioural edge-sensitivity classification
 
-How cellsmith recognises a cell modelled as two opposite-phase level-sensitive latches in series on
-the same declared clock — a master feeding a slave — and re-expresses that pair as a single
-edge-triggered register. This is a **post-exploration** re-expression, not a new analysis: the
-two-latch model stays the source of truth for every derived behaviour (arcs, hazards, constraints,
-regions), and the collapse only changes the *form* a register is annotated in, never what it does.
+How cellsmith decides, for every node of a cell, whether that node is an **edge-triggered register**,
+a **level-sensitive** element, or plain combinational logic — and re-expresses the edge-triggered ones
+as edge seams across the emitted artifacts. Classification reads only the cell's already-explored
+toggle-and-settle behaviour: it observes how each node reacts to a single input toggle from every
+reachable stable state and infers the sequential shape from those observations, never from the
+topology of the source equations. This is a **post-exploration** re-expression, not a new analysis:
+the state machine stays the source of truth for every derived behaviour (arcs, hazards, constraints,
+regions), and classification only chooses the *form* a register is annotated in, never what it does.
 `state-machine-arc-engine.md`, `hazard-detection.md`, and `state-table-regions.md` cover the passes
 whose output this one reads; `state-space-minimisation.md` covers the model rewrite that runs before
 all of them.
 
 ## 1. Where it runs
 
-Recognition (`src/logic/collapse.rs::recognise_edge_registers`) is the **last** step of
-`Cell::analyse`, after the state-space minimisation rewrite, the machine/hazard pass, and the
-per-signal region cache have all already run over the shared per-cell BDD map. It reads that map, the
-post-minimise `signals()` order, the output set, and the cell's declared clock pins — nothing else —
-and is strictly **read-only**: it mutates no BDD and feeds nothing back into the machine, the arcs, or
-the hazard detectors. Its entire output is one new field, `AnalysedCell::edge_registers`, a
-`Vec<EdgeRegister>` in `signals()` order.
+`classify` (`src/logic/edge.rs`) is the **last** step of `Cell::analyse`, after the state-space
+minimisation rewrite, the machine/hazard pass, and the per-signal region cache have all already run.
+It takes the shared `Machine` and is strictly **read-only**: it re-walks the exploration with
+`machine::toggle`/`machine::settle` — exactly mirroring `arcs::derive`'s per-node walk — mutates no
+BDD, and feeds nothing back into the machine, the arcs, or the hazard detectors. Its entire output is
+one field, `AnalysedCell::edge` (`EdgeSensitivity`): the recognised `EdgeRegister`s and the cell-level
+set of internal level-sensitive masters folded away.
 
-## 2. Recognition rule
+The **candidates** are every output (so a combinational output is considered and simply classified as
+`none`) plus every internal state variable that is not itself an output. A pin declared both a clock
+and an async pin is treated as async-only.
 
-A signal `s` with transition function `δ_s` is a **latch** with respect to a declared clock `c` at
-transparency phase `p` iff `c` appears in `δ_s`'s support, the transparent cofactor `T_s = δ_s|c=p`
-does **not** reference `s`, and the hold cofactor `H_s = δ_s|c=¬p` **does**. Recognition is
-**declared-clocks-only**: a cell with no declared clock never collapses, and a signal that is
-latch-shaped with respect to two or more declared clocks is rejected outright — it is not classified
-as a latch on either.
+## 2. The transition predicate
 
-A candidate pair `(m master, s slave)` is nominated when both are latches on the same clock with
-opposite phases and `m` appears in `vars(T_s)`, then confirmed by five guards, all exact BDD
-identities computed in the one shared per-cell builder (so `==` is a genuine function-equality test):
+For each candidate the walk aggregates, over every reachable stable state, how one input toggle moves
+the node. A toggled input is one of three kinds — declared clock, declared async pin, or data input —
+and each contributes a different observation:
 
-- **G2** `m ∉ vars(H_s)` — the master feeds only the slave's transparent path, never its hold.
-- **G3** `s ∉ vars(δ_m)` — no reverse dependency of the master on the slave.
-- **G5** monotone hold for both latches: `H|x=0 ∧ ¬H|x=1 == false` in each latch's own variable.
-- **F1** `T_s|m=0 == H_s|s=0 ∧ T_s|m=1 == H_s|s=1` — the value captured through the master equals the
-  value the slave itself would have held.
-- **F2** `H_m|m=0 == H_s|s=0 ∧ H_m|m=1 == H_s|s=1` — master and slave hold the same value.
+- **data input.** A data toggle that changes the node is recorded per clock phase: for each declared
+  clock, whether the node moved while that clock was low and whether it moved while it was high.
+- **clock.** A clock toggle records the `(pre-state, post-value)` sample under that clock's active
+  edge, and whether the value changed.
+- **async pin.** Async pins are excluded from the hold discipline; their effect is folded into the
+  off-edge synthesis (§4), not the level/register classification.
 
-A master is **foldable** away when it is internal (not an output pin), `s` is its sole surviving
-consumer, and it is not itself a slave (no same-clock opposite-phase latch feeds it). A confirmed pair
-whose master is foldable annotates the slave with `folded_master = Some(m)` and a capture function that
-substitutes the master's own transparent cofactor in for `m`. A confirmed pair whose master is instead
-already annotated as a register in its own right annotates the slave with `folded_master = None`,
-keeping `m` as a live reference in the capture. Recognition runs this pairing as a worklist over the
-signals to a fixpoint, so a slave whose master is not yet resolved (foldable or annotated) waits for a
-later round. A chain head that can neither fold nor be annotated — an exposed, tapped, multi-consumer,
-or undeclared-clock master — propagates nothing, leaving the whole cell unchanged.
+A candidate is then classified:
 
-Each recognised `EdgeRegister` carries the slave's name as `node`, the paired `clock`, the active
-`edge` (`Rise` for a transparent-high slave, `Fall` for transparent-low), a `cols` column set (the
-first-appearance union of the capture's and off-edge's own columns), the `capture` function as
-combinational state-table regions (empty hold — it never references the clock), and the `off_edge`
-function as state-table regions carrying the async set/clear and quiescent-hold behaviour.
+- **level** — some data input is transparent to the node in one phase of a clock that actually gates
+  it (a clock whose own toggle moves the node) but not the other phase. That **phase-asymmetric**
+  change is the signature of a transparent latch following its data during one phase. A level node
+  emits its ordinary hysteretic regions and takes no annotation; an internal level node is a foldable
+  master (§5). Restricting the transparency test to clocks that gate the node stops a uniform reset
+  reading as transparent against an unrelated clock it is independent of.
+- **register** — exactly one declared clock's edge(s) change the node, and no data input is
+  transparent to it: the node holds across data changes while the clock is stable and changes only
+  phase-asymmetrically across that one clock's edges. The active edge set is `Rise`, `Fall`, or both
+  (a **dual-edge** register, when both edges of the same clock change it).
+- **none** — combinational (no clock changes it), or changed by two or more distinct declared clocks:
+  no annotation.
 
-## 3. The N−1 edge-element invariant
+## 3. Capture synthesis
 
-Recognition never increases signal count and, wherever a chain of `N` alternating-phase latches
-confirms all its pairwise guards, folds it down to `N − 1` edge elements: every master but the last
-gets elided, and the boundary node — the one node that is both somebody's slave and somebody else's
-master — survives as its own register instead of vanishing.
+A register's **capture** is the next-state value it latches at an active edge, synthesised per edge
+from that edge's `(pre-state, post-value)` samples through the `regions` FR cover pipeline. The
+witnessed on-samples are the ON-set, the witnessed off-samples the OFF-set, and every unwitnessed
+projection a **don't-care**: the capture is the ON-set generalised by incompletely-specified
+minimisation, so it lands on the underlying function rather than only the sampled pre-states —
+reachability need not exercise every projection. The generalised on-set is total (its off is the exact
+complement, empty hold).
 
-The simplest case is `N = 2`: a plain master/slave DFF (`M` transparent-low, `Q` transparent-high on
-`CLK`) collapses to the single rising-edge register `Q`, folding `M` away entirely — `2 − 1 = 1`.
+The capture is recorded **verbatim** as an ordinary combinational function. An inverting flop captures
+`!D`; a toggle flop's master captures `!Q`; these are just the functions they are, never special-cased
+— inversion carries no dedicated attribute or branch. A projection that carries both an on- and an
+off-sample under the current header is a **conflict**; the synthesis escalates the header from tier 1
+(inputs plus non-level candidates) to tier 2 (inputs plus every candidate, level masters re-included),
+and a conflict that survives tier 2 falls the node back to level, no annotation.
 
-## 4. The ICM shared-boundary case
+## 4. Off-edge synthesis
 
-The ICM synchroniser's `CLKA` chain is `sela1 → sela2 → enA`, three latches in series (`N = 3`), so
-the invariant predicts `2` surviving registers — and that is exactly what recognition produces, but
-not by folding greedily from the front. `sela2` is simultaneously the **slave** of `sela1` and the
-**master** of `enA`: a greedy fold would absorb `sela2` into `enA`'s capture and leave nothing marking
-the shared boundary. The `foldable` guard's "not itself a slave" clause exists precisely to prevent
-that — `sela2` is rejected as a foldable master for `enA` because it is itself latch-paired with
-`sela1` on the same clock. So `sela2` is instead annotated as its **own** rising-edge register, folding
-`sela1` away (`folded_master = Some(sela1)`); and `enA` is annotated as a falling-edge register whose
-master does not fold (`folded_master = None`), keeping `sela2` as a live reference in `enA`'s capture.
-`sela1` and `sela2`'s original two-latch shape both vanish from the emitted count, but `sela2` itself
-remains a genuine coordinate — the chain's `3` latches become `2` registers, `sela2` and `enA`, with
-`sela1` alone elided. The `CLKB` chain (`selb1 → selb2 → enB`) mirrors it.
+The **off-edge** is the node's behaviour while the clock is stable: quiescent hold plus any async
+set/clear. It is synthesised over the **non-clock inputs** from the stable-state samples, grouped by
+projection and split into the clock's two phases. A projection forced high in a phase becomes an async
+set (`on`), forced low becomes an async clear (`off`), and a projection that merely holds (or is
+unobserved) lands in `hold` and drops out of the columns — a data input that never forces the node
+does not appear.
 
-## 5. The exploration is unchanged
+A declared-async pin whose forced effect **differs between the two stable clock phases** blocks the
+whole annotation and falls the node back to level (**behavioural F2**). This subsumes the master-slave
+async-agreement guarantee without any topology matching: a reset that clears both latches agrees
+across the two phases and is recognised as an async clear on the register; a reset that clears only one
+latch disagrees between the phases and self-excludes.
 
-Recognition is read-only by construction, and a permanent regression guard
-(`collapse_changes_only_the_edge_registers_field` in `src/logic/collapse.rs`) checks it directly: for
-both the DFF and ICM fixtures, analysing the same spec with `no_edge_collapse` forced true and false
-produces byte-for-byte identical `AnalysedCell` fields for everything except `edge_registers` —
-`arcs`, `hidden_arcs`, `leakage`, `order_dependence`, `oscillation`, `constraints`, and `regions`
-included. The collapse changes only which form a recognised register is annotated in; the state-machine
+## 5. Fold and the toggle-flop decomposition
+
+Folding is decided at **cell level** (`EdgeSensitivity.folded`). An internal level master is folded
+away when nothing surviving still references it: no register capture or off-edge cover names it, and no
+other surviving level signal depends on it. A folded master's own pin, UDP primitive, and statetable
+row are elided from every artifact, leaving only the register's edge form; its internal-power
+characterisation via its primary-input hidden arcs is unchanged.
+
+A **foldable** master is one that is a pure input function in every pre-edge state. A **toggle flop**
+does not meet that bar: its master is self-fed (it captures a function of the register's own prior
+state, not of a data input), so the ring cannot fold. It **decomposes into two opposite-edge
+registers** instead — the master becomes a register on one edge and the slave a register on the other,
+each keeping the other as a live reference in its capture. A **cross-coupled NAND** pair shares one
+folded master, recognised as two registers over the same captured value and its inverse.
+
+A **dual-edge** register carries two captures (`Rise` first, then `Fall`); both of its clock→node arcs
+are relabelled `-type edge` in the Liberate output.
+
+## 6. Emission
+
+`AnalysedCell::edge` is consumed downstream by the three emitters, each re-expressing a recognised
+register in its own edge form and eliding any folded master:
+
+- **Liberty** — the joint `statetable` carries the register's edge rows; a folded master's row is
+  dropped.
+- **Verilog** — the sequential UDP is written in edge-triggered form.
+- **Liberate** — the register-capturing `define_arc` output carries `-type edge`.
+
+How each does so is an emission concern, not part of classification.
+
+## 7. What the behaviour subsumes
+
+Because classification checks the actual settled behaviour rather than matching a topology, the
+guarantees an explicit master-slave recogniser would enforce as structural guards fall out for free:
+
+- a genuine **hold** across data changes is checked on real transitions, so a node that follows an
+  input during a phase never presents as a register (subsuming the transparent-path / hold guards);
+- **async agreement** is the phase-agreement rule of §4;
+- a **non-monotone or oscillating** hold never presents the required stable behaviour on the walk, so
+  it self-excludes without a separate monotonicity guard.
+
+## 8. Retained restrictions
+
+These bounds are deliberate and user-approved:
+
+- **Declared clocks only.** A cell with no declared clock is never annotated.
+- **One clock per node.** A node changed by two or more declared clocks is not annotated — a two-clock
+  master-slave stays level.
+- **Capture conflict ⇒ level.** A capture conflict that survives the tier-2 header falls the node back
+  to level.
+- **Never-changing ⇒ no register.** A node that never changes on a clock is not a register on it.
+- **Clock/async overlap.** A pin declared both a clock and an async pin is treated async-only.
+- **Async must be declared** to be excluded from the hold discipline; an undeclared forcing input is
+  read as data.
+- **Surviving non-state internals** are not candidates.
+- **Explored machine required.** Classification needs an explored machine, so a cell wider than
+  `MAX_MACHINE_VARS` (= 22) gets no annotation. Lifting the 22-variable cap is a separate,
+  tool-wide change.
+
+## 9. The exploration is unchanged
+
+Classification is read-only by construction, and a permanent regression guard
+(`edge_classification_changes_only_the_edge_annotation` in `src/logic/edge.rs`) checks it directly:
+for both the DFF and ICM fixtures, analysing the same spec with `no_edge_collapse` forced true and
+false produces byte-for-byte identical `AnalysedCell` fields for everything except `edge` — `arcs`,
+`hidden_arcs`, `leakage`, `order_dependence`, `oscillation`, `constraints`, and `regions` included.
+Classification changes only which form a recognised register is annotated in; the state-machine
 exploration, the discovered arcs and their prevectors, and hazard detection never see it.
 
-## 6. Opt-outs
+## 10. Opt-outs
 
-Collapse is on by default. A cell opts out individually with `no_edge_collapse = true` in its TOML
-table; the global `--no-edge-collapse` CLI flag does the same for every cell in the run, applied before
-analysis so it is indistinguishable from each cell having declared the field itself. Either way,
-`edge_registers` stays empty and the cell's two-latch model is emitted exactly as written.
-
-The annotation itself is consumed downstream by the Liberty, Verilog, and Liberate-arc emitters, each
-re-expressing a recognised register in its own edge form and eliding any folded master; how each does
-so is an emission concern, not part of recognition.
+Classification is on by default. A cell opts out individually with `no_edge_collapse = true` in its
+TOML table; the global `--no-edge-collapse` CLI flag does the same for every cell in the run, applied
+before analysis so it is indistinguishable from each cell having declared the field itself. Either
+way, `edge` stays the default empty `EdgeSensitivity` and every node is emitted in its level form.

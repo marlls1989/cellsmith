@@ -9,18 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- A cell modelled as two opposite-phase level-sensitive latches in series on the same declared clock
-  (a master feeding a slave) is recognised, after exploration, as a single edge-triggered register and
-  re-expressed in edge form across all three emitters: the Liberty joint `statetable`, the Verilog
-  sequential UDP, and the Liberate `define_arc` output, whose register-capturing arc carries `-type
-  edge`. A foldable master latch's own pin, UDP primitive, and `statetable` row are elided from every
-  artifact, leaving only the slave's edge form; the master's internal-power characterisation, carried
-  by its primary-input hidden arcs, is unchanged. A master that is itself a slave of an earlier latch
-  (a shared synchroniser boundary) survives as its own register instead of being folded. The collapse
-  only changes which form a register is emitted in: the state-machine exploration, the discovered arcs'
-  prevectors, and hazard detection are untouched, and every
-  non-register signal is emitted exactly as before. On by default; a cell can opt out with
-  `no_edge_collapse = true`, and `--no-edge-collapse` opts out every cell in the run.
+- Behavioural edge-sensitivity classification inside the arc engine. After exploration, every node —
+  each output and each internal state variable — is classified, from the cell's toggle-and-settle
+  behaviour, as an edge-triggered register (on which clock edge or edges), a level-sensitive element,
+  or combinational, and each recognised register is re-expressed in edge form across all three
+  emitters: the Liberty joint `statetable`, the Verilog sequential UDP, and the Liberate `define_arc`
+  output, whose register-capturing arc carries `-type edge`. Classification covers DFF and ICM
+  registers together with inverting, dual-edge, cross-coupled-NAND, exposed-master, and toggle-flop
+  registers; a captured function is recorded verbatim, so an inverting flop captures `!D` and a
+  toggle flop decomposes into two opposite-edge registers. A folded master's own pin, UDP primitive,
+  and `statetable` row are elided from every artifact; its internal-power characterisation, carried by
+  its primary-input hidden arcs, is unchanged. Classification changes only which form a register is
+  emitted in: the state-machine exploration, the discovered arcs' prevectors, and hazard detection are
+  untouched, and every non-register signal is emitted exactly as before. On by default; a cell can opt
+  out with `no_edge_collapse = true`, and `--no-edge-collapse` opts out every cell in the run.
 
 ## [0.1.2] - 2026-07-17
 

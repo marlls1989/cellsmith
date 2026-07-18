@@ -1,17 +1,22 @@
 //! Behavioural edge-sensitivity classification.
 //!
-//! This is the **behavioural** successor to the structural [`super::collapse`] pass: rather than
-//! nominating a master-slave latch pair structurally, it discovers per node — outputs **and** internal
-//! state variables — whether that node is edge-triggered (and on which clock edge/edges), level-
-//! sensitive, or combinational, purely from the cell's already-explored toggle-and-settle behaviour. It
-//! is a strict superset of the structural detector by construction: every latch topology that settles
-//! into an edge seam is recognised, inverting captures (`capture = !D`) included and recorded verbatim —
-//! inversion is never special-cased.
+//! Each candidate node — every output **and** every internal state variable — is classified, purely
+//! from the cell's already-explored toggle-and-settle behaviour, as edge-triggered (and on which clock
+//! edge or edges), level-sensitive, or combinational. An edge-triggered node captures a next-state
+//! value at each active edge of one declared clock and holds otherwise; a level node follows a data
+//! input through a transparent phase. Captures are synthesised through the [`super::regions`] FR cover
+//! pipeline and recorded verbatim as ordinary functions — an inverting flop's capture is simply `!D`,
+//! never special-cased.
 //!
 //! [`classify`] is a **post-exploration** read-only pass over the shared [`Machine`]: it re-walks the
-//! exploration ([`Machine::explored`]) with [`machine::toggle`]/[`machine::settle`], exactly mirroring
-//! [`super::arcs::derive`]'s per-node walk, and only ADDS an edge-sensitivity annotation. It never
-//! re-derives the exploration, the prevectors or the hazards — those stay byte-identical.
+//! exploration with [`machine::toggle`]/[`machine::settle`], mirroring [`super::arcs::derive`]'s
+//! per-node walk, and only ADDS an edge-sensitivity annotation. It never re-derives the exploration,
+//! the prevectors or the hazards — those stay byte-identical whether the annotation is on or off.
+//!
+//! See `docs/edge-collapse.md` for the concept-first walkthrough: the phase-asymmetry transition
+//! predicate, the capture and off-edge synthesis, the cell-level fold and toggle-flop decomposition,
+//! how the master-slave hold and async-agreement guarantees are subsumed behaviourally, and the
+//! retained restrictions.
 //!
 //! # Classification
 //!
@@ -26,7 +31,7 @@
 //!
 //! The capture (per active edge) and the off-edge (hold + async set/clear) functions are synthesised
 //! from the sampled pre-states and stable states over a deterministic two-tier header, reusing the
-//! [`super::regions`] region pipeline so the emitted cubes are byte-compatible with the structural pass.
+//! [`super::regions`] region pipeline.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -622,7 +627,7 @@ fn synth_off_edge<B: Brand, C: ManagerCell>(
 }
 
 /// The register's column set: the first-appearance union of every capture's cols then the off-edge's
-/// cols (mirrors `collapse.rs`'s `union_cols`).
+/// cols.
 fn register_cols(captures: &[(Edge, StateRegions)], off_edge: &StateRegions) -> Vec<Symbol> {
     let mut cols: Vec<Symbol> = Vec::new();
     let sources = captures
@@ -642,7 +647,6 @@ fn register_cols(captures: &[(Edge, StateRegions)], off_edge: &StateRegions) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logic::collapse::{recognise_edge_registers, EdgeRegister as StructReg};
     use espresso_logic::sync_bdd_builder;
     use std::collections::BTreeSet;
 
@@ -688,7 +692,7 @@ mod tests {
         es.folded.iter().map(Symbol::as_str).collect()
     }
 
-    // --- fixtures (collapse.rs re-encoded as single-cell TOML) ---
+    // --- fixtures ---
 
     const DFF_TOML: &str = r#"
 [[cell]]
@@ -771,7 +775,7 @@ GCLK = "enA*CLKA+enB*CLKB"
         });
     }
 
-    // === Fixtures: collapse.rs stay-level cases re-encoded as single-cell TOML ===
+    // === Fixtures: stay-level cases ===
 
     const DLAT_TOML: &str = r#"
 [[cell]]
@@ -853,110 +857,6 @@ M = "!CLK*D + CLK*M"
 [cell.outputs]
 Q = "CLK*!M + !CLK*Q"
 "#;
-
-    // === Step 2: executable superset gate ===
-
-    /// Rebuild a region's minimised on/off/hold covers as BDDs in the shared builder and compare them by
-    /// `equivalent_to` MASKED to the reachable state set: the structural and behavioural covers must agree
-    /// on every reachable state. Full-space equality would over-constrain a shared-boundary register whose
-    /// behavioural capture legitimately drops a syntactically-present-but-behaviourally-redundant literal
-    /// (e.g. ICM's `enA` captures `sela2`, the reachable-equal simplification of the structural
-    /// `!RA*sela2` — `RA*sela2` is unreachable). Reachable-masked equality is the true strict-superset /
-    /// same-behaviour gate.
-    macro_rules! assert_regions_equiv {
-        ($builder:expr, $reach:expr, $a:expr, $b:expr, $ctx:expr) => {{
-            let a = $a;
-            let b = $b;
-            for (region, ca, cb) in [
-                ("on", &a.on_cover, &b.on_cover),
-                ("off", &a.off_cover, &b.off_cover),
-                ("hold", &a.hold_cover, &b.hold_cover),
-            ] {
-                let la = $builder.build_cover(ca).and($reach);
-                let lb = $builder.build_cover(cb).and($reach);
-                assert!(
-                    la.equivalent_to(&lb),
-                    "{} region {} differs over reachable states",
-                    $ctx,
-                    region,
-                );
-            }
-        }};
-    }
-
-    fn differential(src: &str) {
-        with_machine!(src, |builder, analysed, bdds, m| {
-            let order: Vec<Symbol> = analysed.signals().map(|s| s.name.clone()).collect();
-            let output_set: BTreeSet<Symbol> =
-                analysed.outputs.iter().map(|o| o.name.clone()).collect();
-            let clocks = analysed.clock_pins.clone();
-            let structural: Vec<StructReg> =
-                recognise_edge_registers(&bdds, &order, &output_set, &clocks);
-            let es = classify(&m);
-            // The reachable state set as a BDD (OR of every explored stable-state cube), for the masked
-            // region comparison.
-            let mut reach = builder.constant(false);
-            for state in &m.explored.order {
-                reach = reach.or(&super::cube_bdd(&builder, state));
-            }
-            for sr in &structural {
-                let br = es
-                    .registers
-                    .iter()
-                    .find(|r| r.node == sr.node && r.clock == sr.clock)
-                    .unwrap_or_else(|| {
-                        panic!("no behavioural register for structural {:?}", sr.node)
-                    });
-                let bcap = br
-                    .captures
-                    .iter()
-                    .find(|(e, _)| *e == sr.edge)
-                    .map(|(_, c)| c)
-                    .unwrap_or_else(|| {
-                        panic!("behavioural {:?} lacks edge {:?}", sr.node, sr.edge)
-                    });
-                assert_regions_equiv!(
-                    builder,
-                    &reach,
-                    &sr.capture,
-                    bcap,
-                    format!("{} capture", sr.node)
-                );
-                assert_regions_equiv!(
-                    builder,
-                    &reach,
-                    &sr.off_edge,
-                    &br.off_edge,
-                    format!("{} off_edge", sr.node)
-                );
-                if let Some(fm) = &sr.folded_master {
-                    assert!(
-                        es.folded.contains(fm),
-                        "structural folded master {fm:?} missing from behavioural folded {:?}",
-                        folded_list(&es)
-                    );
-                }
-            }
-        });
-    }
-
-    #[test]
-    fn differential_superset_over_every_fixture() {
-        for src in [
-            DFF_TOML,
-            ICM_TOML,
-            DLAT_TOML,
-            GLAT_TOML,
-            MUX_TWO_CLOCK_TOML,
-            EXPOSED_MASTER_TOML,
-            TAPPED_MASTER_TOML,
-            INVERTING_DFF_TOML,
-            MASTER_ONLY_RESET_TOML,
-            UCDFF_TOML,
-        ] {
-            differential(src);
-        }
-    }
 
     // === Step 3 (2): stay level (no annotation) ===
 
