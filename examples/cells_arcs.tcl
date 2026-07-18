@@ -6371,6 +6371,132 @@ define_arc \
 	{ DFF }
 
 define_arc \
+	-prevector_pinlist {G D} \
+	-prevector {11} \
+	-type combinational \
+	-pinlist {G D Q} \
+	-vector {1 F F} \
+	-when "G" \
+	-related_pin D \
+	-pin Q \
+	{ DLH }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {G D} \
+	-prevector {10} \
+	-pinlist {G D Q} \
+	-vector {1 R R} \
+	-when "G" \
+	-related_pin D \
+	-pin Q \
+	{ DLH }
+
+define_arc \
+	-prevector_pinlist {G D} \
+	-prevector {11 01 00} \
+	-type combinational \
+	-pinlist {G D Q} \
+	-vector {R 0 F} \
+	-when "!D" \
+	-related_pin G \
+	-pin Q \
+	{ DLH }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {G D} \
+	-prevector {10 00 01} \
+	-pinlist {G D Q} \
+	-vector {R 1 R} \
+	-when "D" \
+	-related_pin G \
+	-pin Q \
+	{ DLH }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {G D} \
+	-prevector {10 00 01} \
+	-pinlist {G D Q} \
+	-vector {0 F 0} \
+	-when "!G*!Q" \
+	-pin D \
+	{ DLH }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {G D} \
+	-prevector {11 01} \
+	-pinlist {G D Q} \
+	-vector {0 F 1} \
+	-when "!G*Q" \
+	-pin D \
+	{ DLH }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {G D} \
+	-prevector {10 00} \
+	-pinlist {G D Q} \
+	-vector {0 R 0} \
+	-when "!G*!Q" \
+	-pin D \
+	{ DLH }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {G D} \
+	-prevector {11 01 00} \
+	-pinlist {G D Q} \
+	-vector {0 R 1} \
+	-when "!G*Q" \
+	-pin D \
+	{ DLH }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {G D} \
+	-prevector {10} \
+	-pinlist {G D Q} \
+	-vector {F 0 0} \
+	-when "!D*!Q" \
+	-pin G \
+	{ DLH }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {G D} \
+	-prevector {11} \
+	-pinlist {G D Q} \
+	-vector {F 1 1} \
+	-when "D*Q" \
+	-pin G \
+	{ DLH }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {G D} \
+	-prevector {10 00} \
+	-pinlist {G D Q} \
+	-vector {R 0 0} \
+	-when "!D*!Q" \
+	-pin G \
+	{ DLH }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {G D} \
+	-prevector {11 01} \
+	-pinlist {G D Q} \
+	-vector {R 1 1} \
+	-when "D*Q" \
+	-pin G \
+	{ DLH }
+
+define_leakage -when "!D*G*!Q" { DLH }
+define_leakage -when "D*G*Q" { DLH }
+define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00010 10010 00010 10010 10000} \
 	-type combinational \

@@ -151,6 +151,23 @@ library (cells) {
       internal_node : "Q";
     }
   }
+  cell (DLH) {
+    pin (G) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("G D", "Q") {
+      table : "L - : - : N , \
+               H L : - : L , \
+               H H : - : H";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
   cell (ICM) {
     pin (CLKA) {
       direction : input;

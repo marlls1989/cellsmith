@@ -184,6 +184,27 @@ endspecify
 DFF_Q u_DFF_Q (Q, D, CLK);
 endmodule
 `endcelldefine
+primitive DLH_Q(Q, G, D);
+output Q;
+input  G, D;
+reg    Q;
+table
+	0 ? : ? : -;
+	1 0 : ? : 0;
+	1 1 : ? : 1;
+endtable
+endprimitive
+`celldefine
+module DLH(Q, G, D);
+output Q;
+input  G, D;
+specify
+	(G => Q) = (0.1, 0.1);
+	(D => Q) = (0.1, 0.1);
+endspecify
+DLH_Q u_DLH_Q (Q, G, D);
+endmodule
+`endcelldefine
 primitive ICM_GCLK(GCLK, enA, CLKA, enB, CLKB);
 output GCLK;
 input  enA, CLKA, enB, CLKB;

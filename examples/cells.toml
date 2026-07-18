@@ -53,6 +53,15 @@ M = "!CLK*D + CLK*M"           #   transparent when CLK low, holds when high
 Q = "CLK*M + !CLK*Q"           # slave: captures M on the rising edge (M established by the prevector)
 
 [[cell]]
+name = "DLH"
+inputs = ["G", "D"]
+clock = ["G"]                  # active-high enable, marked as the timing reference
+[cell.outputs]
+Q = "G*D + !G*Q"               # transparent-high D latch: Q follows D while G high, holds while G low.
+                               #   A lone latch is not a master-slave pair, so it stays level — no edge
+                               #   collapse even though its enable is a declared clock.
+
+[[cell]]
 name = "ICM"
 inputs = ["CLKA", "CLKB", "RA", "RB", "S"]
 clock = ["CLKA", "CLKB"]
