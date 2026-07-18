@@ -16,8 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   edge`. A foldable master latch's own pin, UDP primitive, and `statetable` row are elided from every
   artifact, leaving only the slave's edge form; the master's internal-power characterisation, carried
   by its primary-input hidden arcs, is unchanged. A master that is itself a slave of an earlier latch
-  (a shared synchroniser boundary) survives as its own register instead of being folded. The collapse only changes which form a register is emitted in: the state-machine
-  exploration, the discovered arcs' prevectors, and hazard detection are untouched, and every
+  (a shared synchroniser boundary) survives as its own register instead of being folded. The collapse
+  only changes which form a register is emitted in: the state-machine exploration, the discovered arcs'
+  prevectors, and hazard detection are untouched, and every
   non-register signal is emitted exactly as before. On by default; a cell can opt out with
   `no_edge_collapse = true`, and `--no-edge-collapse` opts out every cell in the run.
 

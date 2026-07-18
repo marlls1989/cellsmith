@@ -882,7 +882,8 @@ GCLK = "enA*CLKA+enB*CLKB"
     /// A lone level-sensitive latch whose ENABLE is a declared clock, driving an output node. A single
     /// latch is not a master-slave pair, so nothing collapses (no edge registers) and its level
     /// enable->output arcs stay `-type combinational` — never `-type edge` — even though the enable is a
-    /// declared clock. The sharpest guard that a latch/level arc is never mischaracterised as an edge arc.
+    /// declared clock. Confirms a declared-clock enable does not, on its own, collapse a level latch or
+    /// emit an edge arc: recognition finds no master-slave pair, so `edge_registers` is empty.
     #[test]
     fn latch_with_declared_clock_enable_emits_zero_edge_type_arcs() {
         let cell = analyse(

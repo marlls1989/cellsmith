@@ -215,7 +215,8 @@ fn classify_latch<B: Brand, C: ManagerCell>(
 /// The master of slave latch `s`, confirmed against all guards (G2, G3, G5, F1, F2), or `None`. Searches
 /// `vars(T_s)` for a latch on the same clock with the opposite phase, returning the first candidate that
 /// passes every guard. When more than one variable in `vars(T_s)` could classify as the master, this
-/// picks whichever comes first in BDD variable order; that order is stable per shared per-cell builder,
+/// picks whichever comes first in the DFS variable-discovery order `variables()` yields; that order is
+/// stable per shared per-cell builder,
 /// so the choice is deterministic rather than a source of nondeterminism.
 fn valid_master<B: Brand, C: ManagerCell>(
     s: &Symbol,
