@@ -220,26 +220,26 @@ fn collapse_hidden(arcs: &[HiddenArc]) -> Vec<HiddenArc> {
     best.into_values().cloned().collect()
 }
 
-/// Lookup from a register node (an `edge.registers` entry's `node`) to the declared clock it's keyed
-/// off and its capturing edges (one for a single-edge register, two — Rise and Fall — for a dual-edge
-/// register). A delay arc whose output is one of these nodes, whose `-related_pin` is that clock, and
-/// whose own edge is among the register's capturing edges is one of the register's clock-to-output edge
-/// arcs — `format_arc` re-labels it `-type edge` (a Liberate edge-register delay arc) instead of
+/// Lookup from a register node (an `edge.registers` entry's `node`) to its `(clock, capturing edge)`
+/// pairs — one per capture (a single-edge single-clock register has one, a dual-edge register two, Rise
+/// and Fall). A delay arc whose output is one of these nodes, whose `-related_pin` is a keying clock, and
+/// whose own edge is that clock's capturing edge is one of the register's clock-to-output edge arcs —
+/// `format_arc` re-labels it `-type edge` (a Liberate edge-register delay arc) instead of
 /// `-type combinational`. An arc on a non-capturing clock edge is level/latch behaviour and stays
 /// `-type combinational`.
 fn edge_register_clocks(
     cell: &AnalysedCell,
-) -> std::collections::BTreeMap<Symbol, (Symbol, Vec<Edge>)> {
+) -> std::collections::BTreeMap<Symbol, Vec<(Symbol, Edge)>> {
     cell.edge
         .registers
         .iter()
         .map(|r| {
             (
                 r.node.clone(),
-                (
-                    r.clock.clone(),
-                    r.captures.iter().map(|(edge, _)| *edge).collect(),
-                ),
+                r.captures
+                    .iter()
+                    .map(|(clock, edge, _)| (clock.clone(), *edge))
+                    .collect(),
             )
         })
         .collect()
@@ -262,11 +262,13 @@ fn format_arc(
     cell: &AnalysedCell,
     arc: &Arc,
     opts: ArcsTclOptions,
-    edge_clocks: &std::collections::BTreeMap<Symbol, (Symbol, Vec<Edge>)>,
+    edge_clocks: &std::collections::BTreeMap<Symbol, Vec<(Symbol, Edge)>>,
 ) -> String {
     let is_edge = !arc.is_async
-        && edge_clocks.get(&arc.output).is_some_and(|(clock, edges)| {
-            arc.related == *clock && edges.contains(&related_edge(arc))
+        && edge_clocks.get(&arc.output).is_some_and(|pairs| {
+            pairs
+                .iter()
+                .any(|(clock, edge)| arc.related == *clock && *edge == related_edge(arc))
         });
     let type_line = format!(
         "\t-type {} \\\n",
@@ -822,7 +824,7 @@ Q = "CLK*M + !CLK*Q"
             .edge
             .registers
             .iter()
-            .all(|r| r.captures.iter().all(|(e, _)| *e == Edge::Rise)));
+            .all(|r| r.captures.iter().all(|(_, e, _)| *e == Edge::Rise)));
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
         assert!(tcl.matches("-type edge").count() >= 1);

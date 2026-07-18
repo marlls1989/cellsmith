@@ -47,22 +47,35 @@ use crate::logic::arcs::Edge;
 use crate::logic::machine;
 use crate::logic::regions::{self, StateRegions};
 
-/// One recognised edge-triggered register: a node re-expressed as an edge seam on `clock`.
+/// One recognised edge-triggered register: a node re-expressed as an edge seam on one or more clocks.
 #[derive(Debug, Clone)]
 pub struct EdgeRegister {
     /// The node that becomes the register's output coordinate.
     pub node: Symbol,
-    /// The declared clock the node keys off.
-    pub clock: Symbol,
     /// The captured next-state function per active edge, as combinational state-table regions (total —
-    /// off is the complement of on, empty hold). One entry for a single-edge register, two for a
-    /// dual-edge register with `Rise` first.
-    pub captures: Vec<(Edge, StateRegions)>,
-    /// The off-edge (hold) function as state-table regions: on/off are the async set/clear covers, hold
-    /// is the quiescent region; never references `clock`.
+    /// off is the complement of on, empty hold). Each capture carries ITS OWN clock. Grouped by clock in
+    /// cell input-pin order, `Rise` before `Fall` within a clock; a single-clock register keeps one entry
+    /// per active edge (two for a dual-edge register with `Rise` first), byte-identical to a single-clock
+    /// keying.
+    pub captures: Vec<(Symbol, Edge, StateRegions)>,
+    /// The off-edge (hold) function as state-table regions, keyed by the clock set's phase vector: on/off
+    /// are the async set/clear covers, hold is the quiescent region; never references any of the clocks.
     pub off_edge: StateRegions,
     /// The register's column set: the first-appearance union of the captures' cols then `off_edge.cols`.
     pub cols: Vec<Symbol>,
+}
+
+impl EdgeRegister {
+    /// The distinct clocks the register keys off, in first-appearance (capture) order.
+    pub fn clocks(&self) -> Vec<&Symbol> {
+        let mut out: Vec<&Symbol> = Vec::new();
+        for (clock, _, _) in &self.captures {
+            if !out.contains(&clock) {
+                out.push(clock);
+            }
+        }
+        out
+    }
 }
 
 /// The behavioural edge-sensitivity of a cell: its recognised edge registers and the cell-level set of
@@ -113,17 +126,17 @@ impl CandAgg {
     }
 }
 
-/// A synthesised register: its per-edge captures (Rise first), its off-edge, and whether tier-2 header
-/// escalation was needed (tier-2 nodes survive the fold).
-type Synthesised = (Vec<(Edge, StateRegions)>, StateRegions, bool);
+/// A synthesised register: its per-clock, per-edge captures (each carrying its clock, grouped by clock in
+/// input-pin order with Rise first), its off-edge, and whether tier-2 header escalation was needed
+/// (tier-2 nodes survive the fold).
+type Synthesised = (Vec<(Symbol, Edge, StateRegions)>, StateRegions, bool);
 
 /// The behavioural class of a candidate node.
 enum Class {
     Level,
     Register {
-        clock: Symbol,
-        rise: bool,
-        fall: bool,
+        /// The register's keying clocks in input-pin order, each with its active `(rise, fall)` edges.
+        clocks: Vec<(Symbol, bool, bool)>,
     },
     None,
 }
@@ -255,26 +268,31 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Ed
     let mut actually_registered: BTreeSet<Symbol> = BTreeSet::new();
 
     for (i, class) in classes.iter().enumerate() {
-        let Class::Register { clock, rise, fall } = class else {
+        let Class::Register { clocks } = class else {
             continue;
         };
         let name = &candidates[i];
-        // Active edges, Rise first.
-        let mut edges: Vec<(bool, Edge)> = Vec::new();
-        if *rise {
-            edges.push((true, Edge::Rise));
-        }
-        if *fall {
-            edges.push((false, Edge::Fall));
-        }
+        // Per-clock active edges (input-pin order, Rise first within each clock).
+        let clock_edges: Vec<(Symbol, Vec<(bool, Edge)>)> = clocks
+            .iter()
+            .map(|(clock, rise, fall)| {
+                let mut edges: Vec<(bool, Edge)> = Vec::new();
+                if *rise {
+                    edges.push((true, Edge::Rise));
+                }
+                if *fall {
+                    edges.push((false, Edge::Fall));
+                }
+                (clock.clone(), edges)
+            })
+            .collect();
 
         if let Some((captures, off_edge, tier2)) = synth_register(
             &builder,
             &candidates,
             &internal_level,
             inputs,
-            clock,
-            &edges,
+            &clock_edges,
             &aggs[i],
         ) {
             if tier2 {
@@ -284,7 +302,6 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Ed
             actually_registered.insert(name.clone());
             registers.push(EdgeRegister {
                 node: name.clone(),
-                clock: clock.clone(),
                 captures,
                 off_edge,
                 cols,
@@ -391,7 +408,7 @@ fn classify_one<B: Brand, C: ManagerCell>(
                 .filter(|p| p.as_str() != k.as_str())
                 .cloned()
                 .collect();
-            synth_off_edge(builder, &header_off, k, &agg.stable)
+            synth_off_edge(builder, &header_off, std::slice::from_ref(k), &agg.stable)
         });
         match off {
             // `d` lands in a forced set/clear cover ⇒ real set/clear ⇒ permitted (not level).
@@ -419,7 +436,7 @@ fn classify_one<B: Brand, C: ManagerCell>(
                     .filter(|p| p.as_str() != k.as_str())
                     .cloned()
                     .collect();
-                synth_off_edge(builder, &header_off, k, &agg.stable)
+                synth_off_edge(builder, &header_off, std::slice::from_ref(*k), &agg.stable)
             });
             match off {
                 Some(sr) => agg
@@ -447,7 +464,9 @@ fn classify_one<B: Brand, C: ManagerCell>(
             if !rise && !fall {
                 return Class::None;
             }
-            Class::Register { clock, rise, fall }
+            Class::Register {
+                clocks: vec![(clock, rise, fall)],
+            }
         }
         0 => Class::None,
         // TODO(scope-a wave 3): recognise multi-clock via the joint phase-vector off-edge
@@ -464,40 +483,45 @@ fn synth_register<B: Brand, C: ManagerCell>(
     candidates: &[Symbol],
     internal_level: &BTreeSet<Symbol>,
     inputs: &[Symbol],
-    clock: &Symbol,
-    edges: &[(bool, Edge)],
+    clock_edges: &[(Symbol, Vec<(bool, Edge)>)],
     agg: &CandAgg,
 ) -> Option<Synthesised> {
-    for tier2 in [false, true] {
-        // Header: inputs (minus the clock) then the candidate signal names; internal level nodes are
-        // excluded at tier-1 and re-included at tier-2. The candidate's own name is always present (a
-        // toggle flop captures a function of its own prior state).
-        let header: Vec<Symbol> = inputs
-            .iter()
-            .filter(|p| p.as_str() != clock.as_str())
-            .cloned()
-            .chain(
-                candidates
-                    .iter()
-                    .filter(|c| tier2 || !internal_level.contains(*c))
-                    .cloned(),
-            )
-            .collect();
+    let clocks: Vec<Symbol> = clock_edges.iter().map(|(c, _)| c.clone()).collect();
+    let clock_set: BTreeSet<&str> = clocks.iter().map(Symbol::as_str).collect();
 
-        // Capture per active edge.
-        let mut captures: Vec<(Edge, StateRegions)> = Vec::new();
+    for tier2 in [false, true] {
+        // Capture per clock (input-pin order), per active edge (Rise first). Each capture's header is the
+        // inputs minus THAT capture's clock, then the candidate signal names; internal level nodes are
+        // excluded at tier-1 and re-included at tier-2. The candidate's own name is always present (a
+        // toggle flop captures a function of its own prior state). Any OTHER clock stays in the header as
+        // an ordinary level column.
+        let mut captures: Vec<(Symbol, Edge, StateRegions)> = Vec::new();
         let mut conflict = false;
-        for (is_rise, edge) in edges {
-            let samples = agg
-                .captures
-                .get(&(clock.clone(), *is_rise))
-                .map(|c| c.samples.as_slice())
-                .unwrap_or(&[]);
-            match synth_capture(builder, &header, samples) {
-                Some(sr) => captures.push((*edge, sr)),
-                None => {
-                    conflict = true;
-                    break;
+        'clocks: for (clock, edges) in clock_edges {
+            let header: Vec<Symbol> = inputs
+                .iter()
+                .filter(|p| p.as_str() != clock.as_str())
+                .cloned()
+                .chain(
+                    candidates
+                        .iter()
+                        .filter(|c| tier2 || !internal_level.contains(*c))
+                        .cloned(),
+                )
+                .collect();
+
+            for (is_rise, edge) in edges {
+                let samples = agg
+                    .captures
+                    .get(&(clock.clone(), *is_rise))
+                    .map(|c| c.samples.as_slice())
+                    .unwrap_or(&[]);
+                match synth_capture(builder, &header, samples) {
+                    Some(sr) => captures.push((clock.clone(), *edge, sr)),
+                    None => {
+                        conflict = true;
+                        break 'clocks;
+                    }
                 }
             }
         }
@@ -508,16 +532,16 @@ fn synth_register<B: Brand, C: ManagerCell>(
             continue; // escalate to tier-2
         }
 
-        // Off-edge over the non-clock inputs: the hold-and-async-set/clear behaviour is input driven, so
-        // the state coordinates are not columns (the value held is the register's own, absent from the
-        // header, and any forcing comes from an async input). A data input that never forces simply lands
-        // every projection in `hold` and drops out of the cols.
+        // Off-edge over the inputs minus ALL the register's clocks: the hold-and-async-set/clear behaviour
+        // is input driven, so the state coordinates are not columns (the value held is the register's own,
+        // absent from the header, and any forcing comes from an async input). A data input that never
+        // forces simply lands every projection in `hold` and drops out of the cols.
         let header_off: Vec<Symbol> = inputs
             .iter()
-            .filter(|p| p.as_str() != clock.as_str())
+            .filter(|p| !clock_set.contains(p.as_str()))
             .cloned()
             .collect();
-        let off_edge = synth_off_edge(builder, &header_off, clock, &agg.stable)?;
+        let off_edge = synth_off_edge(builder, &header_off, &clocks, &agg.stable)?;
 
         return Some((captures, off_edge, tier2));
     }
@@ -676,43 +700,55 @@ fn generalise<B: Brand, C: ManagerCell>(
 }
 
 /// Synthesise the off-edge (hold + async set/clear) region from the stable-state samples over
-/// `header_off`. Each projection is classified per clock phase; a projection whose classification
-/// differs between the two phases blocks the whole annotation (behavioural F2 — level fallback), so
-/// `None` is returned. Forced projections give the async set/clear covers; agreeing held (and
-/// unobserved) projections default to hold.
+/// `header_off`, for the register's clock SET. Each stable sample is keyed by the PHASE VECTOR of
+/// `clocks` (a sample with any of those clocks unset is skipped — generalising the single-clock
+/// unset-skip). Within a projection every observed phase vector is phase-classified and ALL classes must
+/// AGREE, else the projection blocks the whole annotation (behavioural F2 — level fallback) and `None` is
+/// returned. The agreed Forced class gives the async set/clear cover; agreeing held (and unobserved)
+/// projections default to hold. For a single clock the two phase vectors `[false]`/`[true]` are exactly
+/// today's `(low, high)` split, so this reduces byte-identically.
 fn synth_off_edge<B: Brand, C: ManagerCell>(
     builder: &BddBuilder<B, C>,
     header_off: &[Symbol],
-    clock: &Symbol,
+    clocks: &[Symbol],
     stable: &[(Minterm<Symbol>, bool)],
 ) -> Option<StateRegions> {
-    // Group the stable samples by projection, split into the clock's two phases.
-    let mut groups: BTreeMap<Minterm<Symbol>, (Vec<bool>, Vec<bool>)> = BTreeMap::new();
-    for (state, val) in stable {
-        let Some(ph) = state.value_of(clock.as_str()) else {
-            continue;
-        };
-        let proj = state.project_to(header_off.iter().map(Symbol::as_str));
-        let g = groups.entry(proj).or_default();
-        if ph {
-            g.1.push(*val);
-        } else {
-            g.0.push(*val);
+    // Group the stable samples by off-edge projection, then by the clocks' phase vector.
+    let mut groups: BTreeMap<Minterm<Symbol>, BTreeMap<Vec<bool>, Vec<bool>>> = BTreeMap::new();
+    'sample: for (state, val) in stable {
+        let mut phase: Vec<bool> = Vec::with_capacity(clocks.len());
+        for c in clocks {
+            match state.value_of(c.as_str()) {
+                Some(b) => phase.push(b),
+                None => continue 'sample, // a keying clock unset ⇒ skip this sample
+            }
         }
+        let proj = state.project_to(header_off.iter().map(Symbol::as_str));
+        groups
+            .entry(proj)
+            .or_default()
+            .entry(phase)
+            .or_default()
+            .push(*val);
     }
 
     let mut on_pts = builder.constant(false);
     let mut off_pts = builder.constant(false);
-    for (proj, (low, high)) in &groups {
-        let cl = phase_class(low);
-        let ch = phase_class(high);
-        if let (Some(a), Some(b)) = (cl, ch) {
-            if a != b {
-                return None; // phase disagreement blocks the annotation
+    for (proj, phases) in &groups {
+        // Every observed phase vector's class must agree; a disagreement blocks the annotation.
+        let mut agreed: Option<Phase> = None;
+        for vals in phases.values() {
+            let Some(cls) = phase_class(vals) else {
+                continue;
+            };
+            match agreed {
+                None => agreed = Some(cls),
+                Some(prev) if prev != cls => return None, // phase disagreement blocks the annotation
+                Some(_) => {}
             }
         }
         let cube = cube_bdd(builder, proj);
-        match cl.or(ch) {
+        match agreed {
             Some(Phase::Forced1) => on_pts = on_pts.or(&cube),
             Some(Phase::Forced0) => off_pts = off_pts.or(&cube),
             _ => {} // held or unobserved ⇒ hold
@@ -725,11 +761,14 @@ fn synth_off_edge<B: Brand, C: ManagerCell>(
 
 /// The register's column set: the first-appearance union of every capture's cols then the off-edge's
 /// cols.
-fn register_cols(captures: &[(Edge, StateRegions)], off_edge: &StateRegions) -> Vec<Symbol> {
+fn register_cols(
+    captures: &[(Symbol, Edge, StateRegions)],
+    off_edge: &StateRegions,
+) -> Vec<Symbol> {
     let mut cols: Vec<Symbol> = Vec::new();
     let sources = captures
         .iter()
-        .map(|(_, sr)| &sr.cols)
+        .map(|(_, _, sr)| &sr.cols)
         .chain([&off_edge.cols]);
     for src in sources {
         for s in src {
@@ -772,6 +811,10 @@ mod tests {
 
     fn cols_of(sr: &StateRegions) -> Vec<&str> {
         sr.cols.iter().map(Symbol::as_str).collect()
+    }
+
+    fn clocks_of(er: &EdgeRegister) -> Vec<&str> {
+        er.clocks().into_iter().map(Symbol::as_str).collect()
     }
 
     fn reg<'a>(es: &'a EdgeSensitivity, node: &str) -> &'a EdgeRegister {
@@ -828,9 +871,10 @@ GCLK = "enA*CLKA+enB*CLKB"
             let es = classify(&m);
             assert_eq!(node_list(&es), ["Q"], "only Q is a register");
             let q = reg(&es, "Q");
-            assert_eq!(q.clock, "CLK");
+            assert_eq!(clocks_of(q), ["CLK"]);
             assert_eq!(q.captures.len(), 1);
-            let (edge, cap) = &q.captures[0];
+            let (clk, edge, cap) = &q.captures[0];
+            assert_eq!(clk, "CLK");
             assert_eq!(*edge, Edge::Rise);
             assert_eq!(cols_of(cap), ["D"]);
             assert_eq!(cap.on, vec![vec![Some(true)]]);
@@ -854,17 +898,17 @@ GCLK = "enA*CLKA+enB*CLKB"
             nodes.sort();
             assert_eq!(nodes, ["enA", "enB", "sela2", "selb2"]);
             let s2 = reg(&es, "sela2");
-            assert_eq!(s2.clock, "CLKA");
-            assert_eq!(s2.captures[0].0, Edge::Rise);
+            assert_eq!(clocks_of(s2), ["CLKA"]);
+            assert_eq!(s2.captures[0].1, Edge::Rise);
             let ena = reg(&es, "enA");
-            assert_eq!(ena.captures[0].0, Edge::Fall);
-            assert_eq!(ena.clock, "CLKA");
+            assert_eq!(ena.captures[0].1, Edge::Fall);
+            assert_eq!(clocks_of(ena), ["CLKA"]);
             let sb2 = reg(&es, "selb2");
-            assert_eq!(sb2.captures[0].0, Edge::Rise);
+            assert_eq!(sb2.captures[0].1, Edge::Rise);
             let enb = reg(&es, "enB");
-            assert_eq!(enb.captures[0].0, Edge::Fall);
+            assert_eq!(enb.captures[0].1, Edge::Fall);
             // sela2's capture must not reference the folded sela1.
-            assert!(!s2.captures[0].1.cols.iter().any(|c| c == "sela1"));
+            assert!(!s2.captures[0].2.cols.iter().any(|c| c == "sela1"));
             let folded = folded_list(&es);
             assert!(folded.contains(&"sela1"), "sela1 folded, got {folded:?}");
             assert!(folded.contains(&"selb1"), "selb1 folded, got {folded:?}");
@@ -1037,7 +1081,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
             let es = classify(&m);
             let q = reg(&es, "Q");
             assert_eq!(q.captures.len(), 1);
-            let (edge, cap) = &q.captures[0];
+            let (_clk, edge, cap) = &q.captures[0];
             assert_eq!(*edge, Edge::Rise);
             // capture == !D, recorded verbatim (no special-casing).
             let on = builder.build_cover(&cap.on_cover);
@@ -1051,7 +1095,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
         with_machine!(EXPOSED_MASTER_TOML, |builder, _a, _m2, m| {
             let es = classify(&m);
             let q = reg(&es, "Q");
-            assert_eq!(q.captures[0].0, Edge::Rise);
+            assert_eq!(q.captures[0].1, Edge::Rise);
             // M is an output master (never folded); the slave Q is recognised and its capture equals the
             // master's held value M over the reachable states (D and M coincide there, so generalisation
             // may render the cover as either — both are the same captured value).
@@ -1063,7 +1107,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
             for state in &m.explored.order {
                 reach = reach.or(&super::cube_bdd(&builder, state));
             }
-            let on = builder.build_cover(&q.captures[0].1.on_cover).and(&reach);
+            let on = builder.build_cover(&q.captures[0].2.on_cover).and(&reach);
             let want = builder.var("M").and(&reach);
             assert!(
                 on.equivalent_to(&want),
@@ -1111,16 +1155,16 @@ Q = "!R*(CLK*M + !CLK*Q)"
             let es = classify(&m);
             let q = reg(&es, "Q");
             let mm = reg(&es, "M");
-            assert_eq!(q.captures[0].0, Edge::Rise);
-            assert_eq!(mm.captures[0].0, Edge::Fall);
+            assert_eq!(q.captures[0].1, Edge::Rise);
+            assert_eq!(mm.captures[0].1, Edge::Fall);
             assert!(
-                q.captures[0].1.cols.iter().any(|c| c == "M"),
+                q.captures[0].2.cols.iter().any(|c| c == "M"),
                 "Q captures the master M (ring), cols {:?}",
-                cols_of(&q.captures[0].1)
+                cols_of(&q.captures[0].2)
             );
             // M's falling capture is self-inverting: at the pre-fall (CLK=1) states M equals Q, so
             // capturing !M is capturing !Q — recorded verbatim as `!R*!M`, no special-casing of inversion.
-            let mcap = &mm.captures[0].1;
+            let mcap = &mm.captures[0].2;
             assert!(
                 mcap.cols.iter().any(|c| c == "M"),
                 "self in cols: {:?}",
@@ -1155,10 +1199,10 @@ Qn = "!( !(!M*CLK) * Q )"
             let es = classify(&m);
             let q = reg(&es, "Q");
             let qn = reg(&es, "Qn");
-            assert_eq!(q.captures[0].0, Edge::Rise);
-            assert_eq!(qn.captures[0].0, Edge::Rise);
-            let q_on = builder.build_cover(&q.captures[0].1.on_cover);
-            let qn_on = builder.build_cover(&qn.captures[0].1.on_cover);
+            assert_eq!(q.captures[0].1, Edge::Rise);
+            assert_eq!(qn.captures[0].1, Edge::Rise);
+            let q_on = builder.build_cover(&q.captures[0].2.on_cover);
+            let qn_on = builder.build_cover(&qn.captures[0].2.on_cover);
             assert!(q_on.equivalent_to(&builder.var("D")), "Q captures D");
             assert!(qn_on.equivalent_to(&!&builder.var("D")), "Qn captures !D");
             assert_eq!(folded_list(&es), ["M"], "shared master M folded once");
@@ -1185,9 +1229,9 @@ Q = "CLK*L1 + !CLK*L2"
             let es = classify(&m);
             let q = reg(&es, "Q");
             assert_eq!(q.captures.len(), 2, "dual edge");
-            assert_eq!(q.captures[0].0, Edge::Rise);
-            assert_eq!(q.captures[1].0, Edge::Fall);
-            for (_, cap) in &q.captures {
+            assert_eq!(q.captures[0].1, Edge::Rise);
+            assert_eq!(q.captures[1].1, Edge::Fall);
+            for (_, _, cap) in &q.captures {
                 let on = builder.build_cover(&cap.on_cover);
                 assert!(on.equivalent_to(&builder.var("D")), "each edge captures D");
             }
@@ -1301,7 +1345,7 @@ Q = "!(R*G)*(CLK*M + !CLK*Q)"
         with_machine!(GATEDR_TOML, |builder, _a, _m2, m| {
             let es = classify(&m);
             let q = reg(&es, "Q");
-            assert_eq!(q.clock, "CLK");
+            assert_eq!(clocks_of(q), ["CLK"]);
             // The conjunctive clear is carried faithfully: off_edge.off is forced-0 exactly where R*G.
             let off = builder.build_cover(&q.off_edge.off_cover);
             let rg = builder.var("R").and(&builder.var("G"));
@@ -1356,8 +1400,8 @@ Q = "!R*(CLK*M + !CLK*Q)"
         with_machine!(RDFF_TOML, |builder, _a, _m2, m| {
             let es = classify(&m);
             let q = reg(&es, "Q");
-            assert_eq!(q.clock, "CLK");
-            assert_eq!(q.captures[0].0, Edge::Rise);
+            assert_eq!(clocks_of(q), ["CLK"]);
+            assert_eq!(q.captures[0].1, Edge::Rise);
             let off = builder.build_cover(&q.off_edge.off_cover);
             let r = builder.var("R");
             assert!(off.equivalent_to(&r), "off_edge.off must cover R");

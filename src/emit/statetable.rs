@@ -200,12 +200,13 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
                 input_cols.insert(col.clone());
             }
         }
-        debug_assert!(
-            cell.inputs.contains(&er.clock),
-            "edge-register clock {} must be a primary input",
-            er.clock,
-        );
-        input_cols.insert(er.clock.clone());
+        for clock in er.clocks() {
+            debug_assert!(
+                cell.inputs.contains(clock),
+                "edge-register clock {clock} must be a primary input",
+            );
+            input_cols.insert(clock.clone());
+        }
     }
     let input_nodes: Vec<Symbol> = cell
         .inputs
@@ -329,42 +330,48 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     let mut edge_rows: Vec<EdgeRow> = Vec::new();
     for er in edge_regs {
         let reg = index_of[&er.node];
-        let dual = er.captures.len() == 2;
-        let mut push = |token: EdgeTok, action: Next, cube: &StateCube, cols: &[Symbol]| {
-            edge_rows.push(edge_row(
-                &er.clock,
-                token,
-                reg,
-                action,
-                cube,
-                cols,
-                &input_index,
-                &index_of,
-                input_nodes.len(),
-                k,
-            ));
-        };
-        for (edge, capture) in &er.captures {
+        let single = er.captures.len() == 1;
+        let mut push =
+            |clock: &Symbol, token: EdgeTok, action: Next, cube: &StateCube, cols: &[Symbol]| {
+                edge_rows.push(edge_row(
+                    clock,
+                    token,
+                    reg,
+                    action,
+                    cube,
+                    cols,
+                    &input_index,
+                    &index_of,
+                    input_nodes.len(),
+                    k,
+                ));
+            };
+        for (clock, edge, capture) in &er.captures {
             let active = match edge {
                 Edge::Rise => EdgeTok::Rise,
                 Edge::Fall => EdgeTok::Fall,
             };
             for (action, cubes) in [(Next::High, &capture.on), (Next::Low, &capture.off)] {
                 for cube in cubes {
-                    push(active, action, cube, &capture.cols);
+                    push(clock, active, action, cube, &capture.cols);
                 }
             }
         }
-        // Off-edge token: the single-edge inactive face, or the `Level` `-` column for a dual-edge
-        // register (whose two capture groups already own both clock faces).
-        let off_token = if dual {
-            EdgeTok::Level
-        } else {
-            match er.captures[0].0 {
+        // Off-edge token: the single-capture register's inactive face, or the `Level` `-` column for a
+        // multi-capture register (two edges of one clock, or captures spread across clocks — either way
+        // its capture groups already own every clock face the off-edge could name). The off-edge is
+        // clock-independent; its row marks the register's clock column (the sole clock for a single-clock
+        // register).
+        let off_token = if single {
+            match er.captures[0].1 {
                 Edge::Rise => EdgeTok::NotRise,
                 Edge::Fall => EdgeTok::NotFall,
             }
+        } else {
+            EdgeTok::Level
         };
+        let off_clock = er.clocks();
+        let off_clock = off_clock[0];
         let off = &er.off_edge;
         for (action, cubes) in [
             (Next::High, &off.on),
@@ -372,7 +379,7 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
             (Next::Hold, &off.hold),
         ] {
             for cube in cubes {
-                push(off_token, action, cube, &off.cols);
+                push(off_clock, off_token, action, cube, &off.cols);
             }
         }
     }
@@ -992,7 +999,13 @@ M = "!CLK*D + CLK*M"
             .iter()
             .find(|r| r.node == "Q")
             .expect("Q is recognised as an edge register");
-        assert_eq!(q.clock, "CLK");
+        assert_eq!(
+            q.clocks()
+                .into_iter()
+                .map(Symbol::as_str)
+                .collect::<Vec<_>>(),
+            ["CLK"]
+        );
         assert!(
             !cell.edge.folded.iter().any(|f| f == "M"),
             "M survives as a level node, never folded"

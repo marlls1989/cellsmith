@@ -8,10 +8,10 @@
 //!
 //! A signal recognised as an edge-triggered register ([`crate::logic::edge`]) emits an
 //! **edge-sensitive** UDP instead: the level-latch rows are replaced by clock-edge (`(01)`/`(10)`)
-//! capture rows — one edge group per active edge, so a dual-edge register captures on both — plus async
-//! set/clear level rows, a no-change row for the opposite edge (single-edge registers only) and no-
-//! change rows for steady-clock data transitions. The clock is the primitive's LAST port. A pure master
-//! folded into such a register contributes nothing — no primitive, no wire, no instance.
+//! capture rows — one group per active `(clock, edge)`, so a dual-edge register captures on both — plus
+//! async set/clear level rows, a no-change row for each clock's inactive edge and no-change rows for
+//! steady-clock data transitions. The keying clocks are the primitive's LAST ports. A pure master folded
+//! into such a register contributes nothing — no primitive, no wire, no instance.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -127,36 +127,50 @@ fn pattern(cube: &StateCube) -> String {
         .join(" ")
 }
 
-/// The register's DATA columns: `er.cols` with the register's own symbol removed. A self-referencing
-/// register (a toggle flop, whose capture depends on its own prior state) carries its own node in
-/// `er.cols`; that node is the UDP's `reg` current-state, not an input port, so it is excluded from the
-/// port/input lists and rendered in the current-state field instead.
+/// The register's DATA columns: `er.cols` with the register's own symbol and every keying clock removed.
+/// A self-referencing register (a toggle flop, whose capture depends on its own prior state) carries its
+/// own node in `er.cols`; that node is the UDP's `reg` current-state, not an input port. A multi-clock
+/// register carries the OTHER clocks' levels in a conditioned capture's cols; those clocks are the
+/// primitive's dedicated trailing clock columns, not data ports. Both are excluded here (for a single
+/// clock the clock is never in `er.cols`, so this reduces to removing the register's own symbol).
 fn data_cols(er: &EdgeRegister) -> Vec<&Symbol> {
-    er.cols.iter().filter(|c| **c != er.node).collect()
+    let clocks = er.clocks();
+    er.cols
+        .iter()
+        .filter(|c| **c != er.node && !clocks.contains(c))
+        .collect()
 }
 
 /// One edge-register signal's UDP: an edge-sensitive sequential `primitive` whose ports are
-/// `(pin, data cols…, clock)` with the clock LAST. The `reg` captures on each active clock edge (`(01)`
-/// for `Rise`, `(10)` for `Fall`) and honours async set/clear as clock-independent level rows. The
-/// register's own symbol (a toggle flop's self-feedback) is excluded from the data columns — it is the
-/// `reg` current-state, not an input port.
+/// `(pin, data cols…, clocks…)` with the keying clocks LAST in [`EdgeRegister::clocks`] order. The `reg`
+/// captures on each active clock edge (`(01)` for `Rise`, `(10)` for `Fall`) and honours async set/clear
+/// as clock-independent level rows. The register's own symbol (a toggle flop's self-feedback) and the
+/// clocks are excluded from the data columns — the self column is the `reg` current-state and the clocks
+/// are the dedicated trailing clock columns, not input ports.
 fn edge_primitive(name: &str, pin: &Symbol, er: &EdgeRegister) -> String {
-    let clock = er.clock.as_str();
+    let clocks = er.clocks();
+    let clock_strs: Vec<&str> = clocks.iter().map(|c| c.as_str()).collect();
     let cols = data_cols(er);
-    // Ports: the pin, its data columns (self excluded), then the clock last.
+    // Ports: the pin, its data columns (self and clocks excluded), then the clocks last in clocks() order.
     let ports = std::iter::once(pin.as_str())
         .chain(cols.iter().map(|c| c.as_str()))
-        .chain(std::iter::once(clock))
+        .chain(clock_strs.iter().copied())
         .collect::<Vec<_>>()
         .join(", ");
     let inputs = cols
         .iter()
         .map(|c| c.as_str())
-        .chain(std::iter::once(clock))
+        .chain(clock_strs.iter().copied())
         .collect::<Vec<_>>()
         .join(", ");
+    // Trailing comment naming the clock column(s); reduces to the single-clock wording for one clock.
+    let clock_comment = if clock_strs.len() == 1 {
+        format!("clock {} is the last port", clock_strs[0])
+    } else {
+        format!("clocks {} are the last ports", clock_strs.join(", "))
+    };
 
-    let mut s = format!("primitive {name}({ports}); // clock {clock} is the last port\n");
+    let mut s = format!("primitive {name}({ports}); // {clock_comment}\n");
     s.push_str(&format!("output {pin};\n"));
     s.push_str(&format!("input  {inputs};\n"));
     s.push_str(&format!("reg    {pin};\n"));
@@ -170,16 +184,20 @@ fn edge_primitive(name: &str, pin: &Symbol, er: &EdgeRegister) -> String {
 }
 
 /// The edge-register UDP table rows, sorted for determinism. Column order is the data cols (`er.cols`
-/// minus the register's own symbol) then the clock; the current-state (`reg`) field is `?` except on a
-/// self-referencing register's capture rows, where it carries that register's own literal. Each capture
-/// row carries exactly ONE edge indicator; a dual-edge register emits one capture group per edge.
+/// minus the register's own symbol and the clocks) then the clocks in [`EdgeRegister::clocks`] order; the
+/// current-state (`reg`) field is `?` except on a self-referencing register's capture rows, where it
+/// carries that register's own literal. Each capture row carries exactly ONE edge indicator (IEEE 1364);
+/// the capturing clock's column holds it while every other clock column carries the conditioning level.
+/// For a single clock every rule reduces exactly to the single-clock rows.
 fn edge_table_lines(er: &EdgeRegister) -> Vec<String> {
     let cols = data_cols(er);
+    let clocks = er.clocks();
     let mut lines: Vec<String> = Vec::new();
 
-    // (a) Capture rows: the combinational next-state sampled on each active clock edge. A dual-edge
-    // register contributes two groups, one per edge, each keeping its own single edge indicator.
-    for (edge, capture) in &er.captures {
+    // (a) Capture rows: the combinational next-state sampled on one active edge of one clock. Each
+    // capture carries its own clock; a dual-edge (or multi-clock) register contributes one group per
+    // `(clock, edge)`, each keeping its single edge indicator in the capturing clock's column.
+    for (clock, edge, capture) in &er.captures {
         let capture_edge = match edge {
             Edge::Rise => "(01)",
             Edge::Fall => "(10)",
@@ -188,9 +206,10 @@ fn edge_table_lines(er: &EdgeRegister) -> Vec<String> {
             lines.push(region_row(
                 er,
                 &cols,
+                &clocks,
+                Some((clock, capture_edge)),
                 &capture.cols,
                 cube,
-                capture_edge,
                 "1",
             ));
         }
@@ -198,41 +217,63 @@ fn edge_table_lines(er: &EdgeRegister) -> Vec<String> {
             lines.push(region_row(
                 er,
                 &cols,
+                &clocks,
+                Some((clock, capture_edge)),
                 &capture.cols,
                 cube,
-                capture_edge,
                 "0",
             ));
         }
     }
 
-    // (b) Async set/clear as LEVEL rows (clock `?`): by IEEE 1364 a level row dominates the edge rows,
-    // and F1/F2 guarantee any overlap agrees, so the set/clear wins independent of the clock.
+    // (b) Async set/clear as LEVEL rows (every clock `?`): by IEEE 1364 a level row dominates the edge
+    // rows, and F1/F2 guarantee any overlap agrees, so the set/clear wins independent of the clocks.
     for cube in &er.off_edge.on {
-        lines.push(region_row(er, &cols, &er.off_edge.cols, cube, "?", "1"));
+        lines.push(region_row(
+            er,
+            &cols,
+            &clocks,
+            None,
+            &er.off_edge.cols,
+            cube,
+            "1",
+        ));
     }
     for cube in &er.off_edge.off {
-        lines.push(region_row(er, &cols, &er.off_edge.cols, cube, "?", "0"));
+        lines.push(region_row(
+            er,
+            &cols,
+            &clocks,
+            None,
+            &er.off_edge.cols,
+            cube,
+            "0",
+        ));
     }
 
-    // (c) Opposite-edge ignore: a single-edge register holds on any transition of the inactive clock
-    // edge. A dual-edge register has no inactive edge, so it emits no such row.
-    if er.captures.len() == 1 {
-        let opposite_edge = match er.captures[0].0 {
-            Edge::Rise => "(10)",
-            Edge::Fall => "(01)",
-        };
-        let mut cells: Vec<&str> = cols.iter().map(|_| "?").collect();
-        cells.push(opposite_edge);
-        lines.push(format!("{} : ? : -;", cells.join(" ")));
+    // (c) Opposite-edge ignore: for each clock, each edge face with NO capture entry holds on a
+    // transition of that edge — one row carrying that edge indicator in the clock's column and `?`
+    // elsewhere. A single-edge clock emits its one inactive edge (as today); a dual-edge clock, both
+    // faces captured, emits none.
+    for &clock in &clocks {
+        for (edge, indicator) in [(Edge::Rise, "(01)"), (Edge::Fall, "(10)")] {
+            if er.captures.iter().any(|(c, e, _)| c == clock && *e == edge) {
+                continue;
+            }
+            let mut cells: Vec<&str> = cols.iter().map(|_| "?").collect();
+            for &c in &clocks {
+                cells.push(if c == clock { indicator } else { "?" });
+            }
+            lines.push(format!("{} : ? : -;", cells.join(" ")));
+        }
     }
 
-    // (d) Steady-clock data-transition ignore: a change on any data column with a stable clock holds.
+    // (d) Steady-clock data-transition ignore: a change on any data column with every clock stable holds.
     for i in 0..cols.len() {
         let mut cells: Vec<&str> = (0..cols.len())
             .map(|j| if i == j { "(??)" } else { "?" })
             .collect();
-        cells.push("?");
+        cells.extend(clocks.iter().map(|_| "?"));
         lines.push(format!("{} : ? : -;", cells.join(" ")));
     }
 
@@ -240,25 +281,37 @@ fn edge_table_lines(er: &EdgeRegister) -> Vec<String> {
     lines
 }
 
-/// One region row of an edge-register table: the data columns (`cols`, self excluded) filled from `cube`
-/// by column name against `region_cols`, then the clock cell (`clock_cell`), the current-state (`reg`)
-/// field and the `next` action. A data column the cube does not constrain (or absent from `region_cols`)
-/// reads `?`. The `reg` field is `?` unless the register is self-referencing (its own symbol in
-/// `er.cols`), in which case it carries that node's literal from `cube` — the capture's dependence on the
-/// register's own prior state.
+/// One region row of an edge-register table: the data columns (`cols`, self and clocks excluded) filled
+/// from `cube` by column name against `region_cols`, then the clock columns (`clocks`, in order), the
+/// current-state (`reg`) field and the `next` action. When `active` is `Some((clock, indicator))` the
+/// capturing clock's column carries that edge `indicator` and every OTHER clock column carries its level
+/// from `cube` (a conditioned capture references the other clock's level); when `active` is `None` (a
+/// clock-independent level row) every clock column reads its `cube` level, which is `?` for an off-edge
+/// region since it never references a clock. A data or clock column the cube does not constrain (or absent
+/// from `region_cols`) reads `?`. The `reg` field is `?` unless the register is self-referencing (its own
+/// symbol in `er.cols`), in which case it carries that node's literal from `cube` — the capture's
+/// dependence on the register's own prior state.
 fn region_row(
     er: &EdgeRegister,
     cols: &[&Symbol],
+    clocks: &[&Symbol],
+    active: Option<(&Symbol, &'static str)>,
     region_cols: &[Symbol],
     cube: &StateCube,
-    clock_cell: &str,
     next: &str,
 ) -> String {
     let mut cells: Vec<&str> = cols
         .iter()
         .map(|&c| level_at(c, region_cols, cube))
         .collect();
-    cells.push(clock_cell);
+    // Clock columns LAST, in clocks() order: the capturing clock carries its edge indicator, every other
+    // clock its conditioning level from the cube.
+    for &clock in clocks {
+        match active {
+            Some((active_clock, indicator)) if clock == active_clock => cells.push(indicator),
+            _ => cells.push(level_at(clock, region_cols, cube)),
+        }
+    }
     let reg = if er.cols.contains(&er.node) {
         level_at(&er.node, region_cols, cube)
     } else {
@@ -331,12 +384,13 @@ fn wrapper_module(
             continue;
         }
         let name = prim_name(cell, &sig.name);
-        // Edge registers connect in port order `(pin, cols…, clock)`; constant pins take just their
-        // own port; other sequential pins add their columns.
+        // Edge registers connect in port order `(pin, cols…, clocks…)` with the clocks last in
+        // clocks() order; constant pins take just their own port; other sequential pins add their columns.
         let args = if let Some(er) = edge_by_node.get(sig.name.as_str()) {
+            let clocks = er.clocks();
             std::iter::once(sig.name.as_str())
                 .chain(data_cols(er).iter().map(|c| c.as_str()))
-                .chain(std::iter::once(er.clock.as_str()))
+                .chain(clocks.iter().map(|c| c.as_str()))
                 .collect::<Vec<_>>()
                 .join(", ")
         } else if sr.hold.is_empty() && (sr.on.is_empty() || sr.off.is_empty()) {
