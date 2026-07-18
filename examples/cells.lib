@@ -141,21 +141,14 @@ library (cells) {
     pin (D) {
       direction : input;
     }
-    statetable ("CLK D", "Q M") {
-      table : "L - : - - : N - , \
-               L L : - - : - L , \
-               L H : - - : - H , \
-               H - : - - : - N , \
-               H - : - L : L - , \
-               H - : - H : H -";
+    statetable ("CLK D", "Q") {
+      table : "R H : - : H , \
+               R L : - : L , \
+               ~R - : - : N";
     }
     pin (Q) {
       direction : output;
       internal_node : "Q";
-    }
-    pin (M) {
-      direction : internal;
-      internal_node : "M";
     }
   }
   cell (ICM) {
@@ -174,27 +167,29 @@ library (cells) {
     pin (S) {
       direction : input;
     }
-    statetable ("CLKA CLKB RA RB S", "enA enB sela1 sela2 selb1 selb2") {
-      table : "- - - H - : - - - - - - : - L - - L L , \
-               - - H - - : - - - - - - : L - L L - - , \
-               - L - - - : - - - - - L : - L - - - - , \
-               - L - - - : H - - - - - : - - - - L - , \
-               - L - - L : - - - - - - : - - - - L - , \
-               - L - L - : - - - - - - : - - - - - N , \
-               - L - L - : - - - - - H : - H - - - - , \
-               - L - L H : L - - - - - : - - - - H - , \
-               - H - - - : - - - - L - : - - - - - L , \
-               - H - L - : - - - - - - : - N - - N - , \
-               - H - L - : - - - - H - : - - - - - H , \
-               L - - - - : - - - L - - : L - - - - - , \
-               L - - - - : - H - - - - : - - L - - - , \
-               L - - - H : - - - - - - : - - L - - - , \
-               L - L - - : - - - - - - : - - - N - - , \
-               L - L - - : - - - H - - : H - - - - - , \
-               L - L - L : - L - - - - : - - H - - - , \
-               H - - - - : - - L - - - : - - - L - - , \
-               H - L - - : - - - - - - : N - N - - - , \
-               H - L - - : - - H - - - : - - - H - -";
+    statetable ("CLKA CLKB RA RB S", "enA enB sela2 selb2") {
+      table : "F - L - - : - - H - : H - - - , \
+               F - - - - : - - L - : L - - - , \
+               F - H - - : - - - - : L - - - , \
+               ~F - H - - : - - - - : L - - - , \
+               ~F - L - - : - - - - : N - - - , \
+               - F - L - : - - - H : - H - - , \
+               - F - - - : - - - L : - L - - , \
+               - F - H - : - - - - : - L - - , \
+               - ~F - H - : - - - - : - L - - , \
+               - ~F - L - : - - - - : - N - - , \
+               R - L - L : - L - - : - - H - , \
+               R - - - H : - - - - : - - L - , \
+               R - H - - : - - - - : - - L - , \
+               R - - - - : - H - - : - - L - , \
+               ~R - H - - : - - - - : - - L - , \
+               ~R - L - - : - - - - : - - N - , \
+               - R - L H : L - - - : - - - H , \
+               - R - - L : - - - - : - - - L , \
+               - R - H - : - - - - : - - - L , \
+               - R - - - : H - - - : - - - L , \
+               - ~R - H - : - - - - : - - - L , \
+               - ~R - L - : - - - - : - - - N";
     }
     pin (GCLK) {
       direction : output;
@@ -208,17 +203,9 @@ library (cells) {
       direction : internal;
       internal_node : "enB";
     }
-    pin (sela1) {
-      direction : internal;
-      internal_node : "sela1";
-    }
     pin (sela2) {
       direction : internal;
       internal_node : "sela2";
-    }
-    pin (selb1) {
-      direction : internal;
-      internal_node : "selb1";
     }
     pin (selb2) {
       direction : internal;

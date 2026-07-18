@@ -6169,7 +6169,7 @@ define_leakage -when "A*!B*Qa*!Qb" { MUT }
 define_arc \
 	-prevector_pinlist {CLK D} \
 	-prevector {01 11 01 00} \
-	-type combinational \
+	-type edge \
 	-pinlist {CLK D Q} \
 	-vector {R 0 F} \
 	-when "!D" \
@@ -6178,7 +6178,7 @@ define_arc \
 	{ DFF }
 
 define_arc \
-	-type combinational \
+	-type edge \
 	-prevector_pinlist {CLK D} \
 	-prevector {00 10 00 01} \
 	-pinlist {CLK D Q} \
