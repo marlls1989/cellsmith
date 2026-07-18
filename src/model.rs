@@ -270,18 +270,17 @@ impl Cell {
         // the shared exploration over the minimised model: the two detected hazards (order-dependence,
         // oscillation) and the constraints — setup/hold, non_seq — generated to avoid them. Clock
         // suppression and emission gating are applied downstream.
-        let analysis = crate::logic::analysis::analyse_machine(&analysed, &bdds);
+        // The opt-out (`no_edge_collapse`, also set for every cell by the global `--no-edge-collapse`)
+        // gates the classify() call itself, not just its result — no wasted work when collapse is off.
+        let analysis =
+            crate::logic::analysis::analyse_machine(&analysed, &bdds, !self.no_edge_collapse);
         analysed.arcs = analysis.arcs;
         analysed.hidden_arcs = analysis.hidden_arcs;
         analysed.leakage = analysis.leakage;
         analysed.constraints = analysis.constraints;
         analysed.order_dependence = analysis.order_dependence;
         analysed.oscillation = analysis.oscillation;
-        analysed.edge = if self.no_edge_collapse {
-            Default::default()
-        } else {
-            analysis.edge
-        };
+        analysed.edge = analysis.edge;
 
         // Cache each signal's state-table regions once, in `signals()` order, from the shared folded
         // BDDs, so downstream emitters don't rebuild the BDDs per call site.

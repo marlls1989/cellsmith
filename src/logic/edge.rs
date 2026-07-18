@@ -293,10 +293,15 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Ed
     for (n, d) in &m.out_deltas {
         fn_of.insert(n.as_str(), d);
     }
-    let level_names: Vec<&Symbol> = candidates
+    // Every surviving signal whose RAW function is still emitted — level nodes AND `Class::None`
+    // hysteretic survivors (combinational or ≥2-clock nodes, whose region cols come straight from their
+    // function support). Register nodes are excluded: their raw function is replaced by the edge seam, so
+    // their cols are already accounted for via `ref_reg`. A folded master must not be referenced by any of
+    // these, or the survivor's cols would name a dropped node (statetable invariant I3).
+    let survivor_names: Vec<&Symbol> = candidates
         .iter()
         .zip(&classes)
-        .filter(|(_, c)| matches!(c, Class::Level))
+        .filter(|(_, c)| !matches!(c, Class::Register { .. }))
         .map(|(n, _)| n)
         .collect();
 
@@ -308,8 +313,8 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Ed
             if ref_reg.contains(m.as_str()) {
                 return false;
             }
-            // (b) no OTHER surviving level signal references it,
-            let referenced = level_names.iter().any(|l| {
+            // (b) no OTHER surviving signal (level or hysteretic `Class::None`) references it,
+            let referenced = survivor_names.iter().any(|l| {
                 *l != *m
                     && fn_of
                         .get(l.as_str())
@@ -329,13 +334,22 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Ed
 
 /// Classify one candidate from its aggregated observations.
 fn classify_one(agg: &CandAgg) -> Class {
-    // Level: a data input is transparent to the node in one phase of a clock that actually gates it (a
-    // clock whose own toggle moves the node) but not the other. Restricting to those clocks avoids a
-    // uniform reset reading as transparent against an unrelated clock it is independent of.
-    let level = agg
-        .changed_data
-        .iter()
-        .any(|((_, k), (f, t))| f != t && agg.changed_clocks.contains(k));
+    // Level: a data input is transparent to the node, against a clock that actually gates it (a clock
+    // whose own toggle moves the node). Restricting to those clocks avoids a uniform reset reading as
+    // transparent against an unrelated clock it is independent of. Two transparency signatures block a
+    // register:
+    //   * phase-ASYMMETRIC (`f != t`): the node follows the input during one phase only — the classic
+    //     latch signature.
+    //   * phase-SYMMETRIC (`f == t`, both phases): the input moves the node in both phases yet never
+    //     forces it to a constant off-edge — it lands Held, so it is genuine data transparency (e.g. the
+    //     XOR of two opposite-phase latches on D), NOT an async set/clear. Were this permitted, the node
+    //     would key off the single clock and drop the data input, emitting a self-contradictory register
+    //     that ALSO carries combinational data arcs. A phase-symmetric FORCER (an async-style reset that
+    //     lands Forced0/Forced1, e.g. ICM's sync-declared RA) is permitted: it is real set/clear, not
+    //     transparency, and the node stays a register.
+    let level = agg.changed_data.iter().any(|((d, k), (f, t))| {
+        agg.changed_clocks.contains(k) && (f != t || !data_input_forces(agg, d, k))
+    });
     if level {
         return Class::Level;
     }
@@ -356,6 +370,36 @@ fn classify_one(agg: &CandAgg) -> Class {
         return Class::None;
     }
     Class::Register { clock, rise, fall }
+}
+
+/// Whether a phase-symmetric toggle-changing data input `d` is an off-edge FORCER on a node keyed off
+/// clock `k` — some value of `d` drives the node to a single forced constant (Forced0/Forced1), agreeing
+/// across the observed phases, i.e. an async-style set/clear rather than mere data transparency (Held).
+/// Reuses the off-edge [`phase_class`] landing over the same stable-state samples that [`synth_off_edge`]
+/// consumes; marginalising the other inputs is conservative (a partial forcer reads as Held ⇒ level).
+fn data_input_forces(agg: &CandAgg, d: &Symbol, k: &Symbol) -> bool {
+    for want in [false, true] {
+        let (mut low, mut high) = (Vec::new(), Vec::new());
+        for (state, val) in &agg.stable {
+            if state.value_of(d.as_str()) != Some(want) {
+                continue;
+            }
+            match state.value_of(k.as_str()) {
+                Some(false) => low.push(*val),
+                Some(true) => high.push(*val),
+                None => {}
+            }
+        }
+        let forced = match (phase_class(&low), phase_class(&high)) {
+            (Some(a), Some(b)) => a == b && a != Phase::Held,
+            (Some(a), None) | (None, Some(a)) => a != Phase::Held,
+            (None, None) => false,
+        };
+        if forced {
+            return true;
+        }
+    }
+    false
 }
 
 /// Synthesise a register's captures and off-edge for a candidate, escalating tier-1 → tier-2 on a
@@ -1100,6 +1144,51 @@ Q = "CLK*L1 + !CLK*L2"
         });
     }
 
+    // === Phase-symmetric data transparency must NOT read as an edge register ===
+
+    // Two opposite-phase D latches XORed: M follows D while CLK=0, M2 follows D while CLK=1, and T = M⊕M2
+    // is transparent to D in BOTH phases. D is phase-SYMMETRIC (not a latch signature) and lands Held
+    // off-edge (it forces T to no constant), so it is genuine data transparency — recognising T as an
+    // edge register would DROP D while the same run emits combinational D→T arcs under both phases. T must
+    // stay level; D must survive as a data dependency of T's function.
+    const XLAT_TOML: &str = r#"
+[[cell]]
+name = "XLAT"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+M2 = "CLK*D + !CLK*M2"
+[cell.outputs]
+T = "M*!M2 + !M*M2"
+"#;
+
+    #[test]
+    fn edge_phase_symmetric_transparency_stays_level() {
+        with_machine!(XLAT_TOML, |_b, _a, _m2, m| {
+            let es = classify(&m);
+            // No register for T (nor for M/M2): the whole cell is level/combinational, so there is no
+            // self-contradictory register-plus-combinational-D-arc emission.
+            assert!(
+                !node_list(&es).contains(&"T"),
+                "phase-symmetric D transparency must not read as a register: {:?}",
+                node_list(&es)
+            );
+            assert!(es.registers.is_empty(), "no register: {:?}", node_list(&es));
+            // D is preserved as a live data dependency: some reachable state where toggling D moves T. A
+            // register keyed off CLK would have dropped D while the run still emits D→T data arcs — the
+            // very contradiction this fix removes.
+            let d_drives_t = m.explored.order.iter().any(|node| {
+                let before = m.output_value("T", node);
+                let Some(np) = machine::settle(&m.deltas, &machine::toggle(node, &["D"])) else {
+                    return false;
+                };
+                matches!((before, m.output_value("T", &np)), (Some(b0), Some(b1)) if b0 != b1)
+            });
+            assert!(d_drives_t, "D must remain a live data dependency of T");
+        });
+    }
+
     // === Step 3 (7): blow-up guard ===
 
     #[test]
@@ -1147,6 +1236,11 @@ Q = "CLK*L1 + !CLK*L2"
     /// already-explored behaviour and must change ONLY `edge` — every other `AnalysedCell` field (the
     /// exploration, prevector/vector and hazard outputs) is byte-for-byte identical whether classification
     /// is on or off.
+    ///
+    /// The invariant holds BY CONSTRUCTION: `classify` takes `&Machine` read-only, mutates nothing, and
+    /// mints only names that already exist in the explored machine. This test additionally proves the
+    /// flag-gating is PURE — when opted out (`no_edge_collapse`) the classify() call is skipped and the
+    /// annotation is the byte-identical Default, with every other field untouched.
     #[test]
     fn edge_classification_changes_only_the_edge_annotation() {
         for src in [DFF_TOML, ICM_TOML] {

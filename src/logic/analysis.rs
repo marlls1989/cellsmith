@@ -179,6 +179,7 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
 pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     cell: &AnalysedCell,
     bdds: &BTreeMap<Symbol, Bdd<B, C>>,
+    collapse: bool,
 ) -> MachineAnalysis {
     let Some(m) = Machine::build(cell, bdds) else {
         return MachineAnalysis::default();
@@ -202,7 +203,15 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
         order_dependence: detected.order_dependence,
         oscillation: detected.oscillation,
         leakage: leakage::derive(&m),
-        edge: crate::logic::edge::classify(&m),
+        // Behavioural edge classification is read-only over the explored machine — it mints only
+        // already-existing names and mutates nothing (the exploration-unchanged invariant holds BY
+        // CONSTRUCTION). The opt-out (`collapse == false`) therefore SKIPS the classify() call entirely
+        // rather than discarding its result: a real bypass, byte-identical to the Default annotation.
+        edge: if collapse {
+            crate::logic::edge::classify(&m)
+        } else {
+            crate::logic::edge::EdgeSensitivity::default()
+        },
     }
 }
 
