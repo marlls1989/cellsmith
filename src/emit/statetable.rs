@@ -92,7 +92,7 @@ pub enum EdgeTok {
     Level,
 }
 
-/// One edge-triggered row of the joint state table: an [`EdgeRegister`](crate::logic::edge::EdgeRegister)'s
+/// One edge-triggered row of the joint state table: an [`EdgeCaptures`](crate::logic::edge::EdgeCaptures)'s
 /// capture or off-edge behaviour. `inputs` is aligned to [`StateModel::input_nodes`], `current`/`next` to
 /// [`StateModel::internal_nodes`] — the same layout as [`StateRow`]. The register's `clock` sits in
 /// `inputs` as a `None` placeholder; the renderer prints `token` in that column instead of a level. Every
@@ -136,7 +136,7 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     // internal level-sensitive masters folded away (empty when the cell opted out). A folded master
     // vanishes entirely — no node, no column, no rows; an edge-register node keeps its column but its
     // rows come from the annotation in (e), never the level cover pass in (d).
-    let edge_regs = &cell.edge.registers;
+    let edge_regs = &cell.edge.captures;
     let folded: BTreeSet<Symbol> = cell.edge.folded.iter().cloned().collect();
     let edge_nodes: BTreeSet<Symbol> = edge_regs.iter().map(|er| er.node.clone()).collect();
     // A register node is ALWAYS a state-table node, whether or not its region is hysteretic: a
@@ -905,7 +905,7 @@ Q = "CLK*M + !CLK*Q"
         for src in NON_COLLAPSIBLE {
             let (default, forced) = analyse_both(src);
             assert!(
-                default.edge.registers.is_empty(),
+                default.edge.captures.is_empty(),
                 "unexpected edge register recognised in {}",
                 default.repr_name()
             );
@@ -956,7 +956,7 @@ Q = "CLK*M + !CLK*Q"
         };
 
         for cell in [&direct, &via_flag] {
-            assert!(cell.edge.registers.is_empty());
+            assert!(cell.edge.captures.is_empty());
             let m = build_state_model(cell).expect("DFF is sequential");
             assert!(
                 m.edge_rows.is_empty(),
@@ -995,7 +995,7 @@ M = "!CLK*D + CLK*M"
         let cell = analyse(EMDFF);
         let q = cell
             .edge
-            .registers
+            .captures
             .iter()
             .find(|r| r.node == "Q")
             .expect("Q is recognised as an edge register");
@@ -1040,10 +1040,10 @@ Q = "CLKB*M + !CLKB*Q"
     fn mcdff_two_clock_pair_stays_level() {
         let cell = analyse(MCDFF);
         assert!(
-            cell.edge.registers.is_empty(),
+            cell.edge.captures.is_empty(),
             "a two-clock pair keys off no single clock: {:?}",
             cell.edge
-                .registers
+                .captures
                 .iter()
                 .map(|r| r.node.as_str())
                 .collect::<Vec<_>>()

@@ -44,7 +44,7 @@ pub struct MachineAnalysis {
     pub order_dependence: Vec<OrderDependence>,
     pub oscillation: Vec<Oscillation>,
     pub leakage: Vec<LeakageState>,
-    pub edge: crate::logic::edge::EdgeSensitivity,
+    pub edge: crate::logic::edge::EdgeArcs,
 }
 
 /// The single home for the combinatorial blow-up guard: a cell whose machine width (inputs + state
@@ -210,7 +210,7 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
         edge: if collapse {
             crate::logic::edge::classify(&m)
         } else {
-            crate::logic::edge::EdgeSensitivity::default()
+            crate::logic::edge::EdgeArcs::default()
         },
     }
 }

@@ -47,26 +47,26 @@ use crate::logic::arcs::Edge;
 use crate::logic::machine;
 use crate::logic::regions::{self, StateRegions};
 
-/// One recognised edge-triggered register: a node re-expressed as an edge seam on one or more clocks.
+/// The edge arcs carried by one node: the node re-expressed as an edge seam on one or more clocks, each
+/// edge making the node capture-and-hold a next-state value.
 #[derive(Debug, Clone)]
-pub struct EdgeRegister {
-    /// The node that becomes the register's output coordinate.
+pub struct EdgeCaptures {
+    /// The node the edge arcs belong to.
     pub node: Symbol,
     /// The captured next-state function per active edge, as combinational state-table regions (total —
     /// off is the complement of on, empty hold). Each capture carries ITS OWN clock. Grouped by clock in
-    /// cell input-pin order, `Rise` before `Fall` within a clock; a single-clock register keeps one entry
-    /// per active edge (two for a dual-edge register with `Rise` first), byte-identical to a single-clock
-    /// keying.
+    /// cell input-pin order, `Rise` before `Fall` within a clock; a single-clock node keeps one entry per
+    /// active edge (two for a dual-edge node with `Rise` first), byte-identical to a single-clock keying.
     pub captures: Vec<(Symbol, Edge, StateRegions)>,
     /// The off-edge (hold) function as state-table regions, keyed by the clock set's phase vector: on/off
     /// are the async set/clear covers, hold is the quiescent region; never references any of the clocks.
     pub off_edge: StateRegions,
-    /// The register's column set: the first-appearance union of the captures' cols then `off_edge.cols`.
+    /// The node's column set: the first-appearance union of the captures' cols then `off_edge.cols`.
     pub cols: Vec<Symbol>,
 }
 
-impl EdgeRegister {
-    /// The distinct clocks the register keys off, in first-appearance (capture) order.
+impl EdgeCaptures {
+    /// The distinct clocks the edge arcs key off, in first-appearance (capture) order.
     pub fn clocks(&self) -> Vec<&Symbol> {
         let mut out: Vec<&Symbol> = Vec::new();
         for (clock, _, _) in &self.captures {
@@ -78,11 +78,12 @@ impl EdgeRegister {
     }
 }
 
-/// The behavioural edge-sensitivity of a cell: its recognised edge registers and the cell-level set of
-/// internal level-sensitive master nodes folded away (a cross-coupled pair shares one folded master).
+/// The behavioural edge arcs of a cell: the per-node edge captures recognised across its outputs and
+/// state variables, plus the cell-level set of internal capture-less master nodes folded away (a
+/// cross-coupled pair shares one folded master).
 #[derive(Debug, Default)]
-pub struct EdgeSensitivity {
-    pub registers: Vec<EdgeRegister>,
+pub struct EdgeArcs {
+    pub captures: Vec<EdgeCaptures>,
     pub folded: Vec<Symbol>,
 }
 
@@ -97,9 +98,10 @@ struct CapAgg {
 /// The aggregated observations of one candidate node across the whole exploration walk.
 #[derive(Default, Clone)]
 struct CandAgg {
-    /// Per `(data input, clock)`: whether a data-input toggle changed the node in the clock's `(low,
-    /// high)` phase. A phase-asymmetric change (transparent in one phase only) is level sensitivity.
-    changed_data: BTreeMap<(Symbol, Symbol), (bool, bool)>,
+    /// One entry per single-input toggle that CHANGED the node: `(toggled input, destination stable
+    /// state, post value)`. Every moving toggle is recorded uniformly — clock, data and async alike —
+    /// and the capture-and-hold fixpoint reads them back to decide which clocks keep edge arcs.
+    moves: Vec<(Symbol, Minterm<Symbol>, bool)>,
     /// The distinct clocks whose toggle changed the node.
     changed_clocks: BTreeSet<Symbol>,
     /// Per `(clock, is_rise)`: the capture observations.
@@ -111,11 +113,7 @@ struct CandAgg {
 impl CandAgg {
     /// Fold another node's contribution for the same candidate into this one.
     fn merge(&mut self, other: CandAgg) {
-        for (k, (f, t)) in other.changed_data {
-            let e = self.changed_data.entry(k).or_insert((false, false));
-            e.0 |= f;
-            e.1 |= t;
-        }
+        self.moves.extend(other.moves);
         self.changed_clocks.extend(other.changed_clocks);
         for (k, cap) in other.captures {
             let e = self.captures.entry(k).or_default();
@@ -131,23 +129,15 @@ impl CandAgg {
 /// (tier-2 nodes survive the fold).
 type Synthesised = (Vec<(Symbol, Edge, StateRegions)>, StateRegions, bool);
 
-/// The behavioural class of a candidate node.
-enum Class {
-    Level,
-    Register {
-        /// The register's keying clocks in input-pin order, each with its active `(rise, fall)` edges.
-        clocks: Vec<(Symbol, bool, bool)>,
-    },
-    None,
-}
+/// A clock's cached off-edge forced covers as BDDs: `(set/on, clear/off)`, the fixpoint's set/clear oracle.
+type ForcedCovers<B, C> = (Bdd<B, C>, Bdd<B, C>);
 
-/// Discover each node's edge sensitivity from the cell's toggle-and-settle behaviour. Read-only over the
-/// shared [`Machine`]: it re-walks the exploration and only ADDS an annotation, mirroring
-/// [`super::arcs::derive`].
-pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> EdgeSensitivity {
-    // No state variables ⇒ nothing can be a register (and no builder to mint region covers from).
+/// Discover each node's edge arcs from the cell's toggle-and-settle behaviour. Read-only over the shared
+/// [`Machine`]: it re-walks the exploration and only ADDS an annotation, mirroring [`super::arcs::derive`].
+pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> EdgeArcs {
+    // No state variables ⇒ nothing can carry an edge arc (and no builder to mint region covers from).
     let Some((_, any_delta)) = m.deltas.first() else {
-        return EdgeSensitivity::default();
+        return EdgeArcs::default();
     };
     let builder = any_delta.builder();
 
@@ -156,15 +146,12 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Ed
     let deltas = &m.deltas;
     let ex = &m.explored;
 
-    // Input classes: a pin declared both clock and async counts async-only.
+    // The declared clocks. Every declared clock is a candidate edge key; whether a clock keeps edge arcs
+    // on a given node is decided by the capture-and-hold fixpoint, not by input-class routing.
+    let clock_set: BTreeSet<&str> = cell.clock_pins.iter().map(Symbol::as_str).collect();
+    // The declared async set/clear pins: they override the hold by design, so their off-edge moves never
+    // disqualify a clock (the fixpoint consults this to admit an async set/clear's assertion and release).
     let async_set: BTreeSet<&str> = cell.async_pins.iter().map(Symbol::as_str).collect();
-    let clock_vec: Vec<Symbol> = cell
-        .clock_pins
-        .iter()
-        .filter(|c| !async_set.contains(c.as_str()))
-        .cloned()
-        .collect();
-    let clock_set: BTreeSet<&str> = clock_vec.iter().map(Symbol::as_str).collect();
 
     // Candidates: every output (value read via `Machine::output_value`, so combinational outputs are
     // included) plus every internal state variable (the state-machine coordinates that are not outputs).
@@ -194,41 +181,25 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Ed
             let Some(np) = machine::settle(deltas, &toggled) else {
                 continue;
             };
-            let is_async = async_set.contains(related.as_str());
             let is_clock = clock_set.contains(related.as_str());
             let rose = np.value_of(related.as_str()) == Some(true);
             for (i, c) in candidates.iter().enumerate() {
                 let (Some(b0), Some(b1)) = (v0[i], value(c, &np)) else {
                     continue;
                 };
-                if is_async {
-                    // Async pins are excluded from the hold discipline (handled via the off-edge
-                    // stable-state analysis, not the capture/level classification).
-                    continue;
-                }
                 if is_clock {
+                    // A clock toggle: record every sample for the capture synthesis, changed or not.
                     let cap = out[i].captures.entry((related.clone(), rose)).or_default();
                     cap.samples.push((node.clone(), b1));
                     if b0 != b1 {
                         cap.changed = true;
                         out[i].changed_clocks.insert(related.clone());
                     }
-                } else if b0 != b1 {
-                    // A data toggle that moved the node: record it per clock phase. Transparency in one
-                    // phase but not the other (a phase-asymmetric change) is level sensitivity.
-                    for k in &clock_vec {
-                        if let Some(ph) = node.value_of(k.as_str()) {
-                            let e = out[i]
-                                .changed_data
-                                .entry((related.clone(), k.clone()))
-                                .or_insert((false, false));
-                            if ph {
-                                e.1 = true;
-                            } else {
-                                e.0 = true;
-                            }
-                        }
-                    }
+                }
+                if b0 != b1 {
+                    // Every moving toggle — clock, data or async alike — is a uniform move: the
+                    // destination stable state and the post value the fixpoint replays.
+                    out[i].moves.push((related.clone(), np.clone(), b1));
                 }
             }
         }
@@ -245,76 +216,85 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Ed
         },
     );
 
-    // Classify every node BEFORE any synthesis, so the header (which excludes internal level nodes) is
-    // settled first. The phase-symmetric permit/block decision consults the EXACT off-edge synthesis
-    // (`synth_off_edge` over the non-clock inputs), so it needs the builder and the input header.
-    let classes: Vec<Class> = aggs
+    // The per-arc decision core: for each candidate the capture-and-hold fixpoint yields the set of
+    // clocks that keep edge arcs on it (empty ⇒ combinational/level, no annotation). Computed BEFORE any
+    // synthesis, so the header (which excludes internal capture-less nodes) is settled first.
+    let capture_sets: Vec<Vec<Symbol>> = aggs
         .iter()
-        .map(|agg| classify_one(&builder, inputs, agg))
+        .map(|agg| capture_clocks(&builder, inputs, &async_set, agg))
         .collect();
-    let internal_level: BTreeSet<Symbol> = candidates
+    // The internal, capture-less nodes: excluded from a capture's tier-1 header (so a slave's capture
+    // generalises past a master it will fold) and the fold candidates. Output nodes are never folded, so
+    // their names always stay available in the header.
+    let internal_captureless: BTreeSet<Symbol> = candidates
         .iter()
-        .zip(&classes)
-        .filter(|(name, c)| matches!(c, Class::Level) && !output_names.contains(name.as_str()))
+        .zip(&capture_sets)
+        .filter(|(name, s)| s.is_empty() && !output_names.contains(name.as_str()))
         .map(|(name, _)| name.clone())
         .collect();
 
-    let mut registers: Vec<EdgeRegister> = Vec::new();
-    // Internal level nodes pulled back into a tier-2 header survive (become unfoldable).
+    let mut captures: Vec<EdgeCaptures> = Vec::new();
+    // Internal capture-less nodes pulled back into a tier-2 header survive (become unfoldable).
     let mut tier2_kept: BTreeSet<Symbol> = BTreeSet::new();
-    // Candidates that actually landed in `registers` (synth_register succeeded). A `Class::Register`
-    // candidate whose synthesis returned `None` has no edge annotation, so its RAW function is still
-    // emitted and it must be treated as a surviving raw-function emitter, not a register.
-    let mut actually_registered: BTreeSet<Symbol> = BTreeSet::new();
 
-    for (i, class) in classes.iter().enumerate() {
-        let Class::Register { clocks } = class else {
+    for (i, s) in capture_sets.iter().enumerate() {
+        if s.is_empty() {
             continue;
-        };
+        }
         let name = &candidates[i];
-        // Per-clock active edges (input-pin order, Rise first within each clock).
-        let clock_edges: Vec<(Symbol, Vec<(bool, Edge)>)> = clocks
+        let agg = &aggs[i];
+        // The keying clocks in cell input-pin order, each with its active `(is_rise, Edge)` edges (Rise
+        // before Fall). Every clock in S* is a changed clock, so at least one edge is active.
+        let clock_edges: Vec<(Symbol, Vec<(bool, Edge)>)> = inputs
             .iter()
-            .map(|(clock, rise, fall)| {
+            .filter(|p| s.contains(p))
+            .map(|clock| {
                 let mut edges: Vec<(bool, Edge)> = Vec::new();
-                if *rise {
+                if agg
+                    .captures
+                    .get(&(clock.clone(), true))
+                    .is_some_and(|c| c.changed)
+                {
                     edges.push((true, Edge::Rise));
                 }
-                if *fall {
+                if agg
+                    .captures
+                    .get(&(clock.clone(), false))
+                    .is_some_and(|c| c.changed)
+                {
                     edges.push((false, Edge::Fall));
                 }
                 (clock.clone(), edges)
             })
             .collect();
 
-        if let Some((captures, off_edge, tier2)) = synth_register(
+        let (node_captures, off_edge, tier2) = synth_node_captures(
             &builder,
+            name,
             &candidates,
-            &internal_level,
+            &internal_captureless,
             inputs,
             &clock_edges,
-            &aggs[i],
-        ) {
-            if tier2 {
-                tier2_kept.extend(internal_level.iter().cloned());
-            }
-            let cols = register_cols(&captures, &off_edge);
-            actually_registered.insert(name.clone());
-            registers.push(EdgeRegister {
-                node: name.clone(),
-                captures,
-                off_edge,
-                cols,
-            });
+            agg,
+        );
+        if tier2 {
+            tier2_kept.extend(internal_captureless.iter().cloned());
         }
+        let cols = capture_cols(&node_captures, &off_edge);
+        captures.push(EdgeCaptures {
+            node: name.clone(),
+            captures: node_captures,
+            off_edge,
+            cols,
+        });
     }
 
-    // FOLD (cell-level): an internal level master is folded when nothing surviving still references it.
-    let ref_reg: BTreeSet<&str> = registers
+    // FOLD (cell-level): an internal capture-less master is folded when nothing surviving references it.
+    let ref_reg: BTreeSet<&str> = captures
         .iter()
         .flat_map(|r| r.cols.iter().map(Symbol::as_str))
         .collect();
-    // Function support of every candidate, for the surviving-level-signal reference check.
+    // Function support of every candidate, for the surviving-signal reference check.
     let mut fn_of: BTreeMap<&str, &Bdd<B, C>> = BTreeMap::new();
     for (n, d) in deltas {
         fn_of.insert(n.as_str(), d);
@@ -322,28 +302,27 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Ed
     for (n, d) in &m.out_deltas {
         fn_of.insert(n.as_str(), d);
     }
-    // Every surviving signal whose RAW function is still emitted — level nodes, `Class::None` hysteretic
-    // survivors (combinational or ≥2-clock nodes, whose region cols come straight from their function
-    // support), AND `Class::Register` candidates whose synthesis failed (no edge annotation, so the raw
-    // function is emitted as a fallback). Only candidates that actually landed in `registers` are excluded:
-    // their raw function is replaced by the edge seam, so their cols are already accounted for via
-    // `ref_reg`. A folded master must not be referenced by ANY node whose raw function is emitted,
-    // including registration fallbacks, or the survivor's cols would name a dropped node (statetable
-    // invariant I3).
+    // Every surviving signal whose RAW function is still emitted — the capture-less candidates (level and
+    // combinational nodes, whose region cols come straight from their function support). Candidates that
+    // carry edge arcs are excluded: their raw function is replaced by the edge seam, so their cols are
+    // accounted for via `ref_reg`. A folded master must not be referenced by ANY surviving raw function,
+    // or the survivor's cols would name a dropped node (statetable invariant I3).
     let survivor_names: Vec<&Symbol> = candidates
         .iter()
-        .filter(|n| !actually_registered.contains(*n))
+        .zip(&capture_sets)
+        .filter(|(_, s)| s.is_empty())
+        .map(|(n, _)| n)
         .collect();
 
     let folded: Vec<Symbol> = candidates
         .iter()
-        .filter(|m| internal_level.contains(*m))
+        .filter(|m| internal_captureless.contains(*m))
         .filter(|m| {
-            // (a) no register capture/off-edge cover references it,
+            // (a) no capture/off-edge cover references it,
             if ref_reg.contains(m.as_str()) {
                 return false;
             }
-            // (b) no OTHER surviving signal (level or hysteretic `Class::None`) references it,
+            // (b) no OTHER surviving signal references it,
             let referenced = survivor_names.iter().any(|l| {
                 *l != *m
                     && fn_of
@@ -353,146 +332,120 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Ed
             if referenced {
                 return false;
             }
-            // (c) internal (guaranteed by internal_level), (d) not tier-2 re-included.
+            // (c) internal (guaranteed by internal_captureless), (d) not tier-2 re-included.
             !tier2_kept.contains(*m)
         })
         .cloned()
         .collect();
 
-    EdgeSensitivity { registers, folded }
+    EdgeArcs { captures, folded }
 }
 
-/// Classify one candidate from its aggregated observations. The discriminator is level-vs-edge: a
-/// register's stable value is independent of its clock's LEVEL — its exact off-edge synthesises cleanly
-/// (off-edge phase agreement) — whereas a node that is combinational in a clock's level (or transparent
-/// to a data input) is never a register on that clock, regardless of how many clocks change it. The
-/// phase-symmetric permit/block decision and the per-clock viability both consult the EXACT off-edge
-/// synthesis, so the shared `builder` and the cell `inputs` are threaded in.
-fn classify_one<B: Brand, C: ManagerCell>(
+/// The set of clocks that keep edge arcs on one candidate, from the capture-and-hold fixpoint. A clock
+/// `K` keeps its edge arcs iff, once `K`'s active edge has fired, the node HOLDS the captured value —
+/// independent of `K`'s level and of every non-clock input, until the next edge; the only permitted
+/// off-edge moves are `K`'s own async set/clear. The returned set is empty when the node holds under no
+/// clock (combinational or level), which takes no annotation. Never a clock-count decision: every clock
+/// that survives the fixpoint keeps its arcs (an output may carry edge arcs from several clocks).
+///
+/// (A) Seed `S0` with every changed clock whose EXACT per-clock off-edge synthesises cleanly — an empty
+/// disagreement list, meaning the node's stable value agrees across `K`'s two phases. Each seeded clock
+/// caches its off-edge's forced set/clear covers as BDDs. (B) Greatest fixpoint: drop `K` from `S` while
+/// some recorded move `(x, dest, post)` with `x != K` and `x` not itself a surviving clock is NOT a
+/// forced set/clear of `K`'s off-edge — i.e. `dest` projected onto the off-edge header is not forced to
+/// `post`, and `x` is not a declared async set/clear pin whose assertion/release this is. A dropped clock's
+/// moves then count against the survivors, so iterate to a fixpoint (`<= |clocks|` rounds).
+fn capture_clocks<B: Brand, C: ManagerCell>(
     builder: &BddBuilder<B, C>,
     inputs: &[Symbol],
+    async_set: &BTreeSet<&str>,
     agg: &CandAgg,
-) -> Class {
-    // Level: a data input is transparent to the node, against a clock that actually gates it (a clock
-    // whose own toggle moves the node). Restricting to those clocks avoids a uniform reset reading as
-    // transparent against an unrelated clock it is independent of. Two transparency signatures block a
-    // register:
-    //   * phase-ASYMMETRIC (`f != t`): the node follows the input during one phase only — the classic
-    //     latch signature.
-    //   * phase-SYMMETRIC (`f == t`, both phases): the input moves the node in both phases. Whether that
-    //     is genuine data transparency or a real set/clear is decided by the EXACT off-edge synthesis
-    //     (`synth_off_edge` — the same synthesis the emitter binds to): the input BLOCKS a register only
-    //     if it lands purely Held, i.e. it never appears in a Forced projection of the synthesised
-    //     off-edge (`off_edge.cols`, the support of the forced set/clear covers). A pure-transparency
-    //     input (e.g. XLAT's D, the XOR of two opposite-phase latches, forcing the node to no constant)
-    //     drops out of `off_edge.cols` and blocks: were it permitted the node would key off the single
-    //     clock and drop the data input, emitting a self-contradictory register that ALSO carries
-    //     combinational data arcs. A phase-symmetric FORCER — an async-style set/clear that lands
-    //     Forced0/Forced1, single-literal, disjunctive `R+G` OR conjunctive `R*G` (GATEDR's gated clear)
-    //     alike — appears in `off_edge.cols` and is permitted: it is real set/clear, and the node stays a
-    //     register. Grounding in the exact per-projection synthesis (which marks Forced only where the
-    //     observed samples of a projection actually agree to a constant) also avoids the marginal test's
-    //     mirror risk of KEEPING a register on an unreachable/partial projection.
-    let mut off_edge_cache: BTreeMap<Symbol, Option<StateRegions>> = BTreeMap::new();
-    let level = agg.changed_data.iter().any(|((d, k), (f, t))| {
-        if !agg.changed_clocks.contains(k) {
-            return false;
+) -> Vec<Symbol> {
+    // (A) Seed S0, caching each seeded clock's forced (on, off) set/clear covers for the fixpoint test.
+    let mut forced: BTreeMap<Symbol, ForcedCovers<B, C>> = BTreeMap::new();
+    let mut s: Vec<Symbol> = Vec::new();
+    for k in &agg.changed_clocks {
+        let header_off: Vec<Symbol> = inputs
+            .iter()
+            .filter(|p| p.as_str() != k.as_str())
+            .cloned()
+            .collect();
+        let (regions, dis) =
+            synth_off_edge(builder, &header_off, std::slice::from_ref(k), &agg.stable);
+        if dis.is_empty() {
+            let on = builder.build_cover(&regions.on_cover);
+            let off = builder.build_cover(&regions.off_cover);
+            forced.insert(k.clone(), (on, off));
+            s.push(k.clone());
         }
-        if f != t {
-            return true; // phase-asymmetric ⇒ the classic latch signature
-        }
-        // Phase-symmetric: permit iff `d` participates in a Forced projection of the exact off-edge.
-        let off = off_edge_cache.entry(k.clone()).or_insert_with(|| {
+    }
+
+    // (B) Greatest fixpoint: each round drops at most one offending clock; bounded by |S0| rounds.
+    for _ in 0..forced.len() {
+        let offender = s.iter().find(|k| {
+            let (on, off) = &forced[*k];
             let header_off: Vec<Symbol> = inputs
                 .iter()
                 .filter(|p| p.as_str() != k.as_str())
                 .cloned()
                 .collect();
-            synth_off_edge(builder, &header_off, std::slice::from_ref(k), &agg.stable)
+            agg.moves.iter().any(|(x, dest, post)| {
+                // K's own edge and any surviving clock's edge are captures, not off-edge moves.
+                if x == *k || s.contains(x) {
+                    return false;
+                }
+                // A declared async set/clear pin overrides the hold by design: its ASSERTION forces the
+                // node and its RELEASE lets the node re-acquire its captured value — both belong to the
+                // set/clear machinery, so its moves never disqualify K (e.g. the toggle flop's async reset,
+                // whose release flips the master to its inverted capture).
+                if async_set.contains(x.as_str()) {
+                    return false;
+                }
+                // Otherwise the move must be a forced set/clear ASSERTION: `dest`, projected onto K's
+                // off-edge header, forced to `post` by the set (on) / clear (off) cover. Anything else —
+                // an input that transparently drives the node off-edge (e.g. XLAT's D) — breaks the hold.
+                let proj = dest.project_to(header_off.iter().map(Symbol::as_str));
+                let forced_to_post = if *post {
+                    on.evaluate_fast(&proj) == Some(true)
+                } else {
+                    off.evaluate_fast(&proj) == Some(true)
+                };
+                !forced_to_post
+            })
         });
-        match off {
-            // `d` lands in a forced set/clear cover ⇒ real set/clear ⇒ permitted (not level).
-            Some(sr) => !sr.cols.iter().any(|c| c == d),
-            // No clean off-edge synthesis (phase disagreement) ⇒ forcing cannot be confirmed ⇒ block.
-            None => true,
+        match offender.cloned() {
+            Some(k) => s.retain(|c| c != &k),
+            None => break,
         }
-    });
-    if level {
-        return Class::Level;
     }
-    // Per-clock viability, reusing the level check's lazily-filled off-edge cache. A changed clock `k` is
-    // a viable register key iff its EXACT off-edge synthesises cleanly (off-edge phase AGREEMENT ⇒ the
-    // node's stable value is independent of `k`'s level, not combinational in it) AND every OTHER changed
-    // clock `j` is a level forcer carried by `k`'s off-edge (`j` appears in `off_edge.cols`). A node that
-    // is combinational in `k`'s level yields no clean off-edge (phase disagreement) and is never a
-    // register on `k`, whatever the clock count.
-    let viable: Vec<Symbol> = agg
-        .changed_clocks
-        .iter()
-        .filter(|k| {
-            let off = off_edge_cache.entry((*k).clone()).or_insert_with(|| {
-                let header_off: Vec<Symbol> = inputs
-                    .iter()
-                    .filter(|p| p.as_str() != k.as_str())
-                    .cloned()
-                    .collect();
-                synth_off_edge(builder, &header_off, std::slice::from_ref(*k), &agg.stable)
-            });
-            match off {
-                Some(sr) => agg
-                    .changed_clocks
-                    .iter()
-                    .filter(|j| j.as_str() != k.as_str())
-                    .all(|j| sr.cols.iter().any(|c| c == j)),
-                None => false,
-            }
-        })
-        .cloned()
-        .collect();
 
-    match viable.len() {
-        1 => {
-            let clock = viable.into_iter().next().unwrap();
-            let rise = agg
-                .captures
-                .get(&(clock.clone(), true))
-                .is_some_and(|c| c.changed);
-            let fall = agg
-                .captures
-                .get(&(clock.clone(), false))
-                .is_some_and(|c| c.changed);
-            if !rise && !fall {
-                return Class::None;
-            }
-            Class::Register {
-                clocks: vec![(clock, rise, fall)],
-            }
-        }
-        0 => Class::None,
-        // TODO(scope-a wave 3): recognise multi-clock via the joint phase-vector off-edge
-        _ => Class::None,
-    }
+    s
 }
 
-/// Synthesise a register's captures and off-edge for a candidate, escalating tier-1 → tier-2 on a
-/// capture conflict. Returns `None` (fall back to level, no annotation) when a tier-2 capture still
-/// conflicts or the off-edge phases disagree (behavioural F2). The `bool` is whether tier-2 was used.
+/// Synthesise a node's captures and off-edge, escalating tier-1 → tier-2 on a capture conflict. The
+/// off-edge is synthesised JOINTLY over the node's whole clock set. The `bool` is whether tier-2 was used.
+///
+/// The fixpoint (and the replay-faithfulness harness) guarantee this is only ever called on a node whose
+/// clocks hold cleanly, so neither a surviving tier-2 capture conflict nor a joint off-edge disagreement
+/// can occur; both are guarded by a `debug_assert!` rather than a silent fallback. Emission is
+/// UNCONDITIONAL — every recognised edge arc is kept, with no per-clock off-edge fallback.
 #[allow(clippy::too_many_arguments)]
-fn synth_register<B: Brand, C: ManagerCell>(
+fn synth_node_captures<B: Brand, C: ManagerCell>(
     builder: &BddBuilder<B, C>,
+    node: &Symbol,
     candidates: &[Symbol],
-    internal_level: &BTreeSet<Symbol>,
+    internal_captureless: &BTreeSet<Symbol>,
     inputs: &[Symbol],
     clock_edges: &[(Symbol, Vec<(bool, Edge)>)],
     agg: &CandAgg,
-) -> Option<Synthesised> {
+) -> Synthesised {
     let clocks: Vec<Symbol> = clock_edges.iter().map(|(c, _)| c.clone()).collect();
     let clock_set: BTreeSet<&str> = clocks.iter().map(Symbol::as_str).collect();
 
     for tier2 in [false, true] {
         // Capture per clock (input-pin order), per active edge (Rise first). Each capture's header is the
-        // inputs minus THAT capture's clock, then the candidate signal names; internal level nodes are
-        // excluded at tier-1 and re-included at tier-2. The candidate's own name is always present (a
+        // inputs minus THAT capture's clock, then the candidate signal names; internal capture-less nodes
+        // are excluded at tier-1 and re-included at tier-2. The node's own name is always present (a
         // toggle flop captures a function of its own prior state). Any OTHER clock stays in the header as
         // an ordinary level column.
         let mut captures: Vec<(Symbol, Edge, StateRegions)> = Vec::new();
@@ -505,7 +458,7 @@ fn synth_register<B: Brand, C: ManagerCell>(
                 .chain(
                     candidates
                         .iter()
-                        .filter(|c| tier2 || !internal_level.contains(*c))
+                        .filter(|c| tier2 || !internal_captureless.contains(*c))
                         .cloned(),
                 )
                 .collect();
@@ -525,27 +478,37 @@ fn synth_register<B: Brand, C: ManagerCell>(
                 }
             }
         }
-        if conflict {
-            if tier2 {
-                return None; // a tier-2 conflict falls back to level
-            }
+        if conflict && !tier2 {
             continue; // escalate to tier-2
         }
+        // A surviving tier-2 conflict is unreachable given the fixpoint + harness: assert, never fall back.
+        debug_assert!(
+            !conflict,
+            "tier-2 capture conflict on node {}",
+            node.as_str()
+        );
 
-        // Off-edge over the inputs minus ALL the register's clocks: the hold-and-async-set/clear behaviour
-        // is input driven, so the state coordinates are not columns (the value held is the register's own,
-        // absent from the header, and any forcing comes from an async input). A data input that never
-        // forces simply lands every projection in `hold` and drops out of the cols.
+        // Off-edge over the inputs minus ALL the node's clocks: the hold-and-async-set/clear behaviour is
+        // input driven, so the state coordinates are not columns (the value held is the node's own, absent
+        // from the header, and any forcing comes from an async input). A data input that never forces
+        // simply lands every projection in `hold` and drops out of the cols. Synthesised JOINTLY over the
+        // whole clock set; a joint disagreement is unreachable (belt-and-braces `debug_assert!`).
         let header_off: Vec<Symbol> = inputs
             .iter()
             .filter(|p| !clock_set.contains(p.as_str()))
             .cloned()
             .collect();
-        let off_edge = synth_off_edge(builder, &header_off, &clocks, &agg.stable)?;
+        let (off_edge, dis) = synth_off_edge(builder, &header_off, &clocks, &agg.stable);
+        debug_assert!(
+            dis.is_empty(),
+            "joint off-edge disagreement on node {}: {:?}",
+            node.as_str(),
+            dis
+        );
 
-        return Some((captures, off_edge, tier2));
+        return (captures, off_edge, tier2);
     }
-    None
+    unreachable!("the tier loop always returns")
 }
 
 /// The three-valued phase classification of a projection's observed values.
@@ -700,19 +663,21 @@ fn generalise<B: Brand, C: ManagerCell>(
 }
 
 /// Synthesise the off-edge (hold + async set/clear) region from the stable-state samples over
-/// `header_off`, for the register's clock SET. Each stable sample is keyed by the PHASE VECTOR of
-/// `clocks` (a sample with any of those clocks unset is skipped — generalising the single-clock
-/// unset-skip). Within a projection every observed phase vector is phase-classified and ALL classes must
-/// AGREE, else the projection blocks the whole annotation (behavioural F2 — level fallback) and `None` is
-/// returned. The agreed Forced class gives the async set/clear cover; agreeing held (and unobserved)
-/// projections default to hold. For a single clock the two phase vectors `[false]`/`[true]` are exactly
-/// today's `(low, high)` split, so this reduces byte-identically.
+/// `header_off`, for the node's clock SET, and return it alongside the list of DISAGREEING projections.
+/// Each stable sample is keyed by the PHASE VECTOR of `clocks` (a sample with any of those clocks unset is
+/// skipped — generalising the single-clock unset-skip). Within a projection every observed phase vector is
+/// phase-classified; when they AGREE the agreed Forced class gives the async set/clear cover and agreeing
+/// held (and unobserved) projections default to hold. A projection whose phase vectors DISAGREE is treated
+/// as HOLD (not forced either way) and recorded in the returned disagreement list — the seed and admission
+/// tests read `dis.is_empty()` (a clean off-edge) where the old code read `Some`. For a single clock the
+/// two phase vectors `[false]`/`[true]` are exactly today's `(low, high)` split, so an agreeing off-edge
+/// reduces byte-identically.
 fn synth_off_edge<B: Brand, C: ManagerCell>(
     builder: &BddBuilder<B, C>,
     header_off: &[Symbol],
     clocks: &[Symbol],
     stable: &[(Minterm<Symbol>, bool)],
-) -> Option<StateRegions> {
+) -> (StateRegions, Vec<Minterm<Symbol>>) {
     // Group the stable samples by off-edge projection, then by the clocks' phase vector.
     let mut groups: BTreeMap<Minterm<Symbol>, BTreeMap<Vec<bool>, Vec<bool>>> = BTreeMap::new();
     'sample: for (state, val) in stable {
@@ -734,18 +699,28 @@ fn synth_off_edge<B: Brand, C: ManagerCell>(
 
     let mut on_pts = builder.constant(false);
     let mut off_pts = builder.constant(false);
+    let mut disagreements: Vec<Minterm<Symbol>> = Vec::new();
     for (proj, phases) in &groups {
-        // Every observed phase vector's class must agree; a disagreement blocks the annotation.
+        // Classify every observed phase vector; a disagreement lands the projection in HOLD and is
+        // recorded, rather than blocking the whole synthesis.
         let mut agreed: Option<Phase> = None;
+        let mut disagree = false;
         for vals in phases.values() {
             let Some(cls) = phase_class(vals) else {
                 continue;
             };
             match agreed {
                 None => agreed = Some(cls),
-                Some(prev) if prev != cls => return None, // phase disagreement blocks the annotation
+                Some(prev) if prev != cls => {
+                    disagree = true;
+                    break;
+                }
                 Some(_) => {}
             }
+        }
+        if disagree {
+            disagreements.push(proj.clone());
+            continue; // treat a disagreeing projection as HOLD
         }
         let cube = cube_bdd(builder, proj);
         match agreed {
@@ -756,15 +731,14 @@ fn synth_off_edge<B: Brand, C: ManagerCell>(
     }
 
     let hold = !&on_pts.or(&off_pts);
-    Some(regions_from(&on_pts, &off_pts, &hold, header_off))
+    (
+        regions_from(&on_pts, &off_pts, &hold, header_off),
+        disagreements,
+    )
 }
 
-/// The register's column set: the first-appearance union of every capture's cols then the off-edge's
-/// cols.
-fn register_cols(
-    captures: &[(Symbol, Edge, StateRegions)],
-    off_edge: &StateRegions,
-) -> Vec<Symbol> {
+/// The node's column set: the first-appearance union of every capture's cols then the off-edge's cols.
+fn capture_cols(captures: &[(Symbol, Edge, StateRegions)], off_edge: &StateRegions) -> Vec<Symbol> {
     let mut cols: Vec<Symbol> = Vec::new();
     let sources = captures
         .iter()
@@ -813,22 +787,22 @@ mod tests {
         sr.cols.iter().map(Symbol::as_str).collect()
     }
 
-    fn clocks_of(er: &EdgeRegister) -> Vec<&str> {
+    fn clocks_of(er: &EdgeCaptures) -> Vec<&str> {
         er.clocks().into_iter().map(Symbol::as_str).collect()
     }
 
-    fn reg<'a>(es: &'a EdgeSensitivity, node: &str) -> &'a EdgeRegister {
-        es.registers
+    fn reg<'a>(es: &'a EdgeArcs, node: &str) -> &'a EdgeCaptures {
+        es.captures
             .iter()
             .find(|r| r.node.as_str() == node)
-            .unwrap_or_else(|| panic!("no register for {node}: {:?}", node_list(es)))
+            .unwrap_or_else(|| panic!("no edge arcs for {node}: {:?}", node_list(es)))
     }
 
-    fn node_list(es: &EdgeSensitivity) -> Vec<&str> {
-        es.registers.iter().map(|r| r.node.as_str()).collect()
+    fn node_list(es: &EdgeArcs) -> Vec<&str> {
+        es.captures.iter().map(|r| r.node.as_str()).collect()
     }
 
-    fn folded_list(es: &EdgeSensitivity) -> Vec<&str> {
+    fn folded_list(es: &EdgeArcs) -> Vec<&str> {
         es.folded.iter().map(Symbol::as_str).collect()
     }
 
@@ -1271,7 +1245,7 @@ T = "M*!M2 + !M*M2"
                 "phase-symmetric D transparency must not read as a register: {:?}",
                 node_list(&es)
             );
-            assert!(es.registers.is_empty(), "no register: {:?}", node_list(&es));
+            assert!(es.captures.is_empty(), "no edge arcs: {:?}", node_list(&es));
             // D is preserved as a live data dependency: some reachable state where toggling D moves T. A
             // register keyed off CLK would have dropped D while the run still emits D→T data arcs — the
             // very contradiction this fix removes.
@@ -1490,9 +1464,9 @@ GCLK = "CLK*EL"
         crate::model::recompute_signal_metadata(&mut analysed, &bdds, &min);
         assert!(
             crate::logic::analysis::Machine::build(&analysed, &bdds).is_none(),
-            "wide cell trips the guard ⇒ default EdgeSensitivity"
+            "wide cell trips the guard ⇒ default EdgeArcs"
         );
-        assert!(EdgeSensitivity::default().registers.is_empty());
+        assert!(EdgeArcs::default().captures.is_empty());
     }
 
     // === Permanent guard: the CRITICAL INVARIANT ===
@@ -1552,8 +1526,8 @@ GCLK = "CLK*EL"
 
             // The guard has teeth: classification is a no-op when suppressed and does recognise registers
             // on these fixtures when active.
-            assert!(off.edge.registers.is_empty());
-            assert!(!on.edge.registers.is_empty());
+            assert!(off.edge.captures.is_empty());
+            assert!(!on.edge.captures.is_empty());
         }
     }
 }

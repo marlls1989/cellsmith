@@ -220,7 +220,7 @@ fn collapse_hidden(arcs: &[HiddenArc]) -> Vec<HiddenArc> {
     best.into_values().cloned().collect()
 }
 
-/// Lookup from a register node (an `edge.registers` entry's `node`) to its `(clock, capturing edge)`
+/// Lookup from a register node (an `edge.captures` entry's `node`) to its `(clock, capturing edge)`
 /// pairs — one per capture (a single-edge single-clock register has one, a dual-edge register two, Rise
 /// and Fall). A delay arc whose output is one of these nodes, whose `-related_pin` is a keying clock, and
 /// whose own edge is that clock's capturing edge is one of the register's clock-to-output edge arcs —
@@ -231,7 +231,7 @@ fn edge_register_clocks(
     cell: &AnalysedCell,
 ) -> std::collections::BTreeMap<Symbol, Vec<(Symbol, Edge)>> {
     cell.edge
-        .registers
+        .captures
         .iter()
         .map(|r| {
             (
@@ -793,7 +793,7 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 "#,
         );
-        assert!(cell.edge.registers.is_empty());
+        assert!(cell.edge.captures.is_empty());
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
         assert_eq!(tcl.matches("-type edge").count(), 0);
@@ -818,11 +818,11 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 "#,
         );
-        assert!(!cell.edge.registers.is_empty());
+        assert!(!cell.edge.captures.is_empty());
         // The recognised register captures on the rising clock seam (transparent-high slave).
         assert!(cell
             .edge
-            .registers
+            .captures
             .iter()
             .all(|r| r.captures.iter().all(|(_, e, _)| *e == Edge::Rise)));
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
@@ -891,7 +891,7 @@ enB   = "!RB*(!CLKB*selb2+CLKB*enB)"
 GCLK = "enA*CLKA+enB*CLKB"
 "#,
         );
-        assert!(!cell.edge.registers.is_empty());
+        assert!(!cell.edge.captures.is_empty());
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
         assert_eq!(tcl.matches("-type edge").count(), 0);
@@ -916,9 +916,9 @@ L2 = "CLK*D + !CLK*L2"
 Q = "CLK*L1 + !CLK*L2"
 "#,
         );
-        assert_eq!(cell.edge.registers.len(), 1);
+        assert_eq!(cell.edge.captures.len(), 1);
         assert_eq!(
-            cell.edge.registers[0].captures.len(),
+            cell.edge.captures[0].captures.len(),
             2,
             "dual-edge register"
         );
@@ -978,7 +978,7 @@ clock = ["EN"]
 Q = "EN*D + !EN*Q"
 "#,
         );
-        assert!(cell.edge.registers.is_empty());
+        assert!(cell.edge.captures.is_empty());
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
         assert_eq!(tcl.matches("-type edge").count(), 0);
@@ -1256,7 +1256,7 @@ Q = "CLK*M + !CLK*Q"
 M = "!CLK*D + CLK*M"
 "#,
         );
-        assert!(!cell.edge.registers.is_empty());
+        assert!(!cell.edge.captures.is_empty());
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
         assert!(tcl.matches("-type edge").count() >= 1);

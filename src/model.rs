@@ -201,7 +201,7 @@ pub struct AnalysedCell {
     /// cell-level set of internal level-sensitive master nodes folded away. Default (empty) when the
     /// cell opted out (`no_edge_collapse`). Computed purely from the already-explored machine — it
     /// never alters the exploration.
-    pub edge: crate::logic::edge::EdgeSensitivity,
+    pub edge: crate::logic::edge::EdgeArcs,
 }
 
 impl AnalysedCell {

@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use espresso_logic::Symbol;
 
 use crate::logic::arcs::Edge;
-use crate::logic::edge::EdgeRegister;
+use crate::logic::edge::EdgeCaptures;
 use crate::logic::regions::{StateCube, StateRegions};
 use crate::model::AnalysedCell;
 
@@ -31,9 +31,9 @@ const PATH_DELAY: &str = "(0.1, 0.1)";
 pub fn cell_verilog(cell: &AnalysedCell) -> String {
     // Recognised edge registers, keyed by their output node, and the pure masters folded into them —
     // a folded master emits no primitive, no wire and no instance.
-    let edge_by_node: BTreeMap<&str, &EdgeRegister> = cell
+    let edge_by_node: BTreeMap<&str, &EdgeCaptures> = cell
         .edge
-        .registers
+        .captures
         .iter()
         .map(|er| (er.node.as_str(), er))
         .collect();
@@ -133,7 +133,7 @@ fn pattern(cube: &StateCube) -> String {
 /// register carries the OTHER clocks' levels in a conditioned capture's cols; those clocks are the
 /// primitive's dedicated trailing clock columns, not data ports. Both are excluded here (for a single
 /// clock the clock is never in `er.cols`, so this reduces to removing the register's own symbol).
-fn data_cols(er: &EdgeRegister) -> Vec<&Symbol> {
+fn data_cols(er: &EdgeCaptures) -> Vec<&Symbol> {
     let clocks = er.clocks();
     er.cols
         .iter()
@@ -142,12 +142,12 @@ fn data_cols(er: &EdgeRegister) -> Vec<&Symbol> {
 }
 
 /// One edge-register signal's UDP: an edge-sensitive sequential `primitive` whose ports are
-/// `(pin, data cols…, clocks…)` with the keying clocks LAST in [`EdgeRegister::clocks`] order. The `reg`
+/// `(pin, data cols…, clocks…)` with the keying clocks LAST in [`EdgeCaptures::clocks`] order. The `reg`
 /// captures on each active clock edge (`(01)` for `Rise`, `(10)` for `Fall`) and honours async set/clear
 /// as clock-independent level rows. The register's own symbol (a toggle flop's self-feedback) and the
 /// clocks are excluded from the data columns — the self column is the `reg` current-state and the clocks
 /// are the dedicated trailing clock columns, not input ports.
-fn edge_primitive(name: &str, pin: &Symbol, er: &EdgeRegister) -> String {
+fn edge_primitive(name: &str, pin: &Symbol, er: &EdgeCaptures) -> String {
     let clocks = er.clocks();
     let clock_strs: Vec<&str> = clocks.iter().map(|c| c.as_str()).collect();
     let cols = data_cols(er);
@@ -184,12 +184,12 @@ fn edge_primitive(name: &str, pin: &Symbol, er: &EdgeRegister) -> String {
 }
 
 /// The edge-register UDP table rows, sorted for determinism. Column order is the data cols (`er.cols`
-/// minus the register's own symbol and the clocks) then the clocks in [`EdgeRegister::clocks`] order; the
+/// minus the register's own symbol and the clocks) then the clocks in [`EdgeCaptures::clocks`] order; the
 /// current-state (`reg`) field is `?` except on a self-referencing register's capture rows, where it
 /// carries that register's own literal. Each capture row carries exactly ONE edge indicator (IEEE 1364);
 /// the capturing clock's column holds it while every other clock column carries the conditioning level.
 /// For a single clock every rule reduces exactly to the single-clock rows.
-fn edge_table_lines(er: &EdgeRegister) -> Vec<String> {
+fn edge_table_lines(er: &EdgeCaptures) -> Vec<String> {
     let cols = data_cols(er);
     let clocks = er.clocks();
     let mut lines: Vec<String> = Vec::new();
@@ -292,7 +292,7 @@ fn edge_table_lines(er: &EdgeRegister) -> Vec<String> {
 /// symbol in `er.cols`), in which case it carries that node's literal from `cube` — the capture's
 /// dependence on the register's own prior state.
 fn region_row(
-    er: &EdgeRegister,
+    er: &EdgeCaptures,
     cols: &[&Symbol],
     clocks: &[&Symbol],
     active: Option<(&Symbol, &'static str)>,
@@ -339,7 +339,7 @@ fn level_at(col: &Symbol, region_cols: &[Symbol], cube: &StateCube) -> &'static 
 fn wrapper_module(
     cell: &AnalysedCell,
     name: &Symbol,
-    edge_by_node: &BTreeMap<&str, &EdgeRegister>,
+    edge_by_node: &BTreeMap<&str, &EdgeCaptures>,
     folded: &BTreeSet<&str>,
 ) -> String {
     let outputs: Vec<Symbol> = cell.outputs.iter().map(|o| o.name.clone()).collect();
