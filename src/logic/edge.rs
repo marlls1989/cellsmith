@@ -87,21 +87,28 @@ pub struct EdgeArcs {
     pub folded: Vec<Symbol>,
 }
 
-/// A single edge's capture observations for one candidate: whether any sample changed the value, and
-/// the `(pre-state, post-value)` samples (unchanged clock-toggle samples included).
+/// A single edge's capture observations for one candidate: whether any sample changed the value, the
+/// `(pre-state, post-value)` samples (unchanged clock-toggle samples included) and the full per-firing
+/// census.
 #[derive(Default, Clone)]
 struct CapAgg {
     changed: bool,
     samples: Vec<(Minterm<Symbol>, bool)>,
+    /// One entry per settling firing of this edge — CHANGED OR NOT: `(pre-state, destination stable
+    /// state, post value)`. The census the decision core replays for the edge's content and for the
+    /// held-acquisition hold walk over the post-edge phase.
+    firings: Vec<(Minterm<Symbol>, Minterm<Symbol>, bool)>,
 }
 
 /// The aggregated observations of one candidate node across the whole exploration walk.
 #[derive(Default, Clone)]
 struct CandAgg {
-    /// One entry per single-input toggle that CHANGED the node: `(toggled input, destination stable
-    /// state, post value)`. Every moving toggle is recorded uniformly — clock, data and async alike —
-    /// and the capture-and-hold fixpoint reads them back to decide which clocks keep edge arcs.
-    moves: Vec<(Symbol, Minterm<Symbol>, bool)>,
+    /// One entry per single-input toggle that CHANGED the node: `(toggled input, SOURCE stable state,
+    /// destination stable state, post value)`. Every moving toggle is recorded uniformly — clock, data
+    /// and async alike — and the capture-and-hold fixpoint reads them back to decide which clocks keep
+    /// edge arcs. The source state is kept so a move can be replayed from where it started (the level
+    /// veto and the hold walk both need the pre-toggle state, not just where it landed).
+    moves: Vec<(Symbol, Minterm<Symbol>, Minterm<Symbol>, bool)>,
     /// The distinct clocks whose toggle changed the node.
     changed_clocks: BTreeSet<Symbol>,
     /// Per `(clock, is_rise)`: the capture observations.
@@ -119,6 +126,7 @@ impl CandAgg {
             let e = self.captures.entry(k).or_default();
             e.changed |= cap.changed;
             e.samples.extend(cap.samples);
+            e.firings.extend(cap.firings);
         }
         self.stable.extend(other.stable);
     }
@@ -188,18 +196,22 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Ed
                     continue;
                 };
                 if is_clock {
-                    // A clock toggle: record every sample for the capture synthesis, changed or not.
+                    // A clock toggle: record every sample for the capture synthesis, changed or not,
+                    // and the firing itself — pre, destination and post — for the decision core.
                     let cap = out[i].captures.entry((related.clone(), rose)).or_default();
                     cap.samples.push((node.clone(), b1));
+                    cap.firings.push((node.clone(), np.clone(), b1));
                     if b0 != b1 {
                         cap.changed = true;
                         out[i].changed_clocks.insert(related.clone());
                     }
                 }
                 if b0 != b1 {
-                    // Every moving toggle — clock, data or async alike — is a uniform move: the
-                    // destination stable state and the post value the fixpoint replays.
-                    out[i].moves.push((related.clone(), np.clone(), b1));
+                    // Every moving toggle — clock, data or async alike — is a uniform move: the source
+                    // state, the destination stable state and the post value the fixpoint replays.
+                    out[i]
+                        .moves
+                        .push((related.clone(), node.clone(), np.clone(), b1));
                 }
             }
         }
@@ -389,7 +401,7 @@ fn capture_clocks<B: Brand, C: ManagerCell>(
                 .filter(|p| p.as_str() != k.as_str())
                 .cloned()
                 .collect();
-            agg.moves.iter().any(|(x, dest, post)| {
+            agg.moves.iter().any(|(x, _src, dest, post)| {
                 // K's own edge and any surviving clock's edge are captures, not off-edge moves.
                 if x == *k || s.contains(x) {
                     return false;
