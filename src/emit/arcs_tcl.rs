@@ -1015,14 +1015,14 @@ Q = "!CLKB*M2 + CLKB*Q"
             .captures
             .iter()
             .any(|(c, e, _)| c == "CLKA" && *e == Edge::Rise));
-        assert!(q
-            .captures
-            .iter()
-            .any(|(c, e, _)| c == "CLKB" && *e == Edge::Fall));
+        assert!(
+            !q.captures.iter().any(|(c, _, _)| c == "CLKB"),
+            "Q is a latch on CLKB: no CLKB edge arc"
+        );
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
-        // The CLKA-rise and CLKB-fall Q delay arcs are both -type edge. Read the clock's own vector field
-        // (pinlist orders CLKA, CLKB, then D, Q); R is the capturing rise, F the capturing fall.
+        // The CLKA-rise Q delay arc is -type edge, CONDITIONED on CLKB's level (CLKB appears as a
+        // level field in the vector, never as an R/F edge). Pinlist orders CLKA, CLKB, then D, Q.
         let field_of = |frag: &str, clock: &str| -> Option<String> {
             let idx = ["CLKA", "CLKB", "D", "Q"]
                 .iter()
@@ -1034,7 +1034,6 @@ Q = "!CLKB*M2 + CLKB*Q"
                 .map(str::to_string)
         };
         let mut saw_a_rise_edge = false;
-        let mut saw_b_fall_edge = false;
         for frag in tcl.split("define_arc") {
             if !frag.contains("-pin Q") {
                 continue;
@@ -1043,16 +1042,14 @@ Q = "!CLKB*M2 + CLKB*Q"
             {
                 saw_a_rise_edge |= frag.contains("-type edge \\");
             }
-            if frag.contains("-related_pin CLKB") && field_of(frag, "CLKB").as_deref() == Some("F")
-            {
-                saw_b_fall_edge |= frag.contains("-type edge \\");
-            }
+            // CLKB->Q arcs survive as ordinary COMBINATIONAL latch-open arcs (the reveal), never
+            // as -type edge: Q is a latch on CLKB.
+            assert!(
+                !(frag.contains("-related_pin CLKB") && frag.contains("-type edge \\")),
+                "no CLKB -type edge Q arc may be emitted"
+            );
         }
         assert!(saw_a_rise_edge, "CLKA rising Q arc must be -type edge");
-        assert!(
-            saw_b_fall_edge,
-            "CLKB falling Q arc must be -type edge, alongside CLKA's rise"
-        );
     }
 
     /// COEX: a single output pin carrying edge, combinational AND async arcs at once. CLK's rising edge

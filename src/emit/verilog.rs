@@ -661,7 +661,6 @@ Q = "!CLKB*M2 + CLKB*Q"
                 .to_string()
         };
         let mut saw_clka_rise = false;
-        let mut saw_clkb_fall = false;
         for row in q
             .lines()
             .filter(|l| l.contains("(01)") || l.contains("(10)"))
@@ -669,15 +668,12 @@ Q = "!CLKB*M2 + CLKB*Q"
             if field(row, clka_i) == "(01)" {
                 saw_clka_rise = true;
             }
-            if field(row, clkb_i) == "(10)" {
-                saw_clkb_fall = true;
-            }
+            assert!(
+                field(row, clkb_i) != "(01)" && field(row, clkb_i) != "(10)",
+                "CLKB is a level condition of Q's UDP, never an edge row: {row}"
+            );
         }
         assert!(saw_clka_rise, "Q captures on CLKA rising");
-        assert!(
-            saw_clkb_fall,
-            "Q captures on CLKB falling, alongside CLKA's rise"
-        );
     }
 
     /// The zero-based position of `port` among the UDP `head`'s ports AFTER the output pin (i.e. the data

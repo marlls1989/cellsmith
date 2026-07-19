@@ -1254,8 +1254,9 @@ Q = "!CLKB*M2 + CLKB*Q"
         let cell = analyse(HPIPE);
         let m = build_state_model(&cell).expect("HPIPE is sequential");
         let qi = index_of_node(&m, "Q");
-        // The slave Q's own next-slot is stamped by a CLKA:Rise capture AND a CLKB:Fall capture -- a second
-        // clock's Fall alongside another clock's Rise, on the same node. No arc dropped.
+        // The slave Q's own next-slot is stamped by the conditioned CLKA:Rise capture ONLY: Q is a
+        // latch on CLKB, so CLKB stamps no capture row for Q — it appears as a level condition
+        // inside the CLKA rows instead.
         assert!(
             m.edge_rows
                 .iter()
@@ -1263,10 +1264,10 @@ Q = "!CLKB*M2 + CLKB*Q"
             "Q carries a CLKA:Rise capture row"
         );
         assert!(
-            m.edge_rows
+            !m.edge_rows
                 .iter()
-                .any(|r| r.clock == "CLKB" && r.token == EdgeTok::Fall && r.next[qi].is_some()),
-            "Q carries a CLKB:Fall capture row alongside CLKA:Rise"
+                .any(|r| r.clock == "CLKB" && r.next[qi].is_some()),
+            "Q carries no CLKB capture row: the latch clock is a condition, not a capture"
         );
     }
 
