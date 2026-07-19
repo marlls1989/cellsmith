@@ -386,14 +386,18 @@ impl<'a> Transitions<'a> {
 /// * MOVING — the node actually moves within the phase under some non-`clock` toggle (an inert phase is
 ///   not transparency, it is a node that simply never changes there).
 ///
-/// This is the predicate Rule R\* uses on the OPPOSITE phase of a change-free edge: closing a genuinely
-/// transparent phase is a real capture even when the instantaneous value is unchanged, whereas an edge
-/// whose opposite phase is HYSTERETIC (the node holds there, only being moved by a co-resident clock) is
-/// a total non-event and takes no arc.
+/// Transparency in a phase is the LATCH signature: the node tracks live data there instead of presenting
+/// an already-captured value, so it cannot hold independent of the clock's LEVEL and carries no edge arc
+/// on that clock. The contrasting phase is HYSTERETIC — the node holds there, only being moved by an edge
+/// or a co-resident clock.
 ///
 /// The FORCING region takes no part in either conjunct: a set/clear that overrides the node in the phase
 /// is a coexisting combinational arc, not the node tracking data, so a phase whose only movement is a
 /// forcing (a flop's reset asserting across its closed phase) is not transparent.
+///
+/// Rule R\* no longer consults it — a change-free edge takes no arc whatever the phase it closes — so its
+/// remaining consumer is the replay-faithfulness harness, which reads an OPEN phase against the cover.
+#[cfg_attr(not(test), allow(dead_code))]
 fn transparent<B: Brand, C: ManagerCell>(
     m: &Machine<'_, B, C>,
     tr: &Transitions<'_>,
@@ -455,7 +459,8 @@ fn transparent<B: Brand, C: ManagerCell>(
 ///
 /// An EDGE arc exists iff that clock edge makes the node CAPTURE-AND-HOLD a value — it holds independent
 /// of the clock's LEVEL until that clock's next edge — AND the arc has a REAL EFFECT: some firing changes
-/// the node, or the edge closes a genuinely transparent phase. There is no per-node register verdict, no
+/// the node. A node transparent in some phase of the clock is a LATCH on it and keeps no arc there, since
+/// its value tracks live data rather than holding. There is no per-node register verdict, no
 /// branching on a declared input class and no clock privileging: edge and combinational arcs coexist on
 /// one output, and a conditioned arc (conditioned on another clock's level or phase, say) is still an arc.
 struct Decider<'a, B: Brand, C: ManagerCell> {
@@ -549,11 +554,15 @@ impl<B: Brand, C: ManagerCell> Decider<'_, B, C> {
 
     /// Rule R\*: is the `(clock, is_rise)` arc capturing, evaluated against the current surviving set?
     ///
-    /// The delivered phase must hold (`hold_walk` with cross-clock pruning), and the arc must have a real
-    /// effect — a value-CHANGING firing whose opposite phase does NOT hold on its own (so the edge is
-    /// where the value settles), a change-free firing that closes a genuinely TRANSPARENT phase (a latch
-    /// close, a real effect even at an unchanged value), or a changing firing whose own phase holds
-    /// unaided.
+    /// The delivered phase must hold (`hold_walk` with cross-clock pruning), and the arc must produce a
+    /// real CHANGE — a value-changing firing whose opposite phase does NOT hold on its own (so the edge
+    /// is where the value settles), or one whose own phase holds unaided.
+    ///
+    /// A change-FREE edge takes no arc, however transparent the phase it closes. A node transparent in
+    /// some phase of the clock tracks live data there, so its value is not held independent of the clock
+    /// LEVEL until the next edge: it is a LATCH on that clock, and a latch has no edge arc. A dual-edge
+    /// flop is not the exception — it is OPAQUE in both phases (each phase presents an already-captured
+    /// master), so it qualifies here through the changing branch on both edges.
     fn capturing(&self, (clock, is_rise): &Arc, surviving: &BTreeSet<Arc>) -> bool {
         if !self.hold_walk(clock, *is_rise, surviving, true) {
             return false;
@@ -563,21 +572,9 @@ impl<B: Brand, C: ManagerCell> Decider<'_, B, C> {
             .captures
             .get(&(clock.clone(), *is_rise))
             .is_some_and(|c| c.changed);
-        if changed {
-            !self.hold_walk(clock, !*is_rise, surviving, false)
-                || self.hold_walk(clock, *is_rise, surviving, false)
-        } else {
-            // The opposite phase is the one this edge closes: a genuine transparency there makes the
-            // change-free edge a real capture; a hysteretic one makes it a total non-event.
-            transparent(
-                self.m,
-                self.tr,
-                self.node,
-                clock,
-                !*is_rise,
-                (&self.forced_on, &self.forced_off),
-            )
-        }
+        changed
+            && (!self.hold_walk(clock, !*is_rise, surviving, false)
+                || self.hold_walk(clock, *is_rise, surviving, false))
     }
 }
 
@@ -738,7 +735,8 @@ fn pinned_by_clock_levels<B: Brand, C: ManagerCell>(
 /// STATE content: two firings whose pre-states share a non-clock input projection deliver DIFFERENT values
 /// (the edge transports state). PIN content: a pin outside the ELIMINATED set changes the delivered value
 /// (the edge transports that pin). Seeding is by content over ALL firings, never gated on whether a firing
-/// changed the node — a change-free direction can still be a real latch close, which Rule R\* then judges.
+/// changed the node: content is what the edge could deliver, and Rule R\* is where the change and the hold
+/// obligation are judged.
 fn edge_has_content(
     inputs: &[Symbol],
     clock: &Symbol,
