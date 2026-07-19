@@ -806,6 +806,100 @@ mod tests {
         es.folded.iter().map(Symbol::as_str).collect()
     }
 
+    /// Replay-faithfulness harness: prove every synthesised capture and off-edge against the machine's own
+    /// [`machine::toggle`]/[`machine::settle`] behaviour over the reachable stable states. For each
+    /// capturing node it checks that (a) every active clock edge, fired from a matching pre-phase, makes
+    /// the node capture-and-hold its synthesised value, and (b) every other settling single-input toggle
+    /// leaves the node at its off-edge prediction — the held pre-value, or the agreed async set/clear
+    /// class. A mismatch means the recorded edge arcs do not describe the cell's actual behaviour, so the
+    /// panic names the node, the toggle and the divergent values.
+    ///
+    /// An async pin's RELEASE re-acquires the captured value rather than holding; the off-edge set/clear
+    /// covers model only its assertion, so a non-forcing async toggle is exempt (mirroring `classify`'s
+    /// async exemption in the capture-and-hold fixpoint).
+    fn assert_captures_faithful<B: Brand, C: ManagerCell>(m: &Machine<B, C>, es: &EdgeArcs) {
+        let Some((_, any_delta)) = m.deltas.first() else {
+            return; // no state variables ⇒ nothing carries a capture
+        };
+        let builder = any_delta.builder();
+        let async_pins: BTreeSet<&str> = m.cell.async_pins.iter().map(Symbol::as_str).collect();
+
+        // Does toggling clock `x` from `pre` fire one of node `r`'s recorded capturing edges? A Rise fires
+        // from a low pre-phase, a Fall from a high pre-phase.
+        let is_capturing_edge = |r: &EdgeCaptures, pre: &Minterm<Symbol>, x: &str| -> bool {
+            r.captures.iter().any(|(clk, edge, _)| {
+                clk.as_str() == x && pre.value_of(x) == Some(*edge == Edge::Fall)
+            })
+        };
+
+        for r in &es.captures {
+            let node = r.node.as_str();
+
+            // (capture) each active edge captures-and-holds its synthesised next-state value.
+            for (clock, edge, cap) in &r.captures {
+                let on = builder.build_cover(&cap.on_cover);
+                for pre in &m.explored.order {
+                    // Only pre-states whose clock phase matches the edge start are transitions on this
+                    // edge; skip the rest so a non-transition is never asserted on.
+                    if pre.value_of(clock.as_str()) != Some(*edge == Edge::Fall) {
+                        continue;
+                    }
+                    let Some(np) =
+                        machine::settle(&m.deltas, &machine::toggle(pre, &[clock.as_str()]))
+                    else {
+                        continue;
+                    };
+                    let want = on.evaluate_fast(pre);
+                    let got = m.output_value(node, &np);
+                    assert_eq!(
+                        got, want,
+                        "capture unfaithful: node {node}, clock {} {edge:?} from pre {pre:?} settled \
+                         to {np:?}: observed {got:?} != synthesised capture {want:?}",
+                        clock.as_str()
+                    );
+                }
+            }
+
+            // (off-edge) every other settling single-input toggle holds, or hits the agreed set/clear class.
+            let on = builder.build_cover(&r.off_edge.on_cover);
+            let off = builder.build_cover(&r.off_edge.off_cover);
+            for pre in &m.explored.order {
+                let held = m.output_value(node, pre);
+                for x in &m.cell.inputs {
+                    if is_capturing_edge(r, pre, x.as_str()) {
+                        continue; // a capturing edge, checked above
+                    }
+                    let Some(np) = machine::settle(&m.deltas, &machine::toggle(pre, &[x.as_str()]))
+                    else {
+                        continue;
+                    };
+                    let forced_on = on.evaluate_fast(&np) == Some(true);
+                    let forced_off = off.evaluate_fast(&np) == Some(true);
+                    // A non-forcing async toggle is a release: the node re-acquires its capture, which the
+                    // off-edge covers do not model, so exempt it.
+                    if async_pins.contains(x.as_str()) && !forced_on && !forced_off {
+                        continue;
+                    }
+                    let want = if forced_on {
+                        Some(true)
+                    } else if forced_off {
+                        Some(false)
+                    } else {
+                        held // quiescent ⇒ the node holds its pre-value
+                    };
+                    let got = m.output_value(node, &np);
+                    assert_eq!(
+                        got,
+                        want,
+                        "off-edge unfaithful: node {node}, toggle {} from pre {pre:?} settled to \
+                         {np:?}: observed {got:?} != off-edge prediction {want:?}",
+                        x.as_str()
+                    );
+                }
+            }
+        }
+    }
+
     // --- fixtures ---
 
     const DFF_TOML: &str = r#"
@@ -843,6 +937,7 @@ GCLK = "enA*CLKA+enB*CLKB"
     fn edge_dff_floor() {
         with_machine!(DFF_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
+            assert_captures_faithful(&m, &es);
             assert_eq!(node_list(&es), ["Q"], "only Q is a register");
             let q = reg(&es, "Q");
             assert_eq!(clocks_of(q), ["CLK"]);
@@ -868,6 +963,7 @@ GCLK = "enA*CLKA+enB*CLKB"
     fn edge_icm_floor() {
         with_machine!(ICM_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
+            assert_captures_faithful(&m, &es);
             let mut nodes = node_list(&es);
             nodes.sort();
             assert_eq!(nodes, ["enA", "enB", "sela2", "selb2"]);
@@ -1039,6 +1135,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
         // R clears both latches ⇒ phase agreement ⇒ Q recognised, off_edge.off covers R.
         with_machine!(BOTH_RESET_TOML, |builder, _a, _m2, m| {
             let es = classify(&m);
+            assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             // off_edge.off is forced-0 exactly where R is asserted.
             let off = builder.build_cover(&q.off_edge.off_cover);
@@ -1053,6 +1150,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
     fn edge_inverting_dff_captures_not_d() {
         with_machine!(INVERTING_DFF_TOML, |builder, _a, _m2, m| {
             let es = classify(&m);
+            assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             assert_eq!(q.captures.len(), 1);
             let (_clk, edge, cap) = &q.captures[0];
@@ -1068,6 +1166,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
     fn edge_exposed_master_recognises_slave_over_surviving_master() {
         with_machine!(EXPOSED_MASTER_TOML, |builder, _a, _m2, m| {
             let es = classify(&m);
+            assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             assert_eq!(q.captures[0].1, Edge::Rise);
             // M is an output master (never folded); the slave Q is recognised and its capture equals the
@@ -1094,6 +1193,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
     fn edge_tapped_master_survives_unfolded() {
         with_machine!(TAPPED_MASTER_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
+            assert_captures_faithful(&m, &es);
             let _q = reg(&es, "Q");
             assert!(
                 !folded_list(&es).contains(&"M"),
@@ -1127,6 +1227,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
         // and Q captures the master M on the rising edge (the self-referential ring, M in Q's cols).
         with_machine!(TOGGLE_FLOP_TOML, |builder, _a, _m2, m| {
             let es = classify(&m);
+            assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             let mm = reg(&es, "M");
             assert_eq!(q.captures[0].1, Edge::Rise);
@@ -1171,6 +1272,7 @@ Qn = "!( !(!M*CLK) * Q )"
     fn edge_cross_coupled_nand_two_registers_shared_master() {
         with_machine!(XNAND_TOML, |builder, _a, _m2, m| {
             let es = classify(&m);
+            assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             let qn = reg(&es, "Qn");
             assert_eq!(q.captures[0].1, Edge::Rise);
@@ -1201,6 +1303,7 @@ Q = "CLK*L1 + !CLK*L2"
     fn edge_dual_edge_det_captures_d_on_both_edges() {
         with_machine!(DET_TOML, |builder, _a, _m2, m| {
             let es = classify(&m);
+            assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             assert_eq!(q.captures.len(), 2, "dual edge");
             assert_eq!(q.captures[0].1, Edge::Rise);
@@ -1318,6 +1421,7 @@ Q = "!(R*G)*(CLK*M + !CLK*Q)"
     fn edge_gated_conjunctive_clear_recognised() {
         with_machine!(GATEDR_TOML, |builder, _a, _m2, m| {
             let es = classify(&m);
+            assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             assert_eq!(clocks_of(q), ["CLK"]);
             // The conjunctive clear is carried faithfully: off_edge.off is forced-0 exactly where R*G.
@@ -1345,6 +1449,7 @@ Q = "!(R*G)*(CLK*M + !CLK*Q)"
         ] {
             with_machine!(src, |_b, _a, _m2, m| {
                 let es = classify(&m);
+                assert_captures_faithful(&m, &es);
                 assert!(
                     node_list(&es).contains(&"Q"),
                     "{label}: Q must be a register, got {:?}",
@@ -1373,6 +1478,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
         // off-edge disagrees phase-wise) ⇒ Q is a Rise register keyed on CLK, R landing as its async clear.
         with_machine!(RDFF_TOML, |builder, _a, _m2, m| {
             let es = classify(&m);
+            assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             assert_eq!(clocks_of(q), ["CLK"]);
             assert_eq!(q.captures[0].1, Edge::Rise);
@@ -1529,5 +1635,218 @@ GCLK = "CLK*EL"
             assert!(off.edge.captures.is_empty());
             assert!(!on.edge.captures.is_empty());
         }
+    }
+
+    // === Step 8: grounded per-arc fixtures (DCMUX, COEX, transparent-cascade, clock-and-async) ===
+
+    // DCMUX -- a genuinely INDEPENDENT two-clock capture: Q captures each independently-clocked master at
+    // that clock's own edge, holding otherwise. CLKA and CLKB are unrelated inputs (no structural
+    // derivation, no privileging), so Q carries edge arcs on BOTH clocks with a joint off-edge universal
+    // hold. The internal masters are level (transparent to their data) and carry no arcs.
+    const DCMUX_TOML: &str = r#"
+[[cell]]
+name = "DCMUX"
+inputs = ["CLKA", "CLKB", "DA", "DB"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+MA = "!CLKA*DA + CLKA*MA"
+MB = "!CLKB*DB + CLKB*MB"
+[cell.outputs]
+Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
+"#;
+
+    #[test]
+    fn edge_dcmux_carries_both_clocks_joint_hold() {
+        with_machine!(DCMUX_TOML, |_b, _a, _m2, m| {
+            let es = classify(&m);
+            assert_captures_faithful(&m, &es);
+            // Only Q carries arcs; the internal masters carry none.
+            assert_eq!(node_list(&es), ["Q"], "only Q carries edge arcs");
+            let q = reg(&es, "Q");
+            // Both independent clocks keep edge arcs on the one output (per-arc, no privileging).
+            let clks = clocks_of(q);
+            assert!(
+                clks.contains(&"CLKA") && clks.contains(&"CLKB"),
+                "Q carries both clocks' arcs, got {clks:?}"
+            );
+            assert!(
+                q.captures.iter().any(|(c, _, _)| c == "CLKA"),
+                "a CLKA edge arc"
+            );
+            assert!(
+                q.captures.iter().any(|(c, _, _)| c == "CLKB"),
+                "a CLKB edge arc"
+            );
+            // Joint off-edge is a universal hold: no async set/clear, no columns.
+            assert!(q.off_edge.cols.is_empty(), "no off-edge columns");
+            assert!(q.off_edge.on.is_empty() && q.off_edge.off.is_empty());
+            assert_eq!(q.off_edge.hold, vec![vec![]], "universal hold");
+        });
+    }
+
+    // COEX -- a CLK-rise capture coexisting with a non-async combinational set B (forces Q high in either
+    // clock phase, surviving as a Forced1 off-edge column) AND an async clear R (forces Q low). Edge,
+    // combinational and async arcs all coexist on the one output.
+    const COEX_TOML: &str = r#"
+[[cell]]
+name = "COEX"
+inputs = ["CLK", "D", "B", "R"]
+clock = ["CLK"]
+async = ["R"]
+[cell.internal]
+M = "!R*(B + !CLK*D + CLK*M)"
+[cell.outputs]
+Q = "!R*(B + CLK*M + !CLK*Q)"
+"#;
+
+    #[test]
+    fn edge_coex_edge_and_combinational_on_one_output() {
+        with_machine!(COEX_TOML, |builder, _a, _m2, m| {
+            let es = classify(&m);
+            assert_captures_faithful(&m, &es);
+            let q = reg(&es, "Q");
+            // The edge arc: CLK rising captures.
+            assert_eq!(clocks_of(q), ["CLK"]);
+            assert_eq!(q.captures.len(), 1);
+            assert_eq!(q.captures[0].1, Edge::Rise);
+            // The combinational set B is a Forced1 off-edge column (only while not cleared); the async
+            // clear R is a Forced0 column. Edge and combinational arcs coexist on the one output.
+            let on = builder.build_cover(&q.off_edge.on_cover);
+            let off = builder.build_cover(&q.off_edge.off_cover);
+            let b = builder.var("B");
+            let r = builder.var("R");
+            assert!(
+                on.equivalent_to(&b.and(&!&r)),
+                "off_edge.on is the combinational set B (clear dominating)"
+            );
+            assert!(off.equivalent_to(&r), "off_edge.off is the async clear R");
+            assert!(
+                cols_of(&q.off_edge).contains(&"B"),
+                "B survives as an off-edge column"
+            );
+        });
+    }
+
+    // Transparent cascade (zero-arc): a level latch feeding a same-phase level latch is transparent
+    // overall -- the whole chain follows D through CLK's low phase, so it stays LEVEL and carries ZERO
+    // edge arcs on every node (it falls out as level, not by any dismissal). The XLAT analogue.
+    const TCASC_TOML: &str = r#"
+[[cell]]
+name = "TCASC"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "!CLK*M + CLK*Q"
+"#;
+
+    #[test]
+    fn edge_transparent_cascade_zero_arcs() {
+        with_machine!(TCASC_TOML, |_b, _a, _m2, m| {
+            let es = classify(&m);
+            assert_captures_faithful(&m, &es); // vacuous, but keeps the discipline uniform
+            assert!(
+                es.captures.is_empty(),
+                "a transparent cascade carries zero edge arcs, got {:?}",
+                node_list(&es)
+            );
+        });
+    }
+
+    // Clock-and-async: CLK's rising edge captures D while an async preset (PRE, force 1) and async clear
+    // (CLR, force 0) coexist on the same output. The edge arc and both async set/clear off-edge classes
+    // are carried together.
+    const CAFF_TOML: &str = r#"
+[[cell]]
+name = "CAFF"
+inputs = ["CLK", "D", "PRE", "CLR"]
+clock = ["CLK"]
+async = ["PRE", "CLR"]
+[cell.internal]
+M = "!CLR*(PRE + !CLK*D + CLK*M)"
+[cell.outputs]
+Q = "!CLR*(PRE + CLK*M + !CLK*Q)"
+"#;
+
+    #[test]
+    fn edge_clock_and_async_set_clear_coexist() {
+        with_machine!(CAFF_TOML, |builder, _a, _m2, m| {
+            let es = classify(&m);
+            assert_captures_faithful(&m, &es);
+            let q = reg(&es, "Q");
+            assert_eq!(clocks_of(q), ["CLK"]);
+            assert_eq!(q.captures[0].1, Edge::Rise);
+            // The async set/clear off-edge covers: PRE forces 1 (only while not cleared), CLR forces 0.
+            let on = builder.build_cover(&q.off_edge.on_cover);
+            let off = builder.build_cover(&q.off_edge.off_cover);
+            let pre = builder.var("PRE");
+            let clr = builder.var("CLR");
+            assert!(
+                on.equivalent_to(&pre.and(&!&clr)),
+                "off_edge.on is the async preset PRE (clear dominating)"
+            );
+            assert!(
+                off.equivalent_to(&clr),
+                "off_edge.off is the async clear CLR"
+            );
+        });
+    }
+
+    // === Step 9: hierarchical master-slave-across-two-clocks (correction regression guard) ===
+
+    // HPIPE -- a CLKA rising-edge master pair (M1/M2 capture D on CLKA) feeding a CLKB slave latch on Q (a
+    // derived/gated-clock chain). The pair jointly disagrees at the naive joint-off-edge level the
+    // pre-amendment rule would have checked, yet EVERY hierarchically-related clock's edge arcs must
+    // SURVIVE: the slave Q keeps both CLKA and CLKB, the master node M2 keeps CLKA, and no set is emptied.
+    const HPIPE_TOML: &str = r#"
+[[cell]]
+name = "HPIPE"
+inputs = ["CLKA", "CLKB", "D"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+M1 = "!CLKA*D + CLKA*M1"
+M2 = "CLKA*M1 + !CLKA*M2"
+[cell.outputs]
+Q = "!CLKB*M2 + CLKB*Q"
+"#;
+
+    #[test]
+    fn edge_hierarchical_two_clocks_no_arc_dropped() {
+        with_machine!(HPIPE_TOML, |_b, _a, _m2, m| {
+            let es = classify(&m);
+            assert_captures_faithful(&m, &es);
+            let q = reg(&es, "Q");
+            let m2 = reg(&es, "M2");
+            // The load-bearing guard: no capturing node has an emptied clock set -- no dismissal.
+            for r in &es.captures {
+                assert!(
+                    !r.clocks().is_empty(),
+                    "hierarchically-related arcs dropped from {}",
+                    r.node.as_str()
+                );
+            }
+            // The slave keeps BOTH hierarchically-related clocks; the master node keeps CLKA.
+            let qc = clocks_of(q);
+            assert!(
+                qc.contains(&"CLKA") && qc.contains(&"CLKB"),
+                "slave Q keeps both clocks, got {qc:?}"
+            );
+            assert!(clocks_of(m2).contains(&"CLKA"), "master node keeps CLKA");
+            // A second clock's Fall arc coexists with another clock's Rise on the same node (per-arc).
+            assert!(
+                q.captures
+                    .iter()
+                    .any(|(c, e, _)| c == "CLKA" && *e == Edge::Rise),
+                "Q carries CLKA:Rise"
+            );
+            assert!(
+                q.captures
+                    .iter()
+                    .any(|(c, e, _)| c == "CLKB" && *e == Edge::Fall),
+                "Q carries CLKB:Fall alongside CLKA:Rise"
+            );
+            assert!(folded_list(&es).contains(&"M1"), "the inner master folds");
+        });
     }
 }

@@ -961,6 +961,164 @@ Q = "CLK*L1 + !CLK*L2"
         }
     }
 
+    /// DCMUX: a genuinely independent two-clock capture -- Q captures each independently-clocked master at
+    /// that clock's own edge. Both clocks' Q delay arcs are re-labelled `-type edge` (no clock-privileging,
+    /// no per-output suppression); neither clock's related arcs stay combinational.
+    #[test]
+    fn dcmux_marks_both_clocks_q_arcs_edge_type() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DCMUX"
+inputs = ["CLKA", "CLKB", "DA", "DB"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+MA = "!CLKA*DA + CLKA*MA"
+MB = "!CLKB*DB + CLKB*MB"
+[cell.outputs]
+Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
+"#,
+        );
+        assert!(cell.edge.captures.iter().any(|r| r.node == "Q"));
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        // BOTH clocks' Q delay arcs are re-labelled edge.
+        for clock in ["CLKA", "CLKB"] {
+            let related = format!("-related_pin {clock}");
+            let saw_edge = tcl.split("define_arc").any(|frag| {
+                frag.contains("-pin Q") && frag.contains(&related) && frag.contains("-type edge \\")
+            });
+            assert!(saw_edge, "a {clock}-related Q arc must be -type edge");
+        }
+    }
+
+    /// Hierarchical master-slave across two clocks (HPIPE): the slave Q captures from CLKA on its rising
+    /// edge AND from CLKB on its falling edge -- a second clock's Fall capture emitted alongside another
+    /// clock's Rise on the SAME output node. Both are `-type edge`; no arc is dropped.
+    #[test]
+    fn hierarchical_second_clock_fall_alongside_rise_edge_type() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "HPIPE"
+inputs = ["CLKA", "CLKB", "D"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+M1 = "!CLKA*D + CLKA*M1"
+M2 = "CLKA*M1 + !CLKA*M2"
+[cell.outputs]
+Q = "!CLKB*M2 + CLKB*Q"
+"#,
+        );
+        let q = cell.edge.captures.iter().find(|r| r.node == "Q").unwrap();
+        assert!(q
+            .captures
+            .iter()
+            .any(|(c, e, _)| c == "CLKA" && *e == Edge::Rise));
+        assert!(q
+            .captures
+            .iter()
+            .any(|(c, e, _)| c == "CLKB" && *e == Edge::Fall));
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        // The CLKA-rise and CLKB-fall Q delay arcs are both -type edge. Read the clock's own vector field
+        // (pinlist orders CLKA, CLKB, then D, Q); R is the capturing rise, F the capturing fall.
+        let field_of = |frag: &str, clock: &str| -> Option<String> {
+            let idx = ["CLKA", "CLKB", "D", "Q"]
+                .iter()
+                .position(|p| *p == clock)?;
+            frag.lines()
+                .find(|l| l.contains("-vector"))
+                .and_then(|l| l.split('{').nth(1))
+                .and_then(|v| v.split_whitespace().nth(idx))
+                .map(str::to_string)
+        };
+        let mut saw_a_rise_edge = false;
+        let mut saw_b_fall_edge = false;
+        for frag in tcl.split("define_arc") {
+            if !frag.contains("-pin Q") {
+                continue;
+            }
+            if frag.contains("-related_pin CLKA") && field_of(frag, "CLKA").as_deref() == Some("R")
+            {
+                saw_a_rise_edge |= frag.contains("-type edge \\");
+            }
+            if frag.contains("-related_pin CLKB") && field_of(frag, "CLKB").as_deref() == Some("F")
+            {
+                saw_b_fall_edge |= frag.contains("-type edge \\");
+            }
+        }
+        assert!(saw_a_rise_edge, "CLKA rising Q arc must be -type edge");
+        assert!(
+            saw_b_fall_edge,
+            "CLKB falling Q arc must be -type edge, alongside CLKA's rise"
+        );
+    }
+
+    /// COEX: a single output pin carrying edge, combinational AND async arcs at once. CLK's rising edge
+    /// captures (`-type edge`); a non-async set B forces Q high (`-type combinational`); an async clear R
+    /// forces Q low (`-type async`). All three coexist on pin Q -- no per-output suppression.
+    #[test]
+    fn coex_edge_combinational_async_coexist_on_one_pin() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "COEX"
+inputs = ["CLK", "D", "B", "R"]
+clock = ["CLK"]
+async = ["R"]
+[cell.internal]
+M = "!R*(B + !CLK*D + CLK*M)"
+[cell.outputs]
+Q = "!R*(B + CLK*M + !CLK*Q)"
+"#,
+        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        let q_arc = |related: &str, ty: &str| {
+            let rp = format!("-related_pin {related}");
+            let ty = format!("-type {ty} \\");
+            tcl.split("define_arc")
+                .any(|frag| frag.contains("-pin Q") && frag.contains(&rp) && frag.contains(&ty))
+        };
+        assert!(q_arc("CLK", "edge"), "CLK->Q is -type edge");
+        assert!(q_arc("B", "combinational"), "B->Q is -type combinational");
+        assert!(q_arc("R", "async"), "R->Q is -type async");
+    }
+
+    /// BOTH_RESET: edge and async arcs coexist on one output pin. CLK's rising edge captures
+    /// (`-type edge`); the declared async clear R forces Q low (`-type async`).
+    #[test]
+    fn both_reset_edge_and_async_coexist_on_one_pin() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "BR"
+inputs = ["CLK", "D", "R"]
+clock = ["CLK"]
+async = ["R"]
+[cell.internal]
+M = "!R*(!CLK*D + CLK*M)"
+[cell.outputs]
+Q = "!R*(CLK*M + !CLK*Q)"
+"#,
+        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        let has_clk_edge = tcl.split("define_arc").any(|frag| {
+            frag.contains("-pin Q")
+                && frag.contains("-related_pin CLK")
+                && frag.contains("-type edge \\")
+        });
+        let has_r_async = tcl.split("define_arc").any(|frag| {
+            frag.contains("-pin Q")
+                && frag.contains("-related_pin R")
+                && frag.contains("-type async \\")
+        });
+        assert!(has_clk_edge, "CLK->Q is -type edge");
+        assert!(has_r_async, "R->Q is -type async, coexisting on pin Q");
+    }
+
     /// A lone level-sensitive latch whose ENABLE is a declared clock, driving an output node. A single
     /// latch is not a master-slave pair, so nothing collapses (no edge registers) and its level
     /// enable->output arcs stay `-type combinational` — never `-type edge` — even though the enable is a

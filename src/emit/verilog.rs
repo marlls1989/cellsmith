@@ -578,6 +578,133 @@ GCLK = "enA*CLKA+enB*CLKB"
     }
 
     #[test]
+    fn dcmux_udp_keys_both_clocks_last_with_edge_rows() {
+        // DCMUX: a genuinely independent two-clock capture. Q's UDP keys off BOTH clocks (as its LAST
+        // ports) and captures on each -- no clock-privileging, no per-output suppression.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DCMUX"
+inputs = ["CLKA", "CLKB", "DA", "DB"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+MA = "!CLKA*DA + CLKA*MA"
+MB = "!CLKB*DB + CLKB*MB"
+[cell.outputs]
+Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
+"#,
+        );
+        let v = cell_verilog(&cell);
+        eprintln!("{v}");
+        // Both clocks are the primitive's trailing ports (clocks LAST, in clocks() order).
+        assert!(
+            v.contains(", CLKA, CLKB);") && v.contains("primitive DCMUX_Q("),
+            "Q UDP keys both clocks last"
+        );
+        let q = prim_block(&v, "primitive DCMUX_Q(");
+        // Both clocks contribute capture rows; each row carries exactly ONE edge indicator, the other
+        // keying clock sitting at `?` (a level don't-care).
+        let clka_i = q_port_index(&v, "DCMUX_Q", "CLKA");
+        let clkb_i = q_port_index(&v, "DCMUX_Q", "CLKB");
+        let mut saw_clka_edge = false;
+        let mut saw_clkb_edge = false;
+        for row in q
+            .lines()
+            .filter(|l| l.contains("(01)") || l.contains("(10)"))
+        {
+            let cells: Vec<&str> = row.split(':').next().unwrap().split_whitespace().collect();
+            let edges = row.matches("(01)").count() + row.matches("(10)").count();
+            assert!(
+                edges == 1,
+                "each capture row carries exactly one edge token: {row}"
+            );
+            if matches!(cells.get(clka_i), Some(c) if c.starts_with('(')) {
+                saw_clka_edge = true;
+            }
+            if matches!(cells.get(clkb_i), Some(c) if c.starts_with('(')) {
+                saw_clkb_edge = true;
+            }
+        }
+        assert!(saw_clka_edge, "a CLKA edge capture row");
+        assert!(saw_clkb_edge, "a CLKB edge capture row");
+    }
+
+    #[test]
+    fn hierarchical_slave_udp_captures_on_both_clocks() {
+        // Hierarchical master-slave across two clocks (HPIPE): the slave Q's UDP captures from CLKA on its
+        // rising edge AND from CLKB on its falling edge -- both keying clocks trail, no arc dropped.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "HPIPE"
+inputs = ["CLKA", "CLKB", "D"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+M1 = "!CLKA*D + CLKA*M1"
+M2 = "CLKA*M1 + !CLKA*M2"
+[cell.outputs]
+Q = "!CLKB*M2 + CLKB*Q"
+"#,
+        );
+        let v = cell_verilog(&cell);
+        eprintln!("{v}");
+        let q = prim_block(&v, "primitive HPIPE_Q(");
+        let clka_i = q_port_index(&v, "HPIPE_Q", "CLKA");
+        let clkb_i = q_port_index(&v, "HPIPE_Q", "CLKB");
+        let field = |row: &str, i: usize| -> String {
+            row.split(':')
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .nth(i)
+                .unwrap_or("")
+                .to_string()
+        };
+        let mut saw_clka_rise = false;
+        let mut saw_clkb_fall = false;
+        for row in q
+            .lines()
+            .filter(|l| l.contains("(01)") || l.contains("(10)"))
+        {
+            if field(row, clka_i) == "(01)" {
+                saw_clka_rise = true;
+            }
+            if field(row, clkb_i) == "(10)" {
+                saw_clkb_fall = true;
+            }
+        }
+        assert!(saw_clka_rise, "Q captures on CLKA rising");
+        assert!(
+            saw_clkb_fall,
+            "Q captures on CLKB falling, alongside CLKA's rise"
+        );
+    }
+
+    /// The zero-based position of `port` among the UDP `head`'s ports AFTER the output pin (i.e. the data
+    /// and clock columns, aligned to the `table` row cells before the first `:`).
+    fn q_port_index(v: &str, head: &str, port: &str) -> usize {
+        let decl = v
+            .lines()
+            .find(|l| l.contains(&format!("primitive {head}(")))
+            .expect("primitive decl");
+        let ports: Vec<&str> = decl
+            .split('(')
+            .nth(1)
+            .unwrap()
+            .split(')')
+            .next()
+            .unwrap()
+            .split(',')
+            .map(str::trim)
+            .collect();
+        // ports[0] is the pin; row cells align to ports[1..], so return the index within that tail.
+        ports[1..]
+            .iter()
+            .position(|p| *p == port)
+            .unwrap_or_else(|| panic!("{port} is a UDP port of {head}"))
+    }
+
+    #[test]
     fn multiple_names_share_primitives_with_one_wrapper_each() {
         let cell = analyse(
             r#"

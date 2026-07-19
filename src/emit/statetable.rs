@@ -1189,6 +1189,87 @@ Q = "!R*(CLK*M + !CLK*Q)"
         );
     }
 
+    // DCMUX: a genuinely independent two-clock capture. Q captures each independently-clocked master at
+    // that clock's own edge, holding otherwise.
+    const DCMUX: &str = r#"
+[[cell]]
+name = "DCMUX"
+inputs = ["CLKA", "CLKB", "DA", "DB"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+MA = "!CLKA*DA + CLKA*MA"
+MB = "!CLKB*DB + CLKB*MB"
+[cell.outputs]
+Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
+"#;
+
+    #[test]
+    fn dcmux_edge_rows_carry_both_clocks() {
+        let cell = analyse(DCMUX);
+        let m = build_state_model(&cell).expect("DCMUX is sequential");
+        assert!(
+            names(&m.internal_nodes).contains(&"Q"),
+            "Q is the register node"
+        );
+        // Both independent clocks contribute capture rows -- no clock-privileging, no suppression. Each
+        // capture row names its OWN clock with a Rise/Fall token; the off-edge rows carry the Level token.
+        for clock in ["CLKA", "CLKB"] {
+            assert!(
+                m.edge_rows
+                    .iter()
+                    .any(|r| r.clock == clock && matches!(r.token, EdgeTok::Rise | EdgeTok::Fall)),
+                "{clock} must key a capture row"
+            );
+        }
+        // Every capture row carries exactly ONE clock's edge token; the other keying clock sits in the
+        // input columns as an ordinary level (never a second edge token in the same row).
+        let clkb_i = m.input_nodes.iter().position(|n| n == "CLKB").unwrap();
+        for r in &m.edge_rows {
+            if r.clock == "CLKA" && matches!(r.token, EdgeTok::Rise | EdgeTok::Fall) {
+                // CLKB in a CLKA capture row is only ever a level don't-care/level, i.e. an input value.
+                assert!(
+                    matches!(r.inputs[clkb_i], None | Some(_)),
+                    "CLKB is a level column in a CLKA capture row"
+                );
+            }
+        }
+    }
+
+    // Hierarchical master-slave across two clocks (HPIPE): a CLKA rising-edge master pair feeds a CLKB
+    // slave latch on Q. The slave keeps BOTH clocks' arcs -- CLKA:Rise and CLKB:Fall on the same node.
+    const HPIPE: &str = r#"
+[[cell]]
+name = "HPIPE"
+inputs = ["CLKA", "CLKB", "D"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+M1 = "!CLKA*D + CLKA*M1"
+M2 = "CLKA*M1 + !CLKA*M2"
+[cell.outputs]
+Q = "!CLKB*M2 + CLKB*Q"
+"#;
+
+    #[test]
+    fn hierarchical_slave_keeps_both_clock_edge_rows() {
+        let cell = analyse(HPIPE);
+        let m = build_state_model(&cell).expect("HPIPE is sequential");
+        let qi = index_of_node(&m, "Q");
+        // The slave Q's own next-slot is stamped by a CLKA:Rise capture AND a CLKB:Fall capture -- a second
+        // clock's Fall alongside another clock's Rise, on the same node. No arc dropped.
+        assert!(
+            m.edge_rows
+                .iter()
+                .any(|r| r.clock == "CLKA" && r.token == EdgeTok::Rise && r.next[qi].is_some()),
+            "Q carries a CLKA:Rise capture row"
+        );
+        assert!(
+            m.edge_rows
+                .iter()
+                .any(|r| r.clock == "CLKB" && r.token == EdgeTok::Fall && r.next[qi].is_some()),
+            "Q carries a CLKB:Fall capture row alongside CLKA:Rise"
+        );
+    }
+
     /// The node-order slot of a state node's own name in the joint model (`current`/`next` index).
     fn index_of_node(m: &StateModel, name: &str) -> usize {
         m.internal_nodes

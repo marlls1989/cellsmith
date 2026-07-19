@@ -1051,4 +1051,59 @@ Q = "CLK*L1 + !CLK*L2"
         assert!(!frag.contains("pin (L2)"));
         parse_frag(&frag);
     }
+
+    #[test]
+    fn dcmux_statetable_renders_both_clock_edge_tokens() {
+        // DCMUX: a genuinely independent two-clock capture. The joint statetable keys Q off BOTH clocks,
+        // with capture rows carrying an edge token in each clock's OWN column and the other keying clock
+        // rendered as a level (never two edge tokens in one row) -- no clock-privileging, no suppression.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DCMUX"
+inputs = ["CLKA", "CLKB", "DA", "DB"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+MA = "!CLKA*DA + CLKA*MA"
+MB = "!CLKB*DB + CLKB*MB"
+[cell.outputs]
+Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        // Column order of the statetable input header.
+        let header = frag
+            .lines()
+            .find(|l| l.contains("statetable ("))
+            .expect("a statetable header");
+        let cols: Vec<&str> = header
+            .split('"')
+            .nth(1)
+            .expect("input header field")
+            .split_whitespace()
+            .collect();
+        let clka = cols.iter().position(|c| *c == "CLKA").expect("CLKA column");
+        let clkb = cols.iter().position(|c| *c == "CLKB").expect("CLKB column");
+        let is_edge = |t: &str| t == "R" || t == "F";
+        let mut saw_clka_edge = false;
+        let mut saw_clkb_edge = false;
+        for line in frag.lines() {
+            let Some((pattern, _)) = line.trim().split_once(':') else {
+                continue;
+            };
+            let toks: Vec<&str> = pattern.split_whitespace().collect();
+            if toks.len() != cols.len() {
+                continue; // not a statetable data row
+            }
+            let a = is_edge(toks[clka]);
+            let b = is_edge(toks[clkb]);
+            assert!(!(a && b), "at most one clock-edge token per row: {line}");
+            saw_clka_edge |= a;
+            saw_clkb_edge |= b;
+        }
+        assert!(saw_clka_edge, "a CLKA edge capture row in the statetable");
+        assert!(saw_clkb_edge, "a CLKB edge capture row in the statetable");
+        parse_frag(&frag);
+    }
 }
