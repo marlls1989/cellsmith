@@ -55,7 +55,7 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     } else {
         collapse_conditions(&cell.arcs)
     };
-    let edge_clocks = edge_register_clocks(cell);
+    let edge_clocks = edge_capture_clocks(cell);
     for arc in &arcs {
         out.push_str(&format_arc(cell, arc, opts, &edge_clocks));
     }
@@ -227,7 +227,7 @@ fn collapse_hidden(arcs: &[HiddenArc]) -> Vec<HiddenArc> {
 /// `format_arc` re-labels it `-type edge` (a Liberate edge-register delay arc) instead of
 /// `-type combinational`. An arc on a non-capturing clock edge is level/latch behaviour and stays
 /// `-type combinational`.
-fn edge_register_clocks(
+fn edge_capture_clocks(
     cell: &AnalysedCell,
 ) -> std::collections::BTreeMap<Symbol, Vec<(Symbol, Edge)>> {
     cell.edge
