@@ -106,8 +106,8 @@ struct CandAgg {
     /// One entry per single-input toggle that CHANGED the node: `(toggled input, SOURCE stable state,
     /// destination stable state, post value)`. Every moving toggle is recorded uniformly — clock, data
     /// and async alike — and the capture-and-hold fixpoint reads them back to decide which clocks keep
-    /// edge arcs. The source state is kept so a move can be replayed from where it started (the level
-    /// veto and the hold walk both need the pre-toggle state, not just where it landed).
+    /// edge arcs. The source state is kept so a move can be replayed from where it started (the hold
+    /// walk needs the pre-toggle state, not just where it landed).
     moves: Vec<(Symbol, Minterm<Symbol>, Minterm<Symbol>, bool)>,
     /// The distinct clocks whose toggle changed the node.
     changed_clocks: BTreeSet<Symbol>,
@@ -588,9 +588,10 @@ impl<B: Brand, C: ManagerCell> Decider<'_, B, C> {
 ///    content* (a pin outside the eliminated set changes the delivered value). The ELIMINATED set is the
 ///    non-clock inputs whose toggle moves the node — coexisting combinational arcs (async resets, latch
 ///    data); they contribute no edge content but never disqualify the clock.
-/// 2. **LEVEL-GATING VETO**, before the fixpoint: a clock whose pure LEVEL flip (no settle) changes the
-///    node is vetoed on it — that is a combinational clock gate, not a capture. State-variable nodes are
-///    exempt by construction, since their value is read from the settled field.
+/// 2. **CAPTURED-CONTENT-IRRELEVANCE VETO**, before the fixpoint: a clock is vetoed on the node when some
+///    cube of CLOCK LITERALS ALONE pins the node to a constant, that clock's literal being NECESSARY to
+///    the pinning — in such a phase the captured content is irrelevant and the clock LEVEL alone decides
+///    the node, which is a combinational clock gate, not a capture (see [`pinned_by_clock_levels`]).
 /// 3. **GREATEST FIXPOINT** over the survivors under Rule R\*, with cross-clock pruning: seed all, drop
 ///    every arc failing R\* against the current set, iterate until stable.
 fn capture_arcs<B: Brand, C: ManagerCell>(
@@ -619,13 +620,15 @@ fn capture_arcs<B: Brand, C: ManagerCell>(
         .map(|(arc, _)| arc.clone())
         .collect();
 
-    // (2) LEVEL-GATING VETO.
+    // (2) CAPTURED-CONTENT-IRRELEVANCE VETO.
+    let clock_pins: Vec<&str> = inputs
+        .iter()
+        .map(Symbol::as_str)
+        .filter(|p| clock_set.contains(p))
+        .collect();
     let seeded_clocks: BTreeSet<Symbol> = s.iter().map(|(k, _)| k.clone()).collect();
     for k in &seeded_clocks {
-        if m.explored.order.iter().any(|state| {
-            m.output_value(node.as_str(), &machine::toggle(state, &[k.as_str()]))
-                != m.output_value(node.as_str(), state)
-        }) {
+        if pinned_by_clock_levels(m, node, &clock_pins, k.as_str()) {
             s.retain(|(clock, _)| clock != k);
         }
     }
@@ -663,6 +666,72 @@ fn capture_arcs<B: Brand, C: ManagerCell>(
             s.remove(&arc);
         }
     }
+}
+
+/// Does `clock` act COMBINATIONALLY on `node` — is there a phase in which the CAPTURED CONTENT is
+/// IRRELEVANT, the clock LEVEL alone deciding the node's settled value?
+///
+/// Operationally: some cube of CLOCK LITERALS ALONE pins the node to a constant over every reachable
+/// stable state it covers — regardless of every data pin and every state coordinate — and `clock`'s
+/// literal is NECESSARY to that pinning (dropping it unpins the node). Necessity is what keeps the test
+/// local to the gating clocks: a node pinned by some OTHER clock's level is vetoed on that clock only,
+/// its own capture clock surviving in the larger cube that merely inherits the pinning.
+///
+/// An integrated clock gate (`GCLK = CLK*EL`) is pinned by `!CLK`, and a multi-clock one
+/// (`GCLK = enA*CLKA + enB*CLKB`) by `!CLKA*!CLKB`, so both clocks go; a dual-edge flop
+/// (`Q = CLK*L1 + !CLK*L2`) is pinned by neither phase — the captured content stays relevant throughout —
+/// and keeps both its edges, as does a reset flop, whose forcing cube `CLK*R` is not clock literals alone.
+fn pinned_by_clock_levels<B: Brand, C: ManagerCell>(
+    m: &Machine<'_, B, C>,
+    node: &Symbol,
+    clocks: &[&str],
+    clock: &str,
+) -> bool {
+    let others: Vec<&str> = clocks.iter().copied().filter(|c| *c != clock).collect();
+
+    // Is the node constant over every reachable stable state matching `ctx` (a partial assignment of
+    // `others`) plus the optional literal on `clock`? An unwitnessed cube pins nothing.
+    let pins = |ctx: &[Option<bool>], lit: Option<bool>| -> bool {
+        let mut seen: Option<bool> = None;
+        for state in &m.explored.order {
+            if lit.is_some_and(|l| state.value_of(clock) != Some(l))
+                || others
+                    .iter()
+                    .zip(ctx)
+                    .any(|(p, l)| l.is_some_and(|l| state.value_of(*p) != Some(l)))
+            {
+                continue;
+            }
+            let Some(v) = m.output_value(node.as_str(), state) else {
+                continue;
+            };
+            match seen {
+                None => seen = Some(v),
+                Some(prev) if prev == v => {}
+                _ => return false,
+            }
+        }
+        seen.is_some()
+    };
+
+    // Every cube over the OTHER clocks (each pin low, high or don't-care), as a base-3 counter.
+    let mut ctx: Vec<Option<bool>> = vec![None; others.len()];
+    for code in 0..3usize.pow(u32::try_from(others.len()).unwrap_or(u32::MAX)) {
+        let mut rest = code;
+        for slot in ctx.iter_mut() {
+            *slot = [None, Some(false), Some(true)][rest % 3];
+            rest /= 3;
+        }
+        // `clock`'s literal must do the pinning: a context that already pins on its own says nothing
+        // about this clock.
+        if pins(&ctx, None) {
+            continue;
+        }
+        if [false, true].iter().any(|l| pins(&ctx, Some(*l))) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Does a clock direction's firing census carry edge CONTENT — is there anything for the edge to deliver?
@@ -1313,9 +1382,12 @@ GCLK = "enA*CLKA+enB*CLKB"
         with_machine!(ICM_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert_captures_faithful(&m, &es);
-            // GCLK = enA*CLKA + enB*CLKB is a combinational clock gate: a pure LEVEL flip of either clock
-            // changes it, so the level-gating veto strips both clocks and it carries no arc.
-            assert!(!node_list(&es).contains(&"GCLK"), "GCLK is level-gated");
+            // GCLK = enA*CLKA + enB*CLKB is a combinational clock gate: `!CLKA*!CLKB` pins it to 0 with
+            // the captured enables irrelevant, so the veto strips both clocks and it carries no arc.
+            assert!(
+                !node_list(&es).contains(&"GCLK"),
+                "GCLK is a combinational clock gate"
+            );
             // The enable flops keep a single falling capture each.
             for (name, clock) in [("enA", "CLKA"), ("enB", "CLKB")] {
                 let r = reg(&es, name);
