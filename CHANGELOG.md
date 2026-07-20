@@ -9,20 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Behavioural edge-sensitivity classification inside the arc engine. After exploration, every node —
-  each output and each internal state variable — is classified, from the cell's toggle-and-settle
-  behaviour, as an edge-triggered register (on which clock edge or edges), a level-sensitive element,
-  or combinational, and each recognised register is re-expressed in edge form across all three
-  emitters: the Liberty joint `statetable`, the Verilog sequential UDP, and the Liberate `define_arc`
-  output, whose register-capturing arc carries `-type edge`. Classification covers DFF and ICM
-  registers together with inverting, dual-edge, cross-coupled-NAND, exposed-master, and toggle-flop
-  registers; a captured function is recorded verbatim, so an inverting flop captures `!D` and a
-  toggle flop decomposes into two opposite-edge registers. A folded master's own pin, UDP primitive,
-  and `statetable` row are elided from every artifact; its internal-power characterisation, carried by
-  its primary-input hidden arcs, is unchanged. Classification changes only which form a register is
-  emitted in: the state-machine exploration, the discovered arcs' prevectors, and hazard detection are
-  untouched, and every non-register signal is emitted exactly as before. On by default; a cell can opt
-  out with `no_edge_collapse = true`, and `--no-edge-collapse` opts out every cell in the run.
+- Behavioural per-arc edge classification inside the arc engine. After exploration, every arc a node —
+  each output and each internal state variable — can present is classified, from the cell's
+  toggle-and-settle behaviour, as a **capture** (a clock edge after which the value holds independently
+  of the clock level), a **release** (a clock edge opening a latch, transmitting data that changed
+  while it was closed, the delivered value then tracking), or plain **combinational** propagation
+  through an already-transparent latch. The three categories coexist freely on one output pin — an
+  async-reset flop carries all three — and a conditioned release keeps its condition in `-when` rather
+  than changing category. Captures and releases are distinct categories but both are timing arcs on a
+  clock edge, so both emit Liberate `-type edge`: a plain latch has no capture yet still carries its
+  opening arc, and a clock gate (`ICG`/`ICM` `GCLK`, decided by the clock LEVEL) carries neither.
+  Captures are additionally re-expressed in edge form in the Liberty joint `statetable` and the Verilog
+  sequential UDP; a captured function is recorded verbatim, so an inverting flop captures `!D` and a
+  toggle flop decomposes into two opposite-edge captures. A folded master's own pin, UDP primitive, and
+  `statetable` row are elided from every artifact; its internal-power characterisation, carried by its
+  primary-input hidden arcs, is unchanged. Classification changes only which form an arc is emitted in:
+  the state-machine exploration, the discovered arcs' prevectors, and hazard detection are untouched.
+  Everything is derived behaviourally, never from equation shape and never by branching on a declared
+  input class, so a NAND-implemented cell characterises identically to its pass-transistor twin. On by
+  default; a cell can opt out with `no_edge_collapse = true`, and `--no-edge-collapse` opts out every
+  cell in the run.
 
 ## [0.1.2] - 2026-07-17
 

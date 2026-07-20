@@ -2,6 +2,13 @@
 //!
 //! The layout places `-type` first on rise arcs and after the prevector on fall arcs, with pins
 //! emitted in declaration order.
+//!
+//! Arc typing follows the per-arc classification in [`crate::logic::edge`]. A CAPTURE (a clock edge
+//! after which the value holds independently of the clock level) and a RELEASE (a clock edge opening a
+//! latch, transmitting data that changed while it was closed) are distinct categories internally, but
+//! Liberate has one token for both: they share `-type edge`. Everything else — a data change
+//! propagating through an already-transparent latch — stays `-type combinational`, and a declared-async
+//! related pin takes precedence with `-type async`.
 
 use espresso_logic::Symbol;
 
@@ -56,8 +63,9 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
         collapse_conditions(&cell.arcs)
     };
     let edge_clocks = edge_capture_clocks(cell);
+    let opening_clocks = edge_opening_clocks(cell);
     for arc in &arcs {
-        out.push_str(&format_arc(cell, arc, opts, &edge_clocks));
+        out.push_str(&format_arc(cell, arc, opts, &edge_clocks, &opening_clocks));
     }
     if opts.emit_internal {
         let hidden = if opts.emit_when {
@@ -245,11 +253,34 @@ fn edge_capture_clocks(
         .collect()
 }
 
+/// Lookup from a node to its `(clock, opening edge)` pairs — the RELEASE (opening) arcs: a clock edge
+/// takes a latch from opaque to transparent, so data that changed while it was closed is transmitted to
+/// the node by that clock edge. Keyed the same way as [`edge_capture_clocks`], and restricted to visible
+/// (non-folded) nodes: a node the state-space fold removed carries no emitted arc. Captures and releases
+/// are distinct categories internally, but both are timing arcs on a clock edge and both emit as
+/// Liberate `-type edge`; they differ only in what the delivered value does afterwards (hold vs track).
+fn edge_opening_clocks(
+    cell: &AnalysedCell,
+) -> std::collections::BTreeMap<Symbol, Vec<(Symbol, Edge)>> {
+    let folded: std::collections::BTreeSet<&Symbol> = cell.edge.folded.iter().collect();
+    let mut out: std::collections::BTreeMap<Symbol, Vec<(Symbol, Edge)>> =
+        std::collections::BTreeMap::new();
+    for (node, clock, edge) in &cell.edge.openings {
+        if folded.contains(node) {
+            continue;
+        }
+        out.entry(node.clone())
+            .or_default()
+            .push((clock.clone(), *edge));
+    }
+    out
+}
+
 /// The edge the arc's `related` clock pin makes, read from its value in the end state — the same
 /// derivation the vector uses to render its `R`/`F`. `Rise` when the clock settles high, `Fall` when it
-/// settles low. Used to gate `-type edge`: only the clock-to-output arc on the register's *capturing*
-/// clock edge is the sequential edge arc; an arc on the opposite (non-capturing) clock edge is
-/// level/latch behaviour and stays `-type combinational`.
+/// settles low. Used to gate `-type edge`: a clock-to-output arc is a timing arc only when its own
+/// direction is that clock's capturing or opening edge; a data change propagating through an
+/// already-transparent latch stays `-type combinational`.
 fn related_edge(arc: &Arc) -> Edge {
     if *assignment(&arc.end).get(&arc.related).unwrap_or(&false) {
         Edge::Rise
@@ -263,13 +294,18 @@ fn format_arc(
     arc: &Arc,
     opts: ArcsTclOptions,
     edge_clocks: &std::collections::BTreeMap<Symbol, Vec<(Symbol, Edge)>>,
+    opening_clocks: &std::collections::BTreeMap<Symbol, Vec<(Symbol, Edge)>>,
 ) -> String {
-    let is_edge = !arc.is_async
-        && edge_clocks.get(&arc.output).is_some_and(|pairs| {
+    // A capture and a release are distinct categories internally, but both are clock-edge timing arcs
+    // and share the Liberate `-type edge` token. A declared-async related pin keeps `-type async`.
+    let matches_edge = |map: &std::collections::BTreeMap<Symbol, Vec<(Symbol, Edge)>>| {
+        map.get(&arc.output).is_some_and(|pairs| {
             pairs
                 .iter()
                 .any(|(clock, edge)| arc.related == *clock && *edge == related_edge(arc))
-        });
+        })
+    };
+    let is_edge = !arc.is_async && (matches_edge(edge_clocks) || matches_edge(opening_clocks));
     let type_line = format!(
         "\t-type {} \\\n",
         if arc.is_async {
@@ -894,6 +930,12 @@ GCLK = "enA*CLKA+enB*CLKB"
         assert!(!cell.edge.captures.is_empty());
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
+        // `GCLK` is a gated clock, vetoed on both its clocks: neither a capture nor a release.
+        for frag in tcl.split("define_arc") {
+            if frag.contains("-pin GCLK") && frag.contains("-related_pin CLK") {
+                assert!(frag.contains("-type combinational \\"), "GCLK arc: {frag}");
+            }
+        }
         assert_eq!(tcl.matches("-type edge").count(), 0);
     }
 
@@ -992,9 +1034,11 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
         }
     }
 
-    /// Hierarchical master-slave across two clocks (HPIPE): the slave Q captures from CLKA on its rising
-    /// edge AND from CLKB on its falling edge -- a second clock's Fall capture emitted alongside another
-    /// clock's Rise on the SAME output node. Both are `-type edge`; no arc is dropped.
+    /// Hierarchical master-slave across two clocks (HPIPE): `Q` CAPTURES from CLKA on its rising edge and
+    /// is RELEASED by CLKB on its falling edge (CLKB's fall opens the output latch, transmitting the M2
+    /// value that changed while it was closed). The two categories are distinct internally but share the
+    /// Liberate `-type edge` token, so BOTH clocks' Q arcs render `-type edge` on the SAME output node;
+    /// no arc is dropped.
     #[test]
     fn hierarchical_second_clock_fall_alongside_rise_edge_type() {
         let cell = analyse(
@@ -1017,7 +1061,15 @@ Q = "!CLKB*M2 + CLKB*Q"
             .any(|(c, e, _)| c == "CLKA" && *e == Edge::Rise));
         assert!(
             !q.captures.iter().any(|(c, _, _)| c == "CLKB"),
-            "Q is a latch on CLKB: no CLKB edge arc"
+            "Q does not CAPTURE on CLKB -- it is released by it"
+        );
+        assert!(
+            cell.edge
+                .openings
+                .iter()
+                .any(|(n, c, e)| n == "Q" && c == "CLKB" && *e == Edge::Fall),
+            "Q is RELEASED by CLKB's falling edge: {:?}",
+            cell.edge.openings
         );
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
@@ -1034,6 +1086,7 @@ Q = "!CLKB*M2 + CLKB*Q"
                 .map(str::to_string)
         };
         let mut saw_a_rise_edge = false;
+        let mut saw_b_fall_edge = false;
         for frag in tcl.split("define_arc") {
             if !frag.contains("-pin Q") {
                 continue;
@@ -1042,14 +1095,22 @@ Q = "!CLKB*M2 + CLKB*Q"
             {
                 saw_a_rise_edge |= frag.contains("-type edge \\");
             }
-            // CLKB->Q arcs survive as ordinary COMBINATIONAL latch-open arcs (the reveal), never
-            // as -type edge: Q is a latch on CLKB.
-            assert!(
-                !(frag.contains("-related_pin CLKB") && frag.contains("-type edge \\")),
-                "no CLKB -type edge Q arc may be emitted"
-            );
+            // The CLKB->Q release arcs are `-type edge` too, on CLKB's FALLING (opening) edge.
+            if frag.contains("-related_pin CLKB") {
+                assert_eq!(
+                    field_of(frag, "CLKB").as_deref(),
+                    Some("F"),
+                    "only CLKB's opening (falling) edge reaches Q: {frag}"
+                );
+                assert!(
+                    frag.contains("-type edge \\"),
+                    "CLKB release Q arc must be -type edge: {frag}"
+                );
+                saw_b_fall_edge = true;
+            }
         }
-        assert!(saw_a_rise_edge, "CLKA rising Q arc must be -type edge");
+        assert!(saw_a_rise_edge, "CLKA rising Q capture arc is -type edge");
+        assert!(saw_b_fall_edge, "CLKB falling Q release arc is -type edge");
     }
 
     /// COEX: a single output pin carrying edge, combinational AND async arcs at once. CLK's rising edge
@@ -1116,13 +1177,13 @@ Q = "!R*(CLK*M + !CLK*Q)"
         assert!(has_r_async, "R->Q is -type async, coexisting on pin Q");
     }
 
-    /// A lone level-sensitive latch whose ENABLE is a declared clock, driving an output node. A single
-    /// latch is not a master-slave pair, so nothing collapses (no edge registers) and its level
-    /// enable->output arcs stay `-type combinational` — never `-type edge` — even though the enable is a
-    /// declared clock. Confirms a declared-clock enable does not, on its own, collapse a level latch or
-    /// emit an edge arc: recognition finds no master-slave pair, so `edge_registers` is empty.
+    /// A lone level-sensitive latch whose ENABLE is a declared clock. A latch has no CAPTURE — nothing
+    /// holds independently of the enable's level — but it does have a RELEASE: the enable's rising edge
+    /// takes it from opaque to transparent and transmits the `D` value that changed while it was closed.
+    /// That release is a timing arc, so the enable->Q arcs render `-type edge` even though `captures` is
+    /// empty.
     #[test]
-    fn latch_with_declared_clock_enable_emits_zero_edge_type_arcs() {
+    fn latch_enable_to_q_arcs_are_release_edge_type() {
         let cell = analyse(
             r#"
 [[cell]]
@@ -1133,11 +1194,27 @@ clock = ["EN"]
 Q = "EN*D + !EN*Q"
 "#,
         );
-        assert!(cell.edge.captures.is_empty());
+        assert!(cell.edge.captures.is_empty(), "a latch has no capture");
+        assert!(
+            cell.edge
+                .openings
+                .iter()
+                .any(|(n, c, e)| n == "Q" && c == "EN" && *e == Edge::Rise),
+            "the enable's rising edge opens the latch: {:?}",
+            cell.edge.openings
+        );
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
-        assert_eq!(tcl.matches("-type edge").count(), 0);
-        assert!(tcl.contains("-pin Q"));
+        let mut saw_release = false;
+        for frag in tcl.split("define_arc") {
+            if !(frag.contains("-pin Q") && frag.contains("-related_pin EN")) {
+                continue;
+            }
+            assert!(frag.contains("-type edge \\"), "EN->Q release arc: {frag}");
+            assert!(!frag.contains("-type combinational"));
+            saw_release = true;
+        }
+        assert!(saw_release, "the EN->Q release arcs are emitted");
     }
 
     #[test]
@@ -1336,30 +1413,23 @@ Q = "(A*B + Q*(A+B))*!R"
         (default, forced)
     }
 
-    /// Four shapes that recognise NO edge register even under default (on) collapse: a single latch, a
-    /// gated (self-referencing) latch, a master/slave pair split across two DIFFERENT declared clocks
-    /// (a genuine two-clock master-slave: a node changing on >=2 declared clocks is not annotated), and
-    /// a two-latch DFF whose clock is never declared. The exposed-master DFF (EMDFF) is NO LONGER here
-    /// -- its slave Q is now a recognised edge register (see `emdff_marks_only_the_slave_qs_clk_arc_edge_type`),
-    /// matching the sibling emitters' fixture suites.
-    const NON_COLLAPSIBLE: [&str; 4] = [
-        r#"
+    /// A single transparent latch, whose enable's rising edge is a RELEASE. It has no capture, but the
+    /// release is a real timing arc, so its `CLK`->`Q` arcs render `-type edge`. Opting out
+    /// (`no_edge_collapse`) suppresses the classification entirely and restores `-type combinational`.
+    const DLAT: &str = r#"
 [[cell]]
 name = "DLAT"
 inputs = ["CLK", "D"]
 clock = ["CLK"]
 [cell.outputs]
 Q = "CLK*D + !CLK*Q"
-"#,
-        r#"
-[[cell]]
-name = "GLAT"
-inputs = ["CLK", "D"]
-clock = ["CLK"]
-[cell.outputs]
-Q = "CLK*(D+Q) + !CLK*Q"
-"#,
-        r#"
+"#;
+
+    /// A master/slave pair split across two DIFFERENT declared clocks. `Q` never captures — CLKB's rising
+    /// edge RELEASES the output latch, and CLKA's falling edge (the master closing) reaches `Q` as a
+    /// CONDITIONED release, through the CLKB latch while it is open. Conditioning never reclassifies an
+    /// arc: the condition rides in `-when`, the type stays `edge`.
+    const MCDFF: &str = r#"
 [[cell]]
 name = "MCDFF"
 inputs = ["CLKA", "CLKB", "D"]
@@ -1368,6 +1438,84 @@ clock = ["CLKA", "CLKB"]
 M = "!CLKA*D + CLKA*M"
 [cell.outputs]
 Q = "CLKB*M + !CLKB*Q"
+"#;
+
+    #[test]
+    fn dlat_enable_release_is_edge_type_and_opts_out() {
+        let (default, forced) = analyse_both(DLAT);
+        let tcl_default = cell_arcs_tcl(&default, ArcsTclOptions::default());
+        eprintln!("{tcl_default}");
+        assert!(default.edge.captures.is_empty(), "a latch has no capture");
+        // The enable's rising (opening) edge is the only CLK->Q arc, and it is `-type edge`.
+        for frag in tcl_default.split("define_arc") {
+            if !(frag.contains("-pin Q") && frag.contains("-related_pin CLK")) {
+                continue;
+            }
+            assert!(frag.contains("-type edge \\"), "CLK->Q release: {frag}");
+        }
+        assert!(tcl_default.matches("-type edge").count() >= 1);
+        // Opted out, the same cell falls back to plain combinational arcs.
+        let tcl_forced = cell_arcs_tcl(&forced, ArcsTclOptions::default());
+        assert_eq!(tcl_forced.matches("-type edge").count(), 0);
+    }
+
+    #[test]
+    fn mcdff_two_clock_releases_are_edge_type_with_conditions_preserved() {
+        let (default, forced) = analyse_both(MCDFF);
+        let tcl = cell_arcs_tcl(&default, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        assert!(default.edge.captures.is_empty(), "neither clock captures Q");
+        // Pinlist order is {CLKA CLKB D Q}.
+        let field_of = |frag: &str, idx: usize| -> Option<String> {
+            frag.lines()
+                .find(|l| l.contains("-vector"))
+                .and_then(|l| l.split('{').nth(1))
+                .and_then(|v| v.split_whitespace().nth(idx))
+                .map(str::to_string)
+        };
+        let mut saw_b_release = false;
+        let mut saw_conditioned_a_release = false;
+        for frag in tcl.split("define_arc") {
+            if !frag.contains("-pin Q") {
+                continue;
+            }
+            if frag.contains("-related_pin CLKB") {
+                assert_eq!(field_of(frag, 1).as_deref(), Some("R"), "{frag}");
+                assert!(frag.contains("-type edge \\"), "CLKB release: {frag}");
+                saw_b_release = true;
+            }
+            if frag.contains("-related_pin CLKA") {
+                assert_eq!(field_of(frag, 0).as_deref(), Some("F"), "{frag}");
+                assert!(frag.contains("-type edge \\"), "CLKA release: {frag}");
+                // The condition (CLKB open) rides in `-when`; it does not reclassify the arc.
+                assert!(
+                    frag.contains("-when \"CLKB"),
+                    "conditioned release keeps its -when: {frag}"
+                );
+                saw_conditioned_a_release = true;
+            }
+        }
+        assert!(saw_b_release, "CLKB rising release Q arc is -type edge");
+        assert!(
+            saw_conditioned_a_release,
+            "CLKA falling conditioned release Q arc is -type edge"
+        );
+        // Opted out, both fall back to plain combinational arcs.
+        let tcl_forced = cell_arcs_tcl(&forced, ArcsTclOptions::default());
+        assert_eq!(tcl_forced.matches("-type edge").count(), 0);
+    }
+
+    /// Two shapes that carry NO edge arc at all — neither a capture nor a release — even under default
+    /// (on) classification: a gated (self-referencing) latch, whose enable's edge transmits nothing that
+    /// changed while it was closed, and a two-latch DFF whose clock is never declared.
+    const NON_COLLAPSIBLE: [&str; 2] = [
+        r#"
+[[cell]]
+name = "GLAT"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.outputs]
+Q = "CLK*(D+Q) + !CLK*Q"
 "#,
         r#"
 [[cell]]
@@ -1382,8 +1530,8 @@ Q = "CLK*M + !CLK*Q"
 
     #[test]
     fn non_collapsible_suite_tcl_matches_the_no_edge_collapse_flag() {
-        // Zero `-type edge` blocks, whether the flag is left off (default collapse, a no-op on these
-        // shapes) or forced on -- and the two runs emit byte-identical Tcl.
+        // Zero `-type edge` blocks, whether the flag is left off (default classification, a no-op on
+        // these shapes) or forced on -- and the two runs emit byte-identical Tcl.
         for src in NON_COLLAPSIBLE {
             let (default, forced) = analyse_both(src);
             let tcl_default = cell_arcs_tcl(&default, ArcsTclOptions::default());
@@ -1394,10 +1542,10 @@ Q = "CLK*M + !CLK*Q"
         }
     }
 
-    /// The exposed-master DFF: the behavioural pass recognises the slave `Q` as a rising-edge register
-    /// while the declared-output master `M` survives as a level node. `Q`'s CLK-related delay arc is
-    /// re-labelled `-type edge` (default collapse, no TOML opt-out); `M`'s own arcs are unaffected --
-    /// never re-labelled edge.
+    /// The exposed-master DFF: the behavioural pass recognises the slave `Q` as CAPTURING on CLK's rising
+    /// edge, while the declared-output master `M` is a latch RELEASED by CLK's falling edge. The two
+    /// categories are distinct internally but share the `-type edge` token, so both pins carry an edge
+    /// arc -- `Q` on the rise, `M` on the fall.
     #[test]
     fn emdff_marks_only_the_slave_qs_clk_arc_edge_type() {
         let cell = analyse(
@@ -1415,14 +1563,70 @@ M = "!CLK*D + CLK*M"
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
         assert!(tcl.matches("-type edge").count() >= 1);
+        assert!(
+            cell.edge
+                .openings
+                .iter()
+                .any(|(n, c, e)| n == "M" && c == "CLK" && *e == Edge::Fall),
+            "the exposed master is released by CLK's fall: {:?}",
+            cell.edge.openings
+        );
+        // Vector order is {CLK D M Q} (inputs then outputs, declaration order): CLK's own field is the
+        // arc's edge on the related clock.
+        let clk_field = |frag: &str| -> Option<String> {
+            frag.lines()
+                .find(|l| l.contains("-vector"))
+                .and_then(|l| l.split('{').nth(1))
+                .and_then(|v| v.split_whitespace().next())
+                .map(str::to_string)
+        };
+        let (mut saw_q_capture, mut saw_m_release) = (false, false);
         for frag in tcl.split("define_arc") {
-            if frag.contains("-type edge") {
-                assert!(frag.contains("-pin Q"), "edge type only on Q: {frag}");
+            if !frag.contains("-related_pin CLK") || frag.contains("-type hidden") {
+                continue;
             }
-            if frag.contains("-pin M") {
-                assert!(!frag.contains("-type edge"), "M stays non-edge: {frag}");
+            match (frag.contains("-pin Q \\"), clk_field(frag).as_deref()) {
+                (true, Some("R")) => {
+                    assert!(frag.contains("-type edge \\"), "Q capture: {frag}");
+                    saw_q_capture = true;
+                }
+                (false, Some("F")) => {
+                    assert!(frag.contains("-type edge \\"), "M release: {frag}");
+                    saw_m_release = true;
+                }
+                _ => {}
             }
         }
+        assert!(saw_q_capture, "Q's CLK-rise capture is -type edge");
+        assert!(saw_m_release, "M's CLK-fall release is -type edge");
+    }
+
+    /// An integrated clock gate: `GCLK` is a gated clock, not a latch output. The classifier vetoes CLK
+    /// on it (clock levels alone pin its value), so it is neither a capture nor a release and its
+    /// `GCLK` arcs stay `-type combinational` -- on both clock edges. The internal enable latch `EL` does
+    /// carry a release, but it drives no Liberty output, so no `-type edge` block is emitted.
+    #[test]
+    fn icg_gclk_arcs_stay_combinational() {
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "ICG"
+inputs = ["CLK", "EN"]
+clock = ["CLK"]
+[cell.internal]
+EL = "!CLK*EN + CLK*EL"
+[cell.outputs]
+GCLK = "CLK*EL"
+"#,
+        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        for frag in tcl.split("define_arc") {
+            if frag.contains("-pin GCLK") && frag.contains("-related_pin CLK") {
+                assert!(frag.contains("-type combinational \\"), "GCLK arc: {frag}");
+            }
+        }
+        assert_eq!(tcl.matches("-type edge").count(), 0);
     }
 
     #[test]

@@ -144,7 +144,7 @@ clock = ["CLK"]                # optional: input pins that are clocks. A hazard 
                                #   any other pair yields a symmetric non_seq
 constraint_arcs = true         # optional: opt this cell in to emitting the derived constraint arcs
                                #   (equivalent to the global --constraints flag, per cell)
-# no_edge_collapse = true      # optional: opt this cell OUT of the edge-register collapse below
+# no_edge_collapse = true      # optional: opt this cell OUT of the edge classification below
                                #   (equivalent to the global --no-edge-collapse flag, per cell)
 [cell.internal]                # internal state node: referenceable, but emits no external pin
 M = "!CLK*D + CLK*M"           #   the master latch (transparent low)
@@ -154,13 +154,20 @@ Q = "CLK*M + !CLK*Q"           # the slave references the internal master; CLKâ†
 ```
 
 `M` and `Q` are an opposite-phase latch pair on the declared clock `CLK`, so by default cellsmith
-recognises them, after exploration, as a single rising-edge register on `Q`: `M`'s pin, UDP, and
+classifies, after exploration, the `CLK` rising arc on `Q` as a **capture**: `M`'s pin, UDP, and
 `statetable` row are elided from every emitted artifact, while its internal-power characterisation
-(carried by its primary-input hidden arcs) is unchanged; `Q`'s capture is re-expressed
-combinationally in terms of `D`, and its Liberate arc carries `-type edge`. Setting
-`no_edge_collapse = true` (or passing `--no-edge-collapse`) keeps the two-latch form written above
-exactly as it stands, with `M` staying a separate internal node and `Q`'s arcs discovered by prevector
-as before. See `docs/edge-collapse.md` for the recognition rule and its invariants.
+(carried by its primary-input hidden arcs) is unchanged; `Q`'s capture is re-expressed combinationally
+in terms of `D`, and its Liberate arc carries `-type edge`. Setting `no_edge_collapse = true` (or
+passing `--no-edge-collapse`) keeps the two-latch form written above exactly as it stands, with `M`
+staying a separate internal node and `Q`'s arcs discovered by prevector as before.
+
+Classification is **per arc**, not per node: each arc a cell presents is a capture, a **release** (a
+clock edge opening a latch, transmitting data that changed while it was closed), or plain
+combinational propagation through an already-transparent latch. Captures and releases are distinct
+categories but both are timing arcs on a clock edge, so both emit Liberate `-type edge` â€” a plain latch
+has no capture yet still carries its opening arc. All three categories coexist freely on one output pin
+(an async-reset flop carries all three). See `docs/edge-collapse.md` for the decision pipeline and its
+invariants.
 
 Function syntax: the primary operators are `*` (AND), `+` (OR), `!` (NOT), the constants `1`/`0`, and
 parentheses for grouping. The parser is a superset of that form: it also accepts `&` for AND, `|` for
