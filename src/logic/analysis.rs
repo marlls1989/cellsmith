@@ -196,6 +196,16 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     } else {
         Vec::new()
     };
+    // Behavioural edge classification is read-only over the explored machine — it mints only
+    // already-existing names and mutates nothing (the exploration-unchanged invariant holds BY
+    // CONSTRUCTION). The derived `arcs` are its label domain: every timing arc it labels is one of the
+    // pipeline's own delay arcs. The opt-out (`collapse == false`) SKIPS the classify() call entirely
+    // rather than discarding its result: a real bypass, byte-identical to the Default annotation.
+    let edge = if collapse {
+        crate::logic::edge::classify(&m, &arcs)
+    } else {
+        crate::logic::edge::EdgeArcs::default()
+    };
     MachineAnalysis {
         arcs,
         hidden_arcs,
@@ -203,15 +213,7 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
         order_dependence: detected.order_dependence,
         oscillation: detected.oscillation,
         leakage: leakage::derive(&m),
-        // Behavioural edge classification is read-only over the explored machine — it mints only
-        // already-existing names and mutates nothing (the exploration-unchanged invariant holds BY
-        // CONSTRUCTION). The opt-out (`collapse == false`) therefore SKIPS the classify() call entirely
-        // rather than discarding its result: a real bypass, byte-identical to the Default annotation.
-        edge: if collapse {
-            crate::logic::edge::classify(&m)
-        } else {
-            crate::logic::edge::EdgeArcs::default()
-        },
+        edge,
     }
 }
 

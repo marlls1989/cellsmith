@@ -40,8 +40,9 @@ minimisation rewrite, the machine/hazard pass, and the per-signal region cache h
 It takes the shared `Machine` and is strictly **read-only**: it re-walks the exploration with
 `machine::toggle`/`machine::settle` — exactly mirroring `arcs::derive`'s per-node walk — mutates no
 BDD, and feeds nothing back into the machine, the arcs, or the hazard detectors. Its entire output is
-one field, `AnalysedCell::edge` (`EdgeArcs`): the per-node captures, the raw release (opening) arcs,
-and the cell-level set of internal capture-less masters folded away.
+one field, `AnalysedCell::edge` (`EdgeArcs`): the per-node captures, the per-arc `-type` labels of the
+cell's clock-related delay arcs (keyed by the arc's `(output, clock, direction)` identity in the arc
+pipeline), and the cell-level set of internal capture-less masters folded away.
 
 The **candidates** are every output (so a combinational output is considered and simply keeps no edge
 arc) plus every internal state variable that is not itself an output.
@@ -75,9 +76,16 @@ Per candidate node, over the aggregated walk observations:
    not transparency), and with co-resident clock movers admitted unless they change a phase-wide
    **carrier** the node tracks (a mux switch between held values is not transparency; tracking a live
    carrier is).
-4. **THE OPENING PARTITION** is the complement: a direction that CHANGED the node, was not kept as a
-   capture, and whose clock was not vetoed. It moved the node on an edge but does not hold afterwards —
-   it released a latch rather than captured into it.
+4. **PER-ARC LABELS, SOURCED FROM THE ARC PIPELINE.** Every timing arc is one of the delay arcs
+   `arcs::derive` observed — nothing else exists to label, so a masked edge (a `DFF`'s fall, `ICM`'s
+   competing branch reaching the other synchroniser's first master) never appears at all, and internal
+   nodes — which carry no delay arc — are never labelled. Each clock-related arc key
+   `(output, clock, direction)` is labelled **Capture** when the capture rule kept that direction,
+   **nothing** when the clock is vetoed on the node (a level-acting clock's arcs stay combinational —
+   `RDFF`'s clock-declared reset is the witness: its assert pins the node by level and emits
+   `-type combinational`, never a release), and **Release** otherwise — the arc's existence attests the
+   change, and an edge that moves the node without holding afterwards released a latch. The veto is
+   judged for every clock whose edge moved the node, seeded or not.
 
 Everything a candidate presents that falls in none of these is left to `super::arcs` as an ordinary
 combinational data arc.
@@ -136,12 +144,11 @@ folded master:
   and Liberate derives the timing from the Tcl.
 - **Verilog** — the sequential UDP is written in edge-triggered form for captures; likewise the level
   rows already carry the latch.
-- **Liberate** — `src/emit/arcs_tcl.rs` is the only emitter that types arcs. A capture arc and a
+- **Liberate** — `src/emit/arcs_tcl.rs` is the only emitter that types arcs. Each delay arc looks up
+  its own `(output, related clock, clock direction)` key in `EdgeArcs::labels`: a capture arc and a
   release arc both render `-type edge`; a declared-async related pin takes precedence with
-  `-type async`; everything else stays `-type combinational`.
-
-Release arcs are filtered to **visible** (non-folded) nodes at emission: the raw partition is per-node
-and unfiltered, because folding is decided after classification.
+  `-type async`; an unlabelled arc stays `-type combinational`. No visibility filtering is needed —
+  the label domain is the emitted arcs themselves, and outputs never fold.
 
 ## 8. Retained restrictions
 

@@ -9,7 +9,7 @@
 //!   independently of the clock's LEVEL until that clock's next edge. [`EdgeArcs::captures`].
 //! * **RELEASE / OPENING** (edge) — a clock edge takes a latch from OPAQUE to TRANSPARENT, so data that
 //!   changed while it was closed is transmitted to the node BY THE EDGE; the delivered value then
-//!   TRACKS rather than holds. [`EdgeArcs::openings`].
+//!   TRACKS rather than holds. [`ArcClass::Release`] in [`EdgeArcs::labels`].
 //! * **COMBINATIONAL** — a data change propagating while the latch is already transparent. Not recorded
 //!   here; it falls out of [`super::arcs`] as an ordinary data arc.
 //!
@@ -44,7 +44,13 @@
 //!    node and the delivered phase is QUIET (`phase_quiet`) — no live data reaches the node inside the
 //!    phase, with the node's forcing pins exempted and co-resident clock movers admitted unless they
 //!    change a phase-wide carrier the node tracks.
-//! 4. **THE OPENING PARTITION** is the complement: changed, not kept, not vetoed.
+//! 4. **PER-ARC LABELS, SOURCED FROM THE ARC PIPELINE**: every timing arc is one of the delay arcs
+//!    [`super::arcs::derive`] observed — nothing else exists to label, so a masked edge (a `DFF`'s
+//!    fall, `ICM`'s competing branch) never appears at all. Each clock-related arc key
+//!    `(output, clock, direction)` gets [`ArcClass::Capture`] when the direction was kept by the
+//!    capture rule, no label when the clock was vetoed (a level-acting clock gate stays
+//!    combinational), and [`ArcClass::Release`] otherwise — an edge that moved the node without
+//!    holding afterwards released a latch.
 //!
 //! The capture (per active edge) and the off-edge (hold + set/clear forcing) functions are synthesised
 //! from the sampled pre-states and stable states over a deterministic two-tier header, reusing the
@@ -62,7 +68,7 @@ use espresso_logic::{Cover, CoverType, CubeType, Minimizable, Minterm, Symbol};
 use rayon::prelude::*;
 
 use crate::logic::analysis::Machine;
-use crate::logic::arcs::Edge;
+use crate::logic::arcs::{Arc as DelayArc, Edge};
 use crate::logic::machine;
 use crate::logic::regions::{self, StateRegions};
 
@@ -107,7 +113,7 @@ impl EdgeCaptures {
 ///    independently of the clock level until that clock's next edge — [`EdgeArcs::captures`].
 /// 2. **RELEASE / OPENING** (edge): a clock edge takes a latch from OPAQUE to TRANSPARENT, so data that
 ///    changed while the latch was closed is transmitted to the node BY THE CLOCK EDGE; the delivered
-///    value then TRACKS rather than holds — [`EdgeArcs::openings`].
+///    value then TRACKS rather than holds — [`ArcClass::Release`] in [`EdgeArcs::labels`].
 /// 3. **COMBINATIONAL**: a data change propagating while the latch is already transparent — not recorded
 ///    here; it falls out of [`super::arcs`] as an ordinary data arc.
 ///
@@ -117,10 +123,23 @@ impl EdgeCaptures {
 pub struct EdgeArcs {
     pub captures: Vec<EdgeCaptures>,
     pub folded: Vec<Symbol>,
-    /// The RELEASE (opening) arcs, as `(node, clock, edge)`. RAW and per-node: folding is decided after
-    /// classification, so nodes that later fold away are still listed here and visibility filtering
-    /// belongs to emission, not to this stage.
-    pub openings: Vec<(Symbol, Symbol, Edge)>,
+    /// The per-arc `-type` labels of the cell's CLOCK-RELATED delay arcs, keyed by the arc's identity
+    /// in the arc pipeline: `(output, related clock, the clock's own direction)`. SOURCED FROM the
+    /// derived arcs — a key exists only where [`super::arcs::derive`] observed the transition, so a
+    /// masked edge (a `DFF`'s fall, `ICM`'s competing branch reaching an internal latch) has no entry
+    /// by construction, and internal nodes — which carry no delay arc — are never labelled. An ABSENT
+    /// key on a clock-related arc means the clock acts there by LEVEL (the vetoed clock-gate class)
+    /// and the arc stays `-type combinational`.
+    pub labels: BTreeMap<(Symbol, Symbol, Edge), ArcClass>,
+}
+
+/// The edge category of one labelled delay arc. The two categories are distinct — the delivered value
+/// HOLDS after a capture and TRACKS after a release — but both are timing arcs on a clock edge and
+/// both emit Liberate `-type edge`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArcClass {
+    Capture,
+    Release,
 }
 
 /// A single edge's capture observations for one candidate: whether any sample changed the value, the
@@ -177,9 +196,14 @@ type Synthesised = (Vec<(Symbol, Edge, StateRegions)>, StateRegions, bool);
 /// a per-node register verdict, so edge and combinational arcs coexist freely on one output.
 type Arc = (Symbol, bool);
 
-/// Discover each node's edge arcs from the cell's toggle-and-settle behaviour. Read-only over the shared
-/// [`Machine`]: it re-walks the exploration and only ADDS an annotation, mirroring [`super::arcs::derive`].
-pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> EdgeArcs {
+/// Discover each node's edge arcs from the cell's toggle-and-settle behaviour and label the cell's
+/// delay arcs per arc. Read-only over the shared [`Machine`]: it re-walks the exploration and only ADDS
+/// an annotation, mirroring [`super::arcs::derive`] — whose derived arcs are also the SOURCE of the
+/// label domain: only an observed arc is ever labelled.
+pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
+    m: &Machine<B, C>,
+    delay_arcs: &[DelayArc],
+) -> EdgeArcs {
     // No state variables ⇒ nothing can carry an edge arc (and no builder to mint region covers from).
     let Some((_, any_delta)) = m.deltas.first() else {
         return EdgeArcs::default();
@@ -267,26 +291,41 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Ed
     // (which excludes internal capture-less nodes) is settled first. The single-input transition table is
     // node-independent, so it is built once and shared by every candidate's hold walks.
     let trans = Transitions::build(m);
-    let (capture_sets, opening_sets): (Vec<BTreeSet<Arc>>, Vec<BTreeSet<Arc>>) = candidates
+    let (capture_sets, vetoed_sets): (Vec<BTreeSet<Arc>>, Vec<BTreeSet<Symbol>>) = candidates
         .iter()
         .zip(&aggs)
         .map(|(name, agg)| capture_arcs(m, &trans, name, &clock_set, agg))
         .unzip();
-    // The RAW opening (release) arcs, in candidate order and, within a node, in cell input-pin order with
-    // Rise before Fall — the ordering every other edge listing uses. Kept unfiltered: folding is decided
-    // below, and which of these are visible is an emission-time question.
-    let openings: Vec<(Symbol, Symbol, Edge)> = candidates
+    // The PER-ARC LABELS, sourced from the arc pipeline: each derived delay arc whose related pin is a
+    // declared clock is labelled from its own `(output, clock, direction)` identity — Capture when the
+    // decision core kept that direction, nothing when the clock is level-vetoed on the node (the arc
+    // stays combinational), Release otherwise (the arc's existence attests the change). An arc the
+    // machine never presents has no key, so masking needs no rule here: it already happened in
+    // `arcs::derive`.
+    let cand_index: HashMap<&str, usize> = candidates
         .iter()
-        .zip(&opening_sets)
-        .flat_map(|(name, o)| {
-            inputs.iter().flat_map(move |clock| {
-                [(true, Edge::Rise), (false, Edge::Fall)]
-                    .into_iter()
-                    .filter(move |(is_rise, _)| o.contains(&(clock.clone(), *is_rise)))
-                    .map(move |(_, edge)| (name.clone(), clock.clone(), edge))
-            })
-        })
+        .enumerate()
+        .map(|(i, c)| (c.as_str(), i))
         .collect();
+    let mut labels: BTreeMap<(Symbol, Symbol, Edge), ArcClass> = BTreeMap::new();
+    for a in delay_arcs {
+        if !clock_set.contains(a.related.as_str()) {
+            continue;
+        }
+        let Some(&i) = cand_index.get(a.output.as_str()) else {
+            continue;
+        };
+        let is_rise = a.end.value_of(a.related.as_str()) == Some(true);
+        let class = if capture_sets[i].contains(&(a.related.clone(), is_rise)) {
+            ArcClass::Capture
+        } else if vetoed_sets[i].contains(&a.related) {
+            continue; // a level-acting clock: the arc stays combinational
+        } else {
+            ArcClass::Release
+        };
+        let edge = if is_rise { Edge::Rise } else { Edge::Fall };
+        labels.insert((a.output.clone(), a.related.clone(), edge), class);
+    }
     // The internal, capture-less nodes: excluded from a capture's tier-1 header (so a slave's capture
     // generalises past a master it will fold) and the fold candidates. Output nodes are never folded, so
     // their names always stay available in the header.
@@ -397,7 +436,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Ed
     EdgeArcs {
         captures,
         folded,
-        openings,
+        labels,
     }
 }
 
@@ -509,11 +548,13 @@ fn transparent<B: Brand, C: ManagerCell>(
     moves
 }
 
-/// The `(clock, direction)` edge arcs one candidate node keeps, in three stages, together with its
-/// OPENING (release) arcs: the directions that CHANGED the node but were not kept as captures and whose
-/// clock was not vetoed. A vetoed clock decides the node by its LEVEL, so its directions are ordinary
-/// combinational clock-gate arcs, not openings; everything else that moves the node on an edge without
-/// holding afterwards is a latch opening.
+/// The `(clock, direction)` edge arcs one candidate node keeps, in three stages, together with the
+/// clocks VETOED on it. A vetoed clock decides the node by its LEVEL, so its arcs are ordinary
+/// combinational clock-gate arcs — neither captures nor releases; the veto verdict is returned so the
+/// per-arc labelling can tell a level-acting clock (no label) from a releasing one. The veto is judged
+/// for EVERY clock whose edge moved the node, seeded or not: a clock with no edge content can still be
+/// level-acting (`RDFF`'s clock-declared reset pins the node by its level and must not label the arc a
+/// release).
 ///
 /// 1. **SEED by CONTENT** over ALL firings of each direction, changed or not: the edge has *state
 ///    content* (two firings from equal non-clock input projections deliver different values) or *pin
@@ -536,7 +577,7 @@ fn capture_arcs<B: Brand, C: ManagerCell>(
     node: &Symbol,
     clock_set: &BTreeSet<&str>,
     agg: &CandAgg,
-) -> (BTreeSet<Arc>, BTreeSet<Arc>) {
+) -> (BTreeSet<Arc>, BTreeSet<Symbol>) {
     let inputs = &m.cell.inputs;
 
     // E(N): the non-clock inputs that move the node — coexisting combinational arcs.
@@ -555,23 +596,28 @@ fn capture_arcs<B: Brand, C: ManagerCell>(
         .map(|(arc, _)| arc.clone())
         .collect();
 
-    // (2) CAPTURED-CONTENT-IRRELEVANCE VETO.
+    // (2) CAPTURED-CONTENT-IRRELEVANCE VETO, judged for every clock the seed names PLUS every clock
+    // whose edge CHANGED the node: an unseeded clock never keeps a capture, but its veto verdict still
+    // decides whether its arcs are level-acting (combinational) or releases.
     let clock_pins: Vec<&str> = inputs
         .iter()
         .map(Symbol::as_str)
         .filter(|p| clock_set.contains(p))
         .collect();
-    let seeded_clocks: BTreeSet<Symbol> = s.iter().map(|(k, _)| k.clone()).collect();
+    let candidate_clocks: BTreeSet<Symbol> = s
+        .iter()
+        .map(|(k, _)| k.clone())
+        .chain(agg.changed_clocks.iter().cloned())
+        .collect();
     let mut vetoed: BTreeSet<Symbol> = BTreeSet::new();
-    for k in &seeded_clocks {
+    for k in &candidate_clocks {
         if pinned_by_clock_levels(m, node, &clock_pins, k.as_str()) {
             s.retain(|(clock, _)| clock != k);
             vetoed.insert(k.clone());
         }
     }
 
-    // (3) PER-ARC RULE: keep (K, d) iff CHANGED and the delivered phase is QUIET. Skipped once the seed
-    // is empty — nothing can be kept — but the openings partition is still taken below.
+    // (3) PER-ARC RULE: keep (K, d) iff CHANGED and the delivered phase is QUIET.
     if !s.is_empty() {
         let forcing = forcing_pins(m, tr, node, clock_set, &agg.moves);
         s.retain(|(k, d)| {
@@ -583,16 +629,7 @@ fn capture_arcs<B: Brand, C: ManagerCell>(
         });
     }
 
-    // OPENINGS: changed AND NOT kept AND NOT vetoed. A direction that moved the node but does not hold
-    // afterwards released a latch rather than captured into it.
-    let openings: BTreeSet<Arc> = agg
-        .captures
-        .iter()
-        .filter(|(_, cap)| cap.changed)
-        .map(|(arc, _)| arc.clone())
-        .filter(|arc| !s.contains(arc) && !vetoed.contains(&arc.0))
-        .collect();
-    (s, openings)
+    (s, vetoed)
 }
 
 /// The node's FORCING PINS, classified behaviourally from its own observed moves: a pin is forcing
@@ -1256,6 +1293,14 @@ mod tests {
         }};
     }
 
+    /// Tests call the classifier THROUGH the pipeline, exactly as `analyse_machine` wires it: derive
+    /// the delay arcs first, then label against them. Shadowing the glob-imported `super::classify`
+    /// keeps every call site in the natural form.
+    fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> EdgeArcs {
+        let (arcs, _) = crate::logic::arcs::derive(m);
+        super::classify(m, &arcs)
+    }
+
     fn cols_of(sr: &StateRegions) -> Vec<&str> {
         sr.cols.iter().map(Symbol::as_str).collect()
     }
@@ -1279,24 +1324,21 @@ mod tests {
         es.folded.iter().map(Symbol::as_str).collect()
     }
 
-    /// The raw opening (release) arcs as `(node, clock, edge)` string triples, sorted so the assertion is
-    /// order-insensitive (the classifier collects candidates in parallel).
-    fn opening_list(es: &EdgeArcs) -> Vec<(&str, &str, Edge)> {
-        let mut out: Vec<(&str, &str, Edge)> = es
-            .openings
+    /// The per-arc labels as `(output, clock, clock direction, class)` string tuples, in the map's own
+    /// (deterministic) key order.
+    fn label_list(es: &EdgeArcs) -> Vec<(&str, &str, Edge, ArcClass)> {
+        es.labels
             .iter()
-            .map(|(n, c, e)| (n.as_str(), c.as_str(), *e))
-            .collect();
-        out.sort_by_key(|(n, c, e)| (*n, *c, *e == Edge::Fall));
-        out
+            .map(|((n, c, e), cls)| (n.as_str(), c.as_str(), *e, *cls))
+            .collect()
     }
 
-    /// The opening arcs carried by one node, as `(clock, edge)`.
-    fn openings_of<'a>(es: &'a EdgeArcs, node: &str) -> Vec<(&'a str, Edge)> {
-        opening_list(es)
+    /// The labels carried by one output's arcs, as `(clock, clock direction, class)`.
+    fn labels_of<'a>(es: &'a EdgeArcs, node: &str) -> Vec<(&'a str, Edge, ArcClass)> {
+        label_list(es)
             .into_iter()
-            .filter(|(n, _, _)| *n == node)
-            .map(|(_, c, e)| (c, e))
+            .filter(|(n, _, _, _)| *n == node)
+            .map(|(_, c, e, cls)| (c, e, cls))
             .collect()
     }
 
@@ -2134,6 +2176,14 @@ Q = "!R*(CLK*M + !CLK*Q)"
             for c in ["D", "R"] {
                 assert!(cols.contains(&c), "col {c} missing from {cols:?}");
             }
+            // R is LEVEL-ACTING on Q (R=1 alone pins it to 0), and the veto covers unseeded clocks
+            // too: R's assert arcs carry NO label — never a release — so they emit
+            // `-type combinational`, exactly as when R is not declared a clock (SYNCR).
+            assert_eq!(
+                labels_of(&es, "Q"),
+                [("CLK", Edge::Rise, ArcClass::Capture)],
+                "declaring R a clock must not label its level arcs"
+            );
         });
     }
 
@@ -2741,23 +2791,31 @@ Q = "!( !(M2*!CLKB) * Qn )"
     // from the equations' shape.
 
     #[test]
-    fn edge_opening_single_clock_partition() {
-        // A flop's opening lives on its MASTER, one phase ahead of the capture: DFF's M goes transparent
-        // when CLK falls, and the CLK rise that captures on Q closes M rather than opening it.
+    fn edge_labels_single_clock_sourced_from_arcs() {
+        // Labels are SOURCED FROM the delay arcs, so only observable transitions carry one. DFF's
+        // masked CLK fall never changes Q — no arc, no key — and the internal master M carries no delay
+        // arc at all: the label set is exactly the one capture.
         with_machine!(DFF_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
-            assert_eq!(opening_list(&es), [("M", "CLK", Edge::Fall)]);
+            assert_eq!(
+                label_list(&es),
+                [("Q", "CLK", Edge::Rise, ArcClass::Capture)]
+            );
         });
 
-        // A plain latch is the pure case: no capture anywhere, one opening on the transparent-phase edge.
+        // A plain latch is the pure release case: no capture anywhere, and the enable's opening edge
+        // labels the observed CLK-rise arcs.
         with_machine!(DLAT_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert!(es.captures.is_empty(), "a latch has no capture");
-            assert_eq!(opening_list(&es), [("Q", "CLK", Edge::Rise)]);
+            assert_eq!(
+                label_list(&es),
+                [("Q", "CLK", Edge::Rise, ArcClass::Release)]
+            );
         });
 
-        // Two latches on the SAME phase never form a flop, so the cascade is captureless — but both stages
-        // are real latches and both open on the same edge.
+        // Two latches on the SAME phase never form a flop, so the cascade is captureless — but the
+        // chain's output opens on CLK's fall and that arc is a release.
         with_machine!(TCASC_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert!(
@@ -2765,46 +2823,52 @@ Q = "!( !(M2*!CLKB) * Qn )"
                 "a transparent cascade has no capture"
             );
             assert_eq!(
-                opening_list(&es),
-                [("M", "CLK", Edge::Fall), ("Q", "CLK", Edge::Fall)]
+                label_list(&es),
+                [("Q", "CLK", Edge::Fall, ArcClass::Release)]
             );
         });
 
-        // A dual-edge flop's two masters are transparent on OPPOSITE phases, so its openings are one per
-        // direction — the mirror image of Q's two captures.
+        // A dual-edge flop captures on BOTH directions; the masters' own openings are internal and
+        // carry no delay arc, so no release key exists.
         with_machine!(DET_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert_eq!(
-                opening_list(&es),
-                [("L1", "CLK", Edge::Fall), ("L2", "CLK", Edge::Rise)]
+                label_list(&es),
+                [
+                    ("Q", "CLK", Edge::Rise, ArcClass::Capture),
+                    ("Q", "CLK", Edge::Fall, ArcClass::Capture),
+                ]
             );
         });
     }
 
     #[test]
-    fn edge_opening_two_clock_partition() {
-        // Two independent flops merging into one output: each master opens on its own clock's fall, and Q
-        // — which captures on both clocks — opens on neither.
+    fn edge_labels_two_clock_sourced_from_arcs() {
+        // Two independent flops merging into one output: every clock arc Q presents is a capture, and
+        // the internal masters — whose own openings carry no delay arc — take no key.
         with_machine!(DCMUX_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert_eq!(
-                opening_list(&es),
-                [("MA", "CLKA", Edge::Fall), ("MB", "CLKB", Edge::Fall)]
-            );
-            assert!(
-                openings_of(&es, "Q").is_empty(),
-                "Q captures, it does not open"
+                label_list(&es),
+                [
+                    ("Q", "CLKA", Edge::Rise, ArcClass::Capture),
+                    ("Q", "CLKA", Edge::Fall, ArcClass::Capture),
+                    ("Q", "CLKB", Edge::Rise, ArcClass::Capture),
+                    ("Q", "CLKB", Edge::Fall, ArcClass::Capture),
+                ]
             );
         });
 
-        // HPIPE: a CLKA flop feeding a CLKB latch. Q carries BOTH a CLKA rising capture and a CLKB falling
-        // opening — the two categories coexist on one output, and the opening is exactly the CLKB edge the
-        // capture set (correctly) does not claim.
+        // HPIPE: a CLKA flop feeding a CLKB latch. Q carries BOTH a CLKA rising capture and a CLKB
+        // falling release — the two categories coexist on one output, each labelling its own arcs.
         with_machine!(HPIPE_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert_eq!(
-                opening_list(&es),
-                [("M1", "CLKA", Edge::Fall), ("Q", "CLKB", Edge::Fall)]
+                label_list(&es),
+                [
+                    ("Q", "CLKA", Edge::Rise, ArcClass::Capture),
+                    ("Q", "CLKB", Edge::Fall, ArcClass::Release),
+                ]
             );
             assert_eq!(
                 reg(&es, "Q")
@@ -2813,86 +2877,93 @@ Q = "!( !(M2*!CLKB) * Qn )"
                     .map(|(c, e, _)| (c.as_str(), *e))
                     .collect::<Vec<_>>(),
                 [("CLKA", Edge::Rise)],
-                "the capture set is untouched by the opening partition"
+                "the capture set is untouched by the release labelling"
             );
         });
 
         // MCDFF: two latches on UNRELATED clocks. It stays captureless (its zero-capture fixture is a
-        // separate assertion and must remain true), yet it is not timing-invisible — Q opens on CLKA's
-        // fall as well as on CLKB's rise, the CLKA one being a CONDITIONED release reaching Q only through
-        // the open CLKB latch. Conditioning never reclassifies an arc.
+        // separate assertion and must remain true), yet it is not timing-invisible — Q's CLKB rise opens
+        // its own latch and Q's CLKA fall is a CONDITIONED release reaching Q only through the open CLKB
+        // latch. Conditioning never reclassifies an arc.
         with_machine!(MCDFF_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert!(
                 es.captures.is_empty(),
-                "captures and openings are separate sets: MCDFF still captures nothing, got {:?}",
+                "captures and labels are separate: MCDFF still captures nothing, got {:?}",
                 node_list(&es)
             );
             assert_eq!(
-                opening_list(&es),
+                label_list(&es),
                 [
-                    ("M", "CLKA", Edge::Fall),
-                    ("Q", "CLKA", Edge::Fall),
-                    ("Q", "CLKB", Edge::Rise),
+                    ("Q", "CLKA", Edge::Fall, ArcClass::Release),
+                    ("Q", "CLKB", Edge::Rise, ArcClass::Release),
                 ]
             );
         });
     }
 
     #[test]
-    fn edge_clock_gate_output_has_no_opening() {
-        // A gated clock is combinational in a held enable: the veto strips its clocks, and a vetoed clock
-        // yields NO opening either. The clock-gate class stays out of both edge categories — the enable
-        // latch behind it is the thing that opens.
+    fn edge_clock_gate_arcs_carry_no_label() {
+        // A gated clock is combinational in a held enable: the veto strips its clocks, so its arcs take
+        // no label and stay `-type combinational`. The enable latch behind it is internal — no delay
+        // arc, no key — so the whole label map is empty.
         with_machine!(ICG_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert!(
-                openings_of(&es, "GCLK").is_empty(),
-                "GCLK is a clock gate, not an opening: {:?}",
-                openings_of(&es, "GCLK")
+                es.labels.is_empty(),
+                "a clock gate's arcs carry no edge label: {:?}",
+                label_list(&es)
             );
-            assert_eq!(openings_of(&es, "EL"), [("CLK", Edge::Fall)]);
         });
 
+        // ICM: both clocks are vetoed on GCLK, and the competing-branch propagation into the OTHER
+        // synchroniser's first master is masked by the master-slave chain before it can reach GCLK —
+        // no arc exists, so no label can either. Internal latches (sela1/selb1) are clocked only by
+        // their own branch clock and, carrying no delay arc, take no label at all.
         with_machine!(ICM_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert!(
-                openings_of(&es, "GCLK").is_empty(),
-                "GCLK is a clock gate, not an opening: {:?}",
-                openings_of(&es, "GCLK")
+                es.labels.is_empty(),
+                "ICM's clock-gate arcs carry no edge label: {:?}",
+                label_list(&es)
             );
         });
     }
 
     #[test]
-    fn edge_nand_openings_mirror_the_pass_gate_twins() {
-        // IMPLEMENTATION-STYLE INVARIANCE for the third category too: the NAND-built trio opens on exactly
-        // the same (clock, edge) as its pass-transistor twin. The NAND idiom carries each node's
-        // complement explicitly, and a complement opens with the node it complements — the arcs are per
-        // node, so the extra state variable shows up as an extra listing of the SAME edge, never a
-        // different one.
+    fn edge_nand_labels_mirror_the_pass_gate_twins() {
+        // IMPLEMENTATION-STYLE INVARIANCE for the labels too: the NAND-built trio labels exactly the
+        // same (output, clock, direction) arcs as its pass-transistor twin. The NAND idiom carries each
+        // output's complement explicitly, so the complement output lists the SAME key with the same
+        // class — never a different edge.
         for (toml, want) in [
             (
                 NDLAT_TOML,
-                vec![("Q", "CLK", Edge::Rise), ("Qn", "CLK", Edge::Rise)],
+                vec![
+                    ("Q", "CLK", Edge::Rise, ArcClass::Release),
+                    ("Qn", "CLK", Edge::Rise, ArcClass::Release),
+                ],
             ),
             (
                 NDFF_TOML,
-                vec![("M", "CLK", Edge::Fall), ("Mn", "CLK", Edge::Fall)],
+                vec![
+                    ("Q", "CLK", Edge::Rise, ArcClass::Capture),
+                    ("Qn", "CLK", Edge::Rise, ArcClass::Capture),
+                ],
             ),
             (
                 NHPIPE_TOML,
                 vec![
-                    ("M1", "CLKA", Edge::Fall),
-                    ("M1n", "CLKA", Edge::Fall),
-                    ("Q", "CLKB", Edge::Fall),
-                    ("Qn", "CLKB", Edge::Fall),
+                    ("Q", "CLKA", Edge::Rise, ArcClass::Capture),
+                    ("Q", "CLKB", Edge::Fall, ArcClass::Release),
+                    ("Qn", "CLKA", Edge::Rise, ArcClass::Capture),
+                    ("Qn", "CLKB", Edge::Fall, ArcClass::Release),
                 ],
             ),
         ] {
             with_machine!(toml, |_b, _a, _m2, m| {
                 let es = classify(&m);
-                assert_eq!(opening_list(&es), want);
+                assert_eq!(label_list(&es), want);
             });
         }
     }
