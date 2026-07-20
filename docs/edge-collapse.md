@@ -136,25 +136,26 @@ cover support; a phase-CONDITIONED one keeps its gating clock pinned to the forc
 
 ## 6. Fold
 
-Folding is decided at **cell level** (`EdgeArcs::folded`), after classification. An internal
-capture-less master is folded away when nothing surviving still references it: no capture or off-edge
-cover names it, no other surviving signal's raw function depends on it, and it was not pulled back into
-a tier-2 header. A folded master's own pin, UDP primitive, and statetable row are elided from every
+Folding is decided at **cell level** (`EdgeArcs::folded`), after classification, as a **reachability**
+question: does this value still influence an output once collapsed? It is computed as a liveness
+fixpoint over the graph of raw-function references among capture-less survivors. The seeds are what
+must stay visible: capture-less outputs (never folded), any capture-less candidate pulled back into a
+tier-2 header, and any candidate named by a surviving capture or off-edge cover column — these are the
+sinks whose raw function is actually emitted. Liveness then propagates along each live node's own
+function support (semantic BDD support, never equation shape). An internal, capture-less, non-tier-2
+node folds unless that propagation reaches it; a *mutually-referencing* — or transitively-referencing —
+set of such nodes that reaches no sink folds together, because the set as a whole influences nothing a
+survivor still names. A folded node's own pin, UDP primitive, and statetable row are elided from every
 artifact, leaving only the edge form; its internal-power characterisation via its primary-input hidden
-arcs is unchanged. A **toggle flop** is self-fed, so its ring cannot fold: it decomposes into two
-opposite-edge captures instead, each keeping the other as a live reference.
+arcs is unchanged. A **toggle flop** is self-fed, so its ring cannot fold: its master carries a real
+capture, which structurally excludes it from the capture-less candidate population regardless of this
+rule; it decomposes into two opposite-edge captures instead, each keeping the other as a live reference.
 
-**Known follow-up (contained, fold rule only).** A set of *mutually-referencing* capture-less nodes is
-not group-folded: each is "referenced elsewhere" by the other, so the per-node rule strands both as
-surviving level internals. `NDFF`'s NAND master pair `M`/`Mn` is the witness — its arcs, covers and `Q`
-characterisation are invariant against the pass-transistor `DFF`, only the folding differs (asserted,
-not hidden, in `edge_nand_master_slave_matches_the_pass_gate_flop`).
-
-The suggested fix is to decide folding as a **reachability** question — *does this internal still
-influence an output once collapsed?* — rather than by counting references per node. The reference that
-matters is one that leads to an output; `M` and `Mn` reference each other, but that mutual reference
-leads nowhere outside the pair, so collapsing the pair has the same effect as collapsing the lone `M`
-of the pass-transistor `DFF`.
+`NDFF`'s NAND master pair `M`/`Mn` and `NHPIPE`'s inner NAND master pair `M1`/`M1n` are the group-fold
+witnesses: both are capture-less and mutually referencing, reaching no output once collapsed, so both
+fold together — exactly as the pass-transistor `DFF` and `HPIPE` fold their lone `M`/`M1`. This is
+pinned by `edge_nand_master_slave_matches_the_pass_gate_flop` and
+`edge_nand_hierarchical_two_clocks_matches_the_pass_gate_pipe`.
 
 Note this criterion is deliberately **narrower than the one used during early minimisation**. There,
 self-referential loops are preserved on purpose, because they carry the oscillation detection. At
@@ -191,8 +192,9 @@ These bounds are deliberate and user-approved:
 - **Explored machine required.** Classification needs an explored machine, so a cell wider than
   `MAX_MACHINE_VARS` (= 22) gets no annotation. Lifting the 22-variable cap is a separate, tool-wide
   change.
-- **No group fold.** A set of mutually-referencing capture-less nodes — a NAND master pair — is not
-  folded (§6): the characterisation is unaffected, only the internals stay visible.
+- **Group fold is the §6 reachability rule.** A mutually-referencing capture-less set — a NAND master
+  pair — folds together whenever the set as a whole reaches no output; it is not a separate mechanism
+  from the single-node case, only the same fixpoint applied to a larger set.
 
 ## 9. The exploration is unchanged
 

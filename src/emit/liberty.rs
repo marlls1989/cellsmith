@@ -520,6 +520,51 @@ Q = "CLK*M + !CLK*Q"
     }
 
     #[test]
+    fn ndff_group_folds_the_mutually_referencing_nand_master_pair() {
+        // The cross-coupled-NAND master-slave flop: M/Mn are captureless and mutually referencing, so
+        // they fold together exactly as the pass DFF's lone M folds. Q and Qn survive as the two edge
+        // registers (Qn carries its own genuine !D capture).
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "NDFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+Mn = "!( !(!D*!CLK) * M )"
+M = "!( !(D*!CLK) * Mn )"
+[cell.outputs]
+Qn = "!( !(!M*CLK) * Q )"
+Q = "!( !(M*CLK) * Qn )"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        assert_eq!(frag.matches("statetable").count(), 1);
+        assert!(frag.contains("statetable (\"CLK D\", \"Q Qn\")"));
+        // The folded master pair keeps no pin group and no node column in the statetable header.
+        assert!(!frag.contains("pin (M)"));
+        assert!(!frag.contains("pin (Mn)"));
+        assert!(!frag.contains("function : "));
+        let lib = parse_frag(&frag);
+        let cellg = find_cell(&lib, "NDFF");
+        for gone in ["M", "Mn"] {
+            assert!(
+                !cellg
+                    .subgroups
+                    .iter()
+                    .any(|g| g.type_ == "pin" && g.name == gone),
+                "folded master {gone} must not emit a pin"
+            );
+        }
+        // Q and Qn bind their own nodes as the two surviving edge registers.
+        let q = find_pin(cellg, "Q");
+        assert_eq!(attr_string(q, "internal_node").as_deref(), Some("Q"));
+        let qn = find_pin(cellg, "Qn");
+        assert_eq!(attr_string(qn, "internal_node").as_deref(), Some("Qn"));
+    }
+
+    #[test]
     fn icm_collapses_shared_boundary_registers_with_both_edges() {
         // Two three-latch synchronisers collapse to four edge registers (sela2/enA on CLKA,
         // selb2/enB on CLKB); the folded relays sela1/selb1 vanish, and GCLK stays a state_function.

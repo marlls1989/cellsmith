@@ -112,8 +112,10 @@ impl EdgeCaptures {
 }
 
 /// The behavioural edge arcs of a cell: the per-node edge captures recognised across its outputs and
-/// state variables, plus the cell-level set of internal capture-less master nodes folded away (a
-/// cross-coupled pair shares one folded master).
+/// state variables, plus the cell-level set of internal capture-less master nodes folded away. A
+/// mutually- or transitively-referencing set of such nodes folds together whenever nothing outside the
+/// set reaches an output, so a cross-coupled pair — or a longer reference chain — shares one fold, not
+/// just a single self-holding node.
 ///
 /// Every arc on an output falls in exactly one of THREE categories:
 ///
@@ -393,7 +395,21 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         });
     }
 
-    // FOLD (cell-level): an internal capture-less master is folded when nothing surviving references it.
+    // FOLD (cell-level): folding is decided at emission as a REACHABILITY question — once the collapse is
+    // done, does this value still influence anything the cell emits? An internal, capture-less, non-tier-2
+    // node folds unless a chain of raw-function references, starting from surviving emitted content — a
+    // surviving capture/off-edge cover column, or the raw function of a survivor that can never fold —
+    // reaches it. A mutually-referencing capture-less set that reaches no such sink influences nothing and
+    // collapses as one, exactly as a lone self-holding master does.
+    //
+    // This is computed as a least-fixpoint liveness marking, which is the complement of the greatest
+    // fixpoint "assume every candidate folds, then reinstate any candidate referenced from OUTSIDE the
+    // folded set": a node's own function only propagates once the node is already live, so self-reference
+    // alone never marks it, while any chain that reaches a live sink strands the whole chain.
+    //
+    // The criterion is deliberately NARROWER than early minimisation's, which preserves self-referential
+    // loops so oscillation stays detectable — minimisation is untouched by this. Statetable invariant I3
+    // (`src/emit/statetable.rs`) holds by construction: every kept survivor's support is kept by closure.
     let ref_reg: BTreeSet<&str> = captures
         .iter()
         .flat_map(|r| r.cols.iter().map(Symbol::as_str))
@@ -406,39 +422,50 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     for (n, d) in &m.out_deltas {
         fn_of.insert(n.as_str(), d);
     }
-    // Every surviving signal whose RAW function is still emitted — the capture-less candidates (level and
-    // combinational nodes, whose region cols come straight from their function support). Candidates that
-    // carry edge arcs are excluded: their raw function is replaced by the edge seam, so their cols are
-    // accounted for via `ref_reg`. A folded master must not be referenced by ANY surviving raw function,
-    // or the survivor's cols would name a dropped node (statetable invariant I3).
-    let survivor_names: Vec<&Symbol> = candidates
+    // The foldable population: internal and capture-less (`internal_captureless` already implies both) and
+    // not pulled back into a tier-2 header.
+    let eligible: BTreeSet<&str> = candidates
         .iter()
-        .zip(&capture_sets)
-        .filter(|(_, s)| s.is_empty())
-        .map(|(n, _)| n)
+        .filter(|m| internal_captureless.contains(*m) && !tier2_kept.contains(*m))
+        .map(Symbol::as_str)
         .collect();
 
+    // The liveness seeds. Every capture-less candidate that is NOT eligible — a capture-less output, or a
+    // tier-2-kept internal — has its RAW function emitted and can never fold, so it is a sink whose support
+    // must survive. Candidates that CARRY captures are neither seeds nor propagation sources: their raw
+    // function is replaced by the edge seam, so their references reach us through `ref_reg` instead. On top
+    // of that, any eligible node named by a surviving capture or off-edge cover column is itself live.
+    let mut live: BTreeSet<&str> = BTreeSet::new();
+    for (name, s) in candidates.iter().zip(&capture_sets) {
+        if !s.is_empty() {
+            continue;
+        }
+        if !eligible.contains(name.as_str()) || ref_reg.contains(name.as_str()) {
+            live.insert(name.as_str());
+        }
+    }
+    let mut worklist: Vec<&str> = live.iter().copied().collect();
+
+    // Propagate liveness along each live node's raw-function support — semantic BDD support, never equation
+    // shape — until the least fixpoint is reached.
+    while let Some(l) = worklist.pop() {
+        let Some(f) = fn_of.get(l) else {
+            continue;
+        };
+        for v in f.variables() {
+            // Take the name back out of `eligible` so the marking borrows the candidate list, not the BDD.
+            if let Some(&n) = eligible.get(v.as_str()) {
+                if live.insert(n) {
+                    worklist.push(n);
+                }
+            }
+        }
+    }
+
+    // Everything eligible that liveness never reached folds, in candidate declaration order.
     let folded: Vec<Symbol> = candidates
         .iter()
-        .filter(|m| internal_captureless.contains(*m))
-        .filter(|m| {
-            // (a) no capture/off-edge cover references it,
-            if ref_reg.contains(m.as_str()) {
-                return false;
-            }
-            // (b) no OTHER surviving signal references it,
-            let referenced = survivor_names.iter().any(|l| {
-                *l != *m
-                    && fn_of
-                        .get(l.as_str())
-                        .is_some_and(|f| f.variables().any(|v| v.as_str() == m.as_str()))
-            });
-            if referenced {
-                return false;
-            }
-            // (c) internal (guaranteed by internal_captureless), (d) not tier-2 re-included.
-            !tier2_kept.contains(*m)
-        })
+        .filter(|m| eligible.contains(m.as_str()) && !live.contains(m.as_str()))
         .cloned()
         .collect();
 
@@ -1568,6 +1595,70 @@ mod tests {
         }
     }
 
+    /// The machine-checkable form of statetable invariant I3 (the `debug_assert!` in
+    /// `crate::emit::statetable`): NOTHING THAT SURVIVES EMISSION MAY NAME A FOLDED NODE. A fold — the
+    /// group fold especially — drops the node's column from the emitted table, so a survivor still
+    /// referencing it would emit a dangling column. For every folded name this checks both routes a
+    /// reference can take: a surviving capture's cover columns, and the raw function of a surviving
+    /// capture-less candidate (whose δ is emitted verbatim). Support is read SEMANTICALLY from the BDD,
+    /// never from equation shape.
+    fn assert_no_dropped_references<B: Brand, C: ManagerCell + Send + Sync>(
+        m: &Machine<B, C>,
+        es: &EdgeArcs,
+    ) {
+        let folded: BTreeSet<&str> = es.folded.iter().map(Symbol::as_str).collect();
+        if folded.is_empty() {
+            return;
+        }
+
+        // (a) no surviving capture names a folded node in its cover columns.
+        for r in &es.captures {
+            for col in &r.cols {
+                assert!(
+                    !folded.contains(col.as_str()),
+                    "dropped reference: capture on {} names folded node {col}, folded {:?}",
+                    r.node,
+                    folded_list(es)
+                );
+            }
+        }
+
+        // (b) no surviving capture-less candidate's raw function has a folded node in its support. The
+        // candidate population is the classifier's own: every output plus every non-output state
+        // variable. A candidate that carries a capture is not a survivor of this kind — its raw function
+        // is replaced by the edge seam — and the folded nodes themselves are gone.
+        let output_names: BTreeSet<&str> = m.cell.outputs.iter().map(|o| o.name.as_str()).collect();
+        let captured: BTreeSet<&str> = node_list(es).into_iter().collect();
+        let mut fn_of: BTreeMap<&str, &Bdd<B, C>> = BTreeMap::new();
+        for (n, d) in &m.deltas {
+            fn_of.insert(n.as_str(), d);
+        }
+        for (n, d) in &m.out_deltas {
+            fn_of.insert(n.as_str(), d);
+        }
+        let candidates = output_names
+            .iter()
+            .copied()
+            .chain(
+                m.state_vars
+                    .iter()
+                    .map(Symbol::as_str)
+                    .filter(|sv| !output_names.contains(sv)),
+            )
+            .filter(|c| !captured.contains(c) && !folded.contains(c));
+        for cand in candidates {
+            let Some(f) = fn_of.get(cand) else { continue };
+            for v in f.variables() {
+                assert!(
+                    !folded.contains(v.as_str()),
+                    "dropped reference: surviving capture-less {cand} still names folded node {v}, \
+                     folded {:?}",
+                    folded_list(es)
+                );
+            }
+        }
+    }
+
     // --- fixtures ---
 
     const DFF_TOML: &str = r#"
@@ -1661,6 +1752,13 @@ GCLK = "enA*CLKA+enB*CLKB"
                 ["sela1", "selb1"],
                 "the internal masters fold, exactly"
             );
+            for name in ["enA", "enB", "sela2", "selb2"] {
+                assert!(
+                    node_list(&es).contains(&name),
+                    "{name} survives unfolded, node_list={:?}",
+                    node_list(&es)
+                );
+            }
         });
     }
 
@@ -1940,6 +2038,14 @@ Q = "!R*(CLK*M + !CLK*Q)"
             assert!(
                 m_on.equivalent_to(&want),
                 "M captures !M (=!Q), inverting, no special-casing"
+            );
+            // The ring survives whole: M carries its own falling capture (asserted above), so it fails
+            // `internal_captureless` and is structurally ineligible for the fold fixpoint — the
+            // capture-less precondition, not mutual reference alone, is what protects it.
+            assert!(
+                folded_list(&es).is_empty(),
+                "a self-referential ring whose master carries a real capture folds nothing, got {:?}",
+                folded_list(&es)
             );
         });
     }
@@ -2564,7 +2670,7 @@ Q = "!CLKB*M2 + CLKB*Q"
                 clocks_of(reg(&es, "M2")).contains(&"CLKA"),
                 "master node keeps CLKA"
             );
-            assert!(folded_list(&es).contains(&"M1"), "the inner master folds");
+            assert_eq!(folded_list(&es), ["M1"], "only the inner master folds");
         });
     }
 
@@ -2716,21 +2822,23 @@ Q = "!( !(M2*!CLKB) * Qn )"
             let qn_on = builder.build_cover(&qn.captures[0].2.on_cover);
             assert!(qn_on.equivalent_to(&!&builder.var("D")), "Qn captures !D");
 
-            // KNOWN DIFFERENCE, asserted rather than hidden: the pass DFF folds its master M, whereas the
-            // NAND master pair M/Mn is captureless and MUTUALLY REFERENCING, so each is "referenced
-            // elsewhere" by the other and the per-node fold rule strands BOTH as surviving level
-            // internals. Arcs, covers and the Q characterisation are invariant — only the folding
-            // differs. FOLLOW-UP (contained, fold rule only): group-fold a set of mutually-referencing
-            // captureless nodes when the set as a whole has no reference from outside it.
-            assert!(
-                folded_list(&es).is_empty(),
-                "the mutually-referencing NAND master pair is not folded, folded={:?}",
-                folded_list(&es)
+            // The pass DFF folds its lone master M; the NAND master pair M/Mn is captureless and
+            // MUTUALLY REFERENCING, reaching no output once collapsed, so the reachability fixpoint
+            // folds the pair together — the two forms converge on folding their master(s), the NAND
+            // idiom simply carrying the complement as a second candidate.
+            let mut ndff_folded = folded_list(&es);
+            ndff_folded.sort();
+            assert_eq!(
+                ndff_folded,
+                ["M", "Mn"],
+                "the mutually-referencing NAND master pair folds together, exactly as the pass DFF folds its lone M"
             );
+            // Qn is a genuine second declared output of the NAND topology, carrying its own !D capture
+            // (asserted above) — not an unfolded internal.
             assert_eq!(
                 node_list(&es),
                 ["Q", "Qn"],
-                "M/Mn survive as level internals carrying no arc"
+                "Q and Qn are the only surviving declared outputs"
             );
         });
     }
@@ -2789,6 +2897,20 @@ Q = "!( !(M2*!CLKB) * Qn )"
                 reg(&es, "M2").captures[0].1,
                 Edge::Rise,
                 "master captures on the CLKA rising edge"
+            );
+            // The inner NAND master pair M1/M1n is captureless and mutually referencing, mirroring
+            // NDFF's M/Mn — it folds together, just as the pass-gate HPIPE folds its lone M1.
+            let mut folded = folded_list(&es);
+            folded.sort();
+            assert_eq!(
+                folded,
+                ["M1", "M1n"],
+                "the inner NAND master pair folds together, mirroring the pass-gate HPIPE folding its lone M1"
+            );
+            // M2/M2n carry the CLKA captures, so they were never fold candidates under either rule.
+            assert!(
+                !folded.iter().any(|n| *n == "M2" || *n == "M2n"),
+                "M2/M2n survive, carrying the CLKA captures"
             );
         });
     }
@@ -2977,6 +3099,30 @@ Q = "!( !(M2*!CLKB) * Qn )"
             with_machine!(toml, |_b, _a, _m2, m| {
                 let es = classify(&m);
                 assert_eq!(label_list(&es), want);
+            });
+        }
+    }
+
+    #[test]
+    fn folded_nodes_are_referenced_by_nothing_that_survives() {
+        // The emission invariant the group fold widens, over the sequential fixtures that exercise every
+        // fold shape: a lone master (DFF, HPIPE), a mutually-referencing capture-less pair (NDFF,
+        // NHPIPE), several independent masters (DET, ICM), a ring that folds nothing (the toggle flop)
+        // and the two masters kept live by an outside reference (tapped, exposed).
+        for src in [
+            DFF_TOML,
+            NDFF_TOML,
+            HPIPE_TOML,
+            NHPIPE_TOML,
+            DET_TOML,
+            ICM_TOML,
+            TOGGLE_FLOP_TOML,
+            TAPPED_MASTER_TOML,
+            EXPOSED_MASTER_TOML,
+        ] {
+            with_machine!(src, |_b, _a, _m2, m| {
+                let es = classify(&m);
+                assert_no_dropped_references(&m, &es);
             });
         }
     }

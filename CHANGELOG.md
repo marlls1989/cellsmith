@@ -21,9 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   opening arc, and a clock gate (`ICG`/`ICM` `GCLK`, decided by the clock LEVEL) carries neither.
   Captures are additionally re-expressed in edge form in the Liberty joint `statetable` and the Verilog
   sequential UDP; a captured function is recorded verbatim, so an inverting flop captures `!D` and a
-  toggle flop decomposes into two opposite-edge captures. A folded master's own pin, UDP primitive, and
-  `statetable` row are elided from every artifact; its internal-power characterisation, carried by its
-  primary-input hidden arcs, is unchanged. Classification changes only which form an arc is emitted in:
+  toggle flop decomposes into two opposite-edge captures. Folding is decided at emission as a
+  reachability question — does this value still influence an output once collapsed? — computed as a
+  liveness fixpoint over the candidates' raw-function references, so a mutually- or
+  transitively-referencing set of capture-less internal nodes folds together whenever the set as a
+  whole reaches no output, exactly as a single self-holding master folds; a NAND-implemented flop's
+  cross-coupled master pair therefore folds identically to its pass-transistor twin's lone master. A
+  folded node's own pin, UDP primitive, and `statetable` row are elided from every artifact; its
+  internal-power characterisation, carried by its primary-input hidden arcs, is unchanged. Classification
+  changes only which form an arc is emitted in:
   the state-machine exploration, the discovered arcs' prevectors, and hazard detection are untouched.
   Everything is derived behaviourally, never from equation shape and never by branching on a declared
   input class, so a NAND-implemented cell characterises identically to its pass-transistor twin. On by

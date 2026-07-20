@@ -525,6 +525,33 @@ Q = "CLK*M + !CLK*Q"
     }
 
     #[test]
+    fn ndff_group_folds_the_mutually_referencing_nand_master_pair() {
+        // The cross-coupled-NAND master-slave flop: M/Mn are captureless and mutually referencing, so
+        // they fold together exactly as the pass DFF's lone M folds. Q and Qn survive as the two edge
+        // registers (Qn carries its own genuine !D capture).
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "NDFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+Mn = "!( !(!D*!CLK) * M )"
+M = "!( !(D*!CLK) * Mn )"
+[cell.outputs]
+Qn = "!( !(!M*CLK) * Q )"
+Q = "!( !(M*CLK) * Qn )"
+"#,
+        );
+        let v = cell_verilog(&cell);
+        eprintln!("{v}");
+        // The folded master pair leaves no trace: no primitive, no wire, no instance.
+        assert!(!v.contains("NDFF_M"));
+        assert!(!v.contains("wire   M;"));
+        assert!(!v.contains("wire   Mn;"));
+    }
+
+    #[test]
     fn icm_collapses_masters_into_edge_registers() {
         // The ICM interlock: two three-latch synchronisers. Each chain's head latch (sela1/selb1) is a
         // foldable pure master; sela2/enA (and the CLKB mirror) survive as edge registers.
