@@ -57,7 +57,10 @@ pub struct Arc {
     pub edge: Edge,
     pub output: Symbol,
     pub related: Symbol,
-    /// Start state of the measured edge (the prevector's target), over the primary inputs.
+    /// Start state of the measured edge (the prevector's target): the FULL machine node, over the
+    /// input AND state-variable columns, not just the input projection. This is the arc's context:
+    /// two firings that agree on the inputs but differ in internal state are different arcs, each
+    /// with its own prevector, and both are emitted.
     pub start: Minterm<Symbol>,
     /// End state of the measured edge (defines the vector and the `-when` condition).
     pub end: Minterm<Symbol>,
@@ -70,54 +73,21 @@ pub struct Arc {
 /// states and NO output changes. Used for internal-power characterisation.
 #[derive(Debug, Clone)]
 pub struct HiddenArc {
-    pub pin: Symbol,            // the toggled primary input
-    pub edge: Edge,             // that input's Rise/Fall
-    pub start: Minterm<Symbol>, // input vector before the toggle
-    pub end: Minterm<Symbol>,   // input vector after the toggle
+    pub pin: Symbol, // the toggled primary input
+    pub edge: Edge,  // that input's Rise/Fall
+    /// Start state of the measured toggle: the FULL machine node before it (inputs and state
+    /// variables), the arc's context — see [`Arc::start`].
+    pub start: Minterm<Symbol>,
+    pub end: Minterm<Symbol>, // input vector after the toggle
     pub prevector: Vec<Minterm<Symbol>>,
     pub outputs: Vec<(Symbol, bool)>, // each output's HELD logic value, in cell.outputs order
 }
 
-/// Dedup key for transition arcs: (output, related, edge-direction, start over the inputs).
+/// Identity of a transition arc: (output, related, edge-direction, full machine start state).
 #[allow(clippy::type_complexity)]
 type ArcKey = (Symbol, Symbol, bool, Minterm<Symbol>);
-/// Dedup key for hidden arcs: (toggled pin, edge-direction, start over the inputs, held output values).
-#[allow(clippy::type_complexity)]
-type HiddenKey = (Symbol, bool, Minterm<Symbol>, Vec<(Symbol, bool)>);
-
-/// Merge one candidate arc into `best`, keeping the shortest prevector per key; equal-length ties
-/// keep the incumbent (a free equal-quality tie).
-fn keep_shorter_arc(best: &mut BTreeMap<ArcKey, Arc>, key: ArcKey, arc: Arc) {
-    match best.entry(key) {
-        std::collections::btree_map::Entry::Vacant(e) => {
-            e.insert(arc);
-        }
-        std::collections::btree_map::Entry::Occupied(mut e) => {
-            if arc.prevector.len() < e.get().prevector.len() {
-                e.insert(arc);
-            }
-        }
-    }
-}
-
-/// Merge one candidate hidden arc into `best`, keeping the shortest prevector per key; equal-length
-/// ties keep the incumbent (a free equal-quality tie).
-fn keep_shorter_hidden(
-    best: &mut BTreeMap<HiddenKey, HiddenArc>,
-    key: HiddenKey,
-    hidden: HiddenArc,
-) {
-    match best.entry(key) {
-        std::collections::btree_map::Entry::Vacant(e) => {
-            e.insert(hidden);
-        }
-        std::collections::btree_map::Entry::Occupied(mut e) => {
-            if hidden.prevector.len() < e.get().prevector.len() {
-                e.insert(hidden);
-            }
-        }
-    }
-}
+/// Identity of a hidden arc: (toggled pin, edge-direction, full machine start state).
+type HiddenKey = (Symbol, bool, Minterm<Symbol>);
 
 /// Derive transition arcs for every output of a cell by re-walking its shared asynchronous state machine
 /// (see [`machine`] and [`Machine`]). A machine node is a fully-fixed [`Minterm<Symbol>`] over
@@ -132,20 +102,21 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
     let ex = &m.explored;
 
     let async_set: BTreeSet<&str> = cell.async_pins.iter().map(|s| s.as_str()).collect();
-    // The same arc can be reached from several start candidates; keep the shortest prevector per key;
-    // equal-length ties keep either. Transition arcs are keyed by (output, related, edge-direction,
-    // start over the inputs); hidden ('hidden') arcs by (toggled pin, edge-direction, start over the
-    // inputs, held output values). The held outputs are part of the hidden key so distinct stored-value
-    // contexts of a state-holding cell (same input vector, different stored output) are kept as separate
-    // arcs; only contexts that differ solely in an unobservable internal-node value — which produce
-    // identical outputs — collapse to the shortest-prevector one.
+    // Arcs are identified by their FULL context: transition arcs by (output, related, edge-direction,
+    // full machine start state), hidden ('hidden') arcs by (toggled pin, edge-direction, full machine
+    // start state). Nothing merges — every context a firing can happen in emits its own arc with its
+    // own prevector, so contexts differing only in internal state stay distinct: they exercise
+    // different internal nodes, which is a different delay path and a different power measurement,
+    // even where the input vectors and the held output values coincide.
     //
-    // Each reachable stable state is explored independently into local dedup maps, then folded together
-    // by the same keep-shorter merge; the per-key minimum prevector length is order-independent.
+    // The identities are unique by construction: each reachable stable state appears once in
+    // `ex.order` and contributes at most one toggle per input, hence at most one arc per output. The
+    // maps therefore never collide and exist only to give a deterministic, machine-order-independent
+    // emission order under the parallel walk.
     let per_node =
         |node: &Minterm<Symbol>| -> (BTreeMap<ArcKey, Arc>, BTreeMap<HiddenKey, HiddenArc>) {
-            let mut best_arc: BTreeMap<ArcKey, Arc> = BTreeMap::new();
-            let mut best_hidden: BTreeMap<HiddenKey, HiddenArc> = BTreeMap::new();
+            let mut arc_map: BTreeMap<ArcKey, Arc> = BTreeMap::new();
+            let mut hidden_map: BTreeMap<HiddenKey, HiddenArc> = BTreeMap::new();
             for related in inputs {
                 // Toggle one input, hold the (partial) state, and let the state settle.
                 let toggled = machine::toggle(node, &[related.as_str()]);
@@ -153,7 +124,8 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
                     continue;
                 };
                 // An arc for every output that is defined at both ends and flips across this input toggle.
-                let start = node.project_to(inputs);
+                // The end is projected onto the inputs — it is what the `-vector` and `-when` render from —
+                // while the start keeps the full machine node, the arc's context.
                 let end = np.project_to(inputs);
                 let prevector = ex.path_to(node, inputs);
                 // Collect each output's (before, after) once so both the transition and hidden paths read it.
@@ -176,17 +148,18 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
                         continue;
                     }
                     let edge = if *after { Edge::Rise } else { Edge::Fall };
-                    let key = (o.name.clone(), related.clone(), *after, start.clone());
+                    let key = (o.name.clone(), related.clone(), *after, node.clone());
                     let arc = Arc {
                         edge,
                         output: o.name.clone(),
                         related: related.clone(),
-                        start: start.clone(),
+                        start: node.clone(),
                         end: end.clone(),
                         prevector: prevector.clone(),
                         is_async: async_set.contains(related.as_str()),
                     };
-                    keep_shorter_arc(&mut best_arc, key, arc);
+                    let previous = arc_map.insert(key, arc);
+                    debug_assert!(previous.is_none(), "arc identities are unique per firing");
                 }
 
                 // Hidden path: a settled input toggle where every output is defined at both ends and none of
@@ -207,34 +180,34 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
                     let hidden = HiddenArc {
                         pin: pin.clone(),
                         edge: if rose { Edge::Rise } else { Edge::Fall },
-                        start: start.clone(),
+                        start: node.clone(),
                         end: end.clone(),
                         prevector: prevector.clone(),
-                        outputs: outputs.clone(),
+                        outputs,
                     };
-                    let key = (pin, rose, start.clone(), outputs);
-                    keep_shorter_hidden(&mut best_hidden, key, hidden);
+                    let key = (pin, rose, node.clone());
+                    let previous = hidden_map.insert(key, hidden);
+                    debug_assert!(
+                        previous.is_none(),
+                        "hidden arc identities are unique per firing"
+                    );
                 }
             }
-            (best_arc, best_hidden)
+            (arc_map, hidden_map)
         };
 
-    let (best_arc, best_hidden) = ex.order.par_iter().map(per_node).reduce(
+    let (arc_map, hidden_map) = ex.order.par_iter().map(per_node).reduce(
         || (BTreeMap::new(), BTreeMap::new()),
         |(mut a, mut h), (b, hb)| {
-            for (k, v) in b {
-                keep_shorter_arc(&mut a, k, v);
-            }
-            for (k, v) in hb {
-                keep_shorter_hidden(&mut h, k, v);
-            }
+            a.extend(b);
+            h.extend(hb);
             (a, h)
         },
     );
 
     (
-        best_arc.into_values().collect(),
-        best_hidden.into_values().collect(),
+        arc_map.into_values().collect(),
+        hidden_map.into_values().collect(),
     )
 }
 
@@ -269,9 +242,13 @@ Q = "A*B + Q*(A+B)"
         assert!(arcs
             .iter()
             .any(|a| a.edge == Edge::Fall && a.related == "B"));
-        // Every arc's prevector is a real single-step walk into its start state.
+        // Every arc's prevector is a real single-step walk into its start state — the prevector is
+        // input-only, so it terminates at the start context projected onto the inputs.
         for a in &arcs {
-            assert_eq!(a.prevector.last().unwrap(), &a.start);
+            assert_eq!(
+                a.prevector.last().unwrap(),
+                &a.start.project_to(&cell.inputs)
+            );
             for w in a.prevector.windows(2) {
                 assert_eq!(w[0].hamming_distance(&w[1]), 1);
             }
@@ -279,9 +256,11 @@ Q = "A*B + Q*(A+B)"
     }
 
     #[test]
-    fn c2_arc_and_hidden_prevector_lengths_are_minimal() {
-        // multiset of per-key minimal prevector lengths — pins the min-by-len quality criterion;
-        // re-capture only for a deliberate algorithm change
+    fn c2_arc_and_hidden_prevector_walk_depths() {
+        // multiset of prevector lengths, one entry per derived arc — pins the walk depth each context
+        // costs. C2's only state variable is the output itself, so no two contexts share an identity:
+        // the counts are the same ones full-context keying yields. Re-capture only for a deliberate
+        // algorithm change.
         let cell = analyse(
             r#"
 [[cell]]
@@ -322,9 +301,10 @@ Y = "A*B"
         }));
         // Single-output cell: every hidden arc holds exactly one output value.
         assert!(cell.hidden_arcs.iter().all(|h| h.outputs.len() == 1));
-        // Every hidden arc's prevector is a real single-step walk into its start state.
+        // Every hidden arc's prevector is a real single-step walk into its start state, projected onto
+        // the inputs.
         for h in &cell.hidden_arcs {
-            assert_eq!(h.prevector.last(), Some(&h.start));
+            assert_eq!(h.prevector.last(), Some(&h.start.project_to(&cell.inputs)));
             for w in h.prevector.windows(2) {
                 assert_eq!(w[0].hamming_distance(&w[1]), 1);
             }
@@ -334,8 +314,8 @@ Y = "A*B"
     #[test]
     fn dlatch_keeps_both_stored_value_hidden_contexts() {
         // Transparent-high D-latch: in hold (E=0) a D toggle leaves Q unchanged but its held value depends
-        // on the stored state. Both stored-value contexts (Q held 0 and Q held 1) must survive as distinct
-        // hidden arcs on D — before folding the held output into the dedup key only one survived.
+        // on the stored state. The two stored-value contexts (Q held 0 and Q held 1) are different machine
+        // states, hence distinct hidden arcs on D, each carrying the held value it measured.
         let cell = analyse(
             r#"
 [[cell]]
@@ -363,6 +343,81 @@ Q = "E*D + !E*Q"
         };
         assert!(d_rise.iter().any(|h| q_val(h) == Some(false)));
         assert!(d_rise.iter().any(|h| q_val(h) == Some(true)));
+    }
+
+    /// Two latches, one of them masked out of the output: `K` drives `Y`, while `L` reaches it only
+    /// through `S`. At `S=0` the two stored values of `L` are indistinguishable at the pins, so the
+    /// same firing happens in two machine contexts that share every input value and every output
+    /// value — the minimal shape of the interlocked cells where the arc growth lands.
+    const MASKED_PAIR: &str = r#"
+[[cell]]
+name = "MASKPAIR"
+inputs = ["E", "D", "S", "C"]
+[cell.internal]
+L = "E*D + !E*L"
+K = "C*D + !C*K"
+[cell.outputs]
+Y = "K + S*L"
+"#;
+
+    /// The `L` values the arcs in `starts` were measured from, for arcs whose start context agrees
+    /// with `at` on every listed pin.
+    fn masked_values<'a>(
+        starts: impl Iterator<Item = &'a Minterm<Symbol>>,
+        at: &[(&str, bool)],
+    ) -> BTreeSet<bool> {
+        use crate::logic::assignment;
+        starts
+            .map(assignment)
+            .filter(|a| {
+                at.iter()
+                    .all(|(pin, v)| a.iter().any(|(s, b)| s == pin && b == v))
+            })
+            .filter_map(|a| a.iter().find(|(s, _)| s.as_str() == "L").map(|(_, b)| *b))
+            .collect()
+    }
+
+    #[test]
+    fn distinct_internal_contexts_split_a_delay_arc() {
+        // C rises with D=1 while K holds 0 and S=0: Y rises through K in both stored contexts of the
+        // masked latch. Same related pin, same direction, same input vectors at both ends — two arcs,
+        // because the internal node the edge travels through is not the same one.
+        let cell = analyse(MASKED_PAIR);
+        let at = [("E", false), ("D", true), ("S", false), ("C", false)];
+        let contexts = masked_values(
+            cell.arcs
+                .iter()
+                .filter(|a| a.output == "Y" && a.related == "C" && a.edge == Edge::Rise)
+                .map(|a| &a.start),
+            &at,
+        );
+        assert_eq!(
+            contexts,
+            BTreeSet::from([false, true]),
+            "both stored contexts of the masked latch must emit their own C→Y rise arc"
+        );
+    }
+
+    #[test]
+    fn distinct_internal_contexts_split_a_hidden_arc() {
+        // D falls in hold (E=0, C=0) with S=0: nothing moves and Y stays 0 in either stored context of
+        // the masked latch, yet the toggle exercises different internal state — two power measurements,
+        // so two hidden arcs, though their input vectors and held output values coincide.
+        let cell = analyse(MASKED_PAIR);
+        let at = [("E", false), ("D", true), ("S", false), ("C", false)];
+        let held_low = |h: &HiddenArc| h.outputs.iter().all(|(o, v)| o == "Y" && !v);
+        let contexts = masked_values(
+            cell.hidden_arcs
+                .iter()
+                .filter(|h| h.pin == "D" && h.edge == Edge::Fall && held_low(h))
+                .map(|h| &h.start),
+            &at,
+        );
+        assert_eq!(
+            contexts,
+            BTreeSet::from([false, true]),
+            "both stored contexts of the masked latch must emit their own D-fall hidden arc"
+        );
     }
 
     #[test]
@@ -488,8 +543,12 @@ Q = "CLK*M + !CLK*Q"
         assert!(arcs
             .iter()
             .any(|a| a.related == "CLK" && a.edge == Edge::Fall));
-        // The prevector is a real single-step input walk terminating at the measured start state.
-        assert_eq!(clk_rise.prevector.last().unwrap(), &clk_rise.start);
+        // The prevector is a real single-step input walk terminating at the measured start state's
+        // input projection — the state variables it establishes are not part of the walk's alphabet.
+        assert_eq!(
+            clk_rise.prevector.last().unwrap(),
+            &clk_rise.start.project_to(&cell.inputs)
+        );
         for w in clk_rise.prevector.windows(2) {
             assert_eq!(w[0].hamming_distance(&w[1]), 1);
         }

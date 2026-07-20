@@ -100,9 +100,10 @@ pub fn cell_liberty(cell: &AnalysedCell) -> String {
 /// Build the `cell` group: one input `pin` per primary input, then — for a sequential cell — the single
 /// joint `statetable`, its output pins (in declaration order), and its genuine-internal pins. Output
 /// pins are classified per output (see [`output_pin`]): a state variable, a state-dependent function,
-/// or a plain combinational `function` even alongside a statetable. A purely combinational cell (no
-/// state model) emits each output as a plain `function` pin instead. `name` is the cell name this group
-/// is emitted under; a cell with several declared names yields one identical group per name.
+/// or a plain combinational `function` even alongside a statetable. A cell with no state model — purely
+/// combinational, or one the fold emptied — emits each output as a plain `function` pin and no internal
+/// pin at all. `name` is the cell name this group is emitted under; a cell with several declared names
+/// yields one identical group per name.
 fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
     let mut group = Group::new("cell", name);
 
@@ -111,13 +112,21 @@ fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
     }
 
     match build_state_model(cell) {
-        // Purely combinational: every signal is an output carrying a plain `function`.
+        // No state model: every output carries a plain `function`. The cell is either purely
+        // combinational, or the fold emptied its state model outright. A folded internal still sits in
+        // `cell.internals` -- that list is pruned by the state-space minimisation, a different mechanism
+        // from the fold -- so the internals are filtered here rather than assumed away: an internal state
+        // node emits no external pin, and rendering its region as a `function` would strip the hold term
+        // and publish the node as a spurious output.
         None => {
             debug_assert!(
-                cell.internals.is_empty(),
-                "combinational cell (no state model) has no surviving internals -- minimise I3"
+                cell.internals
+                    .iter()
+                    .all(|s| cell.edge.folded.contains(&s.name)),
+                "no state model: every surviving internal is folded -- minimise I3 plus the fold"
             );
-            for (sig, sr) in cell.signal_regions() {
+            let n_out = cell.outputs.len();
+            for (sig, sr) in cell.signal_regions().take(n_out) {
                 group
                     .subgroups
                     .push(function_pin(&sig.name, &function_sop(sr)));
@@ -562,6 +571,55 @@ Q = "!( !(M*CLK) * Qn )"
         assert_eq!(attr_string(q, "internal_node").as_deref(), Some("Q"));
         let qn = find_pin(cellg, "Qn");
         assert_eq!(attr_string(qn, "internal_node").as_deref(), Some("Qn"));
+    }
+
+    #[test]
+    fn a_wholly_folded_internal_leaves_a_combinational_cell_with_no_pin() {
+        // The fold can empty the state model outright: L is the cell's only state signal and it reaches
+        // no output, so once it folds `build_state_model` returns None and the cell renders through the
+        // combinational branch. L nonetheless survives in `cell.internals` -- that list is pruned by the
+        // state-space minimisation, a different mechanism from the fold -- so the combinational branch
+        // still sees it as a signal. It must emit NO pin: an internal state node has no external pin, and
+        // rendering its region as a `function` would strip the hold term and publish `D*!CLK` as an
+        // output.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "FOLDONLY"
+inputs = ["CLK", "A", "D"]
+clock = ["CLK"]
+[cell.internal]
+L = "!CLK*D + CLK*L"
+[cell.outputs]
+Y = "A*D"
+"#,
+        );
+        assert_eq!(
+            cell.edge
+                .folded
+                .iter()
+                .map(Symbol::as_str)
+                .collect::<Vec<_>>(),
+            ["L"],
+            "premise: L is folded"
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        assert!(!frag.contains("statetable"), "the fold emptied the model");
+        assert!(!frag.contains("pin (L)"), "folded internal emits no pin");
+        let lib = parse_frag(&frag);
+        let cellg = find_cell(&lib, "FOLDONLY");
+        assert!(
+            !cellg
+                .subgroups
+                .iter()
+                .any(|g| g.type_ == "pin" && g.name == "L"),
+            "folded internal L must not emit a pin"
+        );
+        // The genuine output is untouched.
+        let y = find_pin(cellg, "Y");
+        assert_eq!(attr_expr(y, "direction").as_deref(), Some("output"));
+        assert_eq!(attr_string(y, "function").as_deref(), Some("A*D"));
     }
 
     #[test]
