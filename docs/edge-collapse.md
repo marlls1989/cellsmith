@@ -148,8 +148,18 @@ opposite-edge captures instead, each keeping the other as a live reference.
 not group-folded: each is "referenced elsewhere" by the other, so the per-node rule strands both as
 surviving level internals. `NDFF`'s NAND master pair `M`/`Mn` is the witness — its arcs, covers and `Q`
 characterisation are invariant against the pass-transistor `DFF`, only the folding differs (asserted,
-not hidden, in `edge_nand_master_slave_matches_the_pass_gate_flop`). The fix is to group-fold a set of
-mutually-referencing capture-less nodes when the set as a whole has no reference from outside it.
+not hidden, in `edge_nand_master_slave_matches_the_pass_gate_flop`).
+
+The suggested fix is to decide folding as a **reachability** question — *does this internal still
+influence an output once collapsed?* — rather than by counting references per node. The reference that
+matters is one that leads to an output; `M` and `Mn` reference each other, but that mutual reference
+leads nowhere outside the pair, so collapsing the pair has the same effect as collapsing the lone `M`
+of the pass-transistor `DFF`.
+
+Note this criterion is deliberately **narrower than the one used during early minimisation**. There,
+self-referential loops are preserved on purpose, because they carry the oscillation detection. At
+emission that concern does not apply: the only question is whether a value affects the output, so a
+self-referential set that reaches no output may be collapsed even though minimisation had to keep it.
 
 ## 7. Emission
 
