@@ -1,56 +1,64 @@
 //! Behavioural per-arc edge classification.
 //!
-//! Every arc a candidate node — every output **and** every internal state variable — can present is
-//! classified, purely from the cell's already-explored toggle-and-settle behaviour, into one of three
-//! categories. Classification is PER ARC: there is no register verdict on a node, and arcs of all three
-//! categories coexist freely on one output (an async-reset flop carries all three).
+//! Timing arcs are NOT derived here. Every arc the cell has already came out of [`super::arcs::derive`],
+//! which exists wherever a single-input toggle between reachable stable states changes an output. This
+//! module only attaches a LABEL to the clock-related ones — it never builds a parallel set of
+//! `(node, clock, direction)` tuples of its own. Labelling is PER ARC: there is no register verdict on a
+//! node, and arcs of all three categories coexist freely on one output (an async-reset flop carries all
+//! three).
 //!
 //! * **CAPTURE** (edge) — a clock edge makes the node capture-and-hold a value that then holds
-//!   independently of the clock's LEVEL until that clock's next edge. [`EdgeArcs::captures`].
+//!   independently of the clock's LEVEL until that clock's next edge. [`ArcClass::Capture`], with the
+//!   captured function in [`EdgeArcs::captures`].
 //! * **RELEASE / OPENING** (edge) — a clock edge takes a latch from OPAQUE to TRANSPARENT, so data that
 //!   changed while it was closed is transmitted to the node BY THE EDGE; the delivered value then
 //!   TRACKS rather than holds. [`ArcClass::Release`] in [`EdgeArcs::labels`].
-//! * **COMBINATIONAL** — a data change propagating while the latch is already transparent. Not recorded
-//!   here; it falls out of [`super::arcs`] as an ordinary data arc.
+//! * **COMBINATIONAL** — a data change propagating while the latch is already transparent, or a clock
+//!   acting by its LEVEL. Carries no label; it stays an ordinary [`super::arcs`] data arc.
 //!
-//! A latch therefore has no capture but does have an edge arc, its opening. Captures and releases are
-//! distinct categories internally — the delivered value holds versus tracks — but both are timing arcs
-//! on a clock edge and both emit Liberate `-type edge` (see [`crate::emit::arcs_tcl`]). A CONDITIONED
-//! release (a clock edge reaching an output only through a second, currently-open latch) is the same
-//! category with its condition in the arc's `-when`: conditioning never reclassifies an arc.
+//! A latch therefore has no capture but is not timing-invisible: its enable-to-output opening is a real
+//! edge arc. Captures and releases are distinct categories internally — the delivered value holds versus
+//! tracks — but both are timing arcs on a clock edge and both emit Liberate `-type edge` (see
+//! [`crate::emit::arcs_tcl`]). A CONDITIONED arc is still an arc: conditioning on data, on state, on a
+//! second clock's level or on clock phase puts a condition in the arc's `-when` and never suppresses or
+//! reclassifies it.
 //!
-//! Everything here is derived BEHAVIOURALLY from observed toggle-and-settle transitions, never from the
-//! shape of an equation, and nothing branches on a declared input class — an async pin need not be
-//! declared, its effect being classified from its own observed moves (`forcing_pins`). The
-//! characterisation is consequently implementation-style invariant: the NAND-implemented `NDLAT` /
-//! `NDFF` / `NHPIPE` fixtures characterise identically to their pass-transistor twins.
+//! MASKING needs no rule here — it falls out of arc derivation. An arc exists only where a transition
+//! actually reaches an output, so a flop master's release (stopped by its closed slave) and a gated
+//! clock's falling edge (cancelled by the gating condition it controls) simply never present an arc.
+//!
+//! Everything is derived BEHAVIOURALLY from observed toggle-and-settle transitions, never from the shape
+//! of an equation, and nothing branches on a declared input class — an async pin need not be declared,
+//! its effect being classified from its own observed moves (`forcing_pins`). The characterisation is
+//! consequently IMPLEMENTATION-STYLE INVARIANT: the NAND-implemented `NDLAT` / `NDFF` / `NHPIPE`
+//! fixtures characterise identically to their pass-transistor twins.
 //!
 //! [`classify`] is a **post-exploration** read-only pass over the shared [`Machine`]: it re-walks the
 //! exploration with [`machine::toggle`]/[`machine::settle`], mirroring [`super::arcs::derive`]'s
 //! per-node walk, and only ADDS an edge annotation. It never re-derives the exploration, the
 //! prevectors or the hazards — those stay byte-identical whether the annotation is on or off.
 //!
-//! # The pipeline
+//! # The mechanism
 //!
-//! Per candidate, from the aggregated walk observations (`capture_arcs`):
+//! Per candidate node — every output **and** every internal state variable — the walk observations feed
+//! `capture_arcs`, which decides which `(clock, direction)` arcs CAPTURE:
 //!
 //! 1. **SEED by CONTENT** over all firings of a `(clock, direction)`, changed or not: the edge carries
 //!    state content or pin content, judged with the non-clock inputs that move the node (coexisting
 //!    combinational arcs) eliminated.
-//! 2. **LEVEL-INDEPENDENCE VETO** (`pinned_by_clock_levels`): a clock whose LEVELS alone pin the node
-//!    to a constant decides it by level, so it is the combinational clock-gate class (ICG/ICM `GCLK`) —
-//!    neither a capture nor a release.
-//! 3. **CAPTURE RULE**, each arc decided independently: keep `(clock, direction)` iff it CHANGED the
-//!    node and the delivered phase is QUIET (`phase_quiet`) — no live data reaches the node inside the
-//!    phase, with the node's forcing pins exempted and co-resident clock movers admitted unless they
-//!    change a phase-wide carrier the node tracks.
-//! 4. **PER-ARC LABELS, SOURCED FROM THE ARC PIPELINE**: every timing arc is one of the delay arcs
-//!    [`super::arcs::derive`] observed — nothing else exists to label, so a masked edge (a `DFF`'s
-//!    fall, `ICM`'s competing branch) never appears at all. Each clock-related arc key
-//!    `(output, clock, direction)` gets [`ArcClass::Capture`] when the direction was kept by the
-//!    capture rule, no label when the clock was vetoed (a level-acting clock gate stays
-//!    combinational), and [`ArcClass::Release`] otherwise — an edge that moved the node without
-//!    holding afterwards released a latch.
+//! 2. **LEVEL VETO** (`pinned_by_clock_levels`), judged for EVERY clock whose edge moves the node: some
+//!    cube of clock literals ALONE pins the node to a constant, so the clock's LEVEL decides the value
+//!    rather than any captured content. That is the combinational clock-gate class (`ICG`, `ICM`'s
+//!    `GCLK`) — neither a capture nor a release.
+//! 3. **QUIET-PHASE CAPTURE RULE**, each arc decided independently: keep `(clock, direction)` iff it
+//!    CHANGED the node and the delivered phase is QUIET (`phase_quiet`) — no live data reaches the node
+//!    inside the phase, with the node's forcing pins exempted and co-resident clock movers admitted
+//!    unless they change a phase-wide carrier the node tracks.
+//!
+//! The labels then follow from the derived arcs: each clock-related delay arc, keyed by its own
+//! `(output, clock, direction)` identity, is [`ArcClass::Capture`] when the capture rule kept that
+//! direction, UNLABELLED when the clock is level-vetoed on the node, and [`ArcClass::Release`]
+//! otherwise — an edge that moved the node without holding afterwards opened a latch.
 //!
 //! The capture (per active edge) and the off-edge (hold + set/clear forcing) functions are synthesised
 //! from the sampled pre-states and stable states over a deterministic two-tier header, reusing the
@@ -58,7 +66,7 @@
 //! capture is simply `!D`, never special-cased.
 //!
 //! See `docs/edge-collapse.md` for the concept-first walkthrough: the three categories, the decision
-//! pipeline, the capture and off-edge synthesis, the cell-level fold (and its group-fold follow-up), and
+//! mechanism, the capture and off-edge synthesis, the cell-level fold (and its group-fold follow-up), and
 //! the retained restrictions.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -114,8 +122,8 @@ impl EdgeCaptures {
 /// 2. **RELEASE / OPENING** (edge): a clock edge takes a latch from OPAQUE to TRANSPARENT, so data that
 ///    changed while the latch was closed is transmitted to the node BY THE CLOCK EDGE; the delivered
 ///    value then TRACKS rather than holds — [`ArcClass::Release`] in [`EdgeArcs::labels`].
-/// 3. **COMBINATIONAL**: a data change propagating while the latch is already transparent — not recorded
-///    here; it falls out of [`super::arcs`] as an ordinary data arc.
+/// 3. **COMBINATIONAL**: a data change propagating while the latch is already transparent, or a clock
+///    acting by its LEVEL — unlabelled here; it stays an ordinary [`super::arcs`] data arc.
 ///
 /// A latch has no capture but it does have an opening, so both categories are real timing arcs and both
 /// emit as Liberate `-type edge`; they differ only in what the delivered value does afterwards.
@@ -150,8 +158,8 @@ struct CapAgg {
     changed: bool,
     samples: Vec<(Minterm<Symbol>, bool)>,
     /// One entry per settling firing of this edge — CHANGED OR NOT: `(pre-state, destination stable
-    /// state, post value)`. The census the decision core replays for the edge's content and for the
-    /// held-acquisition hold walk over the post-edge phase.
+    /// state, post value)`. The census the content seeding replays to decide whether the edge has
+    /// anything to deliver.
     firings: Vec<(Minterm<Symbol>, Minterm<Symbol>, bool)>,
 }
 
@@ -160,9 +168,9 @@ struct CapAgg {
 struct CandAgg {
     /// One entry per single-input toggle that CHANGED the node: `(toggled input, SOURCE stable state,
     /// destination stable state, post value)`. Every moving toggle is recorded uniformly — clock, data
-    /// and async alike — and the capture-and-hold fixpoint reads them back to decide which clocks keep
-    /// edge arcs. The source state is kept so a move can be replayed from where it started (the hold
-    /// walk needs the pre-toggle state, not just where it landed).
+    /// and async alike — and the decision core reads them back for the eliminated set and the node's
+    /// forcing pins. The source state is kept so a move can be replayed from where it started (the
+    /// forcing classification needs the pre-toggle state, not just where it landed).
     moves: Vec<(Symbol, Minterm<Symbol>, Minterm<Symbol>, bool)>,
     /// The distinct clocks whose toggle changed the node.
     changed_clocks: BTreeSet<Symbol>,
@@ -193,7 +201,7 @@ impl CandAgg {
 type Synthesised = (Vec<(Symbol, Edge, StateRegions)>, StateRegions, bool);
 
 /// One candidate edge arc on a node: `(clock, is_rise)`. The decision core's whole currency — arcs, never
-/// a per-node register verdict, so edge and combinational arcs coexist freely on one output.
+/// a verdict on the node, so edge and combinational arcs coexist freely on one output.
 type Arc = (Symbol, bool);
 
 /// Discover each node's edge arcs from the cell's toggle-and-settle behaviour and label the cell's
@@ -216,7 +224,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     let ex = &m.explored;
 
     // The declared clocks. Every declared clock is a candidate edge key; whether a clock keeps edge arcs
-    // on a given node is decided by the capture-and-hold fixpoint, not by input-class routing.
+    // on a given node is decided by the capture rule and the level veto, not by input-class routing.
     let clock_set: BTreeSet<&str> = cell.clock_pins.iter().map(Symbol::as_str).collect();
 
     // Candidates: every output (value read via `Machine::output_value`, so combinational outputs are
@@ -266,7 +274,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                 }
                 if b0 != b1 {
                     // Every moving toggle — clock, data or async alike — is a uniform move: the source
-                    // state, the destination stable state and the post value the fixpoint replays.
+                    // state, the destination stable state and the post value the decision core reads.
                     out[i]
                         .moves
                         .push((related.clone(), node.clone(), np.clone(), b1));
@@ -286,10 +294,11 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         },
     );
 
-    // The per-arc decision core: for each candidate the seed-veto-fixpoint yields the set of `(clock,
-    // direction)` arcs it keeps (empty ⇒ no annotation). Computed BEFORE any synthesis, so the header
-    // (which excludes internal capture-less nodes) is settled first. The single-input transition table is
-    // node-independent, so it is built once and shared by every candidate's hold walks.
+    // The per-arc decision core: for each candidate, seed by content, level veto, then the quiet-phase
+    // capture rule yield the set of `(clock, direction)` arcs it captures on (empty ⇒ no annotation).
+    // Computed BEFORE any synthesis, so the header (which excludes internal capture-less nodes) is
+    // settled first. The single-input transition table is node-independent, so it is built once and
+    // shared by every candidate's phase scans.
     let trans = Transitions::build(m);
     let (capture_sets, vetoed_sets): (Vec<BTreeSet<Arc>>, Vec<BTreeSet<Symbol>>) = candidates
         .iter()
@@ -443,7 +452,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
 /// The single-input transition table over the reachable stable states: `next[s][x]` is the index of the
 /// stable state reached by toggling input `x` in `order[s]` and settling (`None` when that toggle
 /// oscillates, or lands outside the explored set). The table is NODE-INDEPENDENT — it describes the cell's
-/// state machine, not any one candidate — so it is built once per cell and every candidate's hold walk
+/// state machine, not any one candidate — so it is built once per cell and every candidate's phase scan
 /// indexes into it rather than re-settling.
 struct Transitions<'a> {
     order: &'a [Minterm<Symbol>],
@@ -488,8 +497,9 @@ impl<'a> Transitions<'a> {
 /// is a coexisting combinational arc, not the node tracking data, so a phase whose only movement is a
 /// forcing (a flop's reset asserting across its closed phase) is not transparent.
 ///
-/// Rule R\* no longer consults it — a change-free edge takes no arc whatever the phase it closes — so its
-/// remaining consumer is the replay-faithfulness harness, which reads an OPEN phase against the cover.
+/// The classifier itself does not consult this: a capture is decided by the quiet-phase rule on the
+/// DELIVERED phase. Its remaining consumer is the replay-faithfulness harness, which reads an OPEN phase
+/// against the cover.
 #[cfg_attr(not(test), allow(dead_code))]
 fn transparent<B: Brand, C: ManagerCell>(
     m: &Machine<'_, B, C>,
@@ -561,16 +571,17 @@ fn transparent<B: Brand, C: ManagerCell>(
 ///    content* (a pin outside the eliminated set changes the delivered value). The ELIMINATED set is the
 ///    non-clock inputs whose toggle moves the node — coexisting combinational arcs (async resets, latch
 ///    data); they contribute no edge content but never disqualify the clock.
-/// 2. **CAPTURED-CONTENT-IRRELEVANCE VETO**, before the fixpoint: a clock is vetoed on the node when some
-///    cube of CLOCK LITERALS ALONE pins the node to a constant, that clock's literal being NECESSARY to
-///    the pinning — in such a phase the captured content is irrelevant and the clock LEVEL alone decides
-///    the node, which is a combinational clock gate, not a capture (see [`pinned_by_clock_levels`]).
-/// 3. **PER-ARC RULE**: keep `(K, d)` iff the direction CHANGED the node in some firing (a real
-///    effect) and the DELIVERED phase is QUIET ([`phase_quiet`]): no live data reaches the node
+/// 2. **CAPTURED-CONTENT-IRRELEVANCE VETO**, before the capture rule: a clock is vetoed on the node
+///    when some cube of CLOCK LITERALS ALONE pins the node to a constant, that clock's literal being
+///    NECESSARY to the pinning — in such a phase the captured content is irrelevant and the clock LEVEL
+///    alone decides the node, which is a combinational clock gate, not a capture (see
+///    [`pinned_by_clock_levels`]).
+/// 3. **QUIET-PHASE CAPTURE RULE**: keep `(K, d)` iff the direction CHANGED the node in some firing (a
+///    real effect) and the DELIVERED phase is QUIET ([`phase_quiet`]): no live data reaches the node
 ///    inside the phase, judged with the node's behaviourally-classified forcing pins
 ///    ([`forcing_pins`]) exempted and co-resident clock movers admitted unless they change a
-///    phase-wide carrier the node tracks. Each arc is decided independently — no fixpoint, no
-///    mutual support between arcs.
+///    phase-wide carrier the node tracks. Each arc is decided independently, on its own observations —
+///    no arc's verdict feeds another's.
 fn capture_arcs<B: Brand, C: ManagerCell>(
     m: &Machine<'_, B, C>,
     tr: &Transitions<'_>,
@@ -617,7 +628,7 @@ fn capture_arcs<B: Brand, C: ManagerCell>(
         }
     }
 
-    // (3) PER-ARC RULE: keep (K, d) iff CHANGED and the delivered phase is QUIET.
+    // (3) QUIET-PHASE CAPTURE RULE: keep (K, d) iff CHANGED and the delivered phase is QUIET.
     if !s.is_empty() {
         let forcing = forcing_pins(m, tr, node, clock_set, &agg.moves);
         s.retain(|(k, d)| {
@@ -918,8 +929,8 @@ fn pinned_by_clock_levels<B: Brand, C: ManagerCell>(
 /// STATE content: two firings whose pre-states share a non-clock input projection deliver DIFFERENT values
 /// (the edge transports state). PIN content: a pin outside the ELIMINATED set changes the delivered value
 /// (the edge transports that pin). Seeding is by content over ALL firings, never gated on whether a firing
-/// changed the node: content is what the edge could deliver, and Rule R\* is where the change and the hold
-/// obligation are judged.
+/// changed the node: content is what the edge could deliver, while the capture rule is where the change
+/// and the hold obligation are judged.
 fn edge_has_content(
     inputs: &[Symbol],
     clock: &Symbol,
@@ -968,8 +979,8 @@ fn edge_has_content(
 /// Synthesise a node's captures and off-edge, escalating tier-1 → tier-2 on a capture conflict. The
 /// off-edge is synthesised JOINTLY over the node's whole clock set. The `bool` is whether tier-2 was used.
 ///
-/// The fixpoint (and the replay-faithfulness harness) guarantee this is only ever called on a node whose
-/// clocks hold cleanly, so neither a surviving tier-2 capture conflict nor a joint off-edge disagreement
+/// The capture rule (and the replay-faithfulness harness) guarantee this is only ever called on a node
+/// whose clocks hold cleanly, so neither a surviving tier-2 capture conflict nor a joint off-edge disagreement
 /// can occur; both are guarded by a `debug_assert!` rather than a silent fallback. Emission is
 /// UNCONDITIONAL — every recognised edge arc is kept, with no per-clock off-edge fallback.
 #[allow(clippy::too_many_arguments)]
@@ -1023,7 +1034,8 @@ fn synth_node_captures<B: Brand, C: ManagerCell>(
         if conflict && !tier2 {
             continue; // escalate to tier-2
         }
-        // A surviving tier-2 conflict is unreachable given the fixpoint + harness: assert, never fall back.
+        // A surviving tier-2 conflict is unreachable given the capture rule + harness: assert, never
+        // fall back.
         debug_assert!(
             !conflict,
             "tier-2 capture conflict on node {}",
@@ -1735,7 +1747,7 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*!M + !CLK*Q"
 "#;
 
-    // === Step 3 (2): stay level (no annotation) ===
+    // === No capture kept: the node takes no edge annotation ===
 
     #[test]
     fn edge_stay_level_fixtures() {
@@ -1996,13 +2008,13 @@ Q = "CLK*L1 + !CLK*L2"
         });
     }
 
-    // === Phase-symmetric data transparency must NOT read as an edge register ===
+    // === Phase-symmetric data transparency must NOT read as a capture ===
 
     // Two opposite-phase D latches XORed: M follows D while CLK=0, M2 follows D while CLK=1, and T = M⊕M2
     // is transparent to D in BOTH phases. D is phase-SYMMETRIC (not a latch signature) and lands Held
-    // off-edge (it forces T to no constant), so it is genuine data transparency — recognising T as an
-    // edge register would DROP D while the same run emits combinational D→T arcs under both phases. T must
-    // stay level; D must survive as a data dependency of T's function.
+    // off-edge (it forces T to no constant), so it is genuine data transparency — capturing T on CLK
+    // would DROP D while the same run emits combinational D→T arcs under both phases. T must keep no
+    // capture; D must survive as a data dependency of T's function.
     const XLAT_TOML: &str = r#"
 [[cell]]
 name = "XLAT"
@@ -2117,7 +2129,7 @@ Q = "!(R*G)*(CLK*M + !CLK*Q)"
     #[test]
     fn edge_clear_variants_consistently_registers() {
         // The SAME clear construct — single-literal, disjunctive, conjunctive; sync or async-declared — is
-        // recognised consistently as an edge register. Grounding the permit decision in the exact off-edge
+        // recognised consistently as a capture. Grounding the permit decision in the exact off-edge
         // synthesis removes the R+G-vs-R*G and sync-vs-async inconsistency of the marginal test.
         for (src, label) in [
             (SYNC_R_CLEAR_TOML, "sync single-literal R"),
@@ -2325,7 +2337,7 @@ GCLK = "CLK*EL"
             unchanged!(constraint_arcs_declared);
             unchanged!(regions);
 
-            // The guard has teeth: classification is a no-op when suppressed and does recognise registers
+            // The guard has teeth: classification is a no-op when suppressed and does recognise captures
             // on these fixtures when active.
             assert!(off.edge.captures.is_empty());
             assert!(!on.edge.captures.is_empty());
@@ -2423,8 +2435,9 @@ Q = "!R*(B + CLK*M + !CLK*Q)"
     }
 
     // Transparent cascade (zero-arc): a level latch feeding a same-phase level latch is transparent
-    // overall -- the whole chain follows D through CLK's low phase, so it stays LEVEL and carries ZERO
-    // edge arcs on every node (it falls out as level, not by any dismissal). The XLAT analogue.
+    // overall -- the whole chain follows D through CLK's low phase, so no node keeps a capture and none
+    // carries an edge arc (it falls out of the quiet-phase rule, not from any dismissal). The XLAT
+    // analogue.
     const TCASC_TOML: &str = r#"
 [[cell]]
 name = "TCASC"

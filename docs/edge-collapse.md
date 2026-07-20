@@ -77,9 +77,8 @@ Per candidate node, over the aggregated walk observations:
    **carrier** the node tracks (a mux switch between held values is not transparency; tracking a live
    carrier is).
 4. **PER-ARC LABELS, SOURCED FROM THE ARC PIPELINE.** Every timing arc is one of the delay arcs
-   `arcs::derive` observed — nothing else exists to label, so a masked edge (a `DFF`'s fall, `ICM`'s
-   competing branch reaching the other synchroniser's first master) never appears at all, and internal
-   nodes — which carry no delay arc — are never labelled. Each clock-related arc key
+   `arcs::derive` observed — nothing else exists to label, and internal nodes, which carry no delay
+   arc, are never labelled. Each clock-related arc key
    `(output, clock, direction)` is labelled **Capture** when the capture rule kept that direction,
    **nothing** when the clock is vetoed on the node (a level-acting clock's arcs stay combinational —
    `RDFF`'s clock-declared reset is the witness: its assert pins the node by level and emits
@@ -89,6 +88,24 @@ Per candidate node, over the aggregated walk observations:
 
 Everything a candidate presents that falls in none of these is left to `super::arcs` as an ordinary
 combinational data arc.
+
+### Masking is not a separate mechanism
+
+There is no rule that suppresses an arc a clock edge "should" have had. An arc exists exactly where a
+single-input toggle between reachable stable states actually changes an output, so an edge whose effect
+never reaches an output produces **no arc to label** — masking is already done by the time
+classification runs, and it is done by the machine walk rather than by any edge-specific reasoning:
+
+- A **flop master's release** is stopped by its closed slave. The master opens on one clock phase, but
+  the slave is opaque in that phase, so the output never moves and the arc pipeline observes nothing;
+  only the phase that reaches the output survives, as `Q`'s single capture arc.
+- A **gated clock's** edge is cancelled by the gating condition it controls: the falling edge that would
+  close the gate arrives in a state the gate's own condition has already settled, so the toggle leaves
+  the output where it was and no arc is derived for it.
+
+A `-when` condition is the opposite case and is **not** masking: a conditioned arc is still an arc.
+Conditioning on data, on state, on another clock's level or on clock phase narrows the context the arc
+is measured in — it never suppresses the arc nor moves it to another category.
 
 ## 4. Capture synthesis
 
@@ -136,19 +153,21 @@ mutually-referencing capture-less nodes when the set as a whole has no reference
 
 ## 7. Emission
 
-`AnalysedCell::edge` is consumed downstream, each emitter re-expressing what it needs and eliding any
-folded master:
+`AnalysedCell::edge` is consumed downstream, but the **per-arc label is read by exactly one emitter**.
+`EdgeArcs::captures` and `EdgeArcs::folded` shape the behavioural models; `EdgeArcs::labels` types the
+Liberate arcs and nothing else:
 
-- **Liberty** — the joint `statetable` carries the capture's edge rows; a folded master's row is
-  dropped. Release arcs need nothing here: the statetable's level rows already model latch behaviour,
-  and Liberate derives the timing from the Tcl.
-- **Verilog** — the sequential UDP is written in edge-triggered form for captures; likewise the level
-  rows already carry the latch.
-- **Liberate** — `src/emit/arcs_tcl.rs` is the only emitter that types arcs. Each delay arc looks up
-  its own `(output, related clock, clock direction)` key in `EdgeArcs::labels`: a capture arc and a
-  release arc both render `-type edge`; a declared-async related pin takes precedence with
-  `-type async`; an unlabelled arc stays `-type combinational`. No visibility filtering is needed —
-  the label domain is the emitted arcs themselves, and outputs never fold.
+- **Liberate** — `src/emit/arcs_tcl.rs` is the only consumer of `labels` and the only emitter that
+  types arcs. Each delay arc looks up its own `(output, related clock, clock direction)` key: a capture
+  arc and a release arc both render `-type edge`; a declared-async related pin takes precedence with
+  `-type async`; an unlabelled arc — a transparent-mode data change, or a level-vetoed clock — stays
+  `-type combinational`. No visibility filtering is needed: the label domain is the emitted arcs
+  themselves, and outputs never fold.
+- **Liberty** — the joint `statetable` carries the capture's edge rows and drops a folded master's row.
+  It does not read `labels` at all: release arcs need nothing here, because the statetable's level rows
+  already model the latch and Liberate derives the timing from the Tcl.
+- **Verilog** — the sequential UDP is written in edge-triggered form for captures and elides folded
+  masters; likewise independent of `labels`, the level rows already carrying the latch.
 
 ## 8. Retained restrictions
 
@@ -162,6 +181,8 @@ These bounds are deliberate and user-approved:
 - **Explored machine required.** Classification needs an explored machine, so a cell wider than
   `MAX_MACHINE_VARS` (= 22) gets no annotation. Lifting the 22-variable cap is a separate, tool-wide
   change.
+- **No group fold.** A set of mutually-referencing capture-less nodes — a NAND master pair — is not
+  folded (§6): the characterisation is unaffected, only the internals stay visible.
 
 ## 9. The exploration is unchanged
 

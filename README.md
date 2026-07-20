@@ -194,8 +194,8 @@ Options:
                          machine's settled seed states (emitted by default)
       --constraints      Emit derived setup/hold & non_seq constraint arcs (off by default; a cell can
                          opt in with `constraint_arcs = true`)
-      --no-edge-collapse Suppress the master-slave latch -> edge-register collapse (on by default); a
-                         cell can opt out individually with `no_edge_collapse = true`
+      --no-edge-collapse Suppress per-arc capture/release classification (on by default); a cell can
+                         opt out individually with `no_edge_collapse = true`
       --stdout           Write all three artifacts to stdout (with banners) instead of files
   -h, --help             Print help
   -V, --version          Print version

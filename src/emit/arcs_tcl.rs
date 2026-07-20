@@ -848,9 +848,9 @@ Q = "CLK*M + !CLK*Q"
         assert!(tcl.contains("-type hold \\"));
     }
 
-    /// The ICM interlock's registers are all internal nodes (never a Liberty output), so it has no
-    /// output arcs to re-label — its Tcl carries zero `-type edge` blocks even though it recognises
-    /// edge registers.
+    /// The ICM interlock's capturing nodes are all internal (never a Liberty output), so it has no
+    /// output arcs to re-label — its Tcl carries zero `-type edge` blocks even though captures are
+    /// recognised on those internal nodes.
     #[test]
     fn icm_internal_registers_emit_zero_edge_type_arcs() {
         let cell = analyse(
