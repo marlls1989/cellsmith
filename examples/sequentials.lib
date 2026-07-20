@@ -1,0 +1,927 @@
+library (sequentials) {
+  cell (DFF) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("CLK D", "Q") {
+      table : "R H : - : H , \
+               R L : - : L , \
+               ~R - : - : N";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+  cell (DFF_NOCOLLAPSE) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("CLK D", "Q M") {
+      table : "L - : - - : N - , \
+               L L : - - : - L , \
+               L H : - - : - H , \
+               H - : - - : - N , \
+               H - : - L : L - , \
+               H - : - H : H -";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+    pin (M) {
+      direction : internal;
+      internal_node : "M";
+    }
+  }
+  cell (UCDFF) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("CLK D", "Q M") {
+      table : "L - : - - : N - , \
+               L L : - - : - L , \
+               L H : - - : - H , \
+               H - : - - : - N , \
+               H - : - L : L - , \
+               H - : - H : H -";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+    pin (M) {
+      direction : internal;
+      internal_node : "M";
+    }
+  }
+  cell (EMDFF) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("CLK D", "M Q") {
+      table : "L L : - - : L - , \
+               L H : - - : H - , \
+               H - : - - : N - , \
+               R - : H - : - H , \
+               R - : L - : - L , \
+               ~R - : - - : - N";
+    }
+    pin (M) {
+      direction : output;
+      internal_node : "M";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+  cell (TAPDFF) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("CLK D", "Q T") {
+      table : "L L : - - : - L , \
+               L H : - - : - H , \
+               H - : - - : - N , \
+               R - : - H : H - , \
+               R - : - L : L - , \
+               ~R - : - - : N -";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+    pin (T) {
+      direction : output;
+      internal_node : "T";
+    }
+  }
+  cell (IDFF) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("CLK D", "Q") {
+      table : "R L : - : H , \
+               R H : - : L , \
+               ~R - : - : N";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+  cell (XN) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("CLK D", "Q Qn") {
+      table : "R H : - - : H - , \
+               R L : - - : L - , \
+               ~R - : - - : N - , \
+               R L : - - : - H , \
+               R H : - - : - L , \
+               ~R - : - - : - N";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+    pin (Qn) {
+      direction : output;
+      internal_node : "Qn";
+    }
+  }
+  cell (TFF) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (R) {
+      direction : input;
+    }
+    statetable ("CLK R", "Q M") {
+      table : "R - : - H : H - , \
+               R - : - L : L - , \
+               ~R H : - - : L - , \
+               ~R L : - - : N - , \
+               F L : - L : - H , \
+               F - : - H : - L , \
+               F H : - - : - L , \
+               ~F H : - - : - L , \
+               ~F L : - - : - N";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+    pin (M) {
+      direction : internal;
+      internal_node : "M";
+    }
+  }
+  cell (DET) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("CLK D", "Q") {
+      table : "R H : - : H , \
+               R L : - : L , \
+               F H : - : H , \
+               F L : - : L , \
+               - - : - : N";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+  cell (MOR) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    pin (R) {
+      direction : input;
+    }
+    statetable ("CLK D R", "Q") {
+      table : "R H L : - : H , \
+               R L - : - : L , \
+               R - H : - : L , \
+               ~R - H : - : L , \
+               ~R - L : - : N , \
+               ~R - - : - : N";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+  cell (MORA) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    pin (R) {
+      direction : input;
+    }
+    statetable ("CLK D R", "Q") {
+      table : "R H L : - : H , \
+               R L - : - : L , \
+               R - H : - : L , \
+               ~R - H : - : L , \
+               ~R - L : - : N , \
+               ~R - - : - : N";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+  cell (BR) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    pin (R) {
+      direction : input;
+    }
+    statetable ("CLK D R", "Q") {
+      table : "R H L : - : H , \
+               R L - : - : L , \
+               R - H : - : L , \
+               ~R - H : - : L , \
+               ~R - L : - : N";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+  cell (SYNCR) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    pin (R) {
+      direction : input;
+    }
+    statetable ("CLK D R", "Q") {
+      table : "R H L : - : H , \
+               R L - : - : L , \
+               R - H : - : L , \
+               ~R - H : - : L , \
+               ~R - L : - : N";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+  cell (SYNCRG) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    pin (R) {
+      direction : input;
+    }
+    pin (G) {
+      direction : input;
+    }
+    statetable ("CLK D R G", "Q") {
+      table : "R H L L : - : H , \
+               R L - - : - : L , \
+               R - - H : - : L , \
+               R - H - : - : L , \
+               ~R - - H : - : L , \
+               ~R - H - : - : L , \
+               ~R - L L : - : N";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+  cell (GATEDR) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    pin (R) {
+      direction : input;
+    }
+    pin (G) {
+      direction : input;
+    }
+    statetable ("CLK D R G", "Q") {
+      table : "R H - L : - : H , \
+               R H L - : - : H , \
+               R L - - : - : L , \
+               R - H H : - : L , \
+               ~R - H H : - : L , \
+               ~R - - L : - : N , \
+               ~R - L - : - : N";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+  cell (AGATEDR) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    pin (R) {
+      direction : input;
+    }
+    pin (G) {
+      direction : input;
+    }
+    statetable ("CLK D R G", "Q") {
+      table : "R H - L : - : H , \
+               R H L - : - : H , \
+               R L - - : - : L , \
+               R - H H : - : L , \
+               ~R - H H : - : L , \
+               ~R - - L : - : N , \
+               ~R - L - : - : N";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+  cell (RDFF) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    pin (R) {
+      direction : input;
+    }
+    statetable ("CLK D R", "Q") {
+      table : "R H L : - : H , \
+               R L - : - : L , \
+               R - H : - : L , \
+               ~R - H : - : L , \
+               ~R - L : - : N";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+  cell (COEX) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    pin (B) {
+      direction : input;
+    }
+    pin (R) {
+      direction : input;
+    }
+    statetable ("CLK D B R", "Q") {
+      table : "R H - L : - : H , \
+               R - H - : H : H , \
+               R L - - : L : L , \
+               R - - H : L : L , \
+               R L L - : - : L , \
+               R - L H : - : L , \
+               ~R - H L : - : H , \
+               ~R - - H : - : L , \
+               ~R - L L : - : N";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+  cell (CAFF) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    pin (PRE) {
+      direction : input;
+    }
+    pin (CLR) {
+      direction : input;
+    }
+    statetable ("CLK D PRE CLR", "Q") {
+      table : "R H - L : - : H , \
+               R - H - : H : H , \
+               R L - - : L : L , \
+               R - - H : L : L , \
+               R L L - : - : L , \
+               R - L H : - : L , \
+               ~R - H L : - : H , \
+               ~R - - H : - : L , \
+               ~R - L L : - : N";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+  cell (DLAT) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("CLK D", "Q") {
+      table : "L - : - : N , \
+               H L : - : L , \
+               H H : - : H";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+  cell (DLAT_EN) {
+    pin (EN) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("EN D", "Q") {
+      table : "L - : - : N , \
+               H L : - : L , \
+               H H : - : H";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+  cell (DLAT_E) {
+    pin (E) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("E D", "Q") {
+      table : "L - : - : N , \
+               H L : - : L , \
+               H H : - : H";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+  cell (GLAT) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("CLK D", "Q") {
+      table : "- L : - : N , \
+               L - : - : N , \
+               H H : - : H";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+  cell (MUXLAT) {
+    pin (CLKA) {
+      direction : input;
+    }
+    pin (CLKB) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("CLKA CLKB D", "Q") {
+      table : "- H L : - : L , \
+               - H H : - : H , \
+               L L - : - : N , \
+               H - L : - : L , \
+               H - H : - : H";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+  cell (MCDFF) {
+    pin (CLKA) {
+      direction : input;
+    }
+    pin (CLKB) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("CLKA CLKB D", "Q M") {
+      table : "- L - : - - : N - , \
+               - H - : - L : L - , \
+               - H - : - H : H - , \
+               L - L : - - : - L , \
+               L - H : - - : - H , \
+               H - - : - - : - N";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+    pin (M) {
+      direction : internal;
+      internal_node : "M";
+    }
+  }
+  cell (TCASC) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("CLK D", "Q M") {
+      table : "L - : - L : L - , \
+               L - : - H : H - , \
+               L L : - - : - L , \
+               L H : - - : - H , \
+               H - : - - : N N";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+    pin (M) {
+      direction : internal;
+      internal_node : "M";
+    }
+  }
+  cell (XLAT) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("CLK D", "M M2") {
+      table : "L - : - - : - N , \
+               L L : - - : L - , \
+               L H : - - : H - , \
+               H - : - - : N - , \
+               H L : - - : - L , \
+               H H : - - : - H";
+    }
+    pin (T) {
+      direction : output;
+      state_function : "M*!M2 + !M*M2";
+    }
+    pin (M) {
+      direction : internal;
+      internal_node : "M";
+    }
+    pin (M2) {
+      direction : internal;
+      internal_node : "M2";
+    }
+  }
+  cell (HPIPE) {
+    pin (CLKA) {
+      direction : input;
+    }
+    pin (CLKB) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("CLKA CLKB D", "Q M2") {
+      table : "R H - : H - : H - , \
+               R L H : - - : H - , \
+               R H - : L - : L - , \
+               R L L : - - : L - , \
+               ~R - - : - - : N - , \
+               R - H : - - : - H , \
+               R - L : - - : - L , \
+               ~R - - : - - : - N";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+    pin (M2) {
+      direction : internal;
+      internal_node : "M2";
+    }
+  }
+  cell (DCMUX) {
+    pin (CLKA) {
+      direction : input;
+    }
+    pin (CLKB) {
+      direction : input;
+    }
+    pin (DA) {
+      direction : input;
+    }
+    pin (DB) {
+      direction : input;
+    }
+    statetable ("CLKA CLKB DA DB", "Q MA MB") {
+      table : "- L - L : - - - : - - L , \
+               - L - H : - - - : - - H , \
+               - H - - : - - - : - - N , \
+               L - L - : - - - : - L - , \
+               L - H - : - - - : - H - , \
+               H - - - : - - - : - N - , \
+               R H - - : - - H : H - - , \
+               R - - - : - H - : H - - , \
+               R - - - : - L L : L - - , \
+               R L - - : - L - : L - - , \
+               F - - - : H - H : H - - , \
+               F L - - : - H - : H - - , \
+               F H - - : L - - : L - - , \
+               F H - - : - - L : L - - , \
+               F - - - : L L - : L - - , \
+               F - - - : - L L : L - - , \
+               - R - - : - - H : H - - , \
+               H R - - : - H - : H - - , \
+               - R - - : - L L : L - - , \
+               L R - - : - - L : L - - , \
+               - F - - : H H - : H - - , \
+               L F - - : - - H : H - - , \
+               - F - - : L - L : L - - , \
+               - F - - : - L L : L - - , \
+               H F - - : L - - : L - - , \
+               H F - - : - L - : L - - , \
+               - - - - : - - - : N - -";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+    pin (MA) {
+      direction : internal;
+      internal_node : "MA";
+    }
+    pin (MB) {
+      direction : internal;
+      internal_node : "MB";
+    }
+  }
+  cell (ICG) {
+    pin (CLK) {
+      direction : input;
+    }
+    pin (EN) {
+      direction : input;
+    }
+    statetable ("CLK EN", "EL") {
+      table : "L L : - : L , \
+               L H : - : H , \
+               H - : - : N";
+    }
+    pin (GCLK) {
+      direction : output;
+      state_function : "CLK*EL";
+    }
+    pin (EL) {
+      direction : internal;
+      internal_node : "EL";
+    }
+  }
+  cell (ICM) {
+    pin (CLKA) {
+      direction : input;
+    }
+    pin (CLKB) {
+      direction : input;
+    }
+    pin (RA) {
+      direction : input;
+    }
+    pin (RB) {
+      direction : input;
+    }
+    pin (S) {
+      direction : input;
+    }
+    statetable ("CLKA CLKB RA RB S", "enA enB sela2 selb2") {
+      table : "F - - - - : - - H - : H - - - , \
+               F - - - - : - - L - : L - - - , \
+               ~F - H - - : - - - - : L - - - , \
+               ~F - L - - : - - - - : N - - - , \
+               - F - - - : - - - H : - H - - , \
+               - F - - - : - - - L : - L - - , \
+               - ~F - H - : - - - - : - L - - , \
+               - ~F - L - : - - - - : - N - - , \
+               R - L - L : - L - - : - - H - , \
+               R - - - H : - - - - : - - L - , \
+               R - H - - : - - - - : - - L - , \
+               R - - - - : - H - - : - - L - , \
+               ~R - H - - : - - - - : - - L - , \
+               ~R - L - - : - - - - : - - N - , \
+               - R - L H : L - - - : - - - H , \
+               - R - - L : - - - - : - - - L , \
+               - R - H - : - - - - : - - - L , \
+               - R - - - : H - - - : - - - L , \
+               - ~R - H - : - - - - : - - - L , \
+               - ~R - L - : - - - - : - - - N";
+    }
+    pin (GCLK) {
+      direction : output;
+      state_function : "enB*CLKB + enA*CLKA";
+    }
+    pin (enA) {
+      direction : internal;
+      internal_node : "enA";
+    }
+    pin (enB) {
+      direction : internal;
+      internal_node : "enB";
+    }
+    pin (sela2) {
+      direction : internal;
+      internal_node : "sela2";
+    }
+    pin (selb2) {
+      direction : internal;
+      internal_node : "selb2";
+    }
+  }
+  cell (GL) {
+    pin (C) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("C D", "L") {
+      table : "L L : - : L , \
+               L H : - : H , \
+               H - : - : N";
+    }
+    pin (Y) {
+      direction : output;
+      state_function : "C*L";
+    }
+    pin (L) {
+      direction : internal;
+      internal_node : "L";
+    }
+  }
+  cell (MIX) {
+    pin (A) {
+      direction : input;
+    }
+    pin (B) {
+      direction : input;
+    }
+    pin (C) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("C D", "L") {
+      table : "L L : - : L , \
+               L H : - : H , \
+               H - : - : N";
+    }
+    pin (Y) {
+      direction : output;
+      state_function : "C*L";
+    }
+    pin (Z) {
+      direction : output;
+      function : "A*B";
+    }
+    pin (L) {
+      direction : internal;
+      internal_node : "L";
+    }
+  }
+  cell (TRW) {
+    pin (C) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    pin (E) {
+      direction : input;
+    }
+    statetable ("C D", "L") {
+      table : "L L : - : L , \
+               L H : - : H , \
+               H - : - : N";
+    }
+    pin (Z2) {
+      direction : output;
+      state_function : "C*L + E";
+    }
+    pin (L) {
+      direction : internal;
+      internal_node : "L";
+    }
+  }
+  cell (COLL) {
+    pin (A) {
+      direction : input;
+    }
+    pin (Q_st) {
+      direction : input;
+    }
+    statetable ("A Q_st", "Q") {
+      table : "L L : - : L , \
+               L H : - : N , \
+               H L : - : N , \
+               H H : - : H";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+  cell (C2P) {
+    pin (A) {
+      direction : input;
+    }
+    pin (B) {
+      direction : input;
+    }
+    statetable ("A B", "Q") {
+      table : "L L : - : L , \
+               L H : - : N , \
+               H L : - : N , \
+               H H : - : H";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+    pin (Qc) {
+      direction : output;
+      state_function : "Q";
+    }
+    pin (Qn) {
+      direction : output;
+      state_function : "!Q";
+    }
+  }
+  cell (RC2) {
+    pin (A) {
+      direction : input;
+    }
+    pin (B) {
+      direction : input;
+    }
+    pin (R) {
+      direction : input;
+    }
+    statetable ("A B R", "Q") {
+      table : "- - H : - : L , \
+               L L - : - : L , \
+               L H L : - : N , \
+               H L L : - : N , \
+               H H L : - : H";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
+    }
+  }
+}

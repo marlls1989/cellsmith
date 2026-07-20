@@ -6395,7 +6395,7 @@ define_arc \
 define_arc \
 	-prevector_pinlist {G D} \
 	-prevector {11 01 00} \
-	-type combinational \
+	-type edge \
 	-pinlist {G D Q} \
 	-vector {R 0 F} \
 	-when "!D" \
@@ -6404,7 +6404,7 @@ define_arc \
 	{ DLH }
 
 define_arc \
-	-type combinational \
+	-type edge \
 	-prevector_pinlist {G D} \
 	-prevector {10 00 01} \
 	-pinlist {G D Q} \
