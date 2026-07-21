@@ -310,18 +310,13 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // stores/seam scan rather than re-settling.
     let trans = Transitions::build(m);
 
-    // Each candidate's forcing pins (a state var is always a candidate, so this doubles as the forcing
-    // lookup every `W` needs). Computed BEFORE any synthesis, so the seam set — which decides the
-    // fold-eligible internals the drop-loop prefers to shed — is settled first.
+    // Each candidate's forcing pins. Computed BEFORE any synthesis, so the seam set — which decides the
+    // fold-eligible internals the drop-loop prefers to shed — is settled first. Forcing plays no part in
+    // typing; it is consumed only by off-edge synthesis and the seam fixpoint's forcing exemption.
     let forcing_of: Vec<BTreeMap<Symbol, (bool, bool)>> = candidates
         .iter()
         .zip(&aggs)
         .map(|(name, agg)| forcing_pins(m, &trans, name, &agg.moves))
-        .collect();
-    let forcing_by_name: HashMap<&str, &BTreeMap<Symbol, (bool, bool)>> = candidates
-        .iter()
-        .zip(&forcing_of)
-        .map(|(n, f)| (n.as_str(), f))
         .collect();
 
     // Every candidate's raw function δ (state δ then combinational-output δ), for the output CONE
@@ -357,29 +352,42 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
             }
         }
     }
-    // Is the delivered phase (`clock == is_rise`) POPULATED by an eligible state where the latch is NOT
-    // forced? A phase entirely under the latch's own forcing (a reset holding it at a constant) is not
-    // genuine transparency — the constant arrives from the forcing pin, a coexisting combinational arc, not
-    // from the latch opening — so it does not count as the delivered side of a generation. This is what
-    // keeps a clock-DECLARED reset (`RDFF`'s `R`) from reading as a generating edge on the node it clears.
-    let delivered_populated =
-        |w_forcing: &BTreeMap<Symbol, (bool, bool)>, clock: &Symbol, is_rise: bool| -> bool {
-            trans.order.iter().enumerate().any(|(i, s)| {
-                eligible[i]
-                    && s.value_of(clock.as_str()) == Some(is_rise)
-                    && !w_forcing
-                        .iter()
-                        .any(|(p, (a, _))| s.value_of(p.as_str()) == Some(*a))
-            })
-        };
-    // A latch GENERATES on `(K, d)` iff it is opaque at the source level (`!d`), transparent at the
-    // delivered level (`d`) and that delivered phase is populated outside the latch's own forcing region.
-    // It is K-ASSOCIATED when its opacity differs across `K`'s two phases (a real latch on `K` — the
-    // generator that opens on `d`, or the closer that shuts).
+    // TRANSPARENCY of a latch in a `(clock, level)` phase: (a) no live dependency cycle through it at any
+    // eligible stable state of the phase (`!opaque`, UNCHANGED), and (b) its value VARIES across the phase's
+    // eligible stable states. A phase where the latch is one constant everywhere is a clamp, not an opening —
+    // the value arrives regardless, whoever supplies the constant (a reset, or the toggled clock's own
+    // level), so it is not the delivered side of a generation. Conjunct (b) is a plain scan of the eligible
+    // stable-state order; no BDD work. This live-delivered-phase clause is what keeps a clock-DECLARED reset
+    // (`RDFF`'s `R`, pinning `Q` at 0 across its whole phase) from reading as a generating edge, while a
+    // clock-latched constant whose phase does vary (`SETLR`) stays a genuine opening.
+    let transparent = |w: &Symbol, clock: &Symbol, level: bool| -> bool {
+        if opaque_of[&(w.clone(), clock.clone(), level)] {
+            return false;
+        }
+        let mut seen: Option<bool> = None;
+        for (i, s) in trans.order.iter().enumerate() {
+            if !eligible[i] || s.value_of(clock.as_str()) != Some(level) {
+                continue;
+            }
+            let Some(v) = s.value_of(w.as_str()) else {
+                continue;
+            };
+            match seen {
+                None => seen = Some(v),
+                Some(prev) => {
+                    if prev != v {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    };
+    // A latch GENERATES on `(K, d)` iff it is opaque at the source level (`!d`) and transparent at the
+    // delivered level (`d`). It is K-ASSOCIATED when its opacity differs across `K`'s two phases (a real latch
+    // on `K` — the generator that opens on `d`, or the closer that shuts).
     let generates = |w: &Symbol, clock: &Symbol, is_rise: bool| -> bool {
-        opaque_of[&(w.clone(), clock.clone(), !is_rise)]
-            && !opaque_of[&(w.clone(), clock.clone(), is_rise)]
-            && delivered_populated(forcing_by_name[w.as_str()], clock, is_rise)
+        opaque_of[&(w.clone(), clock.clone(), !is_rise)] && transparent(w, clock, is_rise)
     };
     let k_assoc = |w: &Symbol, clock: &Symbol| -> bool {
         opaque_of[&(w.clone(), clock.clone(), false)]
