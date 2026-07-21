@@ -31,6 +31,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The Liberty emitter classifies each sequential cell's output pins independently.
+  An output that **is** a state variable emits `internal_node`, one that **depends
+  on** a state variable emits `state_function`, and one combinational over inputs
+  only emits plain `function` — previously any cell with a state-holding element
+  routed all of its outputs through `state_function`, so an inputs-only output
+  alongside a state element (e.g. `Z = A*B` next to a latch) was mislabelled. State
+  variables now use their own name as their state-table node, dropping the
+  emission-time `{name}_st` alias, and the `inverted_output` attribute and its
+  projection special-case are removed: a feedthrough or inversion of a single state
+  node (`Qn = "!Q"`) renders as `state_function` like any other function of state.
+  The emitted SOP strings are unchanged; only the attribute key each output carries
+  is chosen correctly. Confined to the Liberty emitter.
 - `--no-when` is suppression-only: it omits the `-when` line from each arc and does nothing else, so
   every derived arc emits in both modes and the output differs from the default solely by the absent
   `-when` conditions. Overlapping arcs and same-vector siblings that differ only in internal state or
