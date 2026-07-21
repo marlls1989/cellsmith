@@ -514,7 +514,18 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLK D} \
-	-prevector {01} \
+	-prevector {00 10 00 01} \
+	-type combinational \
+	-pinlist {CLK D M Q} \
+	-vector {0 F F X} \
+	-when "!CLK" \
+	-related_pin D \
+	-pin M \
+	{ EMDFF }
+
+define_arc \
+	-prevector_pinlist {CLK D} \
+	-prevector {01 11 01} \
 	-type combinational \
 	-pinlist {CLK D M Q} \
 	-vector {0 F F X} \
@@ -526,7 +537,18 @@ define_arc \
 define_arc \
 	-type combinational \
 	-prevector_pinlist {CLK D} \
-	-prevector {00} \
+	-prevector {00 10 00} \
+	-pinlist {CLK D M Q} \
+	-vector {0 R R X} \
+	-when "!CLK" \
+	-related_pin D \
+	-pin M \
+	{ EMDFF }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {CLK D} \
+	-prevector {01 11 01 00} \
 	-pinlist {CLK D M Q} \
 	-vector {0 R R X} \
 	-when "!CLK" \
@@ -684,7 +706,18 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLK D} \
-	-prevector {01} \
+	-prevector {00 10 00 01} \
+	-type combinational \
+	-pinlist {CLK D Q T} \
+	-vector {0 F X F} \
+	-when "!CLK" \
+	-related_pin D \
+	-pin T \
+	{ TAPDFF }
+
+define_arc \
+	-prevector_pinlist {CLK D} \
+	-prevector {01 11 01} \
 	-type combinational \
 	-pinlist {CLK D Q T} \
 	-vector {0 F X F} \
@@ -696,7 +729,18 @@ define_arc \
 define_arc \
 	-type combinational \
 	-prevector_pinlist {CLK D} \
-	-prevector {00} \
+	-prevector {00 10 00} \
+	-pinlist {CLK D Q T} \
+	-vector {0 R X R} \
+	-when "!CLK" \
+	-related_pin D \
+	-pin T \
+	{ TAPDFF }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {CLK D} \
+	-prevector {01 11 01 00} \
 	-pinlist {CLK D Q T} \
 	-vector {0 R X R} \
 	-when "!CLK" \
@@ -811,16 +855,6 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D} \
-	-prevector {01 11 10} \
-	-pinlist {CLK D Q} \
-	-vector {F 0 0} \
-	-when "!D*!Q" \
-	-pin CLK \
-	{ IDFF }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D} \
 	-prevector {00 10} \
 	-pinlist {CLK D Q} \
 	-vector {F 0 1} \
@@ -831,10 +865,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D} \
-	-prevector {01 11} \
+	-prevector {01 11 10} \
 	-pinlist {CLK D Q} \
-	-vector {F 1 0} \
-	-when "D*!Q" \
+	-vector {F 0 0} \
+	-when "!D*!Q" \
 	-pin CLK \
 	{ IDFF }
 
@@ -845,6 +879,16 @@ define_arc \
 	-pinlist {CLK D Q} \
 	-vector {F 1 1} \
 	-when "D*Q" \
+	-pin CLK \
+	{ IDFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D} \
+	-prevector {01 11} \
+	-pinlist {CLK D Q} \
+	-vector {F 1 0} \
+	-when "D*!Q" \
 	-pin CLK \
 	{ IDFF }
 
@@ -891,20 +935,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D} \
-	-prevector {01 11} \
+	-prevector {00 10 11} \
 	-pinlist {CLK D Q} \
-	-vector {1 F 0} \
-	-when "CLK*!Q" \
+	-vector {1 F 1} \
+	-when "CLK*Q" \
 	-pin D \
 	{ IDFF }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D} \
-	-prevector {00 10 11} \
+	-prevector {01 11} \
 	-pinlist {CLK D Q} \
-	-vector {1 F 1} \
-	-when "CLK*Q" \
+	-vector {1 F 0} \
+	-when "CLK*!Q" \
 	-pin D \
 	{ IDFF }
 
@@ -931,20 +975,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D} \
-	-prevector {01 11 10} \
+	-prevector {00 10} \
 	-pinlist {CLK D Q} \
-	-vector {1 R 0} \
-	-when "CLK*!Q" \
+	-vector {1 R 1} \
+	-when "CLK*Q" \
 	-pin D \
 	{ IDFF }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D} \
-	-prevector {00 10} \
+	-prevector {01 11 10} \
 	-pinlist {CLK D Q} \
-	-vector {1 R 1} \
-	-when "CLK*Q" \
+	-vector {1 R 0} \
+	-when "CLK*!Q" \
 	-pin D \
 	{ IDFF }
 
@@ -1193,20 +1237,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK R} \
-	-prevector {01 00 10} \
+	-prevector {11} \
 	-pinlist {CLK R Q} \
-	-vector {F 0 1} \
-	-when "Q*!R" \
+	-vector {F 1 0} \
+	-when "!Q*R" \
 	-pin CLK \
 	{ TFF }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK R} \
-	-prevector {11} \
+	-prevector {01 00 10} \
 	-pinlist {CLK R Q} \
-	-vector {F 1 0} \
-	-when "!Q*R" \
+	-vector {F 0 1} \
+	-when "Q*!R" \
 	-pin CLK \
 	{ TFF }
 
@@ -1509,20 +1553,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110 100} \
+	-prevector {101} \
 	-pinlist {CLK D R Q} \
-	-vector {F 0 0 1} \
-	-when "!D*Q*!R" \
+	-vector {F 0 1 0} \
+	-when "!D*!Q*R" \
 	-pin CLK \
 	{ MOR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {101} \
+	-prevector {010 110 100} \
 	-pinlist {CLK D R Q} \
-	-vector {F 0 1 0} \
-	-when "!D*!Q*R" \
+	-vector {F 0 0 1} \
+	-when "!D*Q*!R" \
 	-pin CLK \
 	{ MOR }
 
@@ -1539,20 +1583,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110} \
+	-prevector {111} \
 	-pinlist {CLK D R Q} \
-	-vector {F 1 0 1} \
-	-when "D*Q*!R" \
+	-vector {F 1 1 0} \
+	-when "D*!Q*R" \
 	-pin CLK \
 	{ MOR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {111} \
+	-prevector {010 110} \
 	-pinlist {CLK D R Q} \
-	-vector {F 1 1 0} \
-	-when "D*!Q*R" \
+	-vector {F 1 0 1} \
+	-when "D*Q*!R" \
 	-pin CLK \
 	{ MOR }
 
@@ -1579,16 +1623,6 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110 010} \
-	-pinlist {CLK D R Q} \
-	-vector {R 1 0 1} \
-	-when "D*Q*!R" \
-	-pin CLK \
-	{ MOR }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D R} \
 	-prevector {111 011} \
 	-pinlist {CLK D R Q} \
 	-vector {R 1 1 0} \
@@ -1599,21 +1633,11 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {111 011 010} \
-	-pinlist {CLK D R Q} \
-	-vector {0 F 0 0} \
-	-when "!CLK*!Q*!R" \
-	-pin D \
-	{ MOR }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D R} \
 	-prevector {010 110 010} \
 	-pinlist {CLK D R Q} \
-	-vector {0 F 0 1} \
-	-when "!CLK*Q*!R" \
-	-pin D \
+	-vector {R 1 0 1} \
+	-when "D*Q*!R" \
+	-pin CLK \
 	{ MOR }
 
 define_arc \
@@ -1639,20 +1663,30 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {111 110} \
+	-prevector {111 011 010} \
 	-pinlist {CLK D R Q} \
-	-vector {1 F 0 0} \
-	-when "CLK*!Q*!R" \
+	-vector {0 F 0 0} \
+	-when "!CLK*!Q*!R" \
 	-pin D \
 	{ MOR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110} \
+	-prevector {010 110 010} \
 	-pinlist {CLK D R Q} \
-	-vector {1 F 0 1} \
-	-when "CLK*Q*!R" \
+	-vector {0 F 0 1} \
+	-when "!CLK*Q*!R" \
+	-pin D \
+	{ MOR }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D R} \
+	-prevector {111 110} \
+	-pinlist {CLK D R Q} \
+	-vector {1 F 0 0} \
+	-when "CLK*!Q*!R" \
 	-pin D \
 	{ MOR }
 
@@ -1669,6 +1703,16 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
+	-prevector {010 110} \
+	-pinlist {CLK D R Q} \
+	-vector {1 F 0 1} \
+	-when "CLK*Q*!R" \
+	-pin D \
+	{ MOR }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D R} \
 	-prevector {000 100 000} \
 	-pinlist {CLK D R Q} \
 	-vector {0 R 0 0} \
@@ -1679,20 +1723,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110 010 000} \
+	-prevector {101 001} \
 	-pinlist {CLK D R Q} \
-	-vector {0 R 0 1} \
-	-when "!CLK*Q*!R" \
+	-vector {0 R 1 0} \
+	-when "!CLK*!Q*R" \
 	-pin D \
 	{ MOR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {101 001} \
+	-prevector {010 110 010 000} \
 	-pinlist {CLK D R Q} \
-	-vector {0 R 1 0} \
-	-when "!CLK*!Q*R" \
+	-vector {0 R 0 1} \
+	-when "!CLK*Q*!R" \
 	-pin D \
 	{ MOR }
 
@@ -1719,20 +1763,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110 100} \
+	-prevector {101} \
 	-pinlist {CLK D R Q} \
-	-vector {1 R 0 1} \
-	-when "CLK*Q*!R" \
+	-vector {1 R 1 0} \
+	-when "CLK*!Q*R" \
 	-pin D \
 	{ MOR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {101} \
+	-prevector {010 110 100} \
 	-pinlist {CLK D R Q} \
-	-vector {1 R 1 0} \
-	-when "CLK*!Q*R" \
+	-vector {1 R 0 1} \
+	-when "CLK*Q*!R" \
 	-pin D \
 	{ MOR }
 
@@ -1941,20 +1985,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110 100} \
+	-prevector {101} \
 	-pinlist {CLK D R Q} \
-	-vector {F 0 0 1} \
-	-when "!D*Q*!R" \
+	-vector {F 0 1 0} \
+	-when "!D*!Q*R" \
 	-pin CLK \
 	{ MORA }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {101} \
+	-prevector {010 110 100} \
 	-pinlist {CLK D R Q} \
-	-vector {F 0 1 0} \
-	-when "!D*!Q*R" \
+	-vector {F 0 0 1} \
+	-when "!D*Q*!R" \
 	-pin CLK \
 	{ MORA }
 
@@ -1971,20 +2015,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110} \
+	-prevector {111} \
 	-pinlist {CLK D R Q} \
-	-vector {F 1 0 1} \
-	-when "D*Q*!R" \
+	-vector {F 1 1 0} \
+	-when "D*!Q*R" \
 	-pin CLK \
 	{ MORA }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {111} \
+	-prevector {010 110} \
 	-pinlist {CLK D R Q} \
-	-vector {F 1 1 0} \
-	-when "D*!Q*R" \
+	-vector {F 1 0 1} \
+	-when "D*Q*!R" \
 	-pin CLK \
 	{ MORA }
 
@@ -2011,16 +2055,6 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110 010} \
-	-pinlist {CLK D R Q} \
-	-vector {R 1 0 1} \
-	-when "D*Q*!R" \
-	-pin CLK \
-	{ MORA }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D R} \
 	-prevector {111 011} \
 	-pinlist {CLK D R Q} \
 	-vector {R 1 1 0} \
@@ -2031,21 +2065,11 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {111 011 010} \
-	-pinlist {CLK D R Q} \
-	-vector {0 F 0 0} \
-	-when "!CLK*!Q*!R" \
-	-pin D \
-	{ MORA }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D R} \
 	-prevector {010 110 010} \
 	-pinlist {CLK D R Q} \
-	-vector {0 F 0 1} \
-	-when "!CLK*Q*!R" \
-	-pin D \
+	-vector {R 1 0 1} \
+	-when "D*Q*!R" \
+	-pin CLK \
 	{ MORA }
 
 define_arc \
@@ -2071,20 +2095,30 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {111 110} \
+	-prevector {111 011 010} \
 	-pinlist {CLK D R Q} \
-	-vector {1 F 0 0} \
-	-when "CLK*!Q*!R" \
+	-vector {0 F 0 0} \
+	-when "!CLK*!Q*!R" \
 	-pin D \
 	{ MORA }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110} \
+	-prevector {010 110 010} \
 	-pinlist {CLK D R Q} \
-	-vector {1 F 0 1} \
-	-when "CLK*Q*!R" \
+	-vector {0 F 0 1} \
+	-when "!CLK*Q*!R" \
+	-pin D \
+	{ MORA }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D R} \
+	-prevector {111 110} \
+	-pinlist {CLK D R Q} \
+	-vector {1 F 0 0} \
+	-when "CLK*!Q*!R" \
 	-pin D \
 	{ MORA }
 
@@ -2101,6 +2135,16 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
+	-prevector {010 110} \
+	-pinlist {CLK D R Q} \
+	-vector {1 F 0 1} \
+	-when "CLK*Q*!R" \
+	-pin D \
+	{ MORA }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D R} \
 	-prevector {000 100 000} \
 	-pinlist {CLK D R Q} \
 	-vector {0 R 0 0} \
@@ -2111,20 +2155,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110 010 000} \
+	-prevector {101 001} \
 	-pinlist {CLK D R Q} \
-	-vector {0 R 0 1} \
-	-when "!CLK*Q*!R" \
+	-vector {0 R 1 0} \
+	-when "!CLK*!Q*R" \
 	-pin D \
 	{ MORA }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {101 001} \
+	-prevector {010 110 010 000} \
 	-pinlist {CLK D R Q} \
-	-vector {0 R 1 0} \
-	-when "!CLK*!Q*R" \
+	-vector {0 R 0 1} \
+	-when "!CLK*Q*!R" \
 	-pin D \
 	{ MORA }
 
@@ -2151,20 +2195,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110 100} \
+	-prevector {101} \
 	-pinlist {CLK D R Q} \
-	-vector {1 R 0 1} \
-	-when "CLK*Q*!R" \
+	-vector {1 R 1 0} \
+	-when "CLK*!Q*R" \
 	-pin D \
 	{ MORA }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {101} \
+	-prevector {010 110 100} \
 	-pinlist {CLK D R Q} \
-	-vector {1 R 1 0} \
-	-when "CLK*!Q*R" \
+	-vector {1 R 0 1} \
+	-when "CLK*Q*!R" \
 	-pin D \
 	{ MORA }
 
@@ -2373,20 +2417,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110 100} \
+	-prevector {101} \
 	-pinlist {CLK D R Q} \
-	-vector {F 0 0 1} \
-	-when "!D*Q*!R" \
+	-vector {F 0 1 0} \
+	-when "!D*!Q*R" \
 	-pin CLK \
 	{ BR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {101} \
+	-prevector {010 110 100} \
 	-pinlist {CLK D R Q} \
-	-vector {F 0 1 0} \
-	-when "!D*!Q*R" \
+	-vector {F 0 0 1} \
+	-when "!D*Q*!R" \
 	-pin CLK \
 	{ BR }
 
@@ -2403,20 +2447,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110} \
+	-prevector {111} \
 	-pinlist {CLK D R Q} \
-	-vector {F 1 0 1} \
-	-when "D*Q*!R" \
+	-vector {F 1 1 0} \
+	-when "D*!Q*R" \
 	-pin CLK \
 	{ BR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {111} \
+	-prevector {010 110} \
 	-pinlist {CLK D R Q} \
-	-vector {F 1 1 0} \
-	-when "D*!Q*R" \
+	-vector {F 1 0 1} \
+	-when "D*Q*!R" \
 	-pin CLK \
 	{ BR }
 
@@ -2443,6 +2487,16 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
+	-prevector {011} \
+	-pinlist {CLK D R Q} \
+	-vector {R 1 1 0} \
+	-when "D*!Q*R" \
+	-pin CLK \
+	{ BR }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D R} \
 	-prevector {010 110 010} \
 	-pinlist {CLK D R Q} \
 	-vector {R 1 0 1} \
@@ -2455,9 +2509,9 @@ define_arc \
 	-prevector_pinlist {CLK D R} \
 	-prevector {011} \
 	-pinlist {CLK D R Q} \
-	-vector {R 1 1 0} \
-	-when "D*!Q*R" \
-	-pin CLK \
+	-vector {0 F 1 0} \
+	-when "!CLK*!Q*R" \
+	-pin D \
 	{ BR }
 
 define_arc \
@@ -2483,30 +2537,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {011} \
-	-pinlist {CLK D R Q} \
-	-vector {0 F 1 0} \
-	-when "!CLK*!Q*R" \
-	-pin D \
-	{ BR }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D R} \
 	-prevector {111 110} \
 	-pinlist {CLK D R Q} \
 	-vector {1 F 0 0} \
 	-when "CLK*!Q*!R" \
-	-pin D \
-	{ BR }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D R} \
-	-prevector {010 110} \
-	-pinlist {CLK D R Q} \
-	-vector {1 F 0 1} \
-	-when "CLK*Q*!R" \
 	-pin D \
 	{ BR }
 
@@ -2523,20 +2557,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {001 000} \
+	-prevector {010 110} \
 	-pinlist {CLK D R Q} \
-	-vector {0 R 0 0} \
-	-when "!CLK*!Q*!R" \
+	-vector {1 F 0 1} \
+	-when "CLK*Q*!R" \
 	-pin D \
 	{ BR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110 010 000} \
+	-prevector {001 000} \
 	-pinlist {CLK D R Q} \
-	-vector {0 R 0 1} \
-	-when "!CLK*Q*!R" \
+	-vector {0 R 0 0} \
+	-when "!CLK*!Q*!R" \
 	-pin D \
 	{ BR }
 
@@ -2553,6 +2587,16 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
+	-prevector {010 110 010 000} \
+	-pinlist {CLK D R Q} \
+	-vector {0 R 0 1} \
+	-when "!CLK*Q*!R" \
+	-pin D \
+	{ BR }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D R} \
 	-prevector {101 100} \
 	-pinlist {CLK D R Q} \
 	-vector {1 R 0 0} \
@@ -2563,20 +2607,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110 100} \
+	-prevector {101} \
 	-pinlist {CLK D R Q} \
-	-vector {1 R 0 1} \
-	-when "CLK*Q*!R" \
+	-vector {1 R 1 0} \
+	-when "CLK*!Q*R" \
 	-pin D \
 	{ BR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {101} \
+	-prevector {010 110 100} \
 	-pinlist {CLK D R Q} \
-	-vector {1 R 1 0} \
-	-when "CLK*!Q*R" \
+	-vector {1 R 0 1} \
+	-when "CLK*Q*!R" \
 	-pin D \
 	{ BR }
 
@@ -2745,20 +2789,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110 100} \
+	-prevector {101} \
 	-pinlist {CLK D R Q} \
-	-vector {F 0 0 1} \
-	-when "!D*Q*!R" \
+	-vector {F 0 1 0} \
+	-when "!D*!Q*R" \
 	-pin CLK \
 	{ SYNCR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {101} \
+	-prevector {010 110 100} \
 	-pinlist {CLK D R Q} \
-	-vector {F 0 1 0} \
-	-when "!D*!Q*R" \
+	-vector {F 0 0 1} \
+	-when "!D*Q*!R" \
 	-pin CLK \
 	{ SYNCR }
 
@@ -2775,20 +2819,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110} \
+	-prevector {111} \
 	-pinlist {CLK D R Q} \
-	-vector {F 1 0 1} \
-	-when "D*Q*!R" \
+	-vector {F 1 1 0} \
+	-when "D*!Q*R" \
 	-pin CLK \
 	{ SYNCR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {111} \
+	-prevector {010 110} \
 	-pinlist {CLK D R Q} \
-	-vector {F 1 1 0} \
-	-when "D*!Q*R" \
+	-vector {F 1 0 1} \
+	-when "D*Q*!R" \
 	-pin CLK \
 	{ SYNCR }
 
@@ -2815,6 +2859,16 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
+	-prevector {011} \
+	-pinlist {CLK D R Q} \
+	-vector {R 1 1 0} \
+	-when "D*!Q*R" \
+	-pin CLK \
+	{ SYNCR }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D R} \
 	-prevector {010 110 010} \
 	-pinlist {CLK D R Q} \
 	-vector {R 1 0 1} \
@@ -2827,9 +2881,9 @@ define_arc \
 	-prevector_pinlist {CLK D R} \
 	-prevector {011} \
 	-pinlist {CLK D R Q} \
-	-vector {R 1 1 0} \
-	-when "D*!Q*R" \
-	-pin CLK \
+	-vector {0 F 1 0} \
+	-when "!CLK*!Q*R" \
+	-pin D \
 	{ SYNCR }
 
 define_arc \
@@ -2855,30 +2909,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {011} \
-	-pinlist {CLK D R Q} \
-	-vector {0 F 1 0} \
-	-when "!CLK*!Q*R" \
-	-pin D \
-	{ SYNCR }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D R} \
 	-prevector {111 110} \
 	-pinlist {CLK D R Q} \
 	-vector {1 F 0 0} \
 	-when "CLK*!Q*!R" \
-	-pin D \
-	{ SYNCR }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D R} \
-	-prevector {010 110} \
-	-pinlist {CLK D R Q} \
-	-vector {1 F 0 1} \
-	-when "CLK*Q*!R" \
 	-pin D \
 	{ SYNCR }
 
@@ -2895,20 +2929,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {001 000} \
+	-prevector {010 110} \
 	-pinlist {CLK D R Q} \
-	-vector {0 R 0 0} \
-	-when "!CLK*!Q*!R" \
+	-vector {1 F 0 1} \
+	-when "CLK*Q*!R" \
 	-pin D \
 	{ SYNCR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110 010 000} \
+	-prevector {001 000} \
 	-pinlist {CLK D R Q} \
-	-vector {0 R 0 1} \
-	-when "!CLK*Q*!R" \
+	-vector {0 R 0 0} \
+	-when "!CLK*!Q*!R" \
 	-pin D \
 	{ SYNCR }
 
@@ -2925,6 +2959,16 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
+	-prevector {010 110 010 000} \
+	-pinlist {CLK D R Q} \
+	-vector {0 R 0 1} \
+	-when "!CLK*Q*!R" \
+	-pin D \
+	{ SYNCR }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D R} \
 	-prevector {101 100} \
 	-pinlist {CLK D R Q} \
 	-vector {1 R 0 0} \
@@ -2935,20 +2979,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110 100} \
+	-prevector {101} \
 	-pinlist {CLK D R Q} \
-	-vector {1 R 0 1} \
-	-when "CLK*Q*!R" \
+	-vector {1 R 1 0} \
+	-when "CLK*!Q*R" \
 	-pin D \
 	{ SYNCR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {101} \
+	-prevector {010 110 100} \
 	-pinlist {CLK D R Q} \
-	-vector {1 R 1 0} \
-	-when "CLK*!Q*R" \
+	-vector {1 R 0 1} \
+	-when "CLK*Q*!R" \
 	-pin D \
 	{ SYNCR }
 
@@ -3161,20 +3205,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100 1000} \
+	-prevector {1010} \
 	-pinlist {CLK D R G Q} \
-	-vector {F 0 0 0 1} \
-	-when "!D*!G*Q*!R" \
+	-vector {F 0 1 0 0} \
+	-when "!D*!G*!Q*R" \
 	-pin CLK \
 	{ SYNCRG }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1010} \
+	-prevector {0100 1100 1000} \
 	-pinlist {CLK D R G Q} \
-	-vector {F 0 1 0 0} \
-	-when "!D*!G*!Q*R" \
+	-vector {F 0 0 0 1} \
+	-when "!D*!G*Q*!R" \
 	-pin CLK \
 	{ SYNCRG }
 
@@ -3211,20 +3255,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100} \
+	-prevector {1110} \
 	-pinlist {CLK D R G Q} \
-	-vector {F 1 0 0 1} \
-	-when "D*!G*Q*!R" \
+	-vector {F 1 1 0 0} \
+	-when "D*!G*!Q*R" \
 	-pin CLK \
 	{ SYNCRG }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1110} \
+	-prevector {0100 1100} \
 	-pinlist {CLK D R G Q} \
-	-vector {F 1 1 0 0} \
-	-when "D*!G*!Q*R" \
+	-vector {F 1 0 0 1} \
+	-when "D*!G*Q*!R" \
 	-pin CLK \
 	{ SYNCRG }
 
@@ -3291,20 +3335,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100 0100} \
+	-prevector {0110} \
 	-pinlist {CLK D R G Q} \
-	-vector {R 1 0 0 1} \
-	-when "D*!G*Q*!R" \
+	-vector {R 1 1 0 0} \
+	-when "D*!G*!Q*R" \
 	-pin CLK \
 	{ SYNCRG }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0110} \
+	-prevector {0100 1100 0100} \
 	-pinlist {CLK D R G Q} \
-	-vector {R 1 1 0 0} \
-	-when "D*!G*!Q*R" \
+	-vector {R 1 0 0 1} \
+	-when "D*!G*Q*!R" \
 	-pin CLK \
 	{ SYNCRG }
 
@@ -3331,6 +3375,16 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
+	-prevector {0110} \
+	-pinlist {CLK D R G Q} \
+	-vector {0 F 1 0 0} \
+	-when "!CLK*!G*!Q*R" \
+	-pin D \
+	{ SYNCRG }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D R G} \
 	-prevector {0110 0100} \
 	-pinlist {CLK D R G Q} \
 	-vector {0 F 0 0 0} \
@@ -3345,16 +3399,6 @@ define_arc \
 	-pinlist {CLK D R G Q} \
 	-vector {0 F 0 0 1} \
 	-when "!CLK*!G*Q*!R" \
-	-pin D \
-	{ SYNCRG }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D R G} \
-	-prevector {0110} \
-	-pinlist {CLK D R G Q} \
-	-vector {0 F 1 0 0} \
-	-when "!CLK*!G*!Q*R" \
 	-pin D \
 	{ SYNCRG }
 
@@ -3391,20 +3435,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100} \
+	-prevector {1110} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 F 0 0 1} \
-	-when "CLK*!G*Q*!R" \
+	-vector {1 F 1 0 0} \
+	-when "CLK*!G*!Q*R" \
 	-pin D \
 	{ SYNCRG }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1110} \
+	-prevector {0100 1100} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 F 1 0 0} \
-	-when "CLK*!G*!Q*R" \
+	-vector {1 F 0 0 1} \
+	-when "CLK*!G*Q*!R" \
 	-pin D \
 	{ SYNCRG }
 
@@ -3441,20 +3485,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100 0100 0000} \
+	-prevector {0010} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 R 0 0 1} \
-	-when "!CLK*!G*Q*!R" \
+	-vector {0 R 1 0 0} \
+	-when "!CLK*!G*!Q*R" \
 	-pin D \
 	{ SYNCRG }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0010} \
+	-prevector {0100 1100 0100 0000} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 R 1 0 0} \
-	-when "!CLK*!G*!Q*R" \
+	-vector {0 R 0 0 1} \
+	-when "!CLK*!G*Q*!R" \
 	-pin D \
 	{ SYNCRG }
 
@@ -3491,20 +3535,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100 1000} \
+	-prevector {1010} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 R 0 0 1} \
-	-when "CLK*!G*Q*!R" \
+	-vector {1 R 1 0 0} \
+	-when "CLK*!G*!Q*R" \
 	-pin D \
 	{ SYNCRG }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1010} \
+	-prevector {0100 1100 1000} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 R 1 0 0} \
-	-when "CLK*!G*!Q*R" \
+	-vector {1 R 0 0 1} \
+	-when "CLK*!G*Q*!R" \
 	-pin D \
 	{ SYNCRG }
 
@@ -3631,20 +3675,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0110 0100} \
+	-prevector {0110} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 1 0 R 0} \
-	-when "!CLK*D*!Q*!R" \
+	-vector {0 1 1 R 0} \
+	-when "!CLK*D*!Q*R" \
 	-pin G \
 	{ SYNCRG }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0110} \
+	-prevector {0110 0100} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 1 1 R 0} \
-	-when "!CLK*D*!Q*R" \
+	-vector {0 1 0 R 0} \
+	-when "!CLK*D*!Q*!R" \
 	-pin G \
 	{ SYNCRG }
 
@@ -4029,20 +4073,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100 1000} \
+	-prevector {1011 1010} \
 	-pinlist {CLK D R G Q} \
-	-vector {F 0 0 0 1} \
-	-when "!D*!G*Q*!R" \
+	-vector {F 0 1 0 0} \
+	-when "!D*!G*!Q*R" \
 	-pin CLK \
 	{ GATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1011 1010} \
+	-prevector {0100 1100 1000} \
 	-pinlist {CLK D R G Q} \
-	-vector {F 0 1 0 0} \
-	-when "!D*!G*!Q*R" \
+	-vector {F 0 0 0 1} \
+	-when "!D*!G*Q*!R" \
 	-pin CLK \
 	{ GATEDR }
 
@@ -4069,20 +4113,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0101 1101 1001} \
+	-prevector {1011} \
 	-pinlist {CLK D R G Q} \
-	-vector {F 0 0 1 1} \
-	-when "!D*G*Q*!R" \
+	-vector {F 0 1 1 0} \
+	-when "!D*G*!Q*R" \
 	-pin CLK \
 	{ GATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1011} \
+	-prevector {0101 1101 1001} \
 	-pinlist {CLK D R G Q} \
-	-vector {F 0 1 1 0} \
-	-when "!D*G*!Q*R" \
+	-vector {F 0 0 1 1} \
+	-when "!D*G*Q*!R" \
 	-pin CLK \
 	{ GATEDR }
 
@@ -4099,20 +4143,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100} \
+	-prevector {1111 1110} \
 	-pinlist {CLK D R G Q} \
-	-vector {F 1 0 0 1} \
-	-when "D*!G*Q*!R" \
+	-vector {F 1 1 0 0} \
+	-when "D*!G*!Q*R" \
 	-pin CLK \
 	{ GATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1111 1110} \
+	-prevector {0100 1100} \
 	-pinlist {CLK D R G Q} \
-	-vector {F 1 1 0 0} \
-	-when "D*!G*!Q*R" \
+	-vector {F 1 0 0 1} \
+	-when "D*!G*Q*!R" \
 	-pin CLK \
 	{ GATEDR }
 
@@ -4139,20 +4183,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0101 1101} \
+	-prevector {1111} \
 	-pinlist {CLK D R G Q} \
-	-vector {F 1 0 1 1} \
-	-when "D*G*Q*!R" \
+	-vector {F 1 1 1 0} \
+	-when "D*G*!Q*R" \
 	-pin CLK \
 	{ GATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1111} \
+	-prevector {0101 1101} \
 	-pinlist {CLK D R G Q} \
-	-vector {F 1 1 1 0} \
-	-when "D*G*!Q*R" \
+	-vector {F 1 0 1 1} \
+	-when "D*G*Q*!R" \
 	-pin CLK \
 	{ GATEDR }
 
@@ -4219,20 +4263,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0101 1101 0101} \
+	-prevector {0111} \
 	-pinlist {CLK D R G Q} \
-	-vector {R 1 0 1 1} \
-	-when "D*G*Q*!R" \
+	-vector {R 1 1 1 0} \
+	-when "D*G*!Q*R" \
 	-pin CLK \
 	{ GATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0111} \
+	-prevector {0101 1101 0101} \
 	-pinlist {CLK D R G Q} \
-	-vector {R 1 1 1 0} \
-	-when "D*G*!Q*R" \
+	-vector {R 1 0 1 1} \
+	-when "D*G*Q*!R" \
 	-pin CLK \
 	{ GATEDR }
 
@@ -4249,16 +4293,6 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100 0100} \
-	-pinlist {CLK D R G Q} \
-	-vector {0 F 0 0 1} \
-	-when "!CLK*!G*Q*!R" \
-	-pin D \
-	{ GATEDR }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D R G} \
 	-prevector {0111 0110} \
 	-pinlist {CLK D R G Q} \
 	-vector {0 F 1 0 0} \
@@ -4269,10 +4303,30 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
+	-prevector {0100 1100 0100} \
+	-pinlist {CLK D R G Q} \
+	-vector {0 F 0 0 1} \
+	-when "!CLK*!G*Q*!R" \
+	-pin D \
+	{ GATEDR }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D R G} \
 	-prevector {0110 1110 0110} \
 	-pinlist {CLK D R G Q} \
 	-vector {0 F 1 0 1} \
 	-when "!CLK*!G*Q*R" \
+	-pin D \
+	{ GATEDR }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D R G} \
+	-prevector {0111} \
+	-pinlist {CLK D R G Q} \
+	-vector {0 F 1 1 0} \
+	-when "!CLK*G*!Q*R" \
 	-pin D \
 	{ GATEDR }
 
@@ -4299,16 +4353,6 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0111} \
-	-pinlist {CLK D R G Q} \
-	-vector {0 F 1 1 0} \
-	-when "!CLK*G*!Q*R" \
-	-pin D \
-	{ GATEDR }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D R G} \
 	-prevector {1111 1101 1100} \
 	-pinlist {CLK D R G Q} \
 	-vector {1 F 0 0 0} \
@@ -4319,20 +4363,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100} \
+	-prevector {1111 1110} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 F 0 0 1} \
-	-when "CLK*!G*Q*!R" \
+	-vector {1 F 1 0 0} \
+	-when "CLK*!G*!Q*R" \
 	-pin D \
 	{ GATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1111 1110} \
+	-prevector {0100 1100} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 F 1 0 0} \
-	-when "CLK*!G*!Q*R" \
+	-vector {1 F 0 0 1} \
+	-when "CLK*!G*Q*!R" \
 	-pin D \
 	{ GATEDR }
 
@@ -4359,20 +4403,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0101 1101} \
+	-prevector {1111} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 F 0 1 1} \
-	-when "CLK*G*Q*!R" \
+	-vector {1 F 1 1 0} \
+	-when "CLK*G*!Q*R" \
 	-pin D \
 	{ GATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1111} \
+	-prevector {0101 1101} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 F 1 1 0} \
-	-when "CLK*G*!Q*R" \
+	-vector {1 F 0 1 1} \
+	-when "CLK*G*Q*!R" \
 	-pin D \
 	{ GATEDR }
 
@@ -4389,20 +4433,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100 0100 0000} \
+	-prevector {0011 0010} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 R 0 0 1} \
-	-when "!CLK*!G*Q*!R" \
+	-vector {0 R 1 0 0} \
+	-when "!CLK*!G*!Q*R" \
 	-pin D \
 	{ GATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0011 0010} \
+	-prevector {0100 1100 0100 0000} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 R 1 0 0} \
-	-when "!CLK*!G*!Q*R" \
+	-vector {0 R 0 0 1} \
+	-when "!CLK*!G*Q*!R" \
 	-pin D \
 	{ GATEDR }
 
@@ -4429,20 +4473,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0101 1101 0101 0001} \
+	-prevector {0011} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 R 0 1 1} \
-	-when "!CLK*G*Q*!R" \
+	-vector {0 R 1 1 0} \
+	-when "!CLK*G*!Q*R" \
 	-pin D \
 	{ GATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0011} \
+	-prevector {0101 1101 0101 0001} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 R 1 1 0} \
-	-when "!CLK*G*!Q*R" \
+	-vector {0 R 0 1 1} \
+	-when "!CLK*G*Q*!R" \
 	-pin D \
 	{ GATEDR }
 
@@ -4459,20 +4503,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100 1000} \
+	-prevector {1011 1010} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 R 0 0 1} \
-	-when "CLK*!G*Q*!R" \
+	-vector {1 R 1 0 0} \
+	-when "CLK*!G*!Q*R" \
 	-pin D \
 	{ GATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1011 1010} \
+	-prevector {0100 1100 1000} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 R 1 0 0} \
-	-when "CLK*!G*!Q*R" \
+	-vector {1 R 0 0 1} \
+	-when "CLK*!G*Q*!R" \
 	-pin D \
 	{ GATEDR }
 
@@ -4499,20 +4543,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0101 1101 1001} \
+	-prevector {1011} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 R 0 1 1} \
-	-when "CLK*G*Q*!R" \
+	-vector {1 R 1 1 0} \
+	-when "CLK*G*!Q*R" \
 	-pin D \
 	{ GATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1011} \
+	-prevector {0101 1101 1001} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 R 1 1 0} \
-	-when "CLK*G*!Q*R" \
+	-vector {1 R 0 1 1} \
+	-when "CLK*G*Q*!R" \
 	-pin D \
 	{ GATEDR }
 
@@ -4529,6 +4573,16 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
+	-prevector {0011} \
+	-pinlist {CLK D R G Q} \
+	-vector {0 0 1 F 0} \
+	-when "!CLK*!D*!Q*R" \
+	-pin G \
+	{ GATEDR }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D R G} \
 	-prevector {0101 1101 0101 0001} \
 	-pinlist {CLK D R G Q} \
 	-vector {0 0 0 F 1} \
@@ -4539,10 +4593,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0011} \
+	-prevector {0111} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 0 1 F 0} \
-	-when "!CLK*!D*!Q*R" \
+	-vector {0 1 1 F 0} \
+	-when "!CLK*D*!Q*R" \
 	-pin G \
 	{ GATEDR }
 
@@ -4569,30 +4623,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0111} \
-	-pinlist {CLK D R G Q} \
-	-vector {0 1 1 F 0} \
-	-when "!CLK*D*!Q*R" \
-	-pin G \
-	{ GATEDR }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D R G} \
 	-prevector {1011 1001} \
 	-pinlist {CLK D R G Q} \
 	-vector {1 0 0 F 0} \
 	-when "CLK*!D*!Q*!R" \
-	-pin G \
-	{ GATEDR }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D R G} \
-	-prevector {0101 1101 1001} \
-	-pinlist {CLK D R G Q} \
-	-vector {1 0 0 F 1} \
-	-when "CLK*!D*Q*!R" \
 	-pin G \
 	{ GATEDR }
 
@@ -4609,20 +4643,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1111 1101} \
+	-prevector {0101 1101 1001} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 1 0 F 0} \
-	-when "CLK*D*!Q*!R" \
+	-vector {1 0 0 F 1} \
+	-when "CLK*!D*Q*!R" \
 	-pin G \
 	{ GATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0101 1101} \
+	-prevector {1111 1101} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 1 0 F 1} \
-	-when "CLK*D*Q*!R" \
+	-vector {1 1 0 F 0} \
+	-when "CLK*D*!Q*!R" \
 	-pin G \
 	{ GATEDR }
 
@@ -4639,20 +4673,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0011 0001 0000} \
+	-prevector {0101 1101} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 0 0 R 0} \
-	-when "!CLK*!D*!Q*!R" \
+	-vector {1 1 0 F 1} \
+	-when "CLK*D*Q*!R" \
 	-pin G \
 	{ GATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100 0100 0000} \
+	-prevector {0011 0001 0000} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 0 0 R 1} \
-	-when "!CLK*!D*Q*!R" \
+	-vector {0 0 0 R 0} \
+	-when "!CLK*!D*!Q*!R" \
 	-pin G \
 	{ GATEDR }
 
@@ -4669,20 +4703,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0111 0101 0100} \
+	-prevector {0100 1100 0100 0000} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 1 0 R 0} \
-	-when "!CLK*D*!Q*!R" \
+	-vector {0 0 0 R 1} \
+	-when "!CLK*!D*Q*!R" \
 	-pin G \
 	{ GATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100 0100} \
+	-prevector {0111 0101 0100} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 1 0 R 1} \
-	-when "!CLK*D*Q*!R" \
+	-vector {0 1 0 R 0} \
+	-when "!CLK*D*!Q*!R" \
 	-pin G \
 	{ GATEDR }
 
@@ -4699,20 +4733,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0000 1000} \
+	-prevector {0100 1100 0100} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 0 0 R 0} \
-	-when "CLK*!D*!Q*!R" \
+	-vector {0 1 0 R 1} \
+	-when "!CLK*D*Q*!R" \
 	-pin G \
 	{ GATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100 1000} \
+	-prevector {0000 1000} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 0 0 R 1} \
-	-when "CLK*!D*Q*!R" \
+	-vector {1 0 0 R 0} \
+	-when "CLK*!D*!Q*!R" \
 	-pin G \
 	{ GATEDR }
 
@@ -4729,6 +4763,16 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
+	-prevector {0100 1100 1000} \
+	-pinlist {CLK D R G Q} \
+	-vector {1 0 0 R 1} \
+	-when "CLK*!D*Q*!R" \
+	-pin G \
+	{ GATEDR }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D R G} \
 	-prevector {1111 1101 1100} \
 	-pinlist {CLK D R G Q} \
 	-vector {1 1 0 R 0} \
@@ -4739,20 +4783,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100} \
+	-prevector {1111 1110} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 1 0 R 1} \
-	-when "CLK*D*Q*!R" \
+	-vector {1 1 1 R 0} \
+	-when "CLK*D*!Q*R" \
 	-pin G \
 	{ GATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1111 1110} \
+	-prevector {0100 1100} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 1 1 R 0} \
-	-when "CLK*D*!Q*R" \
+	-vector {1 1 0 R 1} \
+	-when "CLK*D*Q*!R" \
 	-pin G \
 	{ GATEDR }
 
@@ -5173,20 +5217,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100 1000} \
+	-prevector {1011 1010} \
 	-pinlist {CLK D R G Q} \
-	-vector {F 0 0 0 1} \
-	-when "!D*!G*Q*!R" \
+	-vector {F 0 1 0 0} \
+	-when "!D*!G*!Q*R" \
 	-pin CLK \
 	{ AGATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1011 1010} \
+	-prevector {0100 1100 1000} \
 	-pinlist {CLK D R G Q} \
-	-vector {F 0 1 0 0} \
-	-when "!D*!G*!Q*R" \
+	-vector {F 0 0 0 1} \
+	-when "!D*!G*Q*!R" \
 	-pin CLK \
 	{ AGATEDR }
 
@@ -5213,20 +5257,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0101 1101 1001} \
+	-prevector {1011} \
 	-pinlist {CLK D R G Q} \
-	-vector {F 0 0 1 1} \
-	-when "!D*G*Q*!R" \
+	-vector {F 0 1 1 0} \
+	-when "!D*G*!Q*R" \
 	-pin CLK \
 	{ AGATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1011} \
+	-prevector {0101 1101 1001} \
 	-pinlist {CLK D R G Q} \
-	-vector {F 0 1 1 0} \
-	-when "!D*G*!Q*R" \
+	-vector {F 0 0 1 1} \
+	-when "!D*G*Q*!R" \
 	-pin CLK \
 	{ AGATEDR }
 
@@ -5243,20 +5287,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100} \
+	-prevector {1111 1110} \
 	-pinlist {CLK D R G Q} \
-	-vector {F 1 0 0 1} \
-	-when "D*!G*Q*!R" \
+	-vector {F 1 1 0 0} \
+	-when "D*!G*!Q*R" \
 	-pin CLK \
 	{ AGATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1111 1110} \
+	-prevector {0100 1100} \
 	-pinlist {CLK D R G Q} \
-	-vector {F 1 1 0 0} \
-	-when "D*!G*!Q*R" \
+	-vector {F 1 0 0 1} \
+	-when "D*!G*Q*!R" \
 	-pin CLK \
 	{ AGATEDR }
 
@@ -5283,20 +5327,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0101 1101} \
+	-prevector {1111} \
 	-pinlist {CLK D R G Q} \
-	-vector {F 1 0 1 1} \
-	-when "D*G*Q*!R" \
+	-vector {F 1 1 1 0} \
+	-when "D*G*!Q*R" \
 	-pin CLK \
 	{ AGATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1111} \
+	-prevector {0101 1101} \
 	-pinlist {CLK D R G Q} \
-	-vector {F 1 1 1 0} \
-	-when "D*G*!Q*R" \
+	-vector {F 1 0 1 1} \
+	-when "D*G*Q*!R" \
 	-pin CLK \
 	{ AGATEDR }
 
@@ -5363,20 +5407,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0101 1101 0101} \
+	-prevector {0111} \
 	-pinlist {CLK D R G Q} \
-	-vector {R 1 0 1 1} \
-	-when "D*G*Q*!R" \
+	-vector {R 1 1 1 0} \
+	-when "D*G*!Q*R" \
 	-pin CLK \
 	{ AGATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0111} \
+	-prevector {0101 1101 0101} \
 	-pinlist {CLK D R G Q} \
-	-vector {R 1 1 1 0} \
-	-when "D*G*!Q*R" \
+	-vector {R 1 0 1 1} \
+	-when "D*G*Q*!R" \
 	-pin CLK \
 	{ AGATEDR }
 
@@ -5393,16 +5437,6 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100 0100} \
-	-pinlist {CLK D R G Q} \
-	-vector {0 F 0 0 1} \
-	-when "!CLK*!G*Q*!R" \
-	-pin D \
-	{ AGATEDR }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D R G} \
 	-prevector {0111 0110} \
 	-pinlist {CLK D R G Q} \
 	-vector {0 F 1 0 0} \
@@ -5413,10 +5447,30 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
+	-prevector {0100 1100 0100} \
+	-pinlist {CLK D R G Q} \
+	-vector {0 F 0 0 1} \
+	-when "!CLK*!G*Q*!R" \
+	-pin D \
+	{ AGATEDR }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D R G} \
 	-prevector {0110 1110 0110} \
 	-pinlist {CLK D R G Q} \
 	-vector {0 F 1 0 1} \
 	-when "!CLK*!G*Q*R" \
+	-pin D \
+	{ AGATEDR }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D R G} \
+	-prevector {0111} \
+	-pinlist {CLK D R G Q} \
+	-vector {0 F 1 1 0} \
+	-when "!CLK*G*!Q*R" \
 	-pin D \
 	{ AGATEDR }
 
@@ -5443,16 +5497,6 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0111} \
-	-pinlist {CLK D R G Q} \
-	-vector {0 F 1 1 0} \
-	-when "!CLK*G*!Q*R" \
-	-pin D \
-	{ AGATEDR }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D R G} \
 	-prevector {1111 1101 1100} \
 	-pinlist {CLK D R G Q} \
 	-vector {1 F 0 0 0} \
@@ -5463,20 +5507,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100} \
+	-prevector {1111 1110} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 F 0 0 1} \
-	-when "CLK*!G*Q*!R" \
+	-vector {1 F 1 0 0} \
+	-when "CLK*!G*!Q*R" \
 	-pin D \
 	{ AGATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1111 1110} \
+	-prevector {0100 1100} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 F 1 0 0} \
-	-when "CLK*!G*!Q*R" \
+	-vector {1 F 0 0 1} \
+	-when "CLK*!G*Q*!R" \
 	-pin D \
 	{ AGATEDR }
 
@@ -5503,20 +5547,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0101 1101} \
+	-prevector {1111} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 F 0 1 1} \
-	-when "CLK*G*Q*!R" \
+	-vector {1 F 1 1 0} \
+	-when "CLK*G*!Q*R" \
 	-pin D \
 	{ AGATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1111} \
+	-prevector {0101 1101} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 F 1 1 0} \
-	-when "CLK*G*!Q*R" \
+	-vector {1 F 0 1 1} \
+	-when "CLK*G*Q*!R" \
 	-pin D \
 	{ AGATEDR }
 
@@ -5533,20 +5577,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100 0100 0000} \
+	-prevector {0011 0010} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 R 0 0 1} \
-	-when "!CLK*!G*Q*!R" \
+	-vector {0 R 1 0 0} \
+	-when "!CLK*!G*!Q*R" \
 	-pin D \
 	{ AGATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0011 0010} \
+	-prevector {0100 1100 0100 0000} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 R 1 0 0} \
-	-when "!CLK*!G*!Q*R" \
+	-vector {0 R 0 0 1} \
+	-when "!CLK*!G*Q*!R" \
 	-pin D \
 	{ AGATEDR }
 
@@ -5573,20 +5617,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0101 1101 0101 0001} \
+	-prevector {0011} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 R 0 1 1} \
-	-when "!CLK*G*Q*!R" \
+	-vector {0 R 1 1 0} \
+	-when "!CLK*G*!Q*R" \
 	-pin D \
 	{ AGATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0011} \
+	-prevector {0101 1101 0101 0001} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 R 1 1 0} \
-	-when "!CLK*G*!Q*R" \
+	-vector {0 R 0 1 1} \
+	-when "!CLK*G*Q*!R" \
 	-pin D \
 	{ AGATEDR }
 
@@ -5603,20 +5647,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100 1000} \
+	-prevector {1011 1010} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 R 0 0 1} \
-	-when "CLK*!G*Q*!R" \
+	-vector {1 R 1 0 0} \
+	-when "CLK*!G*!Q*R" \
 	-pin D \
 	{ AGATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1011 1010} \
+	-prevector {0100 1100 1000} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 R 1 0 0} \
-	-when "CLK*!G*!Q*R" \
+	-vector {1 R 0 0 1} \
+	-when "CLK*!G*Q*!R" \
 	-pin D \
 	{ AGATEDR }
 
@@ -5643,20 +5687,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0101 1101 1001} \
+	-prevector {1011} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 R 0 1 1} \
-	-when "CLK*G*Q*!R" \
+	-vector {1 R 1 1 0} \
+	-when "CLK*G*!Q*R" \
 	-pin D \
 	{ AGATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1011} \
+	-prevector {0101 1101 1001} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 R 1 1 0} \
-	-when "CLK*G*!Q*R" \
+	-vector {1 R 0 1 1} \
+	-when "CLK*G*Q*!R" \
 	-pin D \
 	{ AGATEDR }
 
@@ -5673,6 +5717,16 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
+	-prevector {0011} \
+	-pinlist {CLK D R G Q} \
+	-vector {0 0 1 F 0} \
+	-when "!CLK*!D*!Q*R" \
+	-pin G \
+	{ AGATEDR }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D R G} \
 	-prevector {0101 1101 0101 0001} \
 	-pinlist {CLK D R G Q} \
 	-vector {0 0 0 F 1} \
@@ -5683,10 +5737,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0011} \
+	-prevector {0111} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 0 1 F 0} \
-	-when "!CLK*!D*!Q*R" \
+	-vector {0 1 1 F 0} \
+	-when "!CLK*D*!Q*R" \
 	-pin G \
 	{ AGATEDR }
 
@@ -5713,30 +5767,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0111} \
-	-pinlist {CLK D R G Q} \
-	-vector {0 1 1 F 0} \
-	-when "!CLK*D*!Q*R" \
-	-pin G \
-	{ AGATEDR }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D R G} \
 	-prevector {1011 1001} \
 	-pinlist {CLK D R G Q} \
 	-vector {1 0 0 F 0} \
 	-when "CLK*!D*!Q*!R" \
-	-pin G \
-	{ AGATEDR }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D R G} \
-	-prevector {0101 1101 1001} \
-	-pinlist {CLK D R G Q} \
-	-vector {1 0 0 F 1} \
-	-when "CLK*!D*Q*!R" \
 	-pin G \
 	{ AGATEDR }
 
@@ -5753,20 +5787,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1111 1101} \
+	-prevector {0101 1101 1001} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 1 0 F 0} \
-	-when "CLK*D*!Q*!R" \
+	-vector {1 0 0 F 1} \
+	-when "CLK*!D*Q*!R" \
 	-pin G \
 	{ AGATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0101 1101} \
+	-prevector {1111 1101} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 1 0 F 1} \
-	-when "CLK*D*Q*!R" \
+	-vector {1 1 0 F 0} \
+	-when "CLK*D*!Q*!R" \
 	-pin G \
 	{ AGATEDR }
 
@@ -5783,20 +5817,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0011 0001 0000} \
+	-prevector {0101 1101} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 0 0 R 0} \
-	-when "!CLK*!D*!Q*!R" \
+	-vector {1 1 0 F 1} \
+	-when "CLK*D*Q*!R" \
 	-pin G \
 	{ AGATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100 0100 0000} \
+	-prevector {0011 0001 0000} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 0 0 R 1} \
-	-when "!CLK*!D*Q*!R" \
+	-vector {0 0 0 R 0} \
+	-when "!CLK*!D*!Q*!R" \
 	-pin G \
 	{ AGATEDR }
 
@@ -5813,20 +5847,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0111 0101 0100} \
+	-prevector {0100 1100 0100 0000} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 1 0 R 0} \
-	-when "!CLK*D*!Q*!R" \
+	-vector {0 0 0 R 1} \
+	-when "!CLK*!D*Q*!R" \
 	-pin G \
 	{ AGATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100 0100} \
+	-prevector {0111 0101 0100} \
 	-pinlist {CLK D R G Q} \
-	-vector {0 1 0 R 1} \
-	-when "!CLK*D*Q*!R" \
+	-vector {0 1 0 R 0} \
+	-when "!CLK*D*!Q*!R" \
 	-pin G \
 	{ AGATEDR }
 
@@ -5843,20 +5877,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0000 1000} \
+	-prevector {0100 1100 0100} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 0 0 R 0} \
-	-when "CLK*!D*!Q*!R" \
+	-vector {0 1 0 R 1} \
+	-when "!CLK*D*Q*!R" \
 	-pin G \
 	{ AGATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100 1000} \
+	-prevector {0000 1000} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 0 0 R 1} \
-	-when "CLK*!D*Q*!R" \
+	-vector {1 0 0 R 0} \
+	-when "CLK*!D*!Q*!R" \
 	-pin G \
 	{ AGATEDR }
 
@@ -5873,6 +5907,16 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
+	-prevector {0100 1100 1000} \
+	-pinlist {CLK D R G Q} \
+	-vector {1 0 0 R 1} \
+	-when "CLK*!D*Q*!R" \
+	-pin G \
+	{ AGATEDR }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D R G} \
 	-prevector {1111 1101 1100} \
 	-pinlist {CLK D R G Q} \
 	-vector {1 1 0 R 0} \
@@ -5883,20 +5927,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100} \
+	-prevector {1111 1110} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 1 0 R 1} \
-	-when "CLK*D*Q*!R" \
+	-vector {1 1 1 R 0} \
+	-when "CLK*D*!Q*R" \
 	-pin G \
 	{ AGATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {1111 1110} \
+	-prevector {0100 1100} \
 	-pinlist {CLK D R G Q} \
-	-vector {1 1 1 R 0} \
-	-when "CLK*D*!Q*R" \
+	-vector {1 1 0 R 1} \
+	-when "CLK*D*Q*!R" \
 	-pin G \
 	{ AGATEDR }
 
@@ -6229,20 +6273,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110 100} \
+	-prevector {101} \
 	-pinlist {CLK D R Q} \
-	-vector {F 0 0 1} \
-	-when "!D*Q*!R" \
+	-vector {F 0 1 0} \
+	-when "!D*!Q*R" \
 	-pin CLK \
 	{ RDFF }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {101} \
+	-prevector {010 110 100} \
 	-pinlist {CLK D R Q} \
-	-vector {F 0 1 0} \
-	-when "!D*!Q*R" \
+	-vector {F 0 0 1} \
+	-when "!D*Q*!R" \
 	-pin CLK \
 	{ RDFF }
 
@@ -6259,20 +6303,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110} \
+	-prevector {111} \
 	-pinlist {CLK D R Q} \
-	-vector {F 1 0 1} \
-	-when "D*Q*!R" \
+	-vector {F 1 1 0} \
+	-when "D*!Q*R" \
 	-pin CLK \
 	{ RDFF }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {111} \
+	-prevector {010 110} \
 	-pinlist {CLK D R Q} \
-	-vector {F 1 1 0} \
-	-when "D*!Q*R" \
+	-vector {F 1 0 1} \
+	-when "D*Q*!R" \
 	-pin CLK \
 	{ RDFF }
 
@@ -6299,6 +6343,16 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
+	-prevector {011} \
+	-pinlist {CLK D R Q} \
+	-vector {R 1 1 0} \
+	-when "D*!Q*R" \
+	-pin CLK \
+	{ RDFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D R} \
 	-prevector {010 110 010} \
 	-pinlist {CLK D R Q} \
 	-vector {R 1 0 1} \
@@ -6311,9 +6365,9 @@ define_arc \
 	-prevector_pinlist {CLK D R} \
 	-prevector {011} \
 	-pinlist {CLK D R Q} \
-	-vector {R 1 1 0} \
-	-when "D*!Q*R" \
-	-pin CLK \
+	-vector {0 F 1 0} \
+	-when "!CLK*!Q*R" \
+	-pin D \
 	{ RDFF }
 
 define_arc \
@@ -6339,30 +6393,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {011} \
-	-pinlist {CLK D R Q} \
-	-vector {0 F 1 0} \
-	-when "!CLK*!Q*R" \
-	-pin D \
-	{ RDFF }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D R} \
 	-prevector {111 110} \
 	-pinlist {CLK D R Q} \
 	-vector {1 F 0 0} \
 	-when "CLK*!Q*!R" \
-	-pin D \
-	{ RDFF }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D R} \
-	-prevector {010 110} \
-	-pinlist {CLK D R Q} \
-	-vector {1 F 0 1} \
-	-when "CLK*Q*!R" \
 	-pin D \
 	{ RDFF }
 
@@ -6379,20 +6413,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {001 000} \
+	-prevector {010 110} \
 	-pinlist {CLK D R Q} \
-	-vector {0 R 0 0} \
-	-when "!CLK*!Q*!R" \
+	-vector {1 F 0 1} \
+	-when "CLK*Q*!R" \
 	-pin D \
 	{ RDFF }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110 010 000} \
+	-prevector {001 000} \
 	-pinlist {CLK D R Q} \
-	-vector {0 R 0 1} \
-	-when "!CLK*Q*!R" \
+	-vector {0 R 0 0} \
+	-when "!CLK*!Q*!R" \
 	-pin D \
 	{ RDFF }
 
@@ -6409,6 +6443,16 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
+	-prevector {010 110 010 000} \
+	-pinlist {CLK D R Q} \
+	-vector {0 R 0 1} \
+	-when "!CLK*Q*!R" \
+	-pin D \
+	{ RDFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D R} \
 	-prevector {101 100} \
 	-pinlist {CLK D R Q} \
 	-vector {1 R 0 0} \
@@ -6419,20 +6463,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110 100} \
+	-prevector {101} \
 	-pinlist {CLK D R Q} \
-	-vector {1 R 0 1} \
-	-when "CLK*Q*!R" \
+	-vector {1 R 1 0} \
+	-when "CLK*!Q*R" \
 	-pin D \
 	{ RDFF }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {101} \
+	-prevector {010 110 100} \
 	-pinlist {CLK D R Q} \
-	-vector {1 R 1 0} \
-	-when "CLK*!Q*R" \
+	-vector {1 R 0 1} \
+	-when "CLK*Q*!R" \
 	-pin D \
 	{ RDFF }
 
@@ -6723,16 +6767,6 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {0010} \
-	-pinlist {CLK D B R Q} \
-	-vector {0 0 F 0 1} \
-	-when "!CLK*!D*Q*!R" \
-	-pin B \
-	{ COEX }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D B R} \
 	-prevector {0011} \
 	-pinlist {CLK D B R Q} \
 	-vector {0 0 F 1 0} \
@@ -6743,10 +6777,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {0110} \
+	-prevector {0010} \
 	-pinlist {CLK D B R Q} \
-	-vector {0 1 F 0 1} \
-	-when "!CLK*D*Q*!R" \
+	-vector {0 0 F 0 1} \
+	-when "!CLK*!D*Q*!R" \
 	-pin B \
 	{ COEX }
 
@@ -6763,10 +6797,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {1010} \
+	-prevector {0110} \
 	-pinlist {CLK D B R Q} \
-	-vector {1 0 F 0 1} \
-	-when "CLK*!D*Q*!R" \
+	-vector {0 1 F 0 1} \
+	-when "!CLK*D*Q*!R" \
 	-pin B \
 	{ COEX }
 
@@ -6783,10 +6817,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {1110} \
+	-prevector {1010} \
 	-pinlist {CLK D B R Q} \
-	-vector {1 1 F 0 1} \
-	-when "CLK*D*Q*!R" \
+	-vector {1 0 F 0 1} \
+	-when "CLK*!D*Q*!R" \
 	-pin B \
 	{ COEX }
 
@@ -6803,10 +6837,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {0010 0000} \
+	-prevector {1110} \
 	-pinlist {CLK D B R Q} \
-	-vector {0 0 R 0 1} \
-	-when "!CLK*!D*Q*!R" \
+	-vector {1 1 F 0 1} \
+	-when "CLK*D*Q*!R" \
 	-pin B \
 	{ COEX }
 
@@ -6823,10 +6857,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {0110 0100} \
+	-prevector {0010 0000} \
 	-pinlist {CLK D B R Q} \
-	-vector {0 1 R 0 1} \
-	-when "!CLK*D*Q*!R" \
+	-vector {0 0 R 0 1} \
+	-when "!CLK*!D*Q*!R" \
 	-pin B \
 	{ COEX }
 
@@ -6843,10 +6877,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {1010 1000} \
+	-prevector {0110 0100} \
 	-pinlist {CLK D B R Q} \
-	-vector {1 0 R 0 1} \
-	-when "CLK*!D*Q*!R" \
+	-vector {0 1 R 0 1} \
+	-when "!CLK*D*Q*!R" \
 	-pin B \
 	{ COEX }
 
@@ -6863,10 +6897,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {1110 1100} \
+	-prevector {1010 1000} \
 	-pinlist {CLK D B R Q} \
-	-vector {1 1 R 0 1} \
-	-when "CLK*D*Q*!R" \
+	-vector {1 0 R 0 1} \
+	-when "CLK*!D*Q*!R" \
 	-pin B \
 	{ COEX }
 
@@ -6883,20 +6917,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {1001 1000} \
+	-prevector {1110 1100} \
 	-pinlist {CLK D B R Q} \
-	-vector {F 0 0 0 0} \
-	-when "!B*!D*!Q*!R" \
-	-pin CLK \
+	-vector {1 1 R 0 1} \
+	-when "CLK*D*Q*!R" \
+	-pin B \
 	{ COEX }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {1010 1000} \
+	-prevector {1001 1000} \
 	-pinlist {CLK D B R Q} \
-	-vector {F 0 0 0 1} \
-	-when "!B*!D*Q*!R" \
+	-vector {F 0 0 0 0} \
+	-when "!B*!D*!Q*!R" \
 	-pin CLK \
 	{ COEX }
 
@@ -6913,20 +6947,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {1101 1100} \
+	-prevector {1010 1000} \
 	-pinlist {CLK D B R Q} \
-	-vector {F 1 0 0 0} \
-	-when "!B*D*!Q*!R" \
+	-vector {F 0 0 0 1} \
+	-when "!B*!D*Q*!R" \
 	-pin CLK \
 	{ COEX }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {1110 1100} \
+	-prevector {1101 1100} \
 	-pinlist {CLK D B R Q} \
-	-vector {F 1 0 0 1} \
-	-when "!B*D*Q*!R" \
+	-vector {F 1 0 0 0} \
+	-when "!B*D*!Q*!R" \
 	-pin CLK \
 	{ COEX }
 
@@ -6943,10 +6977,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {1010} \
+	-prevector {1110 1100} \
 	-pinlist {CLK D B R Q} \
-	-vector {F 0 1 0 1} \
-	-when "B*!D*Q*!R" \
+	-vector {F 1 0 0 1} \
+	-when "!B*D*Q*!R" \
 	-pin CLK \
 	{ COEX }
 
@@ -6963,10 +6997,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {1110} \
+	-prevector {1010} \
 	-pinlist {CLK D B R Q} \
-	-vector {F 1 1 0 1} \
-	-when "B*D*Q*!R" \
+	-vector {F 0 1 0 1} \
+	-when "B*!D*Q*!R" \
 	-pin CLK \
 	{ COEX }
 
@@ -6977,6 +7011,16 @@ define_arc \
 	-pinlist {CLK D B R Q} \
 	-vector {F 1 1 1 0} \
 	-when "B*D*!Q*R" \
+	-pin CLK \
+	{ COEX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D B R} \
+	-prevector {1110} \
+	-pinlist {CLK D B R Q} \
+	-vector {F 1 1 0 1} \
+	-when "B*D*Q*!R" \
 	-pin CLK \
 	{ COEX }
 
@@ -7003,16 +7047,6 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {0110 0100} \
-	-pinlist {CLK D B R Q} \
-	-vector {R 1 0 0 1} \
-	-when "!B*D*Q*!R" \
-	-pin CLK \
-	{ COEX }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D B R} \
 	-prevector {0101} \
 	-pinlist {CLK D B R Q} \
 	-vector {R 1 0 1 0} \
@@ -7023,10 +7057,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {0010} \
+	-prevector {0110 0100} \
 	-pinlist {CLK D B R Q} \
-	-vector {R 0 1 0 1} \
-	-when "B*!D*Q*!R" \
+	-vector {R 1 0 0 1} \
+	-when "!B*D*Q*!R" \
 	-pin CLK \
 	{ COEX }
 
@@ -7043,10 +7077,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {0110} \
+	-prevector {0010} \
 	-pinlist {CLK D B R Q} \
-	-vector {R 1 1 0 1} \
-	-when "B*D*Q*!R" \
+	-vector {R 0 1 0 1} \
+	-when "B*!D*Q*!R" \
 	-pin CLK \
 	{ COEX }
 
@@ -7058,6 +7092,26 @@ define_arc \
 	-vector {R 1 1 1 0} \
 	-when "B*D*!Q*R" \
 	-pin CLK \
+	{ COEX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D B R} \
+	-prevector {0110} \
+	-pinlist {CLK D B R Q} \
+	-vector {R 1 1 0 1} \
+	-when "B*D*Q*!R" \
+	-pin CLK \
+	{ COEX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D B R} \
+	-prevector {0101} \
+	-pinlist {CLK D B R Q} \
+	-vector {0 F 0 1 0} \
+	-when "!B*!CLK*!Q*R" \
+	-pin D \
 	{ COEX }
 
 define_arc \
@@ -7083,30 +7137,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {0101} \
-	-pinlist {CLK D B R Q} \
-	-vector {0 F 0 1 0} \
-	-when "!B*!CLK*!Q*R" \
-	-pin D \
-	{ COEX }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D B R} \
 	-prevector {1101 1100} \
 	-pinlist {CLK D B R Q} \
 	-vector {1 F 0 0 0} \
 	-when "!B*CLK*!Q*!R" \
-	-pin D \
-	{ COEX }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D B R} \
-	-prevector {1110 1100} \
-	-pinlist {CLK D B R Q} \
-	-vector {1 F 0 0 1} \
-	-when "!B*CLK*Q*!R" \
 	-pin D \
 	{ COEX }
 
@@ -7123,10 +7157,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {0110} \
+	-prevector {1110 1100} \
 	-pinlist {CLK D B R Q} \
-	-vector {0 F 1 0 1} \
-	-when "B*!CLK*Q*!R" \
+	-vector {1 F 0 0 1} \
+	-when "!B*CLK*Q*!R" \
 	-pin D \
 	{ COEX }
 
@@ -7143,10 +7177,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {1110} \
+	-prevector {0110} \
 	-pinlist {CLK D B R Q} \
-	-vector {1 F 1 0 1} \
-	-when "B*CLK*Q*!R" \
+	-vector {0 F 1 0 1} \
+	-when "B*!CLK*Q*!R" \
 	-pin D \
 	{ COEX }
 
@@ -7163,20 +7197,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {0001 0000} \
+	-prevector {1110} \
 	-pinlist {CLK D B R Q} \
-	-vector {0 R 0 0 0} \
-	-when "!B*!CLK*!Q*!R" \
+	-vector {1 F 1 0 1} \
+	-when "B*CLK*Q*!R" \
 	-pin D \
 	{ COEX }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {0010 0000} \
+	-prevector {0001 0000} \
 	-pinlist {CLK D B R Q} \
-	-vector {0 R 0 0 1} \
-	-when "!B*!CLK*Q*!R" \
+	-vector {0 R 0 0 0} \
+	-when "!B*!CLK*!Q*!R" \
 	-pin D \
 	{ COEX }
 
@@ -7193,20 +7227,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {1001 1000} \
+	-prevector {0010 0000} \
 	-pinlist {CLK D B R Q} \
-	-vector {1 R 0 0 0} \
-	-when "!B*CLK*!Q*!R" \
+	-vector {0 R 0 0 1} \
+	-when "!B*!CLK*Q*!R" \
 	-pin D \
 	{ COEX }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {1010 1000} \
+	-prevector {1001 1000} \
 	-pinlist {CLK D B R Q} \
-	-vector {1 R 0 0 1} \
-	-when "!B*CLK*Q*!R" \
+	-vector {1 R 0 0 0} \
+	-when "!B*CLK*!Q*!R" \
 	-pin D \
 	{ COEX }
 
@@ -7223,10 +7257,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {0010} \
+	-prevector {1010 1000} \
 	-pinlist {CLK D B R Q} \
-	-vector {0 R 1 0 1} \
-	-when "B*!CLK*Q*!R" \
+	-vector {1 R 0 0 1} \
+	-when "!B*CLK*Q*!R" \
 	-pin D \
 	{ COEX }
 
@@ -7243,10 +7277,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {1010} \
+	-prevector {0010} \
 	-pinlist {CLK D B R Q} \
-	-vector {1 R 1 0 1} \
-	-when "B*CLK*Q*!R" \
+	-vector {0 R 1 0 1} \
+	-when "B*!CLK*Q*!R" \
 	-pin D \
 	{ COEX }
 
@@ -7257,6 +7291,16 @@ define_arc \
 	-pinlist {CLK D B R Q} \
 	-vector {1 R 1 1 0} \
 	-when "B*CLK*!Q*R" \
+	-pin D \
+	{ COEX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D B R} \
+	-prevector {1010} \
+	-pinlist {CLK D B R Q} \
+	-vector {1 R 1 0 1} \
+	-when "B*CLK*Q*!R" \
 	-pin D \
 	{ COEX }
 
@@ -9084,6 +9128,26 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {011 001 000 100} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {F 0 0 1} \
+	-when "!CLKB*!D*Q" \
+	-pin CLKA \
+	{ MCDFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {010 000 001 101 100} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {F 0 0 0} \
+	-when "!CLKB*!D*!Q" \
+	-pin CLKA \
+	{ MCDFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
 	-prevector {011 111 101 100} \
 	-pinlist {CLKA CLKB D Q} \
 	-vector {F 0 0 1} \
@@ -9095,6 +9159,26 @@ define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB D} \
 	-prevector {010 110 100 101} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {F 0 1 0} \
+	-when "!CLKB*D*!Q" \
+	-pin CLKA \
+	{ MCDFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {011 001 000 100 101} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {F 0 1 1} \
+	-when "!CLKB*D*Q" \
+	-pin CLKA \
+	{ MCDFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {010 000 001 101} \
 	-pinlist {CLKA CLKB D Q} \
 	-vector {F 0 1 0} \
 	-when "!CLKB*D*!Q" \
@@ -9344,6 +9428,26 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {011 001 000 100 101} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {1 0 F 1} \
+	-when "CLKA*!CLKB*Q" \
+	-pin D \
+	{ MCDFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {010 000 001 101} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {1 0 F 0} \
+	-when "CLKA*!CLKB*!Q" \
+	-pin D \
+	{ MCDFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
 	-prevector {011 111 101} \
 	-pinlist {CLKA CLKB D Q} \
 	-vector {1 0 F 1} \
@@ -9395,6 +9499,26 @@ define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB D} \
 	-prevector {010 110 100} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {1 0 R 0} \
+	-when "CLKA*!CLKB*!Q" \
+	-pin D \
+	{ MCDFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {011 001 000 100} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {1 0 R 1} \
+	-when "CLKA*!CLKB*Q" \
+	-pin D \
+	{ MCDFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {010 000 001 101 100} \
 	-pinlist {CLKA CLKB D Q} \
 	-vector {1 0 R 0} \
 	-when "CLKA*!CLKB*!Q" \
@@ -9900,6 +10024,26 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {001 101 001 011 010 110} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {F 1 0 1} \
+	-when "CLKB*!D*Q" \
+	-pin CLKA \
+	{ HPIPE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {000 100 000 010 011 111 110} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {F 1 0 0} \
+	-when "CLKB*!D*!Q" \
+	-pin CLKA \
+	{ HPIPE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
 	-prevector {001 101 111 110} \
 	-pinlist {CLKA CLKB D Q} \
 	-vector {F 1 0 1} \
@@ -9911,6 +10055,26 @@ define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB D} \
 	-prevector {000 100 110 111} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {F 1 1 0} \
+	-when "CLKB*D*!Q" \
+	-pin CLKA \
+	{ HPIPE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {001 101 001 011 010 110 111} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {F 1 1 1} \
+	-when "CLKB*D*Q" \
+	-pin CLKA \
+	{ HPIPE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {000 100 000 010 011 111} \
 	-pinlist {CLKA CLKB D Q} \
 	-vector {F 1 1 0} \
 	-when "CLKB*D*!Q" \
@@ -9960,6 +10124,26 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {001 101 001 011 010 110 010} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {R 1 0 1} \
+	-when "CLKB*!D*Q" \
+	-pin CLKA \
+	{ HPIPE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {000 100 000 010 011 111 011 010} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {R 1 0 0} \
+	-when "CLKB*!D*!Q" \
+	-pin CLKA \
+	{ HPIPE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
 	-prevector {001 101 001 011 010} \
 	-pinlist {CLKA CLKB D Q} \
 	-vector {R 1 0 1} \
@@ -9971,6 +10155,26 @@ define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB D} \
 	-prevector {000 100 000 010 011} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {R 1 1 0} \
+	-when "CLKB*D*!Q" \
+	-pin CLKA \
+	{ HPIPE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {001 101 001 011 010 110 010 011} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {R 1 1 1} \
+	-when "CLKB*D*Q" \
+	-pin CLKA \
+	{ HPIPE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {000 100 000 010 011 111 011} \
 	-pinlist {CLKA CLKB D Q} \
 	-vector {R 1 1 0} \
 	-when "CLKB*D*!Q" \
@@ -10180,6 +10384,26 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {001 101 001 011 010 110 010 011} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {0 1 F 1} \
+	-when "!CLKA*CLKB*Q" \
+	-pin D \
+	{ HPIPE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {000 100 000 010 011 111 011} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {0 1 F 0} \
+	-when "!CLKA*CLKB*!Q" \
+	-pin D \
+	{ HPIPE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
 	-prevector {001 101 001 011} \
 	-pinlist {CLKA CLKB D Q} \
 	-vector {0 1 F 1} \
@@ -10211,6 +10435,26 @@ define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB D} \
 	-prevector {000 100 110 111} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {1 1 F 0} \
+	-when "CLKA*CLKB*!Q" \
+	-pin D \
+	{ HPIPE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {001 101 001 011 010 110 111} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {1 1 F 1} \
+	-when "CLKA*CLKB*Q" \
+	-pin D \
+	{ HPIPE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {000 100 000 010 011 111} \
 	-pinlist {CLKA CLKB D Q} \
 	-vector {1 1 F 0} \
 	-when "CLKA*CLKB*!Q" \
@@ -10260,6 +10504,26 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {001 101 001 011 010 110 010} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {0 1 R 1} \
+	-when "!CLKA*CLKB*Q" \
+	-pin D \
+	{ HPIPE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {000 100 000 010 011 111 011 010} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {0 1 R 0} \
+	-when "!CLKA*CLKB*!Q" \
+	-pin D \
+	{ HPIPE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
 	-prevector {001 101 001 011 010} \
 	-pinlist {CLKA CLKB D Q} \
 	-vector {0 1 R 1} \
@@ -10291,6 +10555,26 @@ define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB D} \
 	-prevector {000 100 110} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {1 1 R 0} \
+	-when "CLKA*CLKB*!Q" \
+	-pin D \
+	{ HPIPE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {001 101 001 011 010 110} \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {1 1 R 1} \
+	-when "CLKA*CLKB*Q" \
+	-pin D \
+	{ HPIPE }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {000 100 000 010 011 111 110} \
 	-pinlist {CLKA CLKB D Q} \
 	-vector {1 1 R 0} \
 	-when "CLKA*CLKB*!Q" \
@@ -10336,7 +10620,7 @@ define_arc \
 define_arc \
 	-prevector_pinlist {CLKA CLKB DA DB} \
 	-prevector {0010 1010 1110 1100} \
-	-type edge \
+	-type combinational \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {F 1 0 0 F} \
 	-when "CLKB*!DA*!DB" \
@@ -10347,7 +10631,7 @@ define_arc \
 define_arc \
 	-prevector_pinlist {CLKA CLKB DA DB} \
 	-prevector {0010 1010 1110 1100 1101} \
-	-type edge \
+	-type combinational \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {F 1 0 1 F} \
 	-when "CLKB*!DA*DB" \
@@ -10358,7 +10642,7 @@ define_arc \
 define_arc \
 	-prevector_pinlist {CLKA CLKB DA DB} \
 	-prevector {0010 1010 1110} \
-	-type edge \
+	-type combinational \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {F 1 1 0 F} \
 	-when "CLKB*DA*!DB" \
@@ -10369,7 +10653,7 @@ define_arc \
 define_arc \
 	-prevector_pinlist {CLKA CLKB DA DB} \
 	-prevector {0010 1010 1110 1111} \
-	-type edge \
+	-type combinational \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {F 1 1 1 F} \
 	-when "CLKB*DA*DB" \
@@ -10446,7 +10730,7 @@ define_arc \
 define_arc \
 	-prevector_pinlist {CLKA CLKB DA DB} \
 	-prevector {0001 1001 1101 1100} \
-	-type edge \
+	-type combinational \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {1 F 0 0 F} \
 	-when "CLKA*!DA*!DB" \
@@ -10457,7 +10741,7 @@ define_arc \
 define_arc \
 	-prevector_pinlist {CLKA CLKB DA DB} \
 	-prevector {0001 1001 1101} \
-	-type edge \
+	-type combinational \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {1 F 0 1 F} \
 	-when "CLKA*!DA*DB" \
@@ -10468,7 +10752,7 @@ define_arc \
 define_arc \
 	-prevector_pinlist {CLKA CLKB DA DB} \
 	-prevector {0001 1001 1101 1111 1110} \
-	-type edge \
+	-type combinational \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {1 F 1 0 F} \
 	-when "CLKA*DA*!DB" \
@@ -10479,7 +10763,7 @@ define_arc \
 define_arc \
 	-prevector_pinlist {CLKA CLKB DA DB} \
 	-prevector {0001 1001 1101 1111} \
-	-type edge \
+	-type combinational \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {1 F 1 1 F} \
 	-when "CLKA*DA*DB" \
@@ -10624,7 +10908,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {1001 1101 1100} \
+	-prevector {0001 1001 1101 1100} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {F 1 0 0 1} \
+	-when "CLKB*!DA*!DB*Q" \
+	-pin CLKA \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0011 1011 1111 1101 1100} \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {F 1 0 0 1} \
 	-when "CLKB*!DA*!DB*Q" \
@@ -10644,7 +10938,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {1001 1101} \
+	-prevector {0001 1001 1101} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {F 1 0 1 1} \
+	-when "CLKB*!DA*DB*Q" \
+	-pin CLKA \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0011 1011 1111 1101} \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {F 1 0 1 1} \
 	-when "CLKB*!DA*DB*Q" \
@@ -10664,7 +10968,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {1011 1111 1110} \
+	-prevector {0001 1001 1101 1111 1110} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {F 1 1 0 1} \
+	-when "CLKB*DA*!DB*Q" \
+	-pin CLKA \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0011 1011 1111 1110} \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {F 1 1 0 1} \
 	-when "CLKB*DA*!DB*Q" \
@@ -10684,7 +10998,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {1011 1111} \
+	-prevector {0001 1001 1101 1111} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {F 1 1 1 1} \
+	-when "CLKB*DA*DB*Q" \
+	-pin CLKA \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0011 1011 1111} \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {F 1 1 1 1} \
 	-when "CLKB*DA*DB*Q" \
@@ -10884,7 +11208,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {0110 1110 1100} \
+	-prevector {0010 1010 1110 1100} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {1 F 0 0 1} \
+	-when "CLKA*!DA*!DB*Q" \
+	-pin CLKB \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0011 1011 1111 1101 1100} \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {1 F 0 0 1} \
 	-when "CLKA*!DA*!DB*Q" \
@@ -10904,7 +11238,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {0111 1111 1101} \
+	-prevector {0010 1010 1110 1100 1101} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {1 F 0 1 1} \
+	-when "CLKA*!DA*DB*Q" \
+	-pin CLKB \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0011 1011 1111 1101} \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {1 F 0 1 1} \
 	-when "CLKA*!DA*DB*Q" \
@@ -10924,7 +11268,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {0110 1110} \
+	-prevector {0010 1010 1110} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {1 F 1 0 1} \
+	-when "CLKA*DA*!DB*Q" \
+	-pin CLKB \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0011 1011 1111 1110} \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {1 F 1 0 1} \
 	-when "CLKA*DA*!DB*Q" \
@@ -10944,7 +11298,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {0111 1111} \
+	-prevector {0010 1010 1110 1111} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {1 F 1 1 1} \
+	-when "CLKA*DA*DB*Q" \
+	-pin CLKB \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0011 1011 1111} \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {1 F 1 1 1} \
 	-when "CLKA*DA*DB*Q" \
@@ -11184,7 +11548,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {0110 1110} \
+	-prevector {0001 1001 1101 1111 1110} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {1 1 F 0 1} \
+	-when "CLKA*CLKB*!DB*Q" \
+	-pin DA \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0010 1010 1110} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {1 1 F 0 1} \
+	-when "CLKA*CLKB*!DB*Q" \
+	-pin DA \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0011 1011 1111 1110} \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {1 1 F 0 1} \
 	-when "CLKA*CLKB*!DB*Q" \
@@ -11204,7 +11588,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {0111 1111} \
+	-prevector {0001 1001 1101 1111} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {1 1 F 1 1} \
+	-when "CLKA*CLKB*DB*Q" \
+	-pin DA \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0010 1010 1110 1111} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {1 1 F 1 1} \
+	-when "CLKA*CLKB*DB*Q" \
+	-pin DA \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0011 1011 1111} \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {1 1 F 1 1} \
 	-when "CLKA*CLKB*DB*Q" \
@@ -11344,7 +11748,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {0110 1110 1100} \
+	-prevector {0001 1001 1101 1100} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {1 1 R 0 1} \
+	-when "CLKA*CLKB*!DB*Q" \
+	-pin DA \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0010 1010 1110 1100} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {1 1 R 0 1} \
+	-when "CLKA*CLKB*!DB*Q" \
+	-pin DA \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0011 1011 1111 1101 1100} \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {1 1 R 0 1} \
 	-when "CLKA*CLKB*!DB*Q" \
@@ -11364,7 +11788,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {1001 1101} \
+	-prevector {0001 1001 1101} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {1 1 R 1 1} \
+	-when "CLKA*CLKB*DB*Q" \
+	-pin DA \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0010 1010 1110 1100 1101} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {1 1 R 1 1} \
+	-when "CLKA*CLKB*DB*Q" \
+	-pin DA \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0011 1011 1111 1101} \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {1 1 R 1 1} \
 	-when "CLKA*CLKB*DB*Q" \
@@ -11504,7 +11948,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {1001 1101} \
+	-prevector {0001 1001 1101} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {1 1 0 F 1} \
+	-when "CLKA*CLKB*!DA*Q" \
+	-pin DB \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0010 1010 1110 1100 1101} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {1 1 0 F 1} \
+	-when "CLKA*CLKB*!DA*Q" \
+	-pin DB \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0011 1011 1111 1101} \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {1 1 0 F 1} \
 	-when "CLKA*CLKB*!DA*Q" \
@@ -11524,7 +11988,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {0111 1111} \
+	-prevector {0001 1001 1101 1111} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {1 1 1 F 1} \
+	-when "CLKA*CLKB*DA*Q" \
+	-pin DB \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0010 1010 1110 1111} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {1 1 1 F 1} \
+	-when "CLKA*CLKB*DA*Q" \
+	-pin DB \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0011 1011 1111} \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {1 1 1 F 1} \
 	-when "CLKA*CLKB*DA*Q" \
@@ -11664,7 +12148,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {0110 1110 1100} \
+	-prevector {0001 1001 1101 1100} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {1 1 0 R 1} \
+	-when "CLKA*CLKB*!DA*Q" \
+	-pin DB \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0010 1010 1110 1100} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {1 1 0 R 1} \
+	-when "CLKA*CLKB*!DA*Q" \
+	-pin DB \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0011 1011 1111 1101 1100} \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {1 1 0 R 1} \
 	-when "CLKA*CLKB*!DA*Q" \
@@ -11684,7 +12188,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {0110 1110} \
+	-prevector {0001 1001 1101 1111 1110} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {1 1 1 R 1} \
+	-when "CLKA*CLKB*DA*Q" \
+	-pin DB \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0010 1010 1110} \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-vector {1 1 1 R 1} \
+	-when "CLKA*CLKB*DA*Q" \
+	-pin DB \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0011 1011 1111 1110} \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-vector {1 1 1 R 1} \
 	-when "CLKA*CLKB*DA*Q" \
@@ -11830,11 +12354,55 @@ define_leakage -when "!CLK*!EN*!GCLK" { ICG }
 define_leakage -when "!CLK*EN*!GCLK" { ICG }
 define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00000 00001 10001 10000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 0 0 0 0 F} \
+	-when "!CLKB*!RA*!RB*!S" \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00010 10010 00010 10010 10000} \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 0 0 0 0 F} \
 	-when "!CLKB*!RA*!RB*!S" \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 00000 10000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 0 0 0 0 F} \
+	-when "!CLKB*!RA*!RB*!S" \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 10000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 0 0 0 0 F} \
+	-when "!CLKB*!RA*!RB*!S" \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00000 00001 10001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 0 0 0 1 F} \
+	-when "!CLKB*!RA*!RB*S" \
 	-related_pin CLKA \
 	-pin GCLK \
 	{ ICM }
@@ -11852,11 +12420,55 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 11001 10001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 0 0 0 1 F} \
+	-when "!CLKB*!RA*!RB*S" \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 10000 10001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 0 0 0 1 F} \
+	-when "!CLKB*!RA*!RB*S" \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00011 10011 10010} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 0 0 1 0 F} \
+	-when "!CLKB*!RA*RB*!S" \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00010 10010 00010 10010} \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 0 0 1 0 F} \
 	-when "!CLKB*!RA*RB*!S" \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00011 10011} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 0 0 1 1 F} \
+	-when "!CLKB*!RA*RB*S" \
 	-related_pin CLKA \
 	-pin GCLK \
 	{ ICM }
@@ -11874,11 +12486,66 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01000 01001 11001 11000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 0 F} \
+	-when "CLKB*!RA*!RB*!S" \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 11001 11000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 0 F} \
+	-when "CLKB*!RA*!RB*!S" \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {01010 11010 01010 11010 11000} \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 1 0 0 0 F} \
 	-when "CLKB*!RA*!RB*!S" \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 0 F} \
+	-when "CLKB*!RA*!RB*!S" \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01000 01001 11001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 1 F} \
+	-when "CLKB*!RA*!RB*S" \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 11001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 1 F} \
+	-when "CLKB*!RA*!RB*S" \
 	-related_pin CLKA \
 	-pin GCLK \
 	{ ICM }
@@ -11896,11 +12563,44 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 11001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 1 F} \
+	-when "CLKB*!RA*!RB*S" \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01011 11011 11010} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 1 0 F} \
+	-when "CLKB*!RA*RB*!S" \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {01010 11010 01010 11010} \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 1 0 1 0 F} \
 	-when "CLKB*!RA*RB*!S" \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01011 11011} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 1 1 F} \
+	-when "CLKB*!RA*RB*S" \
 	-related_pin CLKA \
 	-pin GCLK \
 	{ ICM }
@@ -11930,7 +12630,29 @@ define_arc \
 define_arc \
 	-type combinational \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 00000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 0 0 0 0 R} \
+	-when "!CLKB*!RA*!RB*!S" \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00010 10010 00010 00000 00001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 0 0 0 1 R} \
+	-when "!CLKB*!RA*!RB*S" \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 00001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 0 0 0 1 R} \
 	-when "!CLKB*!RA*!RB*S" \
@@ -11974,7 +12696,29 @@ define_arc \
 define_arc \
 	-type combinational \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 1 0 0 0 R} \
+	-when "CLKB*!RA*!RB*!S" \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {01010 11010 01010 01000 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 1 0 0 1 R} \
+	-when "CLKB*!RA*!RB*S" \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 1 0 0 1 R} \
 	-when "CLKB*!RA*!RB*S" \
@@ -12006,11 +12750,55 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00001 00000 01000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 F 0 0 0 F} \
+	-when "!CLKA*!RA*!RB*!S" \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00101 01101 00101 01101 01001 01000} \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 F 0 0 0 F} \
 	-when "!CLKA*!RA*!RB*!S" \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 00000 01000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 F 0 0 0 F} \
+	-when "!CLKA*!RA*!RB*!S" \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 01001 01000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 F 0 0 0 F} \
+	-when "!CLKA*!RA*!RB*!S" \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00001 00000 01000 01001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 F 0 0 1 F} \
+	-when "!CLKA*!RA*!RB*S" \
 	-related_pin CLKB \
 	-pin GCLK \
 	{ ICM }
@@ -12028,11 +12816,55 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 00001 01001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 F 0 0 1 F} \
+	-when "!CLKA*!RA*!RB*S" \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 01001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 F 0 0 1 F} \
+	-when "!CLKA*!RA*!RB*S" \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00100 01100} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 F 1 0 0 F} \
+	-when "!CLKA*RA*!RB*!S" \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00101 01101 00101 01101 01100} \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 F 1 0 0 F} \
 	-when "!CLKA*RA*!RB*!S" \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00100 01100 01101} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 F 1 0 1 F} \
+	-when "!CLKA*RA*!RB*S" \
 	-related_pin CLKB \
 	-pin GCLK \
 	{ ICM }
@@ -12050,11 +12882,55 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10001 10000 11000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 0 F} \
+	-when "CLKA*!RA*!RB*!S" \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {10101 11101 10101 11101 11001 11000} \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 F 0 0 0 F} \
 	-when "CLKA*!RA*!RB*!S" \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 10000 11000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 0 F} \
+	-when "CLKA*!RA*!RB*!S" \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 11000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 0 F} \
+	-when "CLKA*!RA*!RB*!S" \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10001 10000 11000 11001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 1 F} \
+	-when "CLKA*!RA*!RB*S" \
 	-related_pin CLKB \
 	-pin GCLK \
 	{ ICM }
@@ -12072,11 +12948,55 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 10000 11000 11001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 1 F} \
+	-when "CLKA*!RA*!RB*S" \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 1 F} \
+	-when "CLKA*!RA*!RB*S" \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10100 11100} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 1 0 0 F} \
+	-when "CLKA*RA*!RB*!S" \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {10101 11101 10101 11101 11100} \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 F 1 0 0 F} \
 	-when "CLKA*RA*!RB*!S" \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10100 11100 11101} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 1 0 1 F} \
+	-when "CLKA*RA*!RB*S" \
 	-related_pin CLKB \
 	-pin GCLK \
 	{ ICM }
@@ -12106,7 +13026,29 @@ define_arc \
 define_arc \
 	-type combinational \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 00000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 R 0 0 0 R} \
+	-when "!CLKA*!RA*!RB*!S" \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00101 01101 00101 00001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 R 0 0 1 R} \
+	-when "!CLKA*!RA*!RB*S" \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 00001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 R 0 0 1 R} \
 	-when "!CLKA*!RA*!RB*S" \
@@ -12150,7 +13092,29 @@ define_arc \
 define_arc \
 	-type combinational \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 R 0 0 0 R} \
+	-when "CLKA*!RA*!RB*!S" \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {10101 11101 10101 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 R 0 0 1 R} \
+	-when "CLKA*!RA*!RB*S" \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 R 0 0 1 R} \
 	-when "CLKA*!RA*!RB*S" \
@@ -12182,11 +13146,55 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00000 00001 10001 10000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 R 0 0 F} \
+	-when "CLKA*!CLKB*!RB*!S" \
+	-related_pin RA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00010 10010 00010 10010 10000} \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 R 0 0 F} \
 	-when "CLKA*!CLKB*!RB*!S" \
+	-related_pin RA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 00000 10000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 R 0 0 F} \
+	-when "CLKA*!CLKB*!RB*!S" \
+	-related_pin RA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 10000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 R 0 0 F} \
+	-when "CLKA*!CLKB*!RB*!S" \
+	-related_pin RA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00000 00001 10001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 R 0 1 F} \
+	-when "CLKA*!CLKB*!RB*S" \
 	-related_pin RA \
 	-pin GCLK \
 	{ ICM }
@@ -12204,11 +13212,55 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 11001 10001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 R 0 1 F} \
+	-when "CLKA*!CLKB*!RB*S" \
+	-related_pin RA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 10000 10001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 R 0 1 F} \
+	-when "CLKA*!CLKB*!RB*S" \
+	-related_pin RA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00011 10011 10010} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 R 1 0 F} \
+	-when "CLKA*!CLKB*RB*!S" \
+	-related_pin RA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00010 10010 00010 10010} \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 R 1 0 F} \
 	-when "CLKA*!CLKB*RB*!S" \
+	-related_pin RA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00011 10011} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 R 1 1 F} \
+	-when "CLKA*!CLKB*RB*S" \
 	-related_pin RA \
 	-pin GCLK \
 	{ ICM }
@@ -12226,11 +13278,66 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01000 01001 11001 11000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 0 F} \
+	-when "CLKA*CLKB*!RB*!S" \
+	-related_pin RA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 11001 11000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 0 F} \
+	-when "CLKA*CLKB*!RB*!S" \
+	-related_pin RA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {01010 11010 01010 11010 11000} \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 R 0 0 F} \
 	-when "CLKA*CLKB*!RB*!S" \
+	-related_pin RA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 0 F} \
+	-when "CLKA*CLKB*!RB*!S" \
+	-related_pin RA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01000 01001 11001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 1 F} \
+	-when "CLKA*CLKB*!RB*S" \
+	-related_pin RA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 11001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 1 F} \
+	-when "CLKA*CLKB*!RB*S" \
 	-related_pin RA \
 	-pin GCLK \
 	{ ICM }
@@ -12248,11 +13355,44 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 11001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 1 F} \
+	-when "CLKA*CLKB*!RB*S" \
+	-related_pin RA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01011 11011 11010} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 1 0 F} \
+	-when "CLKA*CLKB*RB*!S" \
+	-related_pin RA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {01010 11010 01010 11010} \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 R 1 0 F} \
 	-when "CLKA*CLKB*RB*!S" \
+	-related_pin RA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01011 11011} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 1 1 F} \
+	-when "CLKA*CLKB*RB*S" \
 	-related_pin RA \
 	-pin GCLK \
 	{ ICM }
@@ -12270,11 +13410,55 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00001 00000 01000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 R 0 F} \
+	-when "!CLKA*CLKB*!RA*!S" \
+	-related_pin RB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00101 01101 00101 01101 01001 01000} \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 0 R 0 F} \
 	-when "!CLKA*CLKB*!RA*!S" \
+	-related_pin RB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 00000 01000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 R 0 F} \
+	-when "!CLKA*CLKB*!RA*!S" \
+	-related_pin RB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 01001 01000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 R 0 F} \
+	-when "!CLKA*CLKB*!RA*!S" \
+	-related_pin RB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00001 00000 01000 01001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 R 1 F} \
+	-when "!CLKA*CLKB*!RA*S" \
 	-related_pin RB \
 	-pin GCLK \
 	{ ICM }
@@ -12292,11 +13476,55 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 00001 01001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 R 1 F} \
+	-when "!CLKA*CLKB*!RA*S" \
+	-related_pin RB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 01001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 R 1 F} \
+	-when "!CLKA*CLKB*!RA*S" \
+	-related_pin RB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00100 01100} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 1 R 0 F} \
+	-when "!CLKA*CLKB*RA*!S" \
+	-related_pin RB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00101 01101 00101 01101 01100} \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 1 R 0 F} \
 	-when "!CLKA*CLKB*RA*!S" \
+	-related_pin RB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00100 01100 01101} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 1 R 1 F} \
+	-when "!CLKA*CLKB*RA*S" \
 	-related_pin RB \
 	-pin GCLK \
 	{ ICM }
@@ -12314,11 +13542,55 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10001 10000 11000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 0 F} \
+	-when "CLKA*CLKB*!RA*!S" \
+	-related_pin RB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {10101 11101 10101 11101 11001 11000} \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 0 R 0 F} \
 	-when "CLKA*CLKB*!RA*!S" \
+	-related_pin RB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 10000 11000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 0 F} \
+	-when "CLKA*CLKB*!RA*!S" \
+	-related_pin RB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 11000} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 0 F} \
+	-when "CLKA*CLKB*!RA*!S" \
+	-related_pin RB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10001 10000 11000 11001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 1 F} \
+	-when "CLKA*CLKB*!RA*S" \
 	-related_pin RB \
 	-pin GCLK \
 	{ ICM }
@@ -12336,11 +13608,55 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 10000 11000 11001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 1 F} \
+	-when "CLKA*CLKB*!RA*S" \
+	-related_pin RB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 1 F} \
+	-when "CLKA*CLKB*!RA*S" \
+	-related_pin RB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10100 11100} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 1 R 0 F} \
+	-when "CLKA*CLKB*RA*!S" \
+	-related_pin RB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {10101 11101 10101 11101 11100} \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 1 R 0 F} \
 	-when "CLKA*CLKB*RA*!S" \
+	-related_pin RB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10100 11100 11101} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 1 R 1 F} \
+	-when "CLKA*CLKB*RA*S" \
 	-related_pin RB \
 	-pin GCLK \
 	{ ICM }
@@ -12359,7 +13675,7 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10100 10000} \
+	-prevector {10110 10010 10000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 0 0 0 0 0} \
 	-when "!CLKB*!GCLK*!RA*!RB*!S" \
@@ -12369,7 +13685,67 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10101 10001} \
+	-prevector {00110 00010 10010 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 0 0 0 0 0} \
+	-when "!CLKB*!GCLK*!RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10001 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 0 0 0 0 0} \
+	-when "!CLKB*!GCLK*!RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 0 0 0 0 0} \
+	-when "!CLKB*!GCLK*!RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10011 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 0 0 0 1 0} \
+	-when "!CLKB*!GCLK*!RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 0 0 0 1 0} \
+	-when "!CLKB*!GCLK*!RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 0 0 0 1 0} \
+	-when "!CLKB*!GCLK*!RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 0 0 0 1 0} \
 	-when "!CLKB*!GCLK*!RA*!RB*S" \
@@ -12389,6 +13765,16 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 0 0 1 0 0} \
+	-when "!CLKB*!GCLK*!RA*RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {10111 10011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 0 0 1 1 0} \
@@ -12399,7 +13785,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10100} \
+	-prevector {00110 00010 10010 10011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 0 0 1 1 0} \
+	-when "!CLKB*!GCLK*!RA*RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10110 10100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 0 1 0 0 0} \
 	-when "!CLKB*!GCLK*RA*!RB*!S" \
@@ -12409,7 +13805,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10101} \
+	-prevector {10101 11101 10101 10100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 0 1 0 0 0} \
+	-when "!CLKB*!GCLK*RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 0 1 0 1 0} \
+	-when "!CLKB*!GCLK*RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 0 1 0 1 0} \
 	-when "!CLKB*!GCLK*RA*!RB*S" \
@@ -12449,7 +13865,97 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10011 10001 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 0 0} \
+	-when "CLKB*!GCLK*!RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 0 0} \
+	-when "CLKB*!GCLK*!RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 0 0} \
+	-when "CLKB*!GCLK*!RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10001 10000 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 0 1} \
+	-when "CLKB*GCLK*!RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {10101 11101 10101 11101 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 0 1} \
+	-when "CLKB*GCLK*!RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 10000 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 0 1} \
+	-when "CLKB*GCLK*!RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 0 1} \
+	-when "CLKB*GCLK*!RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 00000 10000 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 0 1} \
+	-when "CLKB*GCLK*!RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 01001 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 0 1} \
+	-when "CLKB*GCLK*!RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 10000 11000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 1 0 0 0 1} \
 	-when "CLKB*GCLK*!RA*!RB*!S" \
@@ -12469,7 +13975,97 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10011 10001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 1 0} \
+	-when "CLKB*!GCLK*!RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010 11000 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 1 0} \
+	-when "CLKB*!GCLK*!RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 1 0} \
+	-when "CLKB*!GCLK*!RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10001 10000 11000 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 1 1} \
+	-when "CLKB*GCLK*!RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {10101 11101 10101 11101 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 1 1} \
+	-when "CLKB*GCLK*!RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 10000 11000 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 1 1} \
+	-when "CLKB*GCLK*!RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 1 1} \
+	-when "CLKB*GCLK*!RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 11001 10001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 1 1} \
+	-when "CLKB*GCLK*!RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 01001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 0 1 1} \
+	-when "CLKB*GCLK*!RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 10000 11000 11001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 1 0 0 1 1} \
 	-when "CLKB*GCLK*!RA*!RB*S" \
@@ -12489,7 +14085,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 1 0 0} \
+	-when "CLKB*!GCLK*!RA*RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {11111 11011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 0 1 1 0} \
+	-when "CLKB*!GCLK*!RA*RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010 11011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 1 0 1 1 0} \
 	-when "CLKB*!GCLK*!RA*RB*S" \
@@ -12503,6 +14119,26 @@ define_arc \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 1 1 0 0 0} \
 	-when "CLKB*!GCLK*RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10101 11101 11100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 1 0 0 0} \
+	-when "CLKB*!GCLK*RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10100 11100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 1 0 0 1} \
+	-when "CLKB*GCLK*RA*!RB*!S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -12523,6 +14159,26 @@ define_arc \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {F 1 1 0 1 0} \
 	-when "CLKB*!GCLK*RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10101 11101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 1 0 1 0} \
+	-when "CLKB*!GCLK*RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10100 11100 11101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {F 1 1 0 1 1} \
+	-when "CLKB*GCLK*RA*!RB*S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -12559,7 +14215,7 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00100 00000} \
+	-prevector {00110 00010 00000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 0 0 0 0 0} \
 	-when "!CLKB*!GCLK*!RA*!RB*!S" \
@@ -12569,7 +14225,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00101 00001} \
+	-prevector {00101 01101 00101 00001 00000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 0 0 0 0 0} \
+	-when "!CLKB*!GCLK*!RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 0 0 0 1 0} \
+	-when "!CLKB*!GCLK*!RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 0 0 0 1 0} \
 	-when "!CLKB*!GCLK*!RA*!RB*S" \
@@ -12599,7 +14275,7 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00100} \
+	-prevector {00110 00100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 0 1 0 0 0} \
 	-when "!CLKB*!GCLK*RA*!RB*!S" \
@@ -12609,7 +14285,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00101} \
+	-prevector {00101 01101 00101 00100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 0 1 0 0 0} \
+	-when "!CLKB*!GCLK*RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 0 1 0 1 0} \
+	-when "!CLKB*!GCLK*RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 0 1 0 1 0} \
 	-when "!CLKB*!GCLK*RA*!RB*S" \
@@ -12649,7 +14345,47 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 1 0 0 0 0} \
+	-when "CLKB*!GCLK*!RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00001 00000 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 1 0 0 0 1} \
+	-when "CLKB*GCLK*!RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00101 01101 00101 01101 01001 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 1 0 0 0 1} \
+	-when "CLKB*GCLK*!RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 00000 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 1 0 0 0 1} \
+	-when "CLKB*GCLK*!RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 01001 01000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 1 0 0 0 1} \
 	-when "CLKB*GCLK*!RA*!RB*!S" \
@@ -12669,7 +14405,47 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 1 0 0 1 0} \
+	-when "CLKB*!GCLK*!RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00001 00000 01000 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 1 0 0 1 1} \
+	-when "CLKB*GCLK*!RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00101 01101 00101 01101 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 1 0 0 1 1} \
+	-when "CLKB*GCLK*!RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 00001 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 1 0 0 1 1} \
+	-when "CLKB*GCLK*!RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 01001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 1 0 0 1 1} \
 	-when "CLKB*GCLK*!RA*!RB*S" \
@@ -12709,6 +14485,26 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00101 01101 01100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 1 1 0 0 0} \
+	-when "CLKB*!GCLK*RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00100 01100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 1 1 0 0 1} \
+	-when "CLKB*GCLK*RA*!RB*!S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00101 01101 00101 01101 01100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 1 1 0 0 1} \
@@ -12723,6 +14519,26 @@ define_arc \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {R 1 1 0 1 0} \
 	-when "CLKB*!GCLK*RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00101 01101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 1 1 0 1 0} \
+	-when "CLKB*!GCLK*RA*!RB*S" \
+	-pin CLKA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00100 01100 01101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {R 1 1 0 1 1} \
+	-when "CLKB*GCLK*RA*!RB*S" \
 	-pin CLKA \
 	{ ICM }
 
@@ -12759,7 +14575,7 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01010 01000} \
+	-prevector {01110 01010 01000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 F 0 0 0 0} \
 	-when "!CLKA*!GCLK*!RA*!RB*!S" \
@@ -12769,7 +14585,37 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01011 01001} \
+	-prevector {00111 00011 00001 01001 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 F 0 0 0 0} \
+	-when "!CLKA*!GCLK*!RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 F 0 0 0 0} \
+	-when "!CLKA*!GCLK*!RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 F 0 0 0 0} \
+	-when "!CLKA*!GCLK*!RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01111 01011 01001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 F 0 0 1 0} \
 	-when "!CLKA*!GCLK*!RA*!RB*S" \
@@ -12779,7 +14625,37 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01010} \
+	-prevector {00111 00011 00001 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 F 0 0 1 0} \
+	-when "!CLKA*!GCLK*!RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01000 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 F 0 0 1 0} \
+	-when "!CLKA*!GCLK*!RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 F 0 0 1 0} \
+	-when "!CLKA*!GCLK*!RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 F 0 1 0 0} \
 	-when "!CLKA*!GCLK*!RA*RB*!S" \
@@ -12789,7 +14665,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01011} \
+	-prevector {01010 11010 01010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 F 0 1 0 0} \
+	-when "!CLKA*!GCLK*!RA*RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01111 01011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 F 0 1 1 0} \
+	-when "!CLKA*!GCLK*!RA*RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 F 0 1 1 0} \
 	-when "!CLKA*!GCLK*!RA*RB*S" \
@@ -12809,7 +14705,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00101 01101 01100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 F 1 0 0 0} \
+	-when "!CLKA*!GCLK*RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {01111 01101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 F 1 0 1 0} \
+	-when "!CLKA*!GCLK*RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00101 01101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 F 1 0 1 0} \
 	-when "!CLKA*!GCLK*RA*!RB*S" \
@@ -12849,7 +14765,97 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10011 10001 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 0 0} \
+	-when "CLKA*!GCLK*!RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 0 0} \
+	-when "CLKA*!GCLK*!RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 0 0} \
+	-when "CLKA*!GCLK*!RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01000 01001 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 0 1} \
+	-when "CLKA*GCLK*!RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 0 1} \
+	-when "CLKA*GCLK*!RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {01010 11010 01010 11010 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 0 1} \
+	-when "CLKA*GCLK*!RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 0 1} \
+	-when "CLKA*GCLK*!RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 00000 10000 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 0 1} \
+	-when "CLKA*GCLK*!RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 01001 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 0 1} \
+	-when "CLKA*GCLK*!RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 10000 11000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 F 0 0 0 1} \
 	-when "CLKA*GCLK*!RA*!RB*!S" \
@@ -12869,7 +14875,97 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10011 10001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 1 0} \
+	-when "CLKA*!GCLK*!RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010 11000 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 1 0} \
+	-when "CLKA*!GCLK*!RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 1 0} \
+	-when "CLKA*!GCLK*!RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01000 01001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 1 1} \
+	-when "CLKA*GCLK*!RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 1 1} \
+	-when "CLKA*GCLK*!RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {01010 11010 01010 11010 11000 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 1 1} \
+	-when "CLKA*GCLK*!RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 1 1} \
+	-when "CLKA*GCLK*!RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 11001 10001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 1 1} \
+	-when "CLKA*GCLK*!RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 01001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 0 1 1} \
+	-when "CLKA*GCLK*!RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 10000 11000 11001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 F 0 0 1 1} \
 	-when "CLKA*GCLK*!RA*!RB*S" \
@@ -12883,6 +14979,26 @@ define_arc \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 F 0 1 0 0} \
 	-when "CLKA*!GCLK*!RA*RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 1 0 0} \
+	-when "CLKA*!GCLK*!RA*RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01011 11011 11010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 1 0 1} \
+	-when "CLKA*GCLK*!RA*RB*!S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -12909,6 +15025,26 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010 11011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 1 1 0} \
+	-when "CLKA*!GCLK*!RA*RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01011 11011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 0 1 1 1} \
+	-when "CLKA*GCLK*!RA*RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {01010 11010 01010 11010 11011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 F 0 1 1 1} \
@@ -12929,7 +15065,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10101 11101 11100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 1 0 0 0} \
+	-when "CLKA*!GCLK*RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {11111 11101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 F 1 0 1 0} \
+	-when "CLKA*!GCLK*RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10101 11101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 F 1 0 1 0} \
 	-when "CLKA*!GCLK*RA*!RB*S" \
@@ -12959,7 +15115,7 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00010 00000} \
+	-prevector {00110 00010 00000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 R 0 0 0 0} \
 	-when "!CLKA*!GCLK*!RA*!RB*!S" \
@@ -12969,7 +15125,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00011 00001} \
+	-prevector {00010 10010 00010 00000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 R 0 0 0 0} \
+	-when "!CLKA*!GCLK*!RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 R 0 0 1 0} \
 	-when "!CLKA*!GCLK*!RA*!RB*S" \
@@ -12979,7 +15145,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00010} \
+	-prevector {00010 10010 00010 00000 00001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 R 0 0 1 0} \
+	-when "!CLKA*!GCLK*!RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 R 0 1 0 0} \
 	-when "!CLKA*!GCLK*!RA*RB*!S" \
@@ -12989,7 +15165,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00011} \
+	-prevector {00010 10010 00010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 R 0 1 0 0} \
+	-when "!CLKA*!GCLK*!RA*RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 R 0 1 1 0} \
+	-when "!CLKA*!GCLK*!RA*RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 R 0 1 1 0} \
 	-when "!CLKA*!GCLK*!RA*RB*S" \
@@ -13049,7 +15245,47 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 R 0 0 0 0} \
+	-when "CLKA*!GCLK*!RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00000 00001 10001 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 R 0 0 0 1} \
+	-when "CLKA*GCLK*!RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00010 10010 00010 10010 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 R 0 0 0 1} \
+	-when "CLKA*GCLK*!RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 00000 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 R 0 0 0 1} \
+	-when "CLKA*GCLK*!RA*!RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 10000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 R 0 0 0 1} \
 	-when "CLKA*GCLK*!RA*!RB*!S" \
@@ -13069,7 +15305,47 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 R 0 0 1 0} \
+	-when "CLKA*!GCLK*!RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00000 00001 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 R 0 0 1 1} \
+	-when "CLKA*GCLK*!RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00010 10010 00010 10010 10000 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 R 0 0 1 1} \
+	-when "CLKA*GCLK*!RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 11001 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 R 0 0 1 1} \
+	-when "CLKA*GCLK*!RA*!RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 10000 10001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 R 0 0 1 1} \
 	-when "CLKA*GCLK*!RA*!RB*S" \
@@ -13083,6 +15359,26 @@ define_arc \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 R 0 1 0 0} \
 	-when "CLKA*!GCLK*!RA*RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 R 0 1 0 0} \
+	-when "CLKA*!GCLK*!RA*RB*!S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00011 10011 10010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 R 0 1 0 1} \
+	-when "CLKA*GCLK*!RA*RB*!S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -13103,6 +15399,26 @@ define_arc \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 R 0 1 1 0} \
 	-when "CLKA*!GCLK*!RA*RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 R 0 1 1 0} \
+	-when "CLKA*!GCLK*!RA*RB*S" \
+	-pin CLKB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00011 10011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 R 0 1 1 1} \
+	-when "CLKA*GCLK*!RA*RB*S" \
 	-pin CLKB \
 	{ ICM }
 
@@ -13159,7 +15475,7 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00100} \
+	-prevector {00110 00100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 F 0 0 0} \
 	-when "!CLKA*!CLKB*!GCLK*!RB*!S" \
@@ -13169,7 +15485,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00101} \
+	-prevector {00101 01101 00101 00100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 F 0 0 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 F 0 1 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 F 0 1 0} \
 	-when "!CLKA*!CLKB*!GCLK*!RB*S" \
@@ -13209,6 +15545,26 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00101 01101 01100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 F 0 0 0} \
+	-when "!CLKA*CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00100 01100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 F 0 0 1} \
+	-when "!CLKA*CLKB*GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00101 01101 00101 01101 01100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 F 0 0 1} \
@@ -13223,6 +15579,26 @@ define_arc \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 F 0 1 0} \
 	-when "!CLKA*CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00101 01101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 F 0 1 0} \
+	-when "!CLKA*CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00100 01100 01101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 F 0 1 1} \
+	-when "!CLKA*CLKB*GCLK*!RB*S" \
 	-pin RA \
 	{ ICM }
 
@@ -13259,7 +15635,7 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10100} \
+	-prevector {10110 10100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 F 0 0 0} \
 	-when "CLKA*!CLKB*!GCLK*!RB*!S" \
@@ -13269,7 +15645,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10101} \
+	-prevector {10101 11101 10101 10100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 F 0 0 0} \
+	-when "CLKA*!CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 F 0 1 0} \
+	-when "CLKA*!CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 F 0 1 0} \
 	-when "CLKA*!CLKB*!GCLK*!RB*S" \
@@ -13309,6 +15705,26 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10101 11101 11100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 F 0 0 0} \
+	-when "CLKA*CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10100 11100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 F 0 0 1} \
+	-when "CLKA*CLKB*GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {10101 11101 10101 11101 11100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 F 0 0 1} \
@@ -13323,6 +15739,26 @@ define_arc \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 F 0 1 0} \
 	-when "CLKA*CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10101 11101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 F 0 1 0} \
+	-when "CLKA*CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10100 11100 11101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 F 0 1 1} \
+	-when "CLKA*CLKB*GCLK*!RB*S" \
 	-pin RA \
 	{ ICM }
 
@@ -13359,7 +15795,7 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00000} \
+	-prevector {00110 00010 00000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 R 0 0 0} \
 	-when "!CLKA*!CLKB*!GCLK*!RB*!S" \
@@ -13369,7 +15805,37 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00001} \
+	-prevector {00101 01101 00101 00001 00000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 R 0 0 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 R 0 0 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 00000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 R 0 0 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 R 0 1 0} \
 	-when "!CLKA*!CLKB*!GCLK*!RB*S" \
@@ -13379,7 +15845,37 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00010} \
+	-prevector {00101 01101 00101 00001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 R 0 1 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00000 00001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 R 0 1 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 00001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 R 0 1 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 R 1 0 0} \
 	-when "!CLKA*!CLKB*!GCLK*RB*!S" \
@@ -13389,7 +15885,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00011} \
+	-prevector {00010 10010 00010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 R 1 0 0} \
+	-when "!CLKA*!CLKB*!GCLK*RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 R 1 1 0} \
 	-when "!CLKA*!CLKB*!GCLK*RB*S" \
@@ -13399,10 +15905,40 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01010 01000} \
+	-prevector {00010 10010 00010 00011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 R 1 1 0} \
+	-when "!CLKA*!CLKB*!GCLK*RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 01000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 R 0 0 0} \
 	-when "!CLKA*CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 R 0 0 0} \
+	-when "!CLKA*CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00001 00000 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 R 0 0 1} \
+	-when "!CLKA*CLKB*GCLK*!RB*!S" \
 	-pin RA \
 	{ ICM }
 
@@ -13419,10 +15955,70 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01011 01001} \
+	-prevector {01010 11010 01010 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 R 0 0 0} \
+	-when "!CLKA*CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 R 0 0 0} \
+	-when "!CLKA*CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 00000 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 R 0 0 1} \
+	-when "!CLKA*CLKB*GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 01001 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 R 0 0 1} \
+	-when "!CLKA*CLKB*GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01111 01011 01001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 R 0 1 0} \
 	-when "!CLKA*CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 R 0 1 0} \
+	-when "!CLKA*CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00001 00000 01000 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 R 0 1 1} \
+	-when "!CLKA*CLKB*GCLK*!RB*S" \
 	-pin RA \
 	{ ICM }
 
@@ -13439,7 +16035,47 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01010} \
+	-prevector {01010 11010 01010 01000 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 R 0 1 0} \
+	-when "!CLKA*CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 R 0 1 0} \
+	-when "!CLKA*CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 00001 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 R 0 1 1} \
+	-when "!CLKA*CLKB*GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 R 0 1 1} \
+	-when "!CLKA*CLKB*GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 R 1 0 0} \
 	-when "!CLKA*CLKB*!GCLK*RB*!S" \
@@ -13449,7 +16085,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01011} \
+	-prevector {01010 11010 01010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 R 1 0 0} \
+	-when "!CLKA*CLKB*!GCLK*RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01111 01011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 R 1 1 0} \
 	-when "!CLKA*CLKB*!GCLK*RB*S" \
@@ -13459,7 +16105,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10100 10000} \
+	-prevector {01010 11010 01010 01011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 R 1 1 0} \
+	-when "!CLKA*CLKB*!GCLK*RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10110 10010 10000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 R 0 0 0} \
 	-when "CLKA*!CLKB*!GCLK*!RB*!S" \
@@ -13469,7 +16125,67 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10101 10001} \
+	-prevector {00110 00010 10010 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 R 0 0 0} \
+	-when "CLKA*!CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10001 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 R 0 0 0} \
+	-when "CLKA*!CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 R 0 0 0} \
+	-when "CLKA*!CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10011 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 R 0 1 0} \
+	-when "CLKA*!CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 R 0 1 0} \
+	-when "CLKA*!CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 R 0 1 0} \
+	-when "CLKA*!CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 R 0 1 0} \
 	-when "CLKA*!CLKB*!GCLK*!RB*S" \
@@ -13489,7 +16205,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 R 1 0 0} \
+	-when "CLKA*!CLKB*!GCLK*RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {10111 10011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 R 1 1 0} \
+	-when "CLKA*!CLKB*!GCLK*RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 R 1 1 0} \
 	-when "CLKA*!CLKB*!GCLK*RB*S" \
@@ -13509,7 +16245,97 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10011 10001 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 0 0} \
+	-when "CLKA*CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 0 0} \
+	-when "CLKA*CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 0 0} \
+	-when "CLKA*CLKB*!GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10001 10000 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 0 1} \
+	-when "CLKA*CLKB*GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {10101 11101 10101 11101 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 0 1} \
+	-when "CLKA*CLKB*GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 10000 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 0 1} \
+	-when "CLKA*CLKB*GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 0 1} \
+	-when "CLKA*CLKB*GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 00000 10000 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 0 1} \
+	-when "CLKA*CLKB*GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 01001 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 0 1} \
+	-when "CLKA*CLKB*GCLK*!RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 10000 11000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 R 0 0 1} \
 	-when "CLKA*CLKB*GCLK*!RB*!S" \
@@ -13529,7 +16355,97 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10011 10001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 1 0} \
+	-when "CLKA*CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010 11000 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 1 0} \
+	-when "CLKA*CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 1 0} \
+	-when "CLKA*CLKB*!GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10001 10000 11000 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 1 1} \
+	-when "CLKA*CLKB*GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {10101 11101 10101 11101 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 1 1} \
+	-when "CLKA*CLKB*GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 10000 11000 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 1 1} \
+	-when "CLKA*CLKB*GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 1 1} \
+	-when "CLKA*CLKB*GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 11001 10001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 1 1} \
+	-when "CLKA*CLKB*GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 01001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 0 1 1} \
+	-when "CLKA*CLKB*GCLK*!RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 10000 11000 11001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 R 0 1 1} \
 	-when "CLKA*CLKB*GCLK*!RB*S" \
@@ -13549,6 +16465,16 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 1 0 0} \
+	-when "CLKA*CLKB*!GCLK*RB*!S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {11111 11011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 R 1 1 0} \
@@ -13559,7 +16485,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00010} \
+	-prevector {01110 01010 11010 11011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 R 1 1 0} \
+	-when "CLKA*CLKB*!GCLK*RB*S" \
+	-pin RA \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 0 F 0 0} \
 	-when "!CLKA*!CLKB*!GCLK*!RA*!S" \
@@ -13569,7 +16505,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00011} \
+	-prevector {00010 10010 00010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 0 F 0 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 0 F 1 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 0 F 1 0} \
 	-when "!CLKA*!CLKB*!GCLK*!RA*S" \
@@ -13599,7 +16555,7 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01010} \
+	-prevector {01110 01010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 0 F 0 0} \
 	-when "!CLKA*CLKB*!GCLK*!RA*!S" \
@@ -13609,7 +16565,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01011} \
+	-prevector {01010 11010 01010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 F 0 0} \
+	-when "!CLKA*CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01111 01011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 F 1 0} \
+	-when "!CLKA*CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 0 F 1 0} \
 	-when "!CLKA*CLKB*!GCLK*!RA*S" \
@@ -13649,6 +16625,26 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 F 0 0} \
+	-when "CLKA*!CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00011 10011 10010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 F 0 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00010 10010 00010 10010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 0 F 0 1} \
@@ -13663,6 +16659,26 @@ define_arc \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 0 F 1 0} \
 	-when "CLKA*!CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 F 1 0} \
+	-when "CLKA*!CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00011 10011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 F 1 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*S" \
 	-pin RB \
 	{ ICM }
 
@@ -13709,6 +16725,26 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 F 0 0} \
+	-when "CLKA*CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01011 11011 11010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 F 0 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {01010 11010 01010 11010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 0 F 0 1} \
@@ -13723,6 +16759,26 @@ define_arc \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 0 F 1 0} \
 	-when "CLKA*CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010 11011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 F 1 0} \
+	-when "CLKA*CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01011 11011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 F 1 1} \
+	-when "CLKA*CLKB*GCLK*!RA*S" \
 	-pin RB \
 	{ ICM }
 
@@ -13759,7 +16815,7 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00000} \
+	-prevector {00110 00010 00000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 0 R 0 0} \
 	-when "!CLKA*!CLKB*!GCLK*!RA*!S" \
@@ -13769,7 +16825,37 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00001} \
+	-prevector {00101 01101 00101 00001 00000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 0 R 0 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 0 R 0 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 00000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 0 R 0 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 0 R 1 0} \
 	-when "!CLKA*!CLKB*!GCLK*!RA*S" \
@@ -13779,7 +16865,37 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00100} \
+	-prevector {00101 01101 00101 00001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 0 R 1 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00000 00001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 0 R 1 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 00001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 0 R 1 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 1 R 0 0} \
 	-when "!CLKA*!CLKB*!GCLK*RA*!S" \
@@ -13789,7 +16905,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00101} \
+	-prevector {00101 01101 00101 00100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 1 R 0 0} \
+	-when "!CLKA*!CLKB*!GCLK*RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 1 R 1 0} \
 	-when "!CLKA*!CLKB*!GCLK*RA*S" \
@@ -13799,7 +16925,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01010 01000} \
+	-prevector {00101 01101 00101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 1 R 1 0} \
+	-when "!CLKA*!CLKB*!GCLK*RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 01000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 0 R 0 0} \
 	-when "!CLKA*CLKB*!GCLK*!RA*!S" \
@@ -13809,7 +16945,67 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01011 01001} \
+	-prevector {00111 00011 00001 01001 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 R 0 0} \
+	-when "!CLKA*CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 R 0 0} \
+	-when "!CLKA*CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 R 0 0} \
+	-when "!CLKA*CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01111 01011 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 R 1 0} \
+	-when "!CLKA*CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 R 1 0} \
+	-when "!CLKA*CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01000 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 R 1 0} \
+	-when "!CLKA*CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 0 R 1 0} \
 	-when "!CLKA*CLKB*!GCLK*!RA*S" \
@@ -13829,6 +17025,16 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00101 01101 01100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 1 R 0 0} \
+	-when "!CLKA*CLKB*!GCLK*RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {01111 01101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 1 R 1 0} \
@@ -13839,10 +17045,60 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10100 10000} \
+	-prevector {00111 00101 01101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 1 R 1 0} \
+	-when "!CLKA*CLKB*!GCLK*RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10110 10010 10000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 0 R 0 0} \
 	-when "CLKA*!CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 R 0 0} \
+	-when "CLKA*!CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10001 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 R 0 0} \
+	-when "CLKA*!CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 R 0 0} \
+	-when "CLKA*!CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00000 00001 10001 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 R 0 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*!S" \
 	-pin RB \
 	{ ICM }
 
@@ -13859,10 +17115,70 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10101 10001} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 00000 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 R 0 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 R 0 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10011 10001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 0 R 1 0} \
 	-when "CLKA*!CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 R 1 0} \
+	-when "CLKA*!CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 R 1 0} \
+	-when "CLKA*!CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 R 1 0} \
+	-when "CLKA*!CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00000 00001 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 R 1 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*S" \
 	-pin RB \
 	{ ICM }
 
@@ -13879,7 +17195,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10100} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 11001 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 R 1 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 10000 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 R 1 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10110 10100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 1 R 0 0} \
 	-when "CLKA*!CLKB*!GCLK*RA*!S" \
@@ -13889,7 +17225,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10101} \
+	-prevector {10101 11101 10101 10100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 1 R 0 0} \
+	-when "CLKA*!CLKB*!GCLK*RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 1 R 1 0} \
+	-when "CLKA*!CLKB*!GCLK*RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 1 R 1 0} \
 	-when "CLKA*!CLKB*!GCLK*RA*S" \
@@ -13909,7 +17265,97 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10011 10001 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 0 0} \
+	-when "CLKA*CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 0 0} \
+	-when "CLKA*CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 0 0} \
+	-when "CLKA*CLKB*!GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01000 01001 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 0 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 0 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {01010 11010 01010 11010 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 0 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 0 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 00000 10000 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 0 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 01001 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 0 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 10000 11000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 0 R 0 1} \
 	-when "CLKA*CLKB*GCLK*!RA*!S" \
@@ -13929,7 +17375,97 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10011 10001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 1 0} \
+	-when "CLKA*CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010 11000 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 1 0} \
+	-when "CLKA*CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 1 0} \
+	-when "CLKA*CLKB*!GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01000 01001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 1 1} \
+	-when "CLKA*CLKB*GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 1 1} \
+	-when "CLKA*CLKB*GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {01010 11010 01010 11010 11000 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 1 1} \
+	-when "CLKA*CLKB*GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 1 1} \
+	-when "CLKA*CLKB*GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 11001 10001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 1 1} \
+	-when "CLKA*CLKB*GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 01001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 R 1 1} \
+	-when "CLKA*CLKB*GCLK*!RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 10000 11000 11001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 0 R 1 1} \
 	-when "CLKA*CLKB*GCLK*!RA*S" \
@@ -13949,6 +17485,16 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10101 11101 11100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 1 R 0 0} \
+	-when "CLKA*CLKB*!GCLK*RA*!S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {11111 11101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 1 R 1 0} \
@@ -13959,7 +17505,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00001} \
+	-prevector {10111 10101 11101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 1 R 1 0} \
+	-when "CLKA*CLKB*!GCLK*RA*S" \
+	-pin RB \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 0 0 F 0} \
 	-when "!CLKA*!CLKB*!GCLK*!RA*!RB" \
@@ -13969,7 +17525,37 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00011} \
+	-prevector {00101 01101 00101 00001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 0 0 F 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00000 00001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 0 0 F 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 00001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 0 0 F 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 0 1 F 0} \
 	-when "!CLKA*!CLKB*!GCLK*!RA*RB" \
@@ -13979,7 +17565,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00101} \
+	-prevector {00010 10010 00010 00011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 0 1 F 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 1 0 F 0} \
+	-when "!CLKA*!CLKB*!GCLK*RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 1 0 F 0} \
 	-when "!CLKA*!CLKB*!GCLK*RA*!RB" \
@@ -13999,10 +17605,30 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01011 01001} \
+	-prevector {01111 01011 01001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 0 0 F 0} \
 	-when "!CLKA*CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 0 F 0} \
+	-when "!CLKA*CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00001 00000 01000 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 0 F 1} \
+	-when "!CLKA*CLKB*GCLK*!RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -14019,7 +17645,57 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01011} \
+	-prevector {01010 11010 01010 01000 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 0 F 0} \
+	-when "!CLKA*CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 0 F 0} \
+	-when "!CLKA*CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 00001 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 0 F 1} \
+	-when "!CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 01001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 0 F 1} \
+	-when "!CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01111 01011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 1 F 0} \
+	-when "!CLKA*CLKB*!GCLK*!RA*RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 0 1 F 0} \
 	-when "!CLKA*CLKB*!GCLK*!RA*RB" \
@@ -14033,6 +17709,26 @@ define_arc \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 1 0 F 0} \
 	-when "!CLKA*CLKB*!GCLK*RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00101 01101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 1 0 F 0} \
+	-when "!CLKA*CLKB*!GCLK*RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00100 01100 01101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 1 0 F 1} \
+	-when "!CLKA*CLKB*GCLK*RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -14059,7 +17755,7 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10101 10001} \
+	-prevector {10111 10011 10001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 0 0 F 0} \
 	-when "CLKA*!CLKB*!GCLK*!RA*!RB" \
@@ -14069,7 +17765,67 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 0 F 0} \
+	-when "CLKA*!CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 0 F 0} \
+	-when "CLKA*!CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 0 F 0} \
+	-when "CLKA*!CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00000 00001 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 0 F 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00010 10010 00010 10010 10000 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 0 F 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 11001 10001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 0 F 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 10000 10001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 0 0 F 1} \
 	-when "CLKA*!CLKB*GCLK*!RA*!RB" \
@@ -14089,6 +17845,26 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 1 F 0} \
+	-when "CLKA*!CLKB*!GCLK*!RA*RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00011 10011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 1 F 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00010 10010 00010 10010 10011} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 0 1 F 1} \
@@ -14099,7 +17875,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10101} \
+	-prevector {10111 10101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 1 0 F 0} \
+	-when "CLKA*!CLKB*!GCLK*RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 1 0 F 0} \
 	-when "CLKA*!CLKB*!GCLK*RA*!RB" \
@@ -14129,7 +17915,137 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10011 10001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 F 0} \
+	-when "CLKA*CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010 11000 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 F 0} \
+	-when "CLKA*CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 F 0} \
+	-when "CLKA*CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10001 10000 11000 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 F 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {10101 11101 10101 11101 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 F 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 10000 11000 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 F 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 F 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01000 01001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 F 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 F 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 11010 11000 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 F 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 F 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 11001 10001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 F 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 01001 11001} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 F 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 10000 11000 11001} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 0 0 F 1} \
 	-when "CLKA*CLKB*GCLK*!RA*!RB" \
@@ -14143,6 +18059,26 @@ define_arc \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 0 1 F 0} \
 	-when "CLKA*CLKB*!GCLK*!RA*RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010 11011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 1 F 0} \
+	-when "CLKA*CLKB*!GCLK*!RA*RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01011 11011} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 1 F 1} \
+	-when "CLKA*CLKB*GCLK*!RA*RB" \
 	-pin S \
 	{ ICM }
 
@@ -14169,6 +18105,26 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10101 11101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 1 0 F 0} \
+	-when "CLKA*CLKB*!GCLK*RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10100 11100 11101} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 1 0 F 1} \
+	-when "CLKA*CLKB*GCLK*RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {10101 11101 10101 11101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 1 0 F 1} \
@@ -14189,7 +18145,7 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00000} \
+	-prevector {00110 00010 00000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 0 0 R 0} \
 	-when "!CLKA*!CLKB*!GCLK*!RA*!RB" \
@@ -14199,7 +18155,37 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00010} \
+	-prevector {00101 01101 00101 00001 00000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 0 0 R 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 0 0 R 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 00000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 0 0 R 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 0 1 R 0} \
 	-when "!CLKA*!CLKB*!GCLK*!RA*RB" \
@@ -14209,7 +18195,27 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00100} \
+	-prevector {00010 10010 00010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 0 1 R 0} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 0 1 0 R 0} \
+	-when "!CLKA*!CLKB*!GCLK*RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 0 1 0 R 0} \
 	-when "!CLKA*!CLKB*!GCLK*RA*!RB" \
@@ -14229,10 +18235,30 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01010 01000} \
+	-prevector {01110 01010 01000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 0 0 R 0} \
 	-when "!CLKA*CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 0 R 0} \
+	-when "!CLKA*CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00001 00000 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 0 R 1} \
+	-when "!CLKA*CLKB*GCLK*!RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -14249,7 +18275,57 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01010} \
+	-prevector {01010 11010 01010 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 0 R 0} \
+	-when "!CLKA*CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 0 R 0} \
+	-when "!CLKA*CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 00000 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 0 R 1} \
+	-when "!CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 01001 01000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 0 R 1} \
+	-when "!CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 0 1 R 0} \
+	-when "!CLKA*CLKB*!GCLK*!RA*RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 0 1 R 0} \
 	-when "!CLKA*CLKB*!GCLK*!RA*RB" \
@@ -14263,6 +18339,26 @@ define_arc \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {0 1 1 0 R 0} \
 	-when "!CLKA*CLKB*!GCLK*RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00101 01101 01100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 1 0 R 0} \
+	-when "!CLKA*CLKB*!GCLK*RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00100 01100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {0 1 1 0 R 1} \
+	-when "!CLKA*CLKB*GCLK*RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -14289,7 +18385,7 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10100 10000} \
+	-prevector {10110 10010 10000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 0 0 R 0} \
 	-when "CLKA*!CLKB*!GCLK*!RA*!RB" \
@@ -14299,7 +18395,67 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 0 R 0} \
+	-when "CLKA*!CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10001 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 0 R 0} \
+	-when "CLKA*!CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 0 R 0} \
+	-when "CLKA*!CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00000 00001 10001 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 0 R 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00010 10010 00010 10010 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 0 R 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 00000 10000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 0 R 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 10000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 0 0 R 1} \
 	-when "CLKA*!CLKB*GCLK*!RA*!RB" \
@@ -14319,6 +18475,26 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 1 R 0} \
+	-when "CLKA*!CLKB*!GCLK*!RA*RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 00011 10011 10010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 0 1 R 1} \
+	-when "CLKA*!CLKB*GCLK*!RA*RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00010 10010 00010 10010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 0 1 R 1} \
@@ -14329,7 +18505,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10100} \
+	-prevector {10110 10100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 0 1 0 R 0} \
+	-when "CLKA*!CLKB*!GCLK*RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 0 1 0 R 0} \
 	-when "CLKA*!CLKB*!GCLK*RA*!RB" \
@@ -14359,7 +18545,137 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10011 10001 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 R 0} \
+	-when "CLKA*CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 R 0} \
+	-when "CLKA*CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 R 0} \
+	-when "CLKA*CLKB*!GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10001 10000 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 R 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 11101 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 R 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 10000 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 R 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 R 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01000 01001 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 R 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 01001 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 R 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {01010 11010 01010 11010 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 R 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 R 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 00000 10000 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 R 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10000 10001 11001 10001 11001 01001 11001 11000} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 0 R 1} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00011 00001 01001 01000 11000 01000 11000 10000 11000} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 0 0 R 1} \
 	-when "CLKA*CLKB*GCLK*!RA*!RB" \
@@ -14373,6 +18689,26 @@ define_arc \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 0 1 R 0} \
 	-when "CLKA*CLKB*!GCLK*!RA*RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 1 R 0} \
+	-when "CLKA*CLKB*!GCLK*!RA*RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 01010 01011 11011 11010} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 0 1 R 1} \
+	-when "CLKA*CLKB*GCLK*!RA*RB" \
 	-pin S \
 	{ ICM }
 
@@ -14393,6 +18729,26 @@ define_arc \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
 	-vector {1 1 1 0 R 0} \
 	-when "CLKA*CLKB*!GCLK*RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10101 11101 11100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 1 0 R 0} \
+	-when "CLKA*CLKB*!GCLK*RA*!RB" \
+	-pin S \
+	{ ICM }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 10100 11100} \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-vector {1 1 1 0 R 1} \
+	-when "CLKA*CLKB*GCLK*RA*!RB" \
 	-pin S \
 	{ ICM }
 
@@ -14725,7 +19081,7 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {A B C D} \
-	-prevector {1110} \
+	-prevector {1100 1110} \
 	-type combinational \
 	-pinlist {A B C D Y Z} \
 	-vector {F 1 1 0 X F} \
@@ -14736,7 +19092,29 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {A B C D} \
-	-prevector {1111} \
+	-prevector {1101 1111 1110} \
+	-type combinational \
+	-pinlist {A B C D Y Z} \
+	-vector {F 1 1 0 X F} \
+	-when "B*C*!D" \
+	-related_pin A \
+	-pin Z \
+	{ MIX }
+
+define_arc \
+	-prevector_pinlist {A B C D} \
+	-prevector {1100 1110 1111} \
+	-type combinational \
+	-pinlist {A B C D Y Z} \
+	-vector {F 1 1 1 X F} \
+	-when "B*C*D" \
+	-related_pin A \
+	-pin Z \
+	{ MIX }
+
+define_arc \
+	-prevector_pinlist {A B C D} \
+	-prevector {1101 1111} \
 	-type combinational \
 	-pinlist {A B C D Y Z} \
 	-vector {F 1 1 1 X F} \
@@ -14770,7 +19148,7 @@ define_arc \
 define_arc \
 	-type combinational \
 	-prevector_pinlist {A B C D} \
-	-prevector {0110} \
+	-prevector {0100 0110} \
 	-pinlist {A B C D Y Z} \
 	-vector {R 1 1 0 X R} \
 	-when "B*C*!D" \
@@ -14781,7 +19159,29 @@ define_arc \
 define_arc \
 	-type combinational \
 	-prevector_pinlist {A B C D} \
-	-prevector {0111} \
+	-prevector {0101 0111 0110} \
+	-pinlist {A B C D Y Z} \
+	-vector {R 1 1 0 X R} \
+	-when "B*C*!D" \
+	-related_pin A \
+	-pin Z \
+	{ MIX }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {A B C D} \
+	-prevector {0100 0110 0111} \
+	-pinlist {A B C D Y Z} \
+	-vector {R 1 1 1 X R} \
+	-when "B*C*D" \
+	-related_pin A \
+	-pin Z \
+	{ MIX }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {A B C D} \
+	-prevector {0101 0111} \
 	-pinlist {A B C D Y Z} \
 	-vector {R 1 1 1 X R} \
 	-when "B*C*D" \
@@ -14813,7 +19213,7 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {A B C D} \
-	-prevector {1110} \
+	-prevector {1100 1110} \
 	-type combinational \
 	-pinlist {A B C D Y Z} \
 	-vector {1 F 1 0 X F} \
@@ -14824,7 +19224,29 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {A B C D} \
-	-prevector {1111} \
+	-prevector {1101 1111 1110} \
+	-type combinational \
+	-pinlist {A B C D Y Z} \
+	-vector {1 F 1 0 X F} \
+	-when "A*C*!D" \
+	-related_pin B \
+	-pin Z \
+	{ MIX }
+
+define_arc \
+	-prevector_pinlist {A B C D} \
+	-prevector {1100 1110 1111} \
+	-type combinational \
+	-pinlist {A B C D Y Z} \
+	-vector {1 F 1 1 X F} \
+	-when "A*C*D" \
+	-related_pin B \
+	-pin Z \
+	{ MIX }
+
+define_arc \
+	-prevector_pinlist {A B C D} \
+	-prevector {1101 1111} \
 	-type combinational \
 	-pinlist {A B C D Y Z} \
 	-vector {1 F 1 1 X F} \
@@ -14858,7 +19280,7 @@ define_arc \
 define_arc \
 	-type combinational \
 	-prevector_pinlist {A B C D} \
-	-prevector {1010} \
+	-prevector {1000 1010} \
 	-pinlist {A B C D Y Z} \
 	-vector {1 R 1 0 X R} \
 	-when "A*C*!D" \
@@ -14869,7 +19291,29 @@ define_arc \
 define_arc \
 	-type combinational \
 	-prevector_pinlist {A B C D} \
-	-prevector {1011} \
+	-prevector {1001 1011 1010} \
+	-pinlist {A B C D Y Z} \
+	-vector {1 R 1 0 X R} \
+	-when "A*C*!D" \
+	-related_pin B \
+	-pin Z \
+	{ MIX }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {A B C D} \
+	-prevector {1000 1010 1011} \
+	-pinlist {A B C D Y Z} \
+	-vector {1 R 1 1 X R} \
+	-when "A*C*D" \
+	-related_pin B \
+	-pin Z \
+	{ MIX }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {A B C D} \
+	-prevector {1001 1011} \
 	-pinlist {A B C D Y Z} \
 	-vector {1 R 1 1 X R} \
 	-when "A*C*D" \
@@ -15627,7 +20071,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {C D E} \
-	-prevector {101} \
+	-prevector {001 101} \
+	-pinlist {C D E Z2} \
+	-vector {F 0 1 1} \
+	-when "!D*E*Z2" \
+	-pin C \
+	{ TRW }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {C D E} \
+	-prevector {011 111 101} \
 	-pinlist {C D E Z2} \
 	-vector {F 0 1 1} \
 	-when "!D*E*Z2" \
@@ -15647,7 +20101,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {C D E} \
-	-prevector {111} \
+	-prevector {001 101 111} \
+	-pinlist {C D E Z2} \
+	-vector {F 1 1 1} \
+	-when "D*E*Z2" \
+	-pin C \
+	{ TRW }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {C D E} \
+	-prevector {011 111} \
 	-pinlist {C D E Z2} \
 	-vector {F 1 1 1} \
 	-when "D*E*Z2" \
@@ -15727,7 +20191,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {C D E} \
-	-prevector {111} \
+	-prevector {001 101 111} \
+	-pinlist {C D E Z2} \
+	-vector {1 F 1 1} \
+	-when "C*E*Z2" \
+	-pin D \
+	{ TRW }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {C D E} \
+	-prevector {011 111} \
 	-pinlist {C D E Z2} \
 	-vector {1 F 1 1} \
 	-when "C*E*Z2" \
@@ -15777,7 +20251,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {C D E} \
-	-prevector {101} \
+	-prevector {001 101} \
+	-pinlist {C D E Z2} \
+	-vector {1 R 1 1} \
+	-when "C*E*Z2" \
+	-pin D \
+	{ TRW }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {C D E} \
+	-prevector {011 111 101} \
 	-pinlist {C D E Z2} \
 	-vector {1 R 1 1} \
 	-when "C*E*Z2" \
@@ -16281,20 +20765,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {A B R} \
-	-prevector {110} \
+	-prevector {111} \
 	-pinlist {A B R Q} \
-	-vector {F 1 0 1} \
-	-when "B*Q*!R" \
+	-vector {F 1 1 0} \
+	-when "B*!Q*R" \
 	-pin A \
 	{ RC2 }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {A B R} \
-	-prevector {111} \
+	-prevector {110} \
 	-pinlist {A B R Q} \
-	-vector {F 1 1 0} \
-	-when "B*!Q*R" \
+	-vector {F 1 0 1} \
+	-when "B*Q*!R" \
 	-pin A \
 	{ RC2 }
 
@@ -16321,20 +20805,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {A B R} \
-	-prevector {110 010} \
+	-prevector {011} \
 	-pinlist {A B R Q} \
-	-vector {R 1 0 1} \
-	-when "B*Q*!R" \
+	-vector {R 1 1 0} \
+	-when "B*!Q*R" \
 	-pin A \
 	{ RC2 }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {A B R} \
-	-prevector {011} \
+	-prevector {110 010} \
 	-pinlist {A B R Q} \
-	-vector {R 1 1 0} \
-	-when "B*!Q*R" \
+	-vector {R 1 0 1} \
+	-when "B*Q*!R" \
 	-pin A \
 	{ RC2 }
 
@@ -16361,20 +20845,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {A B R} \
-	-prevector {110} \
+	-prevector {111} \
 	-pinlist {A B R Q} \
-	-vector {1 F 0 1} \
-	-when "A*Q*!R" \
+	-vector {1 F 1 0} \
+	-when "A*!Q*R" \
 	-pin B \
 	{ RC2 }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {A B R} \
-	-prevector {111} \
+	-prevector {110} \
 	-pinlist {A B R Q} \
-	-vector {1 F 1 0} \
-	-when "A*!Q*R" \
+	-vector {1 F 0 1} \
+	-when "A*Q*!R" \
 	-pin B \
 	{ RC2 }
 
@@ -16401,20 +20885,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {A B R} \
-	-prevector {110 100} \
+	-prevector {101} \
 	-pinlist {A B R Q} \
-	-vector {1 R 0 1} \
-	-when "A*Q*!R" \
+	-vector {1 R 1 0} \
+	-when "A*!Q*R" \
 	-pin B \
 	{ RC2 }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {A B R} \
-	-prevector {101} \
+	-prevector {110 100} \
 	-pinlist {A B R Q} \
-	-vector {1 R 1 0} \
-	-when "A*!Q*R" \
+	-vector {1 R 0 1} \
+	-when "A*Q*!R" \
 	-pin B \
 	{ RC2 }
 

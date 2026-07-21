@@ -75,8 +75,8 @@ library (sequentials) {
       table : "L L : - - : L - , \
                L H : - - : H - , \
                H - : - - : N - , \
-               R - : H - : - H , \
-               R - : L - : - L , \
+               R H : - - : - H , \
+               R L : - - : - L , \
                ~R - : - - : - N";
     }
     pin (M) {
@@ -99,8 +99,8 @@ library (sequentials) {
       table : "L L : - - : - L , \
                L H : - - : - H , \
                H - : - - : - N , \
-               R - : - H : H - , \
-               R - : - L : L - , \
+               R H : - - : H - , \
+               R L : - - : L - , \
                ~R - : - - : N -";
     }
     pin (Q) {
@@ -161,12 +161,13 @@ library (sequentials) {
       direction : input;
     }
     statetable ("CLK R", "Q M") {
-      table : "R - : - H : H - , \
-               R - : - L : L - , \
+      table : "R L : L - : H - , \
+               R - : H - : L - , \
+               R H : - - : L - , \
                ~R H : - - : L - , \
                ~R L : - - : N - , \
-               F L : - L : - H , \
-               F - : - H : - L , \
+               F L : L - : - H , \
+               F - : H - : - L , \
                F H : - - : - L , \
                ~F H : - - : - L , \
                ~F L : - - : - N";
@@ -213,9 +214,9 @@ library (sequentials) {
       table : "R H L : - : H , \
                R L - : - : L , \
                R - H : - : L , \
-               ~R - H : - : L , \
+               H - H : - : L , \
                ~R - L : - : N , \
-               ~R - - : - : N";
+               L - - : - : N";
     }
     pin (Q) {
       direction : output;
@@ -236,9 +237,9 @@ library (sequentials) {
       table : "R H L : - : H , \
                R L - : - : L , \
                R - H : - : L , \
-               ~R - H : - : L , \
+               H - H : - : L , \
                ~R - L : - : N , \
-               ~R - - : - : N";
+               L - - : - : N";
     }
     pin (Q) {
       direction : output;
@@ -407,11 +408,9 @@ library (sequentials) {
     }
     statetable ("CLK D B R", "Q") {
       table : "R H - L : - : H , \
-               R - H - : H : H , \
-               R L - - : L : L , \
-               R - - H : L : L , \
+               R - H L : - : H , \
                R L L - : - : L , \
-               R - L H : - : L , \
+               R - - H : - : L , \
                ~R - H L : - : H , \
                ~R - - H : - : L , \
                ~R - L L : - : N";
@@ -436,11 +435,9 @@ library (sequentials) {
     }
     statetable ("CLK D PRE CLR", "Q") {
       table : "R H - L : - : H , \
-               R - H - : H : H , \
-               R L - - : L : L , \
-               R - - H : L : L , \
+               R - H L : - : H , \
                R L L - : - : L , \
-               R - L H : - : L , \
+               R - - H : - : L , \
                ~R - H L : - : H , \
                ~R - - H : - : L , \
                ~R - L L : - : N";
@@ -633,7 +630,9 @@ library (sequentials) {
                R L H : - - : H - , \
                R H - : L - : L - , \
                R L L : - - : L - , \
-               ~R - - : - - : N - , \
+               - F - : - H : H - , \
+               - F - : - L : L - , \
+               - - - : - - : N - , \
                R - H : - - : - H , \
                R - L : - - : - L , \
                ~R - - : - - : - N";
@@ -664,30 +663,15 @@ library (sequentials) {
       table : "- L - L : - - - : - - L , \
                - L - H : - - - : - - H , \
                - H - - : - - - : - - N , \
+               - H - - : - - H : H - - , \
+               - H - - : - L L : L - - , \
                L - L - : - - - : - L - , \
                L - H - : - - - : - H - , \
+               L L - - : - - - : N - - , \
+               L H - - : - - L : L - - , \
                H - - - : - - - : - N - , \
-               R H - - : - - H : H - - , \
-               R - - - : - H - : H - - , \
-               R - - - : - L L : L - - , \
-               R L - - : - L - : L - - , \
-               F - - - : H - H : H - - , \
-               F L - - : - H - : H - - , \
-               F H - - : L - - : L - - , \
-               F H - - : - - L : L - - , \
-               F - - - : L L - : L - - , \
-               F - - - : - L L : L - - , \
-               - R - - : - - H : H - - , \
-               H R - - : - H - : H - - , \
-               - R - - : - L L : L - - , \
-               L R - - : - - L : L - - , \
-               - F - - : H H - : H - - , \
-               L F - - : - - H : H - - , \
-               - F - - : L - L : L - - , \
-               - F - - : - L L : L - - , \
-               H F - - : L - - : L - - , \
-               H F - - : - L - : L - - , \
-               - - - - : - - - : N - -";
+               H - - - : - H - : H - - , \
+               H L - - : - L - : L - -";
     }
     pin (Q) {
       direction : output;

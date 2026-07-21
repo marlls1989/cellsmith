@@ -154,19 +154,22 @@ Q = "CLK*M + !CLK*Q"           # the slave references the internal master; CLK�
 ```
 
 `M` and `Q` are an opposite-phase latch pair on the declared clock `CLK`, so by default cellsmith
-classifies, after exploration, the `CLK` rising arc on `Q` as a **capture**: `M`'s pin, UDP, and
+recognises, after exploration, the `CLK` rising arc on `Q` as an **edge arc**: `M`'s pin, UDP, and
 `statetable` row are elided from every emitted artifact, while its internal-power characterisation
-(carried by its primary-input hidden arcs) is unchanged; `Q`'s capture is re-expressed combinationally
-in terms of `D`, and its Liberate arc carries `-type edge`. Setting `no_edge_collapse = true` (or
-passing `--no-edge-collapse`) keeps the two-latch form written above exactly as it stands, with `M`
-staying a separate internal node and `Q`'s arcs discovered by prevector as before.
+(carried by its primary-input hidden arcs) is unchanged; `Q`'s next state is re-expressed
+combinationally in terms of `D`, and its Liberate arc carries `-type edge`. Setting
+`no_edge_collapse = true` (or passing `--no-edge-collapse`) keeps the two-latch form written above
+exactly as it stands, with `M` staying a separate internal node and `Q`'s arcs discovered by prevector
+as before.
 
-Classification is **per arc**, not per node: each arc a cell presents is a capture, a **release** (a
-clock edge opening a latch, transmitting data that changed while it was closed), or plain
-combinational propagation through an already-transparent latch. Captures and releases are distinct
-categories but both are timing arcs on a clock edge, so both emit Liberate `-type edge` — a plain latch
-has no capture yet still carries its opening arc. All three categories coexist freely on one output pin
-(an async-reset flop carries all three). See `docs/edge-collapse.md` for the decision pipeline and its
+Classification is **per arc**, not per node, and there is one category — the **edge arc**: a clock
+toggle that takes a latch from opaque to transparent and whose delivered value depends on retained latch
+content. The physical event may be a capture (the value then holds until the next edge) or a latch
+opening (the value then tracks its data); both are timing arcs on a clock edge and both emit
+`-type edge`, so a plain latch with no capture still carries its opening arc. An arc that does not meet
+the definition — a data change through an already-transparent latch, or a clock acting by its level —
+stays `-type combinational`. Edge and combinational arcs coexist freely on one output pin (an
+async-reset flop carries both). See `docs/edge-collapse.md` for the decision pipeline and its
 invariants.
 
 Function syntax: the primary operators are `*` (AND), `+` (OR), `!` (NOT), the constants `1`/`0`, and
@@ -184,21 +187,22 @@ Arguments:
   <SPEC>              TOML cell spec to read ("-" reads from stdin)
 
 Options:
-  -o, --outdir <OUTDIR>  Directory for the generated files [default: .]
-  -n, --name <NAME>      Base name for the output files [default: spec file stem, or "cells" for stdin]
-      --no-when          Suppress the `-when` conditions on arcs (emitted by default); with them
-                         suppressed, arcs sharing a (related, pin, edge) collapse to one
-      --no-internal      Suppress hidden (internal-power) arcs — input toggles where no output
-                         changes (emitted by default)
-      --no-leakage       Suppress `define_leakage` blocks — static leakage states derived from the
-                         machine's settled seed states (emitted by default)
-      --constraints      Emit derived setup/hold & non_seq constraint arcs (off by default; a cell can
-                         opt in with `constraint_arcs = true`)
-      --no-edge-collapse Suppress per-arc capture/release classification (on by default); a cell can
-                         opt out individually with `no_edge_collapse = true`
-      --stdout           Write all three artifacts to stdout (with banners) instead of files
-  -h, --help             Print help
-  -V, --version          Print version
+  -o, --outdir <OUTDIR>   Directory for the generated files [default: .]
+  -n, --name <NAME>       Base name for the output files (defaults to the spec file stem, or "cells" for stdin)
+      --no-when           Suppress the `-when` conditions on arcs (emitted by default). Suppression only:
+                          every arc still emits, so the output differs from the default solely by the
+                          absent `-when` lines
+      --no-internal       Suppress hidden (internal-power) arcs — input toggles where no output changes
+                          (emitted by default)
+      --no-leakage        Suppress `define_leakage` blocks — static leakage states derived from the
+                          machine's settled seed states (emitted by default)
+      --constraints       Emit derived setup/hold & non_seq constraint arcs (off by default; a cell can
+                          opt in with `constraint_arcs = true`)
+      --no-edge-collapse  Suppress the behavioural edge-register annotation (on by default); a cell can
+                          opt out individually with `no_edge_collapse = true`
+      --stdout            Write all three artifacts to stdout (with banners) instead of writing files
+  -h, --help              Print help
+  -V, --version           Print version
 ```
 
 Examples:

@@ -95,10 +95,11 @@ pub struct EdgeCaptures {
     /// The captured next-state function per active edge, as combinational state-table regions (total —
     /// off is the complement of on, empty hold). Each capture carries ITS OWN clock. Grouped by clock in
     /// cell input-pin order, `Rise` before `Fall` within a clock; a single-clock node keeps one entry per
-    /// active edge (two for a dual-edge node with `Rise` first), byte-identical to a single-clock keying.
+    /// active edge (two for a dual-edge node with `Rise` first).
     pub captures: Vec<(Symbol, Edge, StateRegions)>,
     /// The off-edge (hold) function as state-table regions, keyed by the clock set's phase vector: on/off
-    /// are the async set/clear covers, hold is the quiescent region; never references any of the clocks.
+    /// are the set/clear covers, hold is the quiescent region. A phase-agreed forcing drops the clocks
+    /// from its cover; a phase-conditioned one keeps its gating clock literal (`CLK*R`).
     pub off_edge: StateRegions,
     /// The node's column set: the first-appearance union of the captures' cols then `off_edge.cols`.
     pub cols: Vec<Symbol>,
@@ -570,8 +571,9 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // alone never marks it, while any chain that reaches a live sink strands the whole chain.
     //
     // The criterion is deliberately NARROWER than early minimisation's, which preserves self-referential
-    // loops so oscillation stays detectable — minimisation is untouched by this. Statetable invariant I3
-    // (`src/logic/minimise.rs`) holds by construction: every kept survivor's support is kept by closure.
+    // loops so oscillation stays detectable — minimisation is untouched by this. The minimise fixpoint
+    // invariant I3 (`src/logic/minimise.rs`) holds by construction: every kept survivor's support is kept
+    // by closure.
     let ref_reg: BTreeSet<&str> = captures
         .iter()
         .flat_map(|r| r.cols.iter().map(Symbol::as_str))
@@ -655,83 +657,6 @@ impl<'a> Transitions<'a> {
             .collect();
         Transitions { order, next }
     }
-}
-
-/// Is `node` genuinely TRANSPARENT in `clock`'s `level` phase? Two conjuncts, both behavioural:
-///
-/// * MEMORYLESS — no two reachable stable states of the phase that agree on every column except `node`
-///   differ in `node` (the phase pins the node's value, so nothing is being remembered across it), and
-/// * MOVING — the node actually moves within the phase under some non-`clock` toggle (an inert phase is
-///   not transparency, it is a node that simply never changes there).
-///
-/// Transparency in a phase is the LATCH signature: the node tracks live data there instead of presenting
-/// an already-captured value, so it cannot hold independent of the clock's LEVEL and carries no edge arc
-/// on that clock. The contrasting phase is HYSTERETIC — the node holds there, only being moved by an edge
-/// or a co-resident clock.
-///
-/// The FORCING region takes no part in either conjunct: a set/clear that overrides the node in the phase
-/// is a coexisting combinational arc, not the node tracking data, so a phase whose only movement is a
-/// forcing (a flop's reset asserting across its closed phase) is not transparent.
-///
-/// The classifier itself does not consult this — the edge arcs are decided by condition 1' and the seam
-/// fixpoint from [`stores`]. Its only consumer is the replay-faithfulness harness, which reads an OPEN
-/// phase against the cover.
-#[cfg_attr(not(test), allow(dead_code))]
-fn transparent<B: Brand, C: ManagerCell>(
-    m: &Machine<'_, B, C>,
-    tr: &Transitions<'_>,
-    node: &Symbol,
-    clock: &Symbol,
-    level: bool,
-    forced: (&Bdd<B, C>, &Bdd<B, C>),
-) -> bool {
-    let is_forced = |s: &Minterm<Symbol>| {
-        forced.0.evaluate_fast(s) == Some(true) || forced.1.evaluate_fast(s) == Some(true)
-    };
-    // Every column but the node itself: two phase states agreeing here and differing in the node are a
-    // witness of memory.
-    let cols: Vec<&str> = tr
-        .order
-        .first()
-        .map(|s| {
-            s.vars()
-                .iter()
-                .map(Symbol::as_str)
-                .filter(|v| *v != node.as_str())
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let mut seen: BTreeMap<Minterm<Symbol>, bool> = BTreeMap::new();
-    let mut moves = false;
-    for (i, s) in tr.order.iter().enumerate() {
-        if s.value_of(clock.as_str()) != Some(level) || is_forced(s) {
-            continue;
-        }
-        let Some(v) = m.output_value(node.as_str(), s) else {
-            continue;
-        };
-        if let Some(prev) = seen.insert(s.project_to(cols.iter().copied()), v) {
-            if prev != v {
-                return false; // memory: the phase does not pin the node
-            }
-        }
-        if !moves {
-            for (xi, x) in m.cell.inputs.iter().enumerate() {
-                if x == clock {
-                    continue;
-                }
-                if let Some(ni) = tr.next[i][xi] {
-                    let dest = &tr.order[ni];
-                    if !is_forced(dest) && m.output_value(node.as_str(), dest) != Some(v) {
-                        moves = true;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-    moves
 }
 
 /// Does `f`, once every variable of its support EXCEPT `freed` is fixed to `state`'s values, still depend
@@ -891,8 +816,8 @@ fn forcing_pins<B: Brand, C: ManagerCell>(
     // No tracked data pin satisfies this: its tracking is confined to a clock-phase region, and elsewhere
     // the node varies under the same pin level. A REAL capture clock never pins the node to a constant
     // either (the node carries content in both phases), so declaration plays no part — a level-forcing
-    // reset is a forcing pin whether or not it was declared a clock (the behavioural principle the deleted
-    // level veto used to serve for `RDFF`'s clock-declared `R`).
+    // reset is a forcing pin whether or not it was declared a clock, which is how `RDFF`'s clock-declared
+    // `R` is handled here.
     let mut pinning: BTreeMap<Symbol, (bool, bool)> = BTreeMap::new();
     for x in inputs {
         let pinned_value = |level: bool| -> Option<bool> {
@@ -1163,7 +1088,9 @@ fn regions_from<B: Brand, C: ManagerCell>(
 /// generalises past the reachable pre-states to the underlying function — reachability need not cover
 /// every projection for the cover to land on the true capture. The generalised on-set is total, its off
 /// the exact complement (empty hold). Returns `None` when a projection carries both an on- and an
-/// off-sample (a conflict that tier-2 must disambiguate).
+/// off-sample — a conflict that the uniform header (all inputs except the keying clock plus every
+/// candidate) makes impossible for the classifier's own calls, since equal projections are then the same
+/// machine minterm.
 fn synth_capture<B: Brand, C: ManagerCell>(
     builder: &BddBuilder<B, C>,
     header: &[Symbol],
@@ -1411,6 +1338,50 @@ mod tests {
         let tr = Transitions::build(m);
         let inputs = &m.cell.inputs;
 
+        // The ELIGIBLE stable states — measured only where every state column is determinate (a don't-care
+        // is a missing variable, never coerced), and the live dependency graph at each. Both feed the
+        // restriction-survival transparency test the harness reads open phases with.
+        let eligible: Vec<bool> = tr
+            .order
+            .iter()
+            .map(|s| {
+                m.state_vars
+                    .iter()
+                    .all(|w| s.value_of(w.as_str()).is_some())
+            })
+            .collect();
+        let live_succ = super::live_successors(m, &tr, &eligible);
+        // A node is TRANSPARENT in `clock`'s `level` phase iff it carries NO live dependency cycle at any
+        // eligible stable state of the phase (not opaque) AND its value VARIES across those states — the
+        // same restriction-survival form the classifier types generation on. A phase pinned to one constant
+        // everywhere is a forcing, not an opening, so it is not transparent.
+        let phase_transparent = |node: &Symbol, clock: &Symbol, level: bool| -> bool {
+            let opaque = m.state_set.contains(node.as_str())
+                && tr.order.iter().enumerate().any(|(i, s)| {
+                    eligible[i]
+                        && s.value_of(clock.as_str()) == Some(level)
+                        && super::reaches_self(&live_succ[i], node)
+                });
+            if opaque {
+                return false;
+            }
+            let mut seen: Option<bool> = None;
+            for (i, s) in tr.order.iter().enumerate() {
+                if !eligible[i] || s.value_of(clock.as_str()) != Some(level) {
+                    continue;
+                }
+                let Some(v) = m.output_value(node.as_str(), s) else {
+                    continue;
+                };
+                match seen {
+                    None => seen = Some(v),
+                    Some(prev) if prev != v => return true,
+                    Some(_) => {}
+                }
+            }
+            false
+        };
+
         for r in &es.captures {
             let node = r.node.as_str();
             let value = |s: &Minterm<Symbol>| m.output_value(node, s);
@@ -1448,9 +1419,8 @@ mod tests {
                         && tr.next[si][xi].is_some_and(|ni| value(&tr.order[ni]) != value(s))
                 })
             };
-            let is_transparent = |(clock, is_rise): &Arc| -> bool {
-                super::transparent(m, &tr, &r.node, clock, !*is_rise, (&forced_on, &forced_off))
-            };
+            let is_transparent =
+                |(clock, is_rise): &Arc| -> bool { phase_transparent(&r.node, clock, !*is_rise) };
 
             // The OPEN phases: a CHANGE-FREE arc whose pre-phase is genuinely transparent is a latch
             // close, and its pre-phase is where the node tracks that arc's cover.
@@ -1537,37 +1507,6 @@ mod tests {
                             );
                         }
                         continue;
-                    } else if m.cell.clock_pins.iter().any(|c| c == x)
-                        && !covers.keys().any(|(k, _)| k == x)
-                        && super::transparent(
-                            m,
-                            &tr,
-                            &r.node,
-                            x,
-                            dest.value_of(x.as_str()) == Some(true),
-                            (&forced_on, &forced_off),
-                        )
-                    {
-                        // An UN-ARCED latch clock OPENING into its transparent phase: the node
-                        // re-tracks the value captured upstream (HPIPE's CLKB fall revealing the
-                        // CLKA capture), which the edge model does not predict. Require only
-                        // DETERMINISM per (pin, destination-minus-node projection).
-                        let others: Vec<&str> = dest
-                            .vars()
-                            .iter()
-                            .map(Symbol::as_str)
-                            .filter(|v| *v != node)
-                            .collect();
-                        let key = (x.clone(), dest.project_to(others));
-                        if let Some(prev) = releases.insert(key.clone(), got) {
-                            assert_eq!(
-                                prev, got,
-                                "reveal unfaithful: node {node}, latch clock {x} into {:?}: \
-                                 {prev:?} != {got:?}",
-                                key.1
-                            );
-                        }
-                        continue;
                     } else {
                         value(s) // quiescent ⇒ the node holds
                     };
@@ -1595,11 +1534,10 @@ mod tests {
         }
     }
 
-    /// The machine-checkable form of statetable invariant I3 (the `debug_assert!` in
-    /// `crate::emit::statetable`): NOTHING THAT SURVIVES EMISSION MAY NAME A FOLDED NODE. A fold — the
-    /// group fold especially — drops the node's column from the emitted table, so a survivor still
-    /// referencing it would emit a dangling column. For every folded name this checks both routes a
-    /// reference can take: a surviving capture's cover columns, and the raw function of a surviving
+    /// A machine-check of the fold's emission guarantee: NOTHING THAT SURVIVES EMISSION MAY NAME A FOLDED
+    /// NODE. A fold — the group fold especially — drops the node's column from the emitted table, so a
+    /// survivor still referencing it would emit a dangling column. For every folded name this checks both
+    /// routes a reference can take: a surviving capture's cover columns, and the raw function of a surviving
     /// capture-less candidate (whose δ is emitted verbatim). Support is read SEMANTICALLY from the BDD,
     /// never from equation shape.
     fn assert_no_dropped_references<B: Brand, C: ManagerCell + Send + Sync>(
@@ -1690,7 +1628,7 @@ enB   = "!RB*(!CLKB*selb2+CLKB*enB)"
 GCLK = "enA*CLKA+enB*CLKB"
 "#;
 
-    // === Step 1 done-when / Step 3 (1) FLOOR ===
+    // === Floor: the canonical flop and interlock keep exactly their arcs ===
 
     #[test]
     fn edge_dff_floor() {
@@ -1723,8 +1661,9 @@ GCLK = "enA*CLKA+enB*CLKB"
         with_machine!(ICM_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert_captures_faithful(&m, &es);
-            // GCLK = enA*CLKA + enB*CLKB is a combinational clock gate: `!CLKA*!CLKB` pins it to 0 with
-            // the captured enables irrelevant, so the veto strips both clocks and it carries no arc.
+            // GCLK = enA*CLKA + enB*CLKB is a combinational clock gate: on either clock's edge no
+            // clock-associated source survives the restriction (the competing enable is not that clock's
+            // associate, and the branch's own enable is masked at the destination), so GCLK carries no arc.
             assert!(
                 !node_list(&es).contains(&"GCLK"),
                 "GCLK is a combinational clock gate"
@@ -1866,7 +1805,7 @@ Q = "CLK*!M + !CLK*Q"
         }
     }
 
-    // === Step 3 (3): behavioural F2 ===
+    // === Reset forcing vs blocking: a clear is a coexisting combinational arc, not a blocker ===
 
     const MOR_ASYNC_TOML: &str = r#"
 [[cell]]
@@ -1932,7 +1871,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
         });
     }
 
-    // === Step 3 (4): new recognitions ===
+    // === Inverting capture and exposed/tapped masters ===
 
     #[test]
     fn edge_inverting_dff_captures_not_d() {
@@ -2062,7 +2001,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
         });
     }
 
-    // === Step 3 (5): cross-coupled NAND slave ===
+    // === Cross-coupled NAND slave ===
 
     const XNAND_TOML: &str = r#"
 [[cell]]
@@ -2093,7 +2032,7 @@ Qn = "!( !(!M*CLK) * Q )"
         });
     }
 
-    // === Step 3 (6): dual-edge mux-DET ===
+    // === Dual-edge mux (DET) ===
 
     const DET_TOML: &str = r#"
 [[cell]]
@@ -2126,7 +2065,7 @@ Q = "CLK*L1 + !CLK*L2"
         });
     }
 
-    // === Phase-symmetric data transparency must NOT read as a capture ===
+    // === Phase-symmetric data transparency stays a level cell ===
 
     // Two opposite-phase D latches XORed: M follows D while CLK=0, M2 follows D while CLK=1, and T = M⊕M2
     // is transparent to D in BOTH phases. D is phase-SYMMETRIC (not a latch signature) and lands Held
@@ -2157,9 +2096,9 @@ T = "M*!M2 + !M*M2"
                 node_list(&es)
             );
             assert!(es.captures.is_empty(), "no edge arcs: {:?}", node_list(&es));
-            // D is preserved as a live data dependency: some reachable state where toggling D moves T. A
-            // register keyed off CLK would have dropped D while the run still emits D→T data arcs — the
-            // very contradiction this fix removes.
+            // D is preserved as a live data dependency: some reachable state where toggling D moves T.
+            // Typing T as a register keyed off CLK would drop D while the run still emits D→T data arcs, so
+            // T correctly stays level and D survives in T's function.
             let d_drives_t = m.explored.order.iter().any(|node| {
                 let before = m.output_value("T", node);
                 let Some(np) = machine::settle(&m.deltas, &machine::toggle(node, &["D"])) else {
@@ -2173,10 +2112,9 @@ T = "M*!M2 + !M*M2"
 
     // === Conjunctive / disjunctive / single-literal clear consistency ===
 
-    // A gated conjunctive clear: R*G forces both latches to 0 (needs G high too). The clear is not
-    // marginally forcing — the R=1,G=0 states hold — so a marginal forcing test wrongly reads it Held and
-    // blocks. The EXACT off-edge synthesis lands R*G Forced0, so R and G each participate in a Forced
-    // projection and Q stays a register with the conjunctive clear carried in off_edge.off.
+    // A gated conjunctive clear: R*G forces both latches to 0 (needs G high too), while the R=1,G=0 states
+    // merely hold. The off-edge synthesis lands R*G as a Forced0 cover, so R and G each participate in a
+    // forced projection and Q stays a register with the conjunctive clear carried in off_edge.off.
     const GATEDR_TOML: &str = r#"
 [[cell]]
 name = "GATEDR"
@@ -2247,8 +2185,8 @@ Q = "!(R*G)*(CLK*M + !CLK*Q)"
     #[test]
     fn edge_clear_variants_consistently_registers() {
         // The SAME clear construct — single-literal, disjunctive, conjunctive; sync or async-declared — is
-        // recognised consistently as a capture. Grounding the permit decision in the exact off-edge
-        // synthesis removes the R+G-vs-R*G and sync-vs-async inconsistency of the marginal test.
+        // recognised consistently as an edge register. The off-edge synthesis carries each clear as its own
+        // forced cover, so R+G and R*G, sync and async-declared, all keep Q a register alike.
         for (src, label) in [
             (SYNC_R_CLEAR_TOML, "sync single-literal R"),
             (SYNC_RG_OR_CLEAR_TOML, "sync disjunctive R+G"),
@@ -2267,7 +2205,7 @@ Q = "!(R*G)*(CLK*M + !CLK*Q)"
         }
     }
 
-    // === Wave 1 batch 3: multi-clock-shaped fixtures for the per-clock viability discriminator ===
+    // === Declared clocks that act by level, not by edge (RDFF, ICG) ===
 
     const RDFF_TOML: &str = r#"
 [[cell]]
@@ -2330,10 +2268,11 @@ GCLK = "CLK*EL"
 
     #[test]
     fn edge_icg_gclk_blocked_el_survives_as_level() {
-        // GCLK is combinational in EL, which is itself held (memory) across CLK's high phase ⇒ GCLK's
-        // off-edge synthesis hits a phase disagreement and is blocked — NOT by a declared-clock-count gate.
-        // EL is the classic transparent latch (level, phase-asymmetric to EN) and survives unfolded because
-        // GCLK's raw function still references it.
+        // GCLK = CLK*EL is combinational CAUSALLY: on the fall EL opens, but GCLK's residual over
+        // all-but-EL at the destination (CLK=0) is 0 — the CLK*EL gate swallows the captured value, so no
+        // propagation source survives; on the rise nothing generates. EL is the classic transparent latch
+        // (level, phase-asymmetric to EN) and survives unfolded because GCLK's raw function still
+        // references it.
         with_machine!(ICG_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert!(
@@ -2356,8 +2295,8 @@ GCLK = "CLK*EL"
 
     #[test]
     fn edge_master_only_reset_master_folds_once_recognised() {
-        // Q's registration now succeeds, so its raw function is replaced by the edge seam and nothing
-        // surviving references the master ⇒ M folds away.
+        // Q carries an edge seam, so its raw function is replaced by that seam and nothing surviving
+        // references the master ⇒ M folds away.
         with_machine!(MOR_ASYNC_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert_eq!(
@@ -2368,7 +2307,7 @@ GCLK = "CLK*EL"
         });
     }
 
-    // === Step 3 (7): blow-up guard ===
+    // === Blow-up guard ===
 
     #[test]
     fn edge_blowup_guard_yields_default() {
@@ -2462,7 +2401,7 @@ GCLK = "CLK*EL"
         }
     }
 
-    // === Step 8: grounded per-arc fixtures (DCMUX, COEX, transparent-cascade, clock-and-async) ===
+    // === Grounded per-arc fixtures (DCMUX, COEX, transparent cascade, clock-and-async) ===
 
     // DCMUX -- two independently-clocked masters merged into one output Q. Each clock's RISING edge is a
     // generation at Q (Q self-loops only when both clocks are low, and each rise takes it transparent to
@@ -2615,12 +2554,11 @@ Q = "!CLR*(PRE + CLK*M + !CLK*Q)"
         });
     }
 
-    // === Step 9: hierarchical master-slave-across-two-clocks (correction regression guard) ===
+    // === Hierarchical master-slave across two clocks (HPIPE) ===
 
     // HPIPE -- a CLKA rising-edge master pair (M1/M2 capture D on CLKA) feeding a CLKB slave latch on Q (a
-    // derived/gated-clock chain). The pair jointly disagrees at the naive joint-off-edge level the
-    // pre-amendment rule would have checked, yet EVERY hierarchically-related clock's edge arcs must
-    // SURVIVE: the slave Q keeps both CLKA and CLKB, the master node M2 keeps CLKA, and no set is emptied.
+    // derived/gated-clock chain). Every hierarchically-related clock's edge arcs survive: the slave Q keeps
+    // both CLKA and CLKB, the master node M2 keeps CLKA, and no seam set is emptied.
     const HPIPE_TOML: &str = r#"
 [[cell]]
 name = "HPIPE"
@@ -2639,9 +2577,9 @@ Q = "!CLKB*M2 + CLKB*Q"
         //
         // * CLKA:Rise is the conditioned capture — Q takes the master pair's content when CLKB is
         //   transparent (CLKB=0) and re-delivers its own held value when CLKB is opaque (CLKB=1);
-        // * CLKB:Fall is Q's OWN latch opening — Q holds M2 in CLKB=1 and reveals it on the fall. This
-        //   closes the known imprecision the old model carved out of the replay harness: the CLKB reveal
-        //   is now a first-class seam with its own capture (M2).
+        // * CLKB:Fall is Q's OWN latch opening — Q holds M2 in CLKB=1 and reveals it on the fall, a
+        //   first-class seam with its own capture (M2). The replay harness predicts this reveal directly,
+        //   with no exemption.
         with_machine!(HPIPE_TOML, |builder, _a, _m2, m| {
             let es = classify(&m);
             assert_captures_faithful(&m, &es);
@@ -2935,12 +2873,12 @@ Q = "!( !(M2*!CLKB) * Qn )"
         });
     }
 
-    // === THE OPENING (RELEASE) PARTITION ===
+    // === Openings: a latch with no capture still carries an edge arc ===
     //
     // An opening is the clock edge that takes a node from OPAQUE to TRANSPARENT: data that changed while
-    // the node was closed is delivered BY THAT EDGE, and the delivered value then TRACKS rather than
-    // holds. It is the third leg of the per-arc classification, disjoint from the captures and equally an
-    // edge arc — a latch has no capture but it does have an opening.
+    // the node was closed is delivered BY THAT EDGE, and the delivered value then TRACKS its data rather
+    // than holding. It is an edge arc like any other — a latch has no capture but it does have an opening,
+    // so it is not timing-invisible.
     //
     // The lists below are GROUNDED: each was read off the machine before being pinned, never predicted
     // from the equations' shape.
@@ -3126,5 +3064,293 @@ Q = "!( !(M2*!CLKB) * Qn )"
                 assert_no_dropped_references(&m, &es);
             });
         }
+    }
+
+    // === SETLR: a constant is a legitimate latched value ===
+
+    // Y opens on the rising edge into the CLK=1 phase where it delivers !R — a value that VARIES with the
+    // async clear R, so the phase is live and the rise genuinely generates. The latched value happens to be
+    // the constant 1 (gated by the clear), which is a value like any other.
+    const SETLR_TOML: &str = r#"
+[[cell]]
+name = "SETLR"
+inputs = ["CLK", "R"]
+clock = ["CLK"]
+async = ["R"]
+[cell.outputs]
+Y = "!R*(CLK + !CLK*Y)"
+"#;
+
+    // The hard-constant twin: the CLK=1 phase pins Y to 1 EVERYWHERE (no live variation), so the delivered
+    // value arrives regardless of latch content — a forcing by the clock's own level, not an opening. The
+    // rise types combinational.
+    const SETLR_HARD_TOML: &str = r#"
+[[cell]]
+name = "SETLRN"
+inputs = ["CLK", "R"]
+clock = ["CLK"]
+async = ["R"]
+[cell.outputs]
+Y = "CLK + !CLK*!R*Y"
+"#;
+
+    #[test]
+    fn edge_setlr_registers_the_constant_hard_constant_twin_is_combinational() {
+        // The positive form: Y is an edge register, the rise labelled edge, the async R its off-edge clear.
+        with_machine!(SETLR_TOML, |builder, _a, _m2, m| {
+            let es = classify(&m);
+            assert_captures_faithful(&m, &es);
+            let y = reg(&es, "Y");
+            assert_eq!(clocks_of(y), ["CLK"]);
+            assert_eq!(y.captures.len(), 1);
+            assert_eq!(y.captures[0].1, Edge::Rise, "Y generates on the rise");
+            assert_eq!(
+                labels_of(&es, "Y"),
+                [("CLK", Edge::Rise)],
+                "the rise types edge — a live delivered phase"
+            );
+            let off = builder.build_cover(&y.off_edge.off_cover);
+            assert!(
+                off.equivalent_to(&builder.var("R")),
+                "off_edge.off is the async clear R"
+            );
+        });
+        // The hard-constant twin: nothing generates into the clock-pinned phase, so Y stays combinational
+        // — no register, no edge label.
+        with_machine!(SETLR_HARD_TOML, |_b, _a, _m2, m| {
+            let es = classify(&m);
+            assert_captures_faithful(&m, &es);
+            assert!(
+                !node_list(&es).contains(&"Y"),
+                "a clock-level-pinned phase is a forcing, not a register: {:?}",
+                node_list(&es)
+            );
+            assert!(
+                es.labels.is_empty(),
+                "the hard-constant twin's rise is combinational: {:?}",
+                label_list(&es)
+            );
+        });
+    }
+
+    // === The pseudo-latch probe: self-referential in the equation, never bistable in behaviour ===
+
+    // `Y*A*B` is a self-reference in the equation, but Y never sits on a live dependency cycle that opens
+    // across a clock edge — no phase takes Y opaque→transparent — so it never generates and stays
+    // combinational. Generation is behavioural bistability, not textual self-reference.
+    const PSEUDO_LATCH_TOML: &str = r#"
+[[cell]]
+name = "PLAT"
+inputs = ["CLK", "A", "B"]
+clock = ["CLK"]
+[cell.outputs]
+Y = "CLK*A + !CLK*B + Y*A*B"
+"#;
+
+    #[test]
+    fn edge_pseudo_latch_probe_never_generates() {
+        with_machine!(PSEUDO_LATCH_TOML, |_b, _a, _m2, m| {
+            let es = classify(&m);
+            assert_captures_faithful(&m, &es);
+            assert!(
+                !node_list(&es).contains(&"Y"),
+                "the pseudo-latch never generates — no register: {:?}",
+                node_list(&es)
+            );
+            assert!(
+                es.labels.is_empty(),
+                "every arc is combinational: {:?}",
+                label_list(&es)
+            );
+        });
+    }
+
+    // === Per-arc sibling splits: one (output, clock, direction) typing differently by context ===
+
+    // The distinct-type siblings on Y's CLK Fall, keyed by the mask column `mask`: where the fall reveals
+    // the opening latch `L` the arc types EDGE, where the mask cuts `L` out of the residual it types
+    // COMBINATIONAL — the fall then moves Y only through the CLK level. Both siblings share the vector and
+    // differ only in prevector and type, which is legal in Liberate.
+    fn assert_fall_splits_on_mask(
+        src: &str,
+        mask: &str,
+        edge_when: bool, // the mask value at which the fall reveals `L`
+    ) {
+        with_machine!(src, |_b, _a, _m2, m| {
+            let (arcs, _) = crate::logic::arcs::derive(&m);
+            let es = classify(&m);
+            assert_captures_faithful(&m, &es);
+            let mut edge_ctx = 0;
+            let mut comb_ctx = 0;
+            for a in &arcs {
+                if a.output.as_str() != "Y"
+                    || a.related.as_str() != "CLK"
+                    || a.end.value_of("CLK") != Some(false)
+                {
+                    continue; // only Y's CLK Fall arcs
+                }
+                let labelled = es.labels.contains(&(
+                    a.output.clone(),
+                    a.related.clone(),
+                    Edge::Fall,
+                    a.start.clone(),
+                ));
+                match a.start.value_of(mask) {
+                    Some(v) if v == edge_when => {
+                        assert!(
+                            labelled,
+                            "with {mask} admitting L the fall reveals it and types edge: {a:?}"
+                        );
+                        edge_ctx += 1;
+                    }
+                    Some(_) => {
+                        assert!(
+                            !labelled,
+                            "with {mask} masking L the fall types combinational: {a:?}"
+                        );
+                        comb_ctx += 1;
+                    }
+                    None => {}
+                }
+            }
+            assert!(
+                edge_ctx > 0 && comb_ctx > 0,
+                "Y's CLK Fall must split into an edge sibling and a combinational one \
+                 (edge={edge_ctx}, comb={comb_ctx})"
+            );
+        });
+    }
+
+    // A masked latch: `L` opens on the fall, `Y = CLK*A + B*L` gates it behind the AND-mask B. The fall
+    // residual over all-but-`L` is `L` when B=1 (edge) and 0 when B=0 (combinational, the fall moving Y
+    // through the dropping `CLK*A` term).
+    const MASKL_TOML: &str = r#"
+[[cell]]
+name = "MASKL"
+inputs = ["CLK", "D", "A", "B"]
+clock = ["CLK"]
+[cell.internal]
+L = "!CLK*D + CLK*L"
+[cell.outputs]
+Y = "CLK*A + B*L"
+"#;
+
+    // An OR-masked latch: `Y = !CLK*R + L`. The fall residual over all-but-`L` is `L` when R=0 (edge) and
+    // the constant 1 when R=1 — the OR-mask swallows the opening, so the fall types combinational.
+    const ORLAT_TOML: &str = r#"
+[[cell]]
+name = "ORLAT"
+inputs = ["CLK", "D", "R"]
+clock = ["CLK"]
+[cell.internal]
+L = "!CLK*D + CLK*L"
+[cell.outputs]
+Y = "!CLK*R + L"
+"#;
+
+    #[test]
+    fn edge_masked_latch_fall_arc_splits_per_context() {
+        assert_fall_splits_on_mask(MASKL_TOML, "B", true);
+    }
+
+    #[test]
+    fn edge_or_masked_latch_fall_arc_splits_per_context() {
+        assert_fall_splits_on_mask(ORLAT_TOML, "R", false);
+    }
+
+    // === Source scoping: DET exposes a surviving source, a clock gate reaches none ===
+
+    #[test]
+    fn edge_source_scoping_det_dual_edge_versus_clock_gate_none() {
+        // DET's Q exposes a K-associated latch's content on BOTH edges (`Q = L1` on the rise, `L2` on the
+        // fall), so both CLK edges have a surviving propagation source and type edge.
+        with_machine!(DET_TOML, |_b, _a, _m2, m| {
+            let es = classify(&m);
+            assert_captures_faithful(&m, &es);
+            let labs = label_list(&es);
+            assert!(
+                labs.contains(&("Q", "CLK", Edge::Rise))
+                    && labs.contains(&("Q", "CLK", Edge::Fall))
+                    && labs.len() == 2,
+                "DET exposes D on both edges: {labs:?}"
+            );
+        });
+        // ICG's GCLK reaches no surviving source — the captured `EL` is swallowed by the `CLK*EL` gate at
+        // the destination — so neither clock edge types edge.
+        with_machine!(ICG_TOML, |_b, _a, _m2, m| {
+            let es = classify(&m);
+            assert_captures_faithful(&m, &es);
+            assert!(
+                es.labels.is_empty(),
+                "ICG's GCLK is combinational — the opening latch is masked: {:?}",
+                label_list(&es)
+            );
+        });
+        // ICM's GCLK likewise: the competing enable is not the toggled clock's associate, and the branch's
+        // own enable is masked at the destination, so no candidate source survives on either clock.
+        with_machine!(ICM_TOML, |_b, _a, _m2, m| {
+            let es = classify(&m);
+            assert_captures_faithful(&m, &es);
+            assert!(
+                es.labels.is_empty(),
+                "ICM's GCLK is combinational — no clock-associated source survives: {:?}",
+                label_list(&es)
+            );
+        });
+    }
+
+    // === Generation and propagation coerce no state: no state-coercion identifier survives ===
+
+    #[test]
+    fn no_state_coercion_identifier_survives_in_src() {
+        // Generation and propagation type edges purely by restriction-survival over the machine's own
+        // stable states, coercing no state. This gate proves that discipline is intact: no code identifier
+        // names a state-perturbation mechanism. Each needle is assembled from two halves so the gate never
+        // matches its own source, and only CODE is scanned — the part of each line before `//` — so the
+        // ordinary physical word (a phase clamped to a constant is a forcing) survives in prose.
+        let needles: Vec<String> = [
+            ("fr", "eeze"),
+            ("fro", "zen"),
+            ("per", "turb"),
+            ("cl", "amp"),
+            ("co-mo", "ver"),
+        ]
+        .iter()
+        .map(|(a, b)| format!("{a}{b}"))
+        .collect();
+
+        fn rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("read_dir src") {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    rs_files(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        rs_files(&src, &mut files);
+        assert!(!files.is_empty(), "no .rs files found under {src:?}");
+
+        let mut hits: Vec<String> = Vec::new();
+        for path in &files {
+            let text = std::fs::read_to_string(path).expect("read src file");
+            for (i, line) in text.lines().enumerate() {
+                let code = line.split("//").next().unwrap_or("").to_ascii_lowercase();
+                for needle in &needles {
+                    if code.contains(needle.as_str()) {
+                        hits.push(format!("{}:{}: {}", path.display(), i + 1, line.trim()));
+                    }
+                }
+            }
+        }
+        assert!(
+            hits.is_empty(),
+            "a state-coercion identifier survives in src (generation/propagation coerce no state):\n{}",
+            hits.join("\n")
+        );
     }
 }

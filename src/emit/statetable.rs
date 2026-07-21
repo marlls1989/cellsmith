@@ -868,9 +868,10 @@ Y = "C*L"
 
     /// Three shapes the behavioural classifier leaves fully level (no register, no fold) even under
     /// default (on) collapse: a single latch (no seam to sample), a gated latch (self-referencing
-    /// transparent cofactor), and a two-latch DFF whose clock is never declared. The structural pass's
-    /// MCDFF and EMDFF fixtures are NO LONGER here: the behavioural pass recognises their slave Q as an
-    /// edge register (see `mcdff_and_emdff_recognise_slave_over_surviving_master`).
+    /// transparent cofactor), and a two-latch DFF whose clock is never declared. MCDFF and EMDFF have
+    /// their own fixtures instead: MCDFF's two-clock slave stays level
+    /// (`mcdff_two_clock_pair_stays_level`), while EMDFF's slave is recognised as an edge register
+    /// (`emdff_recognises_slave_over_surviving_master`).
     const NON_COLLAPSIBLE: [&str; 3] = [
         // Single latch: Q has no master seam, so no clock edge captures it.
         r#"
@@ -1022,11 +1023,9 @@ M = "!CLK*D + CLK*M"
         assert!(!m.rows.is_empty(), "M contributes level rows");
     }
 
-    // Master/slave pair split across two DIFFERENT declared clocks: M latches on CLKA, Q on CLKB. Q's
-    // value depends (transitively through settle) on BOTH clocks, so the behavioural classifier keys it
-    // off no single clock and recognises NO register -- it stays fully level. (NOTE: the wave-2 design
-    // note expected MCDFF to become a positive fixture with Q recognised; the already-landed classifier
-    // declines it, matching the structural pass. See the returned QUESTION.)
+    // Master/slave pair split across two DIFFERENT declared clocks: M latches on CLKA, Q on CLKB. Q tracks
+    // live data through CLKB's transparent phase, so its seam set empties under the fixpoint: the
+    // classifier recognises NO register and Q stays fully level, matching the structural pass.
     const MCDFF: &str = r#"
 [[cell]]
 name = "MCDFF"
@@ -1241,8 +1240,8 @@ Q = "!CLKB*M2 + CLKB*Q"
         let m = build_state_model(&cell).expect("HPIPE is sequential");
         let qi = index_of_node(&m, "Q");
         // The slave Q's own next-slot is stamped by BOTH the conditioned CLKA:Rise capture AND its own
-        // CLKB:Fall opening (the master-slave reveal). The CLKB-fall rows close the imprecision the old
-        // model carved out of the replay harness — the CLKB reveal is now a first-class capture row.
+        // CLKB:Fall opening (the master-slave reveal): the CLKB reveal is a first-class capture row, so the
+        // emitted statetable carries the CLKB-fall rows directly.
         assert!(
             m.edge_rows
                 .iter()
@@ -1593,7 +1592,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
     /// The rendered-row replay over the joint level+edge first-match semantics, for the fixtures that
     /// carry the phase-conditioned clear (MOR/MORA), a multi-step two-node level model (SR), a dual-edge
     /// register (DET), a two-seam toggle register (TFF), the canonical DFF, and a full-async clear DFF
-    /// (RDFF). Fails against the pre-S6 `edge_input_pattern` (the dropped `CLK*R` clock literal makes
+    /// (RDFF). Fails against an `edge_input_pattern` that drops the `CLK*R` clock literal (which would make
     /// MOR/MORA clear on any non-rising event with R high, including CLK=0 where the cell holds).
     #[test]
     fn rendered_rows_replay_machine_settled_values() {

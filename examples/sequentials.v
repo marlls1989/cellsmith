@@ -96,9 +96,9 @@ table
 	1 ? : ? : -;
 endtable
 endprimitive
-primitive EMDFF_Q(Q, M, CLK); // clock CLK is the last port
+primitive EMDFF_Q(Q, D, CLK); // clock CLK is the last port
 output Q;
-input  M, CLK;
+input  D, CLK;
 reg    Q;
 table
 	(??) ? : ? : -;
@@ -118,12 +118,12 @@ specify
 	(D => Q) = (0.1, 0.1);
 endspecify
 EMDFF_M u_EMDFF_M (M, CLK, D);
-EMDFF_Q u_EMDFF_Q (Q, M, CLK);
+EMDFF_Q u_EMDFF_Q (Q, D, CLK);
 endmodule
 `endcelldefine
-primitive TAPDFF_Q(Q, T, CLK); // clock CLK is the last port
+primitive TAPDFF_Q(Q, D, CLK); // clock CLK is the last port
 output Q;
-input  T, CLK;
+input  D, CLK;
 reg    Q;
 table
 	(??) ? : ? : -;
@@ -152,7 +152,7 @@ specify
 	(D => Q) = (0.1, 0.1);
 	(D => T) = (0.1, 0.1);
 endspecify
-TAPDFF_Q u_TAPDFF_Q (Q, T, CLK);
+TAPDFF_Q u_TAPDFF_Q (Q, D, CLK);
 TAPDFF_T u_TAPDFF_T (T, CLK, D);
 endmodule
 `endcelldefine
@@ -214,30 +214,31 @@ XN_Q u_XN_Q (Q, D, CLK);
 XN_Qn u_XN_Qn (Qn, D, CLK);
 endmodule
 `endcelldefine
-primitive TFF_Q(Q, M, R, CLK); // clock CLK is the last port
+primitive TFF_Q(Q, R, CLK); // clock CLK is the last port
 output Q;
-input  M, R, CLK;
+input  R, CLK;
 reg    Q;
 table
-	(??) ? ? : ? : -;
-	0 ? (01) : ? : 0;
-	1 ? (01) : ? : 1;
-	? (??) ? : ? : -;
-	? 1 ? : ? : 0;
-	? ? (10) : ? : -;
+	(??) ? : ? : -;
+	0 (01) : 0 : 1;
+	1 (01) : ? : 0;
+	1 ? : ? : 0;
+	? (01) : 1 : 0;
+	? (10) : ? : -;
 endtable
 endprimitive
-primitive TFF_M(M, R, CLK); // clock CLK is the last port
+primitive TFF_M(M, R, Q, CLK); // clock CLK is the last port
 output M;
-input  R, CLK;
+input  R, Q, CLK;
 reg    M;
 table
-	(??) ? : ? : -;
-	0 (10) : 0 : 1;
-	1 (10) : ? : 0;
-	1 ? : ? : 0;
-	? (01) : ? : -;
-	? (10) : 1 : 0;
+	(??) ? ? : ? : -;
+	0 0 (10) : ? : 1;
+	1 ? (10) : ? : 0;
+	1 ? ? : ? : 0;
+	? (??) ? : ? : -;
+	? 1 (10) : ? : 0;
+	? ? (01) : ? : -;
 endtable
 endprimitive
 `celldefine
@@ -249,8 +250,8 @@ specify
 	(CLK => Q) = (0.1, 0.1);
 	(R => Q) = (0.1, 0.1);
 endspecify
-TFF_Q u_TFF_Q (Q, M, R, CLK);
-TFF_M u_TFF_M (M, R, CLK);
+TFF_Q u_TFF_Q (Q, R, CLK);
+TFF_M u_TFF_M (M, R, Q, CLK);
 endmodule
 `endcelldefine
 primitive DET_Q(Q, D, CLK); // clock CLK is the last port
@@ -501,14 +502,12 @@ reg    Q;
 table
 	(??) ? ? ? : ? : -;
 	0 0 ? (01) : ? : 0;
-	0 ? ? (01) : 0 : 0;
 	1 ? 0 (01) : ? : 1;
 	? (??) ? ? : ? : -;
-	? 0 1 (01) : ? : 0;
+	? 1 0 (01) : ? : 1;
 	? 1 0 ? : ? : 1;
-	? 1 ? (01) : 1 : 1;
 	? ? (??) ? : ? : -;
-	? ? 1 (01) : 0 : 0;
+	? ? 1 (01) : ? : 0;
 	? ? 1 ? : ? : 0;
 	? ? ? (10) : ? : -;
 endtable
@@ -533,14 +532,12 @@ reg    Q;
 table
 	(??) ? ? ? : ? : -;
 	0 0 ? (01) : ? : 0;
-	0 ? ? (01) : 0 : 0;
 	1 ? 0 (01) : ? : 1;
 	? (??) ? ? : ? : -;
-	? 0 1 (01) : ? : 0;
+	? 1 0 (01) : ? : 1;
 	? 1 0 ? : ? : 1;
-	? 1 ? (01) : 1 : 1;
 	? ? (??) ? : ? : -;
-	? ? 1 (01) : 0 : 0;
+	? ? 1 (01) : ? : 0;
 	? ? 1 ? : ? : 0;
 	? ? ? (10) : ? : -;
 endtable
@@ -778,18 +775,21 @@ XLAT_M u_XLAT_M (M, CLK, D);
 XLAT_M2 u_XLAT_M2 (M2, CLK, D);
 endmodule
 `endcelldefine
-primitive HPIPE_Q(Q, CLKB, D, CLKA); // clock CLKA is the last port
+primitive HPIPE_Q(Q, D, M2, CLKA, CLKB); // clocks CLKA, CLKB are the last ports
 output Q;
-input  CLKB, D, CLKA;
+input  D, M2, CLKA, CLKB;
 reg    Q;
 table
-	(??) ? ? : ? : -;
-	0 0 (01) : ? : 0;
-	0 1 (01) : ? : 1;
-	1 ? (01) : 0 : 0;
-	1 ? (01) : 1 : 1;
-	? (??) ? : ? : -;
-	? ? (10) : ? : -;
+	(??) ? ? ? : ? : -;
+	0 ? (01) 0 : ? : 0;
+	1 ? (01) 0 : ? : 1;
+	? (??) ? ? : ? : -;
+	? 0 ? (10) : ? : 0;
+	? 1 ? (10) : ? : 1;
+	? ? (01) 1 : 0 : 0;
+	? ? (01) 1 : 1 : 1;
+	? ? (10) ? : ? : -;
+	? ? ? (01) : ? : -;
 endtable
 endprimitive
 primitive HPIPE_M2(M2, D, CLKA); // clock CLKA is the last port
@@ -813,37 +813,21 @@ specify
 	(CLKB => Q) = (0.1, 0.1);
 	(D => Q) = (0.1, 0.1);
 endspecify
-HPIPE_Q u_HPIPE_Q (Q, CLKB, D, CLKA);
+HPIPE_Q u_HPIPE_Q (Q, D, M2, CLKA, CLKB);
 HPIPE_M2 u_HPIPE_M2 (M2, D, CLKA);
 endmodule
 `endcelldefine
-primitive DCMUX_Q(Q, MA, MB, CLKA, CLKB); // clocks CLKA, CLKB are the last ports
+primitive DCMUX_Q(Q, CLKA, MA, CLKB, MB);
 output Q;
-input  MA, MB, CLKA, CLKB;
+input  CLKA, MA, CLKB, MB;
 reg    Q;
 table
-	(??) ? ? ? : ? : -;
-	0 0 (01) ? : ? : 0;
-	0 0 (10) ? : ? : 0;
-	0 0 ? (01) : ? : 0;
-	0 0 ? (10) : ? : 0;
-	0 ? (01) 0 : ? : 0;
-	0 ? (10) ? : 0 : 0;
-	0 ? 1 (10) : ? : 0;
-	1 ? (01) ? : ? : 1;
-	1 ? (10) 0 : ? : 1;
-	1 ? 1 (01) : ? : 1;
-	1 ? ? (10) : 1 : 1;
-	? (??) ? ? : ? : -;
-	? 0 (10) 1 : ? : 0;
-	? 0 0 (01) : ? : 0;
-	? 0 ? (10) : 0 : 0;
-	? 1 (01) 1 : ? : 1;
-	? 1 (10) ? : 1 : 1;
-	? 1 0 (10) : ? : 1;
-	? 1 ? (01) : ? : 1;
-	? ? (10) 1 : 0 : 0;
-	? ? 1 (10) : 0 : 0;
+	0 ? 0 ? : ? : -;
+	0 ? 1 0 : ? : 0;
+	1 0 0 ? : ? : 0;
+	1 1 ? ? : ? : 1;
+	? 0 1 0 : ? : 0;
+	? ? 1 1 : ? : 1;
 endtable
 endprimitive
 primitive DCMUX_MA(MA, CLKA, DA);
@@ -877,7 +861,7 @@ specify
 	(DA => Q) = (0.1, 0.1);
 	(DB => Q) = (0.1, 0.1);
 endspecify
-DCMUX_Q u_DCMUX_Q (Q, MA, MB, CLKA, CLKB);
+DCMUX_Q u_DCMUX_Q (Q, CLKA, MA, CLKB, MB);
 DCMUX_MA u_DCMUX_MA (MA, CLKA, DA);
 DCMUX_MB u_DCMUX_MB (MB, CLKB, DB);
 endmodule

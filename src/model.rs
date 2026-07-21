@@ -60,8 +60,9 @@ pub struct Cell {
     /// default; also enabled globally by the `--constraints` CLI flag.
     #[serde(default)]
     pub constraint_arcs: bool,
-    /// Optional: opt OUT of the master-slave latch → edge-register collapse for this cell. Collapse is
-    /// ON by default; setting this true (or the global `--no-edge-collapse` CLI flag) suppresses it.
+    /// Optional: opt OUT of the behavioural per-arc edge classification for this cell (see
+    /// [`crate::logic::edge`]). Classification is ON by default; setting this true (or the global
+    /// `--no-edge-collapse` CLI flag) suppresses it, leaving every arc in its combinational form.
     #[serde(default)]
     pub no_edge_collapse: bool,
 }
@@ -197,10 +198,11 @@ pub struct AnalysedCell {
     /// Each signal's state-table regions, precomputed once and cached in `signals()` order (outputs
     /// then internals), so emitters don't rebuild the BDDs per call site.
     pub regions: Vec<crate::logic::regions::StateRegions>,
-    /// The cell's behavioural edge-sensitivity: its recognised edge-triggered registers and the
-    /// cell-level set of internal level-sensitive master nodes folded away. Default (empty) when the
-    /// cell opted out (`no_edge_collapse`). Computed purely from the already-explored machine — it
-    /// never alters the exploration.
+    /// The cell's behavioural edge classification ([`crate::logic::edge::EdgeArcs`]): the per-node edge
+    /// seams (`captures`), the per-arc `-type edge` labels (`labels`) — the field the Liberate arc emitter
+    /// reads to type each arc — and the cell-level set of internal non-seam master nodes folded away
+    /// (`folded`). Default (empty) when the cell opted out (`no_edge_collapse`). Computed purely from the
+    /// already-explored machine — it never alters the exploration.
     pub edge: crate::logic::edge::EdgeArcs,
 }
 
