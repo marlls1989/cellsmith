@@ -793,10 +793,7 @@ Y = "!((CLK*L1 + !CLK*L2)*A)"
         // internal_node, never a folded master.
         let y = find_pin(cellg, "Y");
         let sf = attr_string(y, "state_function").expect("Y prints a state_function");
-        assert!(
-            sf.contains("Yst") && sf.contains('A'),
-            "Y reads Yst and A: {sf}"
-        );
+        assert_eq!(sf, "Yst + !A", "Y reads Yst and A: {sf}");
         assert!(!y.attributes.contains_key("internal_node"));
 
         // `Yst` is a first-class internal-node pin.

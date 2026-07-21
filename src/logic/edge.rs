@@ -23,7 +23,7 @@
 //!
 //! Everything is derived BEHAVIOURALLY from observed toggle-and-settle transitions, never from the shape
 //! of an equation, and nothing branches on a declared input class — an async pin need not be declared,
-//! its effect being classified from its own observed moves ([`forcing_pins`]). The characterisation is
+//! its effect being classified from its own observed moves (`forcing_pins`). The characterisation is
 //! consequently IMPLEMENTATION-STYLE INVARIANT: the NAND-implemented `NDLAT` / `NDFF` / `NHPIPE`
 //! fixtures characterise identically to their pass-transistor twins.
 //!
@@ -67,7 +67,7 @@
 //!    `(K, d)` when a non-forcing change of the node inside its delivered phase occurs at a toggle not
 //!    itself an edge of `S`. A node with a non-empty `S` is an edge register; its per-edge next-state
 //!    functions and off-edge are synthesised into [`EdgeArcs::captures`].
-//! 3. **Cover synthesis** — [`synth_capture`], [`generalise`] and [`regions_from`] over one uniform
+//! 3. **Cover synthesis** — `synth_capture`, `generalise` and `regions_from` over one uniform
 //!    header (all inputs except the keying clock plus every candidate), with an ordered drop-loop that
 //!    prefers inputs over internals so the fold-eligible internals drop out of the cover.
 //! 4. **Fold** — internal non-seam nodes fold away as an emission-time reachability fixpoint.
@@ -172,7 +172,7 @@ pub struct DerivedRegister {
     /// declared register when a match was found (nothing minted).
     pub name: Symbol,
     /// The register's value over machine coordinates, evaluable at any explored stable state — the harness
-    /// resolves the derived node's value through this instead of [`Machine::output_value`].
+    /// resolves the derived node's value through this instead of `Machine::output_value`.
     pub content: Cover<Symbol, Anonymous>,
     /// Per read-gated output that reads this register: the output's combinational read function, as
     /// state-table regions over the register node and the gate pins.

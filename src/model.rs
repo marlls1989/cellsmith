@@ -200,9 +200,11 @@ pub struct AnalysedCell {
     pub regions: Vec<crate::logic::regions::StateRegions>,
     /// The cell's behavioural edge classification ([`crate::logic::edge::EdgeArcs`]): the per-node edge
     /// seams (`captures`), the per-arc `-type edge` labels (`labels`) — the field the Liberate arc emitter
-    /// reads to type each arc — and the cell-level set of internal non-seam master nodes folded away
-    /// (`folded`). Default (empty) when the cell opted out (`no_edge_collapse`). Computed purely from the
-    /// already-explored machine — it never alters the exploration.
+    /// reads to type each arc — the cell-level set of internal non-seam master nodes folded away
+    /// (`folded`), and the read-gate factorisations recognised across the cell's outputs (`derived`),
+    /// which the Liberty, Verilog and state-table emitters read to render a read-gated register as its own
+    /// internal node. Default (empty) when the cell opted out (`no_edge_collapse`). Computed purely from
+    /// the already-explored machine — it never alters the exploration.
     pub edge: crate::logic::edge::EdgeArcs,
 }
 

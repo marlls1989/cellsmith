@@ -5,12 +5,11 @@
 //!
 //! Arc typing follows the per-arc labels in [`crate::logic::edge`], which are SOURCED FROM the arc
 //! pipeline itself: each emitted delay arc looks up its own `(output, related clock, clock direction)`
-//! key in [`crate::logic::edge::EdgeArcs::labels`]. A CAPTURE (a clock edge after which the value holds
-//! independently of the clock level) and a RELEASE (a clock edge opening a latch, transmitting data
-//! that changed while it was closed) are distinct categories internally, but Liberate has one token for
-//! both: they share `-type edge`. An unlabelled arc — a data change propagating through an
-//! already-transparent latch, or a level-acting (vetoed) clock — stays `-type combinational`, and a
-//! declared-async related pin takes precedence with `-type async`.
+//! key in [`crate::logic::edge::EdgeArcs::labels`]. A labelled arc is a clock edge after which the value
+//! holds independently of the clock level, and Liberate has one token for it: `-type edge`. An
+//! unlabelled arc — a data change propagating through an already-transparent latch, or a clock acting by
+//! its level rather than being held — stays `-type combinational`, and a declared-async related pin
+//! takes precedence with `-type async`.
 
 use espresso_logic::Symbol;
 
@@ -827,7 +826,8 @@ GCLK = "enA*CLKA+enB*CLKB"
         assert!(!cell.edge.captures.is_empty());
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
-        // `GCLK` is a gated clock, vetoed on both its clocks: neither a capture nor a release.
+        // `GCLK` acts by the level of both CLKA and CLKB, not a held transition, so neither produces an
+        // edge arc.
         for frag in tcl.split("define_arc") {
             if frag.contains("-pin GCLK") && frag.contains("-related_pin CLK") {
                 assert!(frag.contains("-type combinational \\"), "GCLK arc: {frag}");
@@ -1504,9 +1504,10 @@ M = "!CLK*D + CLK*M"
     }
 
     /// RDFF: a both-latch clear `R` that is ALSO declared a clock pin. R's assert arcs are a LEVEL
-    /// action — `R=1` alone pins Q low — so the veto strips R and its arcs stay
-    /// `-type combinational`, byte-for-byte the classification `SYNCR` (the same cell with R
-    /// undeclared) gets. Declaring a level-acting pin a clock must never conjure a release arc.
+    /// action — `R=1` alone pins Q low, not a transition that holds independently of R's level — so R's
+    /// arcs stay `-type combinational`, byte-for-byte the classification `SYNCR` (the same cell with R
+    /// undeclared) gets. Declaring a level-acting pin a clock must never conjure an edge arc that isn't
+    /// there.
     #[test]
     fn rdff_clock_declared_reset_arcs_stay_combinational() {
         let cell = analyse(
@@ -1544,10 +1545,10 @@ Q = "!R*(CLK*M + !CLK*Q)"
         assert!(saw_clk_edge, "the CLK->Q capture arcs are emitted");
     }
 
-    /// An integrated clock gate: `GCLK` is a gated clock, not a latch output. The classifier vetoes CLK
-    /// on it (clock levels alone pin its value), so it is neither a capture nor a release and its
-    /// `GCLK` arcs stay `-type combinational` -- on both clock edges. The internal enable latch `EL` does
-    /// carry a release, but it drives no Liberty output, so no `-type edge` block is emitted.
+    /// An integrated clock gate: `GCLK` is a gated clock, not a latch output. `GCLK` acts by the level of
+    /// CLK (`CLK*EL`) rather than holding a value independently of it, so its arcs stay `-type
+    /// combinational` -- on both clock edges. The internal enable latch `EL` does have an edge arc of its
+    /// own, but it drives no Liberty output, so no `-type edge` block is emitted.
     #[test]
     fn icg_gclk_arcs_stay_combinational() {
         let cell = analyse(

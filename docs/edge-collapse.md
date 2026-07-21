@@ -45,8 +45,9 @@ exploration with `machine::toggle`/`machine::settle` — exactly mirroring `arcs
 — mutates no BDD, and feeds nothing back into the machine, the arcs, or the hazard detectors. Its entire
 output is one field, `AnalysedCell::edge` (`EdgeArcs`): the per-node captures, the per-arc `-type`
 labels of the cell's clock-related delay arcs (keyed by the arc's full
-`(output, clock, direction, machine start minterm)` identity in the arc pipeline), and the cell-level
-set of internal non-seam masters folded away.
+`(output, clock, direction, machine start minterm)` identity in the arc pipeline), the cell-level
+set of internal non-seam masters folded away, and the read-gate factorisations
+(`EdgeArcs::derived`, a `DerivedRegister` per read-gated register output — see §6).
 
 The **candidates** are every output (so a combinational output is considered and simply keeps no edge
 arc) plus every internal state variable that is not itself an output.
@@ -69,26 +70,32 @@ seams, same covers, same folds.
 One analysis over the machine's `toggle`/`settle` observations produces both the arc types and the state
 model:
 
-> arc typing (generation + propagation, per arc) → per-node seam set `S` (greatest fixpoint) → edge
-> functions (uniform header + drop-loop) → off-edge → fold (reachability).
+> arc typing (two-birth gate, per arc) → per-node seam set `S` (greatest fixpoint) → edge functions
+> (uniform header + drop-loop) → off-edge → read-gate factorisation → fold (reachability).
 
-### 3.1 Arc typing — generation and propagation
+### 3.1 Arc typing — the two-birth gate
 
 Each clock-related delay arc, at its full identity `(output, clock, direction, machine start minterm)`,
-is typed edge iff its firing changed the output (vacuity), some latch in the output's cone **generates**
-on `(clock, direction)`, and the change **propagates** from a surviving source. Generation at the output
-itself types the arc directly.
+is typed edge iff its firing changed the output (vacuity) **and** some **birth** node's edge
+**propagates** to that output at the firing's own post-arc stable state `sp`:
+`types_edge = ∃ b: born(b, clock, direction, sp) ∧ propagates(output, sp, b)` (`types_edge` in
+`src/logic/edge.rs`). The decision is **per firing** — `sp` is that firing's destination — so two firings
+of one `(output, clock, direction)` can type differently.
 
-**Generation — a latch going opaque→transparent.** Opacity is read from the live dependency loops at the
-eligible stable states. At a stable state the dependency edge `n → m` between state variables is **live**
-iff `δ_m`, restricted (`Bdd::restrict_to`) to all of its support *except* `n` at the values they take in
-the state, still depends on `n` — the residual is non-constant in `n`. A latch is **opaque** in a phase
-iff some eligible stable state of that phase carries a live dependency cycle through it, and
+An edge is **born** two ways (`born` in `src/logic/edge.rs`), both evaluated at **any** node — a birth is
+not confined to the output, and the birth universe is every candidate (an output or a state variable):
+
+**(a) By generation — a latch going opaque→transparent.** Opacity is read from the live dependency loops
+at the eligible stable states. At a stable state the dependency edge `n → m` between state variables is
+**live** iff `δ_m`, restricted (`Bdd::restrict_to`) to all of its support *except* `n` at the values they
+take in the state, still depends on `n` — the residual is non-constant in `n`. A latch is **opaque** in a
+phase iff some eligible stable state of that phase carries a live dependency cycle through it, and
 **transparent** iff none does *and* its value **varies** across the phase's eligible stable states. That
 variation clause matters: a phase pinned to one constant everywhere — by a reset, or by the toggled
 clock's own level — delivers its value regardless of latch content, which is a forcing, not an opening,
 so generation never fires into it. A latch **generates** on `(clock, direction)` iff it is opaque at the
-source level and transparent at the delivered level.
+source level and transparent at the delivered level; a generating latch *at the node* births the edge
+there.
 
 This lands the hard cases with no per-node witness machinery. In a pass-gate DFF, `δ_Q` at `CLK=0` is
 `Q` — a live self-loop, opaque — while at `CLK=1` it is the master `M` with no path back — transparent —
@@ -103,19 +110,29 @@ phase pins `Q` at 0 everywhere, while its `CLK` arcs are unaffected. The pseudo-
 and stays combinational — generation means *behaviourally bistable*, not *self-referential in the
 equation*.
 
-**Propagation — restriction-survival from the arc's source.** For an observed arc with post-generation
-stable state `s'`, restrict `δ_output` on all of its support *minus* the edge's source variable `W` to
-the values they take at `s'`; the arc propagates iff the residual still depends on `W`. The source is the
-latch the edge arrived from — the generated latch, or the exposed content donor whose value the change
-delivered (`DET`'s rise delivers `L1`, so the source is `L1`). Candidate sources are the clock-associated
-latches in the output's cone (the generator and the closer). The test is applied transitively through
-intermediate nodes and **per arc**: different firings restrict to different `s'` and decide
-independently, which is exactly how the `MASKL` fall splits — with the mask admitting the latch the
-residual is `L` (edge), with it masking the latch the residual is constant (combinational). A masked
-source never survives the restriction: `ICG`'s `EL` is swallowed by the `CLK*EL` gate at the destination,
-and `ICM`'s competing enable is not the toggled clock's associate, so a clock gate's `GCLK` reaches no
-surviving source on either edge and stays combinational — the exclusion is causal, a plain absence of any
-clock-associated source.
+**(b) By closer-exposure — a mux switching to expose the latch it just closed.** The toggle switches the
+node to a leg holding a latch this same edge closes. `δ_node` reads, in its **direct** support, a
+generator `g` and a distinct closer `c`, both latches *associated with the clock* (a real latch on it —
+opacity differs across the clock's two phases), with `δ_node` restricted all-but-`c` at `sp` still
+depending on `c` — the two-leg mux shape, `DET`'s rise exposing the content donor it just closed. This
+direct-support listing (`cone` in `src/logic/edge.rs`) picks the mux's two legs and **nothing more**: it
+is the mux event itself, not a depth bound. A closer-exposure edge can therefore be born at an
+**internal** node and then propagate onward — `DETP`'s DET mux is buried in the cross-clock latch `T`, is
+born there, and reaches the output only through propagation (there is no one-step-cone gate keeping it
+combinational).
+
+**Propagation — restriction-survival, transitive, from the output back to the birth node.** From the
+output `o`, walk the dependency chain back toward the birth node `b` (`propagates` in `src/logic/edge.rs`):
+a hop `node → w` survives iff `δ_node`, restricted (`Bdd::restrict_to`) on all of its support *minus* `w`
+to `sp`'s values, still depends on `w`; a **masked** hop — whose residual is constant in its predecessor —
+dies. Reaching `b` means `b`'s edge reaches `o`; the output itself is the first node tested, so a birth at
+the output types the arc directly. The walk has **no depth limit**, so a generator revealed through a deep
+same-phase pipe or a buried mux types identically to a shallow one. Masking is per arc, and is where the
+clock gates fall out: the `MASKL` fall splits because different firings restrict to different `sp` and
+decide independently — admitting the latch the residual is `L` (edge), masking it the residual is constant
+(combinational). `ICG`'s `EL` is swallowed by the `CLK*EL` gate, and `ICM`'s competing enable is not the
+toggled clock's associate, so a clock gate's `GCLK` reaches no birth node on either edge and stays
+combinational — the exclusion is causal, a plain absence of any clock-associated birth.
 
 ### 3.2 The seam set — the seam fixpoint
 
@@ -176,7 +193,41 @@ pinned to the forcing level, which is why the off-edge of a phase-conditioned re
 literal (`CLK*R`). Because the clocks are in the header, that literal is available: synthesising over the
 non-clock inputs alone could not express it.
 
-## 6. Fold
+## 6. Read-gate factorisation
+
+A register output can have a forcing pin that merely **reads** the held state without changing it —
+`BDET`'s output-enable `A` (`Y = !(M*A)`), as opposed to `RDFF`'s reset `R`, which *changes* the state.
+Folding such an output's master into the output would destroy the content the output re-acquires when the
+gate releases. So the output is **factored**: the state-holding register is pulled out as its own node
+with native edge capture, and the output becomes a combinational **read function** over it. Each such
+factorisation is carried as a `DerivedRegister` on `EdgeArcs::derived` (`src/logic/edge.rs`); the field is
+empty for every cell with no read-gated register output.
+
+The discriminator is **state-change-in-cone**: a forcing pin of the output is a read-gate iff toggling it
+never moves any state variable in the output's cone — the transitive state variables `δ_output` depends
+on. Its pass level is the pin's un-asserted level. If the output has at least one such gate, the register
+content it reads is `δ_output` cofactored at the read-gates' pass levels (`Bdd::restrict_to`); an ordinary
+register — every forcing pin changes the held state — is left untouched.
+
+The factored register **reuses a declared register** whose content matches the cofactored content up to
+inversion, and otherwise **mints** a fresh, collision-checked node named `<output>st` holding that
+content. A minted register carries its own `EdgeCaptures`, taken from the output's already-synthesised
+covers cofactored gate-free (the captures shed the gate columns, the off-edge collapses to a pure hold),
+so the whole name-driven edge-row / UDP machinery flows through unchanged. The reading output records a
+combinational read function over `[register, read-columns]`, sampled from the machine and stored as
+state-table regions in `DerivedRegister::reads`; its fold seed is redirected onto that read function's
+support so its masters fold (§7).
+
+`BDET` is the ratified shape. `A` is a read-gate — toggling it never moves the DET latches `L1`/`L2` in
+`Y`'s cone — so the register is factored out as a minted `Yst = !M` (`δ_Y` cofactored at `A=1`, with
+`M = CLK*L1 + !CLK*L2`). `Yst` is a dual-edge register capturing `!D` on both edges — the NAND read
+inverts the held content, and inversion is not special-cased — and `Y` becomes the read function
+`state_function` `Yst + !A`, machine-equivalent to `!(M*A)`. That equivalence is proven by full reachable
+state-space replay, not a literal SOP match (`assert_reads_faithful` in `src/logic/edge.rs`). `DETP` is
+the reuse case: its DET mux is buried in the declared cross-clock latch `T`, `Y`'s cofactored content `!T`
+matches `T` up to inversion, so `T` is reused and nothing is minted.
+
+## 7. Fold
 
 Folding is decided at **cell level** (`EdgeArcs::folded`), after classification, as a **reachability**
 question: does this value still influence an output once collapsed? It is computed as a liveness fixpoint
@@ -202,11 +253,11 @@ self-referential loops are preserved on purpose, because they carry the oscillat
 emission that concern does not apply: the only question is whether a value affects the output, so a
 self-referential set that reaches no output may be collapsed even though minimisation had to keep it.
 
-## 7. Emission
+## 8. Emission
 
 `AnalysedCell::edge` is consumed downstream, but the **per-arc label is read by exactly one emitter**.
-`EdgeArcs::captures` and `EdgeArcs::folded` shape the behavioural models; `EdgeArcs::labels` types the
-Liberate arcs and nothing else:
+`EdgeArcs::captures`, `EdgeArcs::folded` and `EdgeArcs::derived` shape the behavioural models;
+`EdgeArcs::labels` types the Liberate arcs and nothing else:
 
 - **Liberate** — `src/emit/arcs_tcl.rs` is the only consumer of `labels` and the only emitter that types
   arcs. Each delay arc looks up its own `(output, related clock, clock direction, start minterm)` key: an
@@ -216,11 +267,16 @@ Liberate arcs and nothing else:
   themselves, and outputs never fold.
 - **Liberty** — the joint `statetable` carries the edge rows and drops a folded master's row. It does not
   read `labels` at all: a latch opening needs nothing here, because the statetable's level rows already
-  model the latch and Liberate derives the timing from the Tcl.
+  model the latch and Liberate derives the timing from the Tcl. A **read-gate factorisation** (§6) adds a
+  first-class `internal_node` pin for a minted register — its native edge rows join the joint statetable —
+  and the read-gated output prints a `state_function` over the factored register and the gate pins
+  (`Y`'s `Yst + !A`), never its folded master.
 - **Verilog** — the sequential UDP is written in edge-triggered form for the seams and elides folded
-  masters; likewise independent of `labels`, the level rows already carrying the latch.
+  masters; likewise independent of `labels`, the level rows already carrying the latch. A minted factored
+  register emits its own edge UDP driving an internal wire, and the read-gated output becomes a continuous
+  assign over that wire and the gate pins.
 
-## 8. Retained restrictions
+## 9. Retained restrictions
 
 - **Declared clocks only.** A cell with no declared clock carries no edge arc.
 - **Never-changing ⇒ no arc.** A direction that never changes the node presents no arc to type.
@@ -229,7 +285,7 @@ Liberate arcs and nothing else:
   `MAX_MACHINE_VARS` (= 22) gets no annotation. Lifting the 22-variable cap is a separate, tool-wide
   change.
 
-## 9. The exploration is unchanged
+## 10. The exploration is unchanged
 
 Classification is read-only by construction, and a permanent regression guard
 (`edge_classification_changes_only_the_edge_annotation` in `src/logic/edge.rs`) checks it directly: for
@@ -239,7 +295,7 @@ produces byte-for-byte identical `AnalysedCell` fields for everything except `ed
 Classification changes only which form an arc is annotated in; the state-machine exploration, the
 discovered arcs and their prevectors, and hazard detection never see it.
 
-## 10. Opt-outs
+## 11. Opt-outs
 
 Classification is on by default. A cell opts out individually with `no_edge_collapse = true` in its TOML
 table; the global `--no-edge-collapse` CLI flag does the same for every cell in the run, applied before

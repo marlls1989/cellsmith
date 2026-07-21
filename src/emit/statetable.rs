@@ -1581,8 +1581,9 @@ Q = "!R*(CLK*M + !CLK*Q)"
         let machine =
             crate::logic::analysis::Machine::build(&cell, &bdds).expect("fixture is explored");
 
-        // Per-node async-forcing covers (the off-edge set/clear), for the RELEASE carve-out below. A node
-        // with no edge-register entry (a pure level node) has no forcing and is never a release.
+        // Per-node async-forcing covers (the off-edge set/clear), used below to detect a node whose async
+        // force lapses between the start and destination state. A node with no edge-register entry (a
+        // pure level node) has no forcing and never triggers that skip.
         let forcing: BTreeMap<&str, _> = cell
             .edge
             .captures
@@ -1642,11 +1643,12 @@ Q = "!R*(CLK*M + !CLK*Q)"
                     .collect();
                 let got = settle_rendered(&input_names, &rows, cur0, x.as_str(), &dest);
                 for (i, node) in state_names.iter().enumerate() {
-                    // RELEASE carve-out: when an async set/clear RELEASES, the node re-acquires through
-                    // level transparency the edge model abstracts away (TFF's master re-tracking `!Q` when
-                    // R releases at CLK=0). The established replay harness (`assert_captures_faithful`
-                    // clause 4) checks only determinism there, never the exact value, and the statetable is
-                    // deterministic by construction — so skip the exact check on a release.
+                    // When the async set/clear forcing `node` at the start state stops forcing it by the
+                    // destination, the node re-acquires its value through level transparency the edge model
+                    // abstracts away (TFF's master re-tracking `!Q` when R de-asserts at CLK=0). The
+                    // established replay harness (`assert_captures_faithful` clause 4) checks only
+                    // determinism there, never the exact value, and the statetable is deterministic by
+                    // construction — so skip the exact check when the force lapses.
                     if forced(node, s).is_some() && forced(node, &dest).is_none() {
                         continue;
                     }
