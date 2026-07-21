@@ -44,6 +44,7 @@ pub struct MachineAnalysis {
     pub order_dependence: Vec<OrderDependence>,
     pub oscillation: Vec<Oscillation>,
     pub leakage: Vec<LeakageState>,
+    pub edge: crate::logic::edge::EdgeArcs,
 }
 
 /// The single home for the combinatorial blow-up guard: a cell whose machine width (inputs + state
@@ -178,6 +179,7 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
 pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     cell: &AnalysedCell,
     bdds: &BTreeMap<Symbol, Bdd<B, C>>,
+    collapse: bool,
 ) -> MachineAnalysis {
     let Some(m) = Machine::build(cell, bdds) else {
         return MachineAnalysis::default();
@@ -194,6 +196,16 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     } else {
         Vec::new()
     };
+    // Behavioural edge classification is read-only over the explored machine — it mints only
+    // already-existing names and mutates nothing (the exploration-unchanged invariant holds BY
+    // CONSTRUCTION). The derived `arcs` are its label domain: every timing arc it labels is one of the
+    // pipeline's own delay arcs. The opt-out (`collapse == false`) SKIPS the classify() call entirely
+    // rather than discarding its result: a real bypass, byte-identical to the Default annotation.
+    let edge = if collapse {
+        crate::logic::edge::classify(&m, &arcs)
+    } else {
+        crate::logic::edge::EdgeArcs::default()
+    };
     MachineAnalysis {
         arcs,
         hidden_arcs,
@@ -201,6 +213,7 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
         order_dependence: detected.order_dependence,
         oscillation: detected.oscillation,
         leakage: leakage::derive(&m),
+        edge,
     }
 }
 

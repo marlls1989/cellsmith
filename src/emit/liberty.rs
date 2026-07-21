@@ -38,10 +38,12 @@ use liberty_parse::{
     liberty::{Attribute, Group, Liberty},
 };
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use espresso_logic::Symbol;
 use rayon::prelude::*;
 
-use crate::emit::statetable::{build_state_model, Next, StateModel};
+use crate::emit::statetable::{build_state_model, EdgeRow, EdgeTok, Next, StateModel};
 use crate::logic::hazard::Oscillation;
 use crate::logic::regions::{StateCube, StateRegions};
 use crate::model::AnalysedCell;
@@ -100,9 +102,10 @@ pub fn cell_liberty(cell: &AnalysedCell) -> String {
 /// Build the `cell` group: one input `pin` per primary input, then — for a sequential cell — the single
 /// joint `statetable`, its output pins (in declaration order), and its genuine-internal pins. Output
 /// pins are classified per output (see [`output_pin`]): a state variable, a state-dependent function,
-/// or a plain combinational `function` even alongside a statetable. A purely combinational cell (no
-/// state model) emits each output as a plain `function` pin instead. `name` is the cell name this group
-/// is emitted under; a cell with several declared names yields one identical group per name.
+/// or a plain combinational `function` even alongside a statetable. A cell with no state model — purely
+/// combinational, or one the fold emptied — emits each output as a plain `function` pin and no internal
+/// pin at all. `name` is the cell name this group is emitted under; a cell with several declared names
+/// yields one identical group per name.
 fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
     let mut group = Group::new("cell", name);
 
@@ -111,13 +114,21 @@ fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
     }
 
     match build_state_model(cell) {
-        // Purely combinational: every signal is an output carrying a plain `function`.
+        // No state model: every output carries a plain `function`. The cell is either purely
+        // combinational, or the fold emptied its state model outright. A folded internal still sits in
+        // `cell.internals` -- that list is pruned by the state-space minimisation, a different mechanism
+        // from the fold -- so the internals are filtered here rather than assumed away: an internal state
+        // node emits no external pin, and rendering its region as a `function` would strip the hold term
+        // and publish the node as a spurious output.
         None => {
             debug_assert!(
-                cell.internals.is_empty(),
-                "combinational cell (no state model) has no surviving internals -- minimise I3"
+                cell.internals
+                    .iter()
+                    .all(|s| cell.edge.folded.contains(&s.name)),
+                "no state model: every surviving internal is folded -- minimise I3 plus the fold"
             );
-            for (sig, sr) in cell.signal_regions() {
+            let n_out = cell.outputs.len();
+            for (sig, sr) in cell.signal_regions().take(n_out) {
                 group
                     .subgroups
                     .push(function_pin(&sig.name, &function_sop(sr)));
@@ -127,15 +138,40 @@ fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
         Some(model) => {
             group.subgroups.push(statetable_group(&model));
 
+            // A read-gated output reads a factored register combinationally: it prints a `state_function`
+            // over that register and its gate pins, not its raw region (which names the folded masters).
+            let read_of: BTreeMap<&str, &StateRegions> = cell
+                .edge
+                .derived
+                .iter()
+                .flat_map(|d| d.reads.iter().map(|(o, sr)| (o.as_str(), sr)))
+                .collect();
+
             let n_out = cell.outputs.len();
             for (i, (sig, sr)) in cell.signal_regions().enumerate() {
                 if i < n_out {
-                    group.subgroups.push(output_pin(&sig.name, sr, &model));
+                    match read_of.get(sig.name.as_str()) {
+                        Some(reads) => group.subgroups.push(state_function_pin(&sig.name, reads)),
+                        None => group.subgroups.push(output_pin(&sig.name, sr, &model)),
+                    }
                 }
             }
             for (i, (sig, _)) in cell.signal_regions().enumerate() {
-                if i >= n_out {
+                // A folded master carries no node in the collapsed model — skip its internal pin so only
+                // surviving state nodes (`node_of` members) get a pin group.
+                if i >= n_out && model.node_of.contains_key(&sig.name) {
                     group.subgroups.push(internal_pin(&sig.name));
+                }
+            }
+            // The minted derived registers (factored out of read-gated outputs, not declared signals) get
+            // an internal pin binding their same-named state-table node to a port.
+            let signal_names: BTreeSet<&str> = cell
+                .signal_regions()
+                .map(|(s, _)| s.name.as_str())
+                .collect();
+            for d in &cell.edge.derived {
+                if !signal_names.contains(d.name.as_str()) {
+                    group.subgroups.push(internal_pin(&d.name));
                 }
             }
         }
@@ -196,6 +232,24 @@ fn output_pin(name: &Symbol, sr: &StateRegions, model: &StateModel) -> Group {
     pin
 }
 
+/// `pin (<name>) { direction : output; state_function : "<sop>"; }` — a read-gated output. It reads a
+/// factored register (the read-gate factorisation) combinationally, so it names PIN ports — the register's
+/// internal pin and the gate pins — through `state_function`, never a folded master.
+fn state_function_pin(name: &Symbol, reads: &StateRegions) -> Group {
+    let mut pin = Group::new("pin", name);
+    set_attr(
+        &mut pin,
+        "direction",
+        Value::Expression("output".to_owned()),
+    );
+    set_attr(
+        &mut pin,
+        "state_function",
+        Value::String(function_sop(reads)),
+    );
+    pin
+}
+
 /// `pin (<name>) { direction : internal; internal_node : "<name>"; }` — a genuine internal state node,
 /// anchoring the same-named table column to a port (Liberty UG Vol.1 `pin(n1)` example).
 fn internal_pin(name: &Symbol) -> Group {
@@ -227,10 +281,11 @@ fn statetable_group(model: &StateModel) -> Group {
 }
 
 /// Render the joint table body: one `<inputs> : <current> : <next>` row per [`StateModel::rows`] entry,
-/// comma-and-newline-joined (one statetable row per line in the emitted Liberty) in model (deterministic)
-/// order. Inputs/current use `H`/`L`/`-`; next uses `H`/`L`/`N`.
+/// then the edge-triggered rows ([`StateModel::edge_rows`]), comma-and-newline-joined (one statetable row
+/// per line in the emitted Liberty) in model (deterministic) order. Inputs/current use `H`/`L`/`-`; an
+/// edge row's clock column instead carries the token `R`/`F`/`~R`/`~F`; next uses `H`/`L`/`N`.
 fn table_string(model: &StateModel) -> String {
-    model
+    let mut rows: Vec<String> = model
         .rows
         .iter()
         .map(|row| {
@@ -241,8 +296,48 @@ fn table_string(model: &StateModel) -> String {
                 next_pattern(&row.next),
             )
         })
+        .collect();
+    for er in &model.edge_rows {
+        rows.push(format!(
+            "{} : {} : {}",
+            edge_input_pattern(er, &model.input_nodes),
+            state_pattern(&er.current),
+            next_pattern(&er.next),
+        ));
+    }
+    rows.join(" ,\n")
+}
+
+/// Render an edge row's input field: the ordinary `H`/`L`/`-` level symbols, except the register's clock
+/// column carries the edge token (`R`/`F`/`~R`/`~F`/`-`) in place of a level — but ONLY when the row's cube
+/// leaves the clock free (its `inputs` slot is `None`). A phase-conditioned cover (a `CLK*R` forcing clear)
+/// pins the clock in the cube, so `er.inputs` carries its level there; that literal `H`/`L` is printed
+/// instead of the token, so the clear fires in the intended clock phase rather than on any non-edge event.
+fn edge_input_pattern(er: &EdgeRow, input_nodes: &[Symbol]) -> String {
+    input_nodes
+        .iter()
+        .zip(er.inputs.iter())
+        .map(|(node, val)| {
+            if *node == er.clock && val.is_none() {
+                edge_token(er.token)
+            } else {
+                level_symbol(val)
+            }
+        })
         .collect::<Vec<_>>()
-        .join(" ,\n")
+        .join(" ")
+}
+
+/// The Liberty state-table symbol for a clock-edge token. A dual-edge register's off-edge row owns
+/// neither clock face, so its clock column prints the level don't-care `-`.
+fn edge_token(token: EdgeTok) -> &'static str {
+    match token {
+        EdgeTok::Rise => "R",
+        EdgeTok::Fall => "F",
+        EdgeTok::NotRise => "~R",
+        EdgeTok::NotFall => "~F",
+        EdgeTok::Level => "-",
+    }
 }
 
 /// Render a per-node next-state action vector as space-separated `H`/`L`/`N`/`-` symbols. A `None` slot
@@ -271,14 +366,16 @@ fn join_nodes(nodes: &[Symbol]) -> String {
 
 /// Render a cube as space-separated `H`/`L`/`-` symbols (Liberty state-table input levels).
 fn state_pattern(cube: &StateCube) -> String {
-    cube.iter()
-        .map(|c| match c {
-            Some(true) => "H",
-            Some(false) => "L",
-            None => "-",
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    cube.iter().map(level_symbol).collect::<Vec<_>>().join(" ")
+}
+
+/// The Liberty state-table level symbol for one cube value: `H`/`L`/`-`.
+fn level_symbol(val: &Option<bool>) -> &'static str {
+    match val {
+        Some(true) => "H",
+        Some(false) => "L",
+        None => "-",
+    }
 }
 
 /// Render the on-region as a Liberty function string: a sum (`+`) of product (`*`) cubes, each a
@@ -392,11 +489,15 @@ Q = "A*B + Q*(A+B)"
 
     #[test]
     fn dff_emits_one_joint_statetable() {
+        // MIGRATED two-latch coverage: the same DFF with a declared clock but collapse opted OUT keeps
+        // its master-slave statetable (`Q M` nodes, six per-output rows, a `pin (M)`).
         let cell = analyse(
             r#"
 [[cell]]
 name = "DFF"
 inputs = ["CLK", "D"]
+clock = ["CLK"]
+no_edge_collapse = true
 [cell.internal]
 M = "!CLK*D + CLK*M"
 [cell.outputs]
@@ -432,6 +533,194 @@ Q = "CLK*M + !CLK*Q"
             .subgroups
             .iter()
             .any(|g| g.type_ == "pin" && g.name == "M"));
+    }
+
+    #[test]
+    fn dff_collapses_to_edge_statetable() {
+        // Default (collapse ON) with a declared clock: the master-slave DFF becomes ONE rising-edge
+        // register Q, folding M away. The table carries only the register's node `Q` and edge rows.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        assert_eq!(frag.matches("statetable").count(), 1);
+        assert!(frag.contains("statetable (\"CLK D\", \"Q\")"));
+        // Rising-edge capture (R) drives Q from D; the off-edge face (~R) holds.
+        assert!(frag.contains("R H : - : H"));
+        assert!(frag.contains("R L : - : L"));
+        assert!(frag.contains("~R - : - : N"));
+        // The folded master M keeps no pin group and no node column in the statetable header.
+        assert!(!frag.contains("pin (M)"));
+        assert!(!frag.contains("\"Q M\""));
+        assert!(!frag.contains("function : "));
+        let lib = parse_frag(&frag);
+        let cellg = find_cell(&lib, "DFF");
+        assert!(!cellg
+            .subgroups
+            .iter()
+            .any(|g| g.type_ == "pin" && g.name == "M"));
+        // Q binds its own node exactly as an uncollapsed state output would.
+        let q = find_pin(cellg, "Q");
+        assert_eq!(attr_string(q, "internal_node").as_deref(), Some("Q"));
+    }
+
+    #[test]
+    fn ndff_group_folds_the_mutually_referencing_nand_master_pair() {
+        // The cross-coupled-NAND master-slave flop: M/Mn are captureless and mutually referencing, so
+        // they fold together exactly as the pass DFF's lone M folds. Q and Qn survive as the two edge
+        // registers (Qn carries its own genuine !D capture).
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "NDFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+Mn = "!( !(!D*!CLK) * M )"
+M = "!( !(D*!CLK) * Mn )"
+[cell.outputs]
+Qn = "!( !(!M*CLK) * Q )"
+Q = "!( !(M*CLK) * Qn )"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        assert_eq!(frag.matches("statetable").count(), 1);
+        assert!(frag.contains("statetable (\"CLK D\", \"Q Qn\")"));
+        // The folded master pair keeps no pin group and no node column in the statetable header.
+        assert!(!frag.contains("pin (M)"));
+        assert!(!frag.contains("pin (Mn)"));
+        assert!(!frag.contains("function : "));
+        let lib = parse_frag(&frag);
+        let cellg = find_cell(&lib, "NDFF");
+        for gone in ["M", "Mn"] {
+            assert!(
+                !cellg
+                    .subgroups
+                    .iter()
+                    .any(|g| g.type_ == "pin" && g.name == gone),
+                "folded master {gone} must not emit a pin"
+            );
+        }
+        // Q and Qn bind their own nodes as the two surviving edge registers.
+        let q = find_pin(cellg, "Q");
+        assert_eq!(attr_string(q, "internal_node").as_deref(), Some("Q"));
+        let qn = find_pin(cellg, "Qn");
+        assert_eq!(attr_string(qn, "internal_node").as_deref(), Some("Qn"));
+    }
+
+    #[test]
+    fn a_wholly_folded_internal_leaves_a_combinational_cell_with_no_pin() {
+        // The fold can empty the state model outright: L is the cell's only state signal and it reaches
+        // no output, so once it folds `build_state_model` returns None and the cell renders through the
+        // combinational branch. L nonetheless survives in `cell.internals` -- that list is pruned by the
+        // state-space minimisation, a different mechanism from the fold -- so the combinational branch
+        // still sees it as a signal. It must emit NO pin: an internal state node has no external pin, and
+        // rendering its region as a `function` would strip the hold term and publish `D*!CLK` as an
+        // output.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "FOLDONLY"
+inputs = ["CLK", "A", "D"]
+clock = ["CLK"]
+[cell.internal]
+L = "!CLK*D + CLK*L"
+[cell.outputs]
+Y = "A*D"
+"#,
+        );
+        assert_eq!(
+            cell.edge
+                .folded
+                .iter()
+                .map(Symbol::as_str)
+                .collect::<Vec<_>>(),
+            ["L"],
+            "premise: L is folded"
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        assert!(!frag.contains("statetable"), "the fold emptied the model");
+        assert!(!frag.contains("pin (L)"), "folded internal emits no pin");
+        let lib = parse_frag(&frag);
+        let cellg = find_cell(&lib, "FOLDONLY");
+        assert!(
+            !cellg
+                .subgroups
+                .iter()
+                .any(|g| g.type_ == "pin" && g.name == "L"),
+            "folded internal L must not emit a pin"
+        );
+        // The genuine output is untouched.
+        let y = find_pin(cellg, "Y");
+        assert_eq!(attr_expr(y, "direction").as_deref(), Some("output"));
+        assert_eq!(attr_string(y, "function").as_deref(), Some("A*D"));
+    }
+
+    #[test]
+    fn icm_collapses_shared_boundary_registers_with_both_edges() {
+        // Two three-latch synchronisers collapse to four edge registers (sela2/enA on CLKA,
+        // selb2/enB on CLKB); the folded relays sela1/selb1 vanish, and GCLK stays a state_function.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "ICM"
+inputs = ["CLKA", "CLKB", "RA", "RB", "S"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+sela = "!enB*!S"
+selb = "!enA*S"
+sela1 = "!RA*(!CLKA*sela+CLKA*sela1)"
+sela2 = "!RA*(CLKA*sela1+!CLKA*sela2)"
+enA   = "!RA*(!CLKA*sela2+CLKA*enA)"
+selb1 = "!RB*(!CLKB*selb+CLKB*selb1)"
+selb2 = "!RB*(CLKB*selb1+!CLKB*selb2)"
+enB   = "!RB*(!CLKB*selb2+CLKB*enB)"
+[cell.outputs]
+GCLK = "enA*CLKA+enB*CLKB"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        // Both a rising (sela2/selb2) and a falling (enA/enB) register are present.
+        assert!(frag.contains("R "));
+        assert!(frag.contains("F "));
+        let lib = parse_frag(&frag);
+        let cellg = find_cell(&lib, "ICM");
+        // The surviving state nodes are exactly the four registers — no folded relays.
+        for node in ["sela2", "enA", "selb2", "enB"] {
+            assert!(
+                cellg
+                    .subgroups
+                    .iter()
+                    .any(|g| g.type_ == "pin" && g.name == node),
+                "expected pin {node}"
+            );
+        }
+        for gone in ["sela1", "selb1"] {
+            assert!(
+                !cellg
+                    .subgroups
+                    .iter()
+                    .any(|g| g.type_ == "pin" && g.name == gone),
+                "folded relay {gone} must not emit a pin"
+            );
+        }
+        // GCLK depends on the register nodes: a state_function (branch B), never its own node.
+        let gclk = find_pin(cellg, "GCLK");
+        assert!(gclk.attributes.contains_key("state_function"));
+        assert!(!gclk.attributes.contains_key("internal_node"));
     }
 
     #[test]
@@ -473,6 +762,87 @@ Y = "C*L"
     }
 
     #[test]
+    fn bdet_read_gate_factorisation_liberty() {
+        // BDET: the read-gate factorisation mints `Yst` and prints `Y` as a state_function over it. The DET
+        // masters `L1/L2` fold away entirely.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "BDET"
+inputs = ["CLK", "D", "A"]
+clock = ["CLK"]
+[cell.internal]
+L1 = "!CLK*D + CLK*L1"
+L2 = "CLK*D + !CLK*L2"
+[cell.outputs]
+Y = "!((CLK*L1 + !CLK*L2)*A)"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        let lib = parse_frag(&frag);
+        let cellg = find_cell(&lib, "BDET");
+
+        // The statetable names `Yst` as its sole state node; the folded masters vanish.
+        assert!(frag.contains("\"Yst\""), "statetable node is Yst: {frag}");
+        assert!(
+            !frag.contains("L1") && !frag.contains("L2"),
+            "masters folded: {frag}"
+        );
+
+        // `Y` reads the factored register combinationally — a state_function over `Yst` and `A`, no own
+        // internal_node, never a folded master.
+        let y = find_pin(cellg, "Y");
+        let sf = attr_string(y, "state_function").expect("Y prints a state_function");
+        assert_eq!(sf, "Yst + !A", "Y reads Yst and A: {sf}");
+        assert!(!y.attributes.contains_key("internal_node"));
+
+        // `Yst` is a first-class internal-node pin.
+        let yst = find_pin(cellg, "Yst");
+        assert_eq!(attr_expr(yst, "direction").as_deref(), Some("internal"));
+        assert_eq!(attr_string(yst, "internal_node").as_deref(), Some("Yst"));
+    }
+
+    #[test]
+    fn detp_read_gate_reuses_declared_register_liberty() {
+        // DETP: the factorisation REUSES the declared cross-clock register `T` (no mint); `Y` prints a
+        // state_function over `T`.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DETP"
+inputs = ["CLK", "CLKB", "D", "A"]
+clock = ["CLK", "CLKB"]
+[cell.internal]
+L1 = "!CLK*D + CLK*L1"
+L2 = "CLK*D + !CLK*L2"
+T = "!CLKB*(CLK*L1 + !CLK*L2) + CLKB*T"
+[cell.outputs]
+Y = "!(T*A)"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        let lib = parse_frag(&frag);
+        let cellg = find_cell(&lib, "DETP");
+
+        // `Y` is a state_function over the reused declared register `T` and the gate `A`.
+        let y = find_pin(cellg, "Y");
+        let sf = attr_string(y, "state_function").expect("Y prints a state_function");
+        assert!(
+            sf.contains('T') && sf.contains('A'),
+            "Y reads T and A: {sf}"
+        );
+        assert!(!y.attributes.contains_key("internal_node"));
+
+        // `T` keeps its internal-node pin; nothing is minted (no `*st` pin).
+        let t = find_pin(cellg, "T");
+        assert_eq!(attr_string(t, "internal_node").as_deref(), Some("T"));
+        assert!(
+            cellg.subgroups.iter().all(|g| !g.name.ends_with("st")),
+            "no minted register pin"
+        );
+    }
+
+    #[test]
     fn mutex_emits_joint_statetable_no_function() {
         let cell = analyse(
             r#"
@@ -487,8 +857,8 @@ Qb = "!Qa * B"
         let frag = cell_liberty(&cell);
         eprintln!("{frag}");
         assert!(frag.contains("statetable (\"A B\", \"Qa Qb\")"));
-        // The old joint race row `H H : L L : H H` is split into two per-output rows: each grant drives
-        // high off its own request and the other grant currently low, deferring (`-`) the other node.
+        // Each grant has its own per-output row: it drives high off its own request while the
+        // other grant is held low, deferring (`-`) the other node.
         assert!(!frag.contains("H H : L L : H H"));
         assert!(frag.contains("H - : - L : H -"));
         assert!(frag.contains("- H : L - : - H"));
@@ -698,5 +1068,266 @@ Qn = "!Q"
         assert_eq!(attr_string(qn, "state_function").as_deref(), Some("!Q"));
         assert!(!qn.attributes.contains_key("function"));
         assert!(!qn.attributes.contains_key("internal_node"));
+    }
+
+    /// Parse the single-cell `src` and analyse it twice: once as written, once with
+    /// `no_edge_collapse` forced true on every cell -- the same blanket mutation the
+    /// `--no-edge-collapse` CLI flag applies (main.rs:82-88). Proves the per-cell TOML switch and
+    /// the CLI flag are the identical code path, not two independently-tested mechanisms.
+    fn analyse_both(src: &str) -> (crate::model::AnalysedCell, crate::model::AnalysedCell) {
+        let default = crate::model::parse_spec(src)
+            .unwrap()
+            .cells
+            .remove(0)
+            .analyse()
+            .unwrap();
+        let mut spec = crate::model::parse_spec(src).unwrap();
+        for c in &mut spec.cells {
+            c.no_edge_collapse = true;
+        }
+        let forced = spec.cells.remove(0).analyse().unwrap();
+        (default, forced)
+    }
+
+    /// Three shapes the behavioural classifier leaves fully level (no edge token) even under default (on)
+    /// collapse: a single latch, a gated (self-referencing) latch, and a two-latch DFF whose clock is
+    /// never declared. Mirrors `statetable.rs`'s shrunk fixtures. EMDFF and MCDFF each have their own
+    /// dedicated fixture: EMDFF's slave Q is a recognised register (see `emdff_emits_edge_statetable_over_surviving_master`),
+    /// and MCDFF stays level because it has two clocks (see `mcdff_two_clock_stays_level`).
+    const NON_COLLAPSIBLE: [&str; 3] = [
+        r#"
+[[cell]]
+name = "DLAT"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.outputs]
+Q = "CLK*D + !CLK*Q"
+"#,
+        r#"
+[[cell]]
+name = "GLAT"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.outputs]
+Q = "CLK*(D+Q) + !CLK*Q"
+"#,
+        r#"
+[[cell]]
+name = "UCDFF"
+inputs = ["CLK", "D"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#,
+    ];
+
+    #[test]
+    fn non_collapsible_suite_liberty_matches_the_no_edge_collapse_flag() {
+        // No `R`/`F`/`~R`/`~F` edge token appears as its own statetable field, whether the flag is
+        // left off (default collapse, a no-op on these shapes) or forced on -- and the two runs emit
+        // byte-identical Liberty.
+        fn has_edge_token(frag: &str) -> bool {
+            frag.split_whitespace()
+                .any(|tok| matches!(tok, "R" | "F" | "~R" | "~F"))
+        }
+        for src in NON_COLLAPSIBLE {
+            let (default, forced) = analyse_both(src);
+            let frag_default = cell_liberty(&default);
+            let frag_forced = cell_liberty(&forced);
+            assert!(
+                !has_edge_token(&frag_default),
+                "unexpected edge token in {}",
+                default.repr_name()
+            );
+            assert!(!has_edge_token(&frag_forced));
+            assert_eq!(frag_default, frag_forced);
+            parse_frag(&frag_default);
+        }
+    }
+
+    #[test]
+    fn dff_opt_out_restores_pin_m_internal_node_via_either_switch() {
+        // The two-latch DFF, opted out directly (`no_edge_collapse = true` in the TOML) versus opted
+        // out via the CLI-flag-equivalent blanket mutation over the whole spec: both switches restore
+        // the SAME two-latch Liberty -- a genuine `pin (M)` carrying `internal_node : "M"`.
+        const DFF: &str = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+        let direct = {
+            let mut spec = crate::model::parse_spec(DFF).unwrap();
+            spec.cells[0].no_edge_collapse = true;
+            spec.cells.remove(0).analyse().unwrap()
+        };
+        let via_flag = {
+            // Mirrors main.rs:82-88's blanket application of `--no-edge-collapse` over every cell.
+            let mut spec = crate::model::parse_spec(DFF).unwrap();
+            for c in &mut spec.cells {
+                c.no_edge_collapse = true;
+            }
+            spec.cells.remove(0).analyse().unwrap()
+        };
+
+        let frag_direct = cell_liberty(&direct);
+        let frag_via_flag = cell_liberty(&via_flag);
+        for frag in [&frag_direct, &frag_via_flag] {
+            assert!(frag.contains("pin (M)"));
+            assert!(frag.contains("internal_node : \"M\";"));
+        }
+        assert_eq!(frag_direct, frag_via_flag);
+    }
+
+    #[test]
+    fn emdff_emits_edge_statetable_over_surviving_master() {
+        // The exposed-master DFF: the behavioural pass recognises the slave Q as a rising-edge register
+        // while the declared-output master M survives as a level node. The statetable carries both nodes;
+        // Q's rows are edge rows (an `R` token), M's are level rows, and M keeps its own output pin.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "EMDFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+M = "!CLK*D + CLK*M"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        assert_eq!(frag.matches("statetable").count(), 1);
+        // Node order follows signals() (outputs sorted: M before Q).
+        assert!(frag.contains("statetable (\"CLK D\", \"M Q\")"));
+        // Q (second column) captures the INPUT D at the rising edge — the cover prefers the input over the
+        // internal master M (they coincide over the CLK=0 capture domain); the ~R face holds.
+        assert!(frag.contains("R H : - - : - H"));
+        assert!(frag.contains("R L : - - : - L"));
+        assert!(frag.contains("~R - : - - : - N"));
+        // M (first column) is a level latch on CLK, sampling D while transparent-low.
+        assert!(frag.contains("L H : - - : H -"));
+        assert!(frag.contains("L L : - - : L -"));
+        let lib = parse_frag(&frag);
+        let cellg = find_cell(&lib, "EMDFF");
+        // M is a surviving output binding its own node.
+        let m = find_pin(cellg, "M");
+        assert_eq!(attr_string(m, "internal_node").as_deref(), Some("M"));
+        let q = find_pin(cellg, "Q");
+        assert_eq!(attr_string(q, "internal_node").as_deref(), Some("Q"));
+    }
+
+    #[test]
+    fn mcdff_two_clock_stays_level() {
+        // A master/slave pair split across two declared clocks: Q depends transitively on both clocks, so
+        // no single clock keys it and the classifier recognises no register -- a fully level joint table.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "MCDFF"
+inputs = ["CLKA", "CLKB", "D"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+M = "!CLKA*D + CLKA*M"
+[cell.outputs]
+Q = "CLKB*M + !CLKB*Q"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        let has_edge_token = frag
+            .split_whitespace()
+            .any(|t| matches!(t, "R" | "F" | "~R" | "~F"));
+        assert!(!has_edge_token, "two-clock pair stays level, no edge token");
+        assert!(frag.contains("statetable (\"CLKA CLKB D\", \"Q M\")"));
+        parse_frag(&frag);
+    }
+
+    #[test]
+    fn det_dual_edge_renders_both_tokens_and_level_off_edge() {
+        // Dual-edge mux-DET: Q captures D on BOTH clock edges (L1/L2 fold away). The statetable carries an
+        // `R` and an `F` capture group, then the off-edge hold as a `-` Level clock column (captures win
+        // at the edges by Liberty first-match priority).
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DET"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+L1 = "!CLK*D + CLK*L1"
+L2 = "CLK*D + !CLK*L2"
+[cell.outputs]
+Q = "CLK*L1 + !CLK*L2"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        assert_eq!(frag.matches("statetable").count(), 1);
+        assert!(frag.contains("statetable (\"CLK D\", \"Q\")"));
+        // Both clock faces capture D.
+        assert!(frag.contains("R H : - : H"));
+        assert!(frag.contains("R L : - : L"));
+        assert!(frag.contains("F H : - : H"));
+        assert!(frag.contains("F L : - : L"));
+        // The off-edge hold row prints `-` in the clock column (a Level token) and holds.
+        assert!(frag.contains("- - : - : N"));
+        // The folded latches L1/L2 keep no pin and no node column.
+        assert!(!frag.contains("pin (L1)"));
+        assert!(!frag.contains("pin (L2)"));
+        parse_frag(&frag);
+    }
+
+    #[test]
+    fn dcmux_statetable_is_a_level_model() {
+        // DCMUX collapses to a LEVEL model: its falls are combinational and the seam fixpoint empties Q's
+        // set, so the joint statetable renders level rows with NO edge (R/F) token in any column. The two
+        // rise DELAY arcs still render `-type edge` (covered in the arcs_tcl emitter tests).
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DCMUX"
+inputs = ["CLKA", "CLKB", "DA", "DB"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+MA = "!CLKA*DA + CLKA*MA"
+MB = "!CLKB*DB + CLKB*MB"
+[cell.outputs]
+Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        eprintln!("{frag}");
+        // Column order of the statetable input header.
+        let header = frag
+            .lines()
+            .find(|l| l.contains("statetable ("))
+            .expect("a statetable header");
+        let cols: Vec<&str> = header
+            .split('"')
+            .nth(1)
+            .expect("input header field")
+            .split_whitespace()
+            .collect();
+        let is_edge = |t: &str| t == "R" || t == "F";
+        for line in frag.lines() {
+            let Some((pattern, _)) = line.trim().split_once(':') else {
+                continue;
+            };
+            let toks: Vec<&str> = pattern.split_whitespace().collect();
+            if toks.len() != cols.len() {
+                continue; // not a statetable data row
+            }
+            assert!(
+                toks.iter().all(|t| !is_edge(t)),
+                "DCMUX is a level model: no edge token in {line}"
+            );
+        }
+        parse_frag(&frag);
     }
 }

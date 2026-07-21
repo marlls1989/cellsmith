@@ -110,7 +110,7 @@ fn bench_machine_stages(c: &mut Criterion) {
             confluence::detect(&m)
         });
         sweep_bench!(g, "analyse_machine", cell.name[0], true, heavy, || {
-            analyse_machine(&ac, &bdds)
+            analyse_machine(&ac, &bdds, true)
         });
         sweep_bench!(g, "leakage_derive", cell.name[0], false, heavy, || {
             leakage::derive(&m)

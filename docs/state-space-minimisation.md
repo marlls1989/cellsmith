@@ -2,10 +2,11 @@
 
 How cellsmith reduces a cell to the **minimal set of genuine-memory state coordinates** before it
 builds the state machine. A signal is a *state coordinate* only if it holds real memory; signals that
-sit on a feedback cycle but merely relay, alias, or duplicate another signal carry none, and inflate
-the machine and its emitted artifacts. This pass rewrites the cell's function model once so that every
-surviving signal is either a primary input or a self-reaching coordinate, and the machine's next-state
-δ is a direct lookup — no signal is ever substituted through at analysis time.
+sit on a feedback cycle but merely relay (defined in "Guarded relay elimination" below), alias, or
+duplicate another signal carry none, and inflate the machine and its emitted artifacts. This pass
+rewrites the cell's function model once so that every surviving signal is either a primary input or a
+self-reaching coordinate, and the machine's next-state δ is a direct lookup — no signal is ever
+substituted through at analysis time.
 
 It reads the same BDD representation the rest of the engine uses; `state-machine-arc-engine.md` and
 `state-table-regions.md` cover the passes that consume its output.
@@ -44,11 +45,9 @@ each an external pin). That shape is exactly what a Liberty `statetable`/`functi
 an output pin — the spec forbids an output referencing another output. Separating output pins from the
 state they depend on is a Liberty-specific emission concern, not a property of the minimised model, so
 it is handled entirely at emission time (alias minting in `src/emit/statetable.rs`), never by a
-minimisation pass here. An earlier version of this pass hoisted such a cyclic output onto a minted
-internal after the fixpoint; that hoist has been removed, because it fixed a Liberty-only constraint by
-mutating the shared model that the Verilog emitter also reads — a Verilog UDP is free to have an output
-reference another output directly, so baking the hoist into minimisation cost Verilog a distinction it
-was allowed to keep.
+minimisation pass here: a minimisation-time rewrite would mutate the shared model the Verilog emitter
+also reads, and a Verilog UDP is free to have an output reference another output directly, so keeping
+the cyclic-output shape in the minimised model preserves that distinction for Verilog.
 
 ## Identical-δ merge (dedup)
 
@@ -225,9 +224,8 @@ The two passes partition the aliasing they resolve by a hard interface rule, not
 - **(I1) Arity-1 fold soundness.** A bare ±var alias carries exactly one bit — it equals
   `±` its target at every state — so folding it, or folding an internal target's definition into an
   output alias of it, is exact renaming (parity-corrected via the BDD compose; the sign is incidental).
-  Arity-1 is always lockstep, so this is unconditional. An all-wire cycle is no longer refused: it
-  **collapses** to a single keeper
-  coordinate (`a="b"` → `b = var(b)`, a lone self-holding keeper) or a one-node oscillator
+  Arity-1 is always lockstep, so this is unconditional. An all-wire cycle **collapses** to a single
+  keeper coordinate (`a="b"` → `b = var(b)`, a lone self-holding keeper) or a one-node oscillator
   (`a="!b"` → `b = !var(b)`), and the surviving node holds exactly the one bit the cycle carried, so
   its dynamics are preserved.
 - **(I2) Arity guard.** Only a multi-input relay can fabricate a register, and the guard refuses
@@ -265,8 +263,9 @@ multi-input relay and none self-holds (e.g. `X1="!X3·A", X2="!X1·B", X3="!X2·
 committed fixture). Such a ring can admit a fold before any 2-cycle appears, shrinking a would-be
 oscillation group.
 
-Arity-1 links no longer contribute to this limit: a bare ±var alias always collapses soundly (I1), so
+Arity-1 links never contribute to this limit: a bare ±var alias always collapses soundly (I1), so
 any ring with even one wire link is resolved rather than mis-folded. No committed or mandated cell is
-affected: MUT and SR are 2-cycles the guard catches, and ICM's folded relays feed synchroniser latches
-that already self-hold. A fully general criterion would carry a BDD check that the projected cycle
-structure survives; the structural guard is accepted per the decided enforcement level.
+affected: MUT and SR (an SR NOR latch, as above) are 2-cycles the guard catches, and ICM's folded
+relays feed synchroniser latches that already self-hold. A fully general criterion would carry a BDD
+check that the projected cycle structure survives; the structural guard is accepted per the decided
+enforcement level.

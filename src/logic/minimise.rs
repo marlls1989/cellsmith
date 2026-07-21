@@ -50,13 +50,13 @@
 //! # Proof obligations
 //!
 //! **(I1) alias / arity-1 fold soundness.** A bare ±var alias `s = ±var(t)` carries exactly one bit and
-//! is in lockstep with `t`, so it always folds: the old wire-collapse is now simply the **arity-1 case**
-//! of the guarded fold, composed away like any other relay. When the alias is an **output** whose target
+//! is in lockstep with `t`, so it always folds — the **arity-1 case** of the guarded fold, composed away
+//! like any other relay. When the alias is an **output** whose target
 //! `t` is a *surviving internal*, the same fold lands the coordinate on the output rather than composing
 //! the output away: `t`'s definition is folded into `s`, `s` is kept as the coordinate, `t` is purged,
 //! every `t` reference is rewritten `t ↦ ±var(s)`, and `t`'s definer is transferred to `s` with the
 //! parity carried through — so the pin survives holding the coordinate `t` used to name (the sign is
-//! incidental, not a special inversion step). A bare ±alias **ring** is no longer refused: it collapses
+//! incidental, not a special inversion step). A bare ±alias **ring** collapses
 //! onto a single self-holding coordinate
 //! (`a="b", b="a"` → `b = var(b)`; `a="!b", b="a"` → `b = !var(b)`, a one-node oscillator), preserving
 //! the one bit — and any oscillation — the ring carried on that surviving coordinate, exactly as a
@@ -131,7 +131,7 @@
 //! # Known limit
 //!
 //! The guard inspects only `s ↔ c` **2-cycles** as a structural proxy for "removing `s` preserves the
-//! reachable-state cycle structure". Arity-1 links no longer sit inside this limit — they collapse
+//! reachable-state cycle structure". Arity-1 links never sit inside this limit — they collapse
 //! soundly onto a single coordinate (I1). The residual gap is only an *emergent* all-relay ring whose
 //! links are **all** arity `> 1` and no node self-holds: a fold can fire before any 2-cycle forms,
 //! shrinking a would-be oscillation group. No committed or mandated cell is affected — MUT and SR are

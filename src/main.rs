@@ -32,8 +32,8 @@ struct Cli {
     #[arg(short, long)]
     name: Option<String>,
 
-    /// Suppress the `-when` conditions on arcs (emitted by default); collapses arcs that share a
-    /// (related, pin, edge) to a single representative.
+    /// Suppress the `-when` conditions on arcs (emitted by default). Suppression only: every arc still
+    /// emits, so the output differs from the default solely by the absent `-when` lines.
     #[arg(long)]
     no_when: bool,
 
@@ -50,6 +50,11 @@ struct Cli {
     /// `constraint_arcs = true`).
     #[arg(long)]
     constraints: bool,
+
+    /// Suppress the behavioural edge-register annotation (on by default); a cell can opt out
+    /// individually with `no_edge_collapse = true`.
+    #[arg(long)]
+    no_edge_collapse: bool,
 
     /// Write all three artifacts to stdout (with banners) instead of writing files.
     #[arg(long)]
@@ -72,6 +77,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     if cli.constraints {
         for c in &mut spec.cells {
             c.constraint_arcs = true;
+        }
+    }
+    // `--no-edge-collapse` is a blanket disable: it opts every cell out of the edge-register collapse,
+    // exactly as if each had declared `no_edge_collapse = true`.
+    if cli.no_edge_collapse {
+        for c in &mut spec.cells {
+            c.no_edge_collapse = true;
         }
     }
     let cells: Vec<AnalysedCell> = spec.analyse()?;

@@ -56,10 +56,10 @@ the self variable `self`:
 
 Because a partial function's on-set and off-set are **not** complementary, the gap between them is
 non-empty exactly where the output still depends on the projected self variable — that is, where the
-next value is state-dependent. That gap is the **hold** set: the hysteretic region, rendered as the
-`-`/`N` no-change entry in the emitted tables. The onset and offset are each taken as a clean cover; the
-hold set is reconstructed as its own function from the onset and offset covers so that it, too, can be
-minimised as an independent onset.
+next value is state-dependent. That gap is the **hold** set: the hysteretic region (formalised as the
+`hysteretic` flag in §5), rendered as the `-`/`N` no-change entry in the emitted tables. The onset and
+offset are each taken as a clean cover; the hold set is reconstructed as its own function from the onset
+and offset covers so that it, too, can be minimised as an independent onset.
 
 ## 4. Each region is minimised independently
 
@@ -137,7 +137,8 @@ A `-` in a row's next-state field for some node means this row does not define t
 all. Liberty resolves each output's next state independently — **per-output priority** (Vol. 1 §5) — by
 reading the first row that pins a definite (non-`-`) value for it, in table order; `-` simply defers
 that node to whichever lower-priority row does pin it (the master-slave `CP(R)`/`CPN(F)` split-row
-example is exactly this deferral). The construction is sound only because, per node, its `on`, `off`,
+example — one row for the rising-clock phase, another for the falling-clock phase — is exactly this
+deferral). The construction is sound only because, per node, its `on`, `off`,
 and `hold` regions are mutually disjoint: a row can therefore never need to stamp the same node with two
 different definite actions, however many passes contribute cubes to it.
 

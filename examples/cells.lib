@@ -18,7 +18,7 @@ library (cells) {
     pin (B) {
       direction : input;
     }
-    statetable ("A B", "Q_st") {
+    statetable ("A B", "Q") {
       table : "L L : - : L , \
                L H : - : N , \
                H L : - : N , \
@@ -26,8 +26,7 @@ library (cells) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q_st";
-      inverted_output : false;
+      internal_node : "Q";
     }
   }
   cell (RCELEM2) {
@@ -40,7 +39,7 @@ library (cells) {
     pin (R) {
       direction : input;
     }
-    statetable ("A B R", "Q_st") {
+    statetable ("A B R", "Q") {
       table : "- - H : - : L , \
                L L - : - : L , \
                L H L : - : N , \
@@ -49,8 +48,7 @@ library (cells) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q_st";
-      inverted_output : false;
+      internal_node : "Q";
     }
   }
   cell (RACELEM21) {
@@ -72,7 +70,7 @@ library (cells) {
     pin (R) {
       direction : input;
     }
-    statetable ("M1 M2 P1 P2 C R", "Q_st") {
+    statetable ("M1 M2 P1 P2 C R", "Q") {
       table : "- - - - - H : - : L , \
                - H - - L L : - : N , \
                L L - - L - : - : L , \
@@ -83,8 +81,7 @@ library (cells) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q_st";
-      inverted_output : false;
+      internal_node : "Q";
     }
   }
   /* oscillation: !S*!R risks metastability in Q, Qn, settling to one of {Q=0, Qn=1} | {Q=1, Qn=0} */
@@ -95,7 +92,7 @@ library (cells) {
     pin (R) {
       direction : input;
     }
-    statetable ("S R", "Q_st Qn_st") {
+    statetable ("S R", "Q Qn") {
       table : "H - : - - : - L , \
                - H : - - : L - , \
                - L : - L : H - , \
@@ -105,13 +102,11 @@ library (cells) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q_st";
-      inverted_output : false;
+      internal_node : "Q";
     }
     pin (Qn) {
       direction : output;
-      internal_node : "Qn_st";
-      inverted_output : false;
+      internal_node : "Qn";
     }
   }
   /* oscillation: A*B risks metastability in Qa, Qb, settling to one of {Qa=0, Qb=1} | {Qa=1, Qb=0} */
@@ -122,7 +117,7 @@ library (cells) {
     pin (B) {
       direction : input;
     }
-    statetable ("A B", "Qa_st Qb_st") {
+    statetable ("A B", "Qa Qb") {
       table : "- - : - H : L - , \
                - - : H - : - L , \
                - L : - - : - L , \
@@ -132,13 +127,11 @@ library (cells) {
     }
     pin (Qa) {
       direction : output;
-      internal_node : "Qa_st";
-      inverted_output : false;
+      internal_node : "Qa";
     }
     pin (Qb) {
       direction : output;
-      internal_node : "Qb_st";
-      inverted_output : false;
+      internal_node : "Qb";
     }
   }
   cell (DFF) {
@@ -148,22 +141,31 @@ library (cells) {
     pin (D) {
       direction : input;
     }
-    statetable ("CLK D", "Q_st M") {
-      table : "L - : - - : N - , \
-               L L : - - : - L , \
-               L H : - - : - H , \
-               H - : - - : - N , \
-               H - : - L : L - , \
-               H - : - H : H -";
+    statetable ("CLK D", "Q") {
+      table : "R H : - : H , \
+               R L : - : L , \
+               ~R - : - : N";
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q_st";
-      inverted_output : false;
+      internal_node : "Q";
     }
-    pin (M) {
-      direction : internal;
-      internal_node : "M";
+  }
+  cell (DLH) {
+    pin (G) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("G D", "Q") {
+      table : "L - : - : N , \
+               H L : - : L , \
+               H H : - : H";
+    }
+    pin (Q) {
+      direction : output;
+      internal_node : "Q";
     }
   }
   cell (ICM) {
@@ -182,27 +184,27 @@ library (cells) {
     pin (S) {
       direction : input;
     }
-    statetable ("CLKA CLKB RA RB S", "enA enB sela1 sela2 selb1 selb2") {
-      table : "- - - H - : - - - - - - : - L - - L L , \
-               - - H - - : - - - - - - : L - L L - - , \
-               - L - - - : - - - - - L : - L - - - - , \
-               - L - - - : H - - - - - : - - - - L - , \
-               - L - - L : - - - - - - : - - - - L - , \
-               - L - L - : - - - - - - : - - - - - N , \
-               - L - L - : - - - - - H : - H - - - - , \
-               - L - L H : L - - - - - : - - - - H - , \
-               - H - - - : - - - - L - : - - - - - L , \
-               - H - L - : - - - - - - : - N - - N - , \
-               - H - L - : - - - - H - : - - - - - H , \
-               L - - - - : - - - L - - : L - - - - - , \
-               L - - - - : - H - - - - : - - L - - - , \
-               L - - - H : - - - - - - : - - L - - - , \
-               L - L - - : - - - - - - : - - - N - - , \
-               L - L - - : - - - H - - : H - - - - - , \
-               L - L - L : - L - - - - : - - H - - - , \
-               H - - - - : - - L - - - : - - - L - - , \
-               H - L - - : - - - - - - : N - N - - - , \
-               H - L - - : - - H - - - : - - - H - -";
+    statetable ("CLKA CLKB RA RB S", "enA enB sela2 selb2") {
+      table : "F - - - - : - - H - : H - - - , \
+               F - - - - : - - L - : L - - - , \
+               ~F - H - - : - - - - : L - - - , \
+               ~F - L - - : - - - - : N - - - , \
+               - F - - - : - - - H : - H - - , \
+               - F - - - : - - - L : - L - - , \
+               - ~F - H - : - - - - : - L - - , \
+               - ~F - L - : - - - - : - N - - , \
+               R - L - L : - L - - : - - H - , \
+               R - - - H : - - - - : - - L - , \
+               R - H - - : - - - - : - - L - , \
+               R - - - - : - H - - : - - L - , \
+               ~R - H - - : - - - - : - - L - , \
+               ~R - L - - : - - - - : - - N - , \
+               - R - L H : L - - - : - - - H , \
+               - R - - L : - - - - : - - - L , \
+               - R - H - : - - - - : - - - L , \
+               - R - - - : H - - - : - - - L , \
+               - ~R - H - : - - - - : - - - L , \
+               - ~R - L - : - - - - : - - - N";
     }
     pin (GCLK) {
       direction : output;
@@ -216,17 +218,9 @@ library (cells) {
       direction : internal;
       internal_node : "enB";
     }
-    pin (sela1) {
-      direction : internal;
-      internal_node : "sela1";
-    }
     pin (sela2) {
       direction : internal;
       internal_node : "sela2";
-    }
-    pin (selb1) {
-      direction : internal;
-      internal_node : "selb1";
     }
     pin (selb2) {
       direction : internal;
@@ -240,7 +234,7 @@ library (cells) {
     pin (B) {
       direction : input;
     }
-    statetable ("A B", "Q_st") {
+    statetable ("A B", "Q") {
       table : "L L : - : L , \
                L H : - : N , \
                H L : - : N , \
@@ -248,8 +242,7 @@ library (cells) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q_st";
-      inverted_output : false;
+      internal_node : "Q";
     }
   }
 }

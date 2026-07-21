@@ -1,0 +1,404 @@
+# Example cellsmith input — every sequential/clocked cell fixture used by the test suite, gathered
+# into one runnable config. The equations are copied verbatim from the `#[cfg(test)]` fixtures in
+# src/logic/edge.rs and src/emit/{arcs_tcl,statetable,verilog,liberty}.rs, so this file doubles as a
+# hand-runnable exercise of the edge-register collapse, the state tables and the emitters.
+#
+#   cellsmith examples/sequentials.toml -o out      # -> out/sequentials_arcs.tcl, .v, .lib
+#   cellsmith examples/sequentials.toml --stdout    # preview everything on stdout
+#
+# Each cell carries a one-line structural note derived from its equations: a node `X = !CLK*D+CLK*X`
+# is a LATCH transparent while the clock is at the stated level; two latches on the SAME clock in
+# opposite phases in series make an EDGE-TRIGGERED FLIP-FLOP; two latches on DIFFERENT clocks in
+# series stay two latches; a node some cube of clock literals alone pins to a constant is a CLOCK
+# GATE. The purely combinational fixtures, and the C-element/SR/MUT cells already carried verbatim
+# by examples/cells.toml, are not repeated here.
+
+# --- master-slave flip-flops -------------------------------------------------------------------
+
+# Latch on CLK low (M) in series with a latch on CLK high (Q): a rising-edge flip-flop capturing D.
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+
+# The same rising-edge flip-flop with the edge collapse opted out: it stays two level latches.
+[[cell]]
+name = "DFF_NOCOLLAPSE"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+no_edge_collapse = true
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+
+# The same rising-edge flip-flop with CLK left undeclared as a clock pin.
+[[cell]]
+name = "UCDFF"
+inputs = ["CLK", "D"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+
+# Rising-edge flip-flop whose CLK-low master latch M is itself an output pin.
+[[cell]]
+name = "EMDFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+M = "!CLK*D + CLK*M"
+
+# Rising-edge flip-flop with a combinational tap T of the CLK-low master latch M.
+[[cell]]
+name = "TAPDFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+T = "M"
+
+# Rising-edge flip-flop whose CLK-high slave latch takes !M: it captures !D.
+[[cell]]
+name = "IDFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*!M + !CLK*Q"
+
+# Rising-edge flip-flop whose CLK-low master feeds a cross-coupled NAND slave pair: Q captures D,
+# Qn captures !D off the one shared master.
+[[cell]]
+name = "XN"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "!( !(M*CLK) * Qn )"
+Qn = "!( !(!M*CLK) * Q )"
+
+# Latch on CLK low capturing !Q in series with a latch on CLK high: a rising-edge toggle flip-flop,
+# resolved out of its uninitialisable ring by the async clear R on both latches.
+[[cell]]
+name = "TFF"
+inputs = ["CLK", "R"]
+clock = ["CLK"]
+async = ["R"]
+[cell.internal]
+M = "!R*(!CLK*!Q + CLK*M)"
+[cell.outputs]
+Q = "!R*(CLK*M + !CLK*Q)"
+
+# Latch on CLK low (L1) and latch on CLK high (L2) both fed by D, muxed by CLK: a dual-edge
+# triggered flip-flop capturing D on both edges.
+[[cell]]
+name = "DET"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+L1 = "!CLK*D + CLK*L1"
+L2 = "CLK*D + !CLK*L2"
+[cell.outputs]
+Q = "CLK*L1 + !CLK*L2"
+
+# --- flip-flops with set/clear ------------------------------------------------------------------
+
+# Rising-edge flip-flop whose clear R gates the CLK-low master latch only.
+[[cell]]
+name = "MOR"
+inputs = ["CLK", "D", "R"]
+clock = ["CLK"]
+[cell.internal]
+M = "!R*(!CLK*D + CLK*M)"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+
+# The same master-only clear, with R declared async.
+[[cell]]
+name = "MORA"
+inputs = ["CLK", "D", "R"]
+clock = ["CLK"]
+async = ["R"]
+[cell.internal]
+M = "!R*(!CLK*D + CLK*M)"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+
+# Rising-edge flip-flop with the clear R on BOTH latches, R declared async.
+[[cell]]
+name = "BR"
+inputs = ["CLK", "D", "R"]
+clock = ["CLK"]
+async = ["R"]
+[cell.internal]
+M = "!R*(!CLK*D + CLK*M)"
+[cell.outputs]
+Q = "!R*(CLK*M + !CLK*Q)"
+
+# The same both-latch single-literal clear R, declared synchronous.
+[[cell]]
+name = "SYNCR"
+inputs = ["CLK", "D", "R"]
+clock = ["CLK"]
+[cell.internal]
+M = "!R*(!CLK*D + CLK*M)"
+[cell.outputs]
+Q = "!R*(CLK*M + !CLK*Q)"
+
+# Rising-edge flip-flop with a disjunctive clear R+G on both latches.
+[[cell]]
+name = "SYNCRG"
+inputs = ["CLK", "D", "R", "G"]
+clock = ["CLK"]
+[cell.internal]
+M = "!(R+G)*(!CLK*D + CLK*M)"
+[cell.outputs]
+Q = "!(R+G)*(CLK*M + !CLK*Q)"
+
+# Rising-edge flip-flop with a conjunctive clear R*G on both latches.
+[[cell]]
+name = "GATEDR"
+inputs = ["CLK", "D", "R", "G"]
+clock = ["CLK"]
+[cell.internal]
+M = "!(R*G)*(!CLK*D + CLK*M)"
+[cell.outputs]
+Q = "!(R*G)*(CLK*M + !CLK*Q)"
+
+# The same conjunctive clear R*G, with R and G declared async.
+[[cell]]
+name = "AGATEDR"
+inputs = ["CLK", "D", "R", "G"]
+clock = ["CLK"]
+async = ["R", "G"]
+[cell.internal]
+M = "!(R*G)*(!CLK*D + CLK*M)"
+[cell.outputs]
+Q = "!(R*G)*(CLK*M + !CLK*Q)"
+
+# Rising-edge flip-flop with a both-latch clear R, where R is ALSO declared a clock pin.
+[[cell]]
+name = "RDFF"
+inputs = ["CLK", "D", "R"]
+clock = ["CLK", "R"]
+[cell.internal]
+M = "!R*(!CLK*D + CLK*M)"
+[cell.outputs]
+Q = "!R*(CLK*M + !CLK*Q)"
+
+# Rising-edge flip-flop with a combinational set B forcing 1 in either phase and an async clear R.
+[[cell]]
+name = "COEX"
+inputs = ["CLK", "D", "B", "R"]
+clock = ["CLK"]
+async = ["R"]
+[cell.internal]
+M = "!R*(B + !CLK*D + CLK*M)"
+[cell.outputs]
+Q = "!R*(B + CLK*M + !CLK*Q)"
+
+# Rising-edge flip-flop with an async preset PRE (forces 1) and an async clear CLR (forces 0).
+[[cell]]
+name = "CAFF"
+inputs = ["CLK", "D", "PRE", "CLR"]
+clock = ["CLK"]
+async = ["PRE", "CLR"]
+[cell.internal]
+M = "!CLR*(PRE + !CLK*D + CLK*M)"
+[cell.outputs]
+Q = "!CLR*(PRE + CLK*M + !CLK*Q)"
+
+# --- latches and latch chains (no edge) ---------------------------------------------------------
+
+# A lone latch transparent while CLK is high.
+[[cell]]
+name = "DLAT"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.outputs]
+Q = "CLK*D + !CLK*Q"
+
+# The same lone high-transparent latch with the enable pin named EN.
+[[cell]]
+name = "DLAT_EN"
+inputs = ["EN", "D"]
+clock = ["EN"]
+[cell.outputs]
+Q = "EN*D + !EN*Q"
+
+# The same lone high-transparent latch with enable E left undeclared as a clock.
+[[cell]]
+name = "DLAT_E"
+inputs = ["E", "D"]
+[cell.outputs]
+Q = "E*D + !E*Q"
+
+# A latch transparent while CLK is high whose data is D+Q: it can only set while CLK is high.
+[[cell]]
+name = "GLAT"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.outputs]
+Q = "CLK*(D+Q) + !CLK*Q"
+
+# A single latch on D whose transparent window is CLKA high OR CLKB high (an OR'd enable).
+[[cell]]
+name = "MUXLAT"
+inputs = ["CLKA", "CLKB", "D"]
+clock = ["CLKA", "CLKB"]
+[cell.outputs]
+Q = "CLKA*D + !CLKA*(CLKB*D + !CLKB*Q)"
+
+# Latch on CLKA low in series with a latch on CLKB high: two latches on DIFFERENT clocks, no flop.
+[[cell]]
+name = "MCDFF"
+inputs = ["CLKA", "CLKB", "D"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+M = "!CLKA*D + CLKA*M"
+[cell.outputs]
+Q = "CLKB*M + !CLKB*Q"
+
+# Latch on CLK low in series with another latch on CLK low: a same-phase transparent cascade, no flop.
+[[cell]]
+name = "TCASC"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "!CLK*M + CLK*Q"
+
+# Latch on CLK low (M) and latch on CLK high (M2) XORed: T is transparent to D in BOTH phases, level.
+[[cell]]
+name = "XLAT"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+M2 = "CLK*D + !CLK*M2"
+[cell.outputs]
+T = "M*!M2 + !M*M2"
+
+# --- multi-clock structures ---------------------------------------------------------------------
+
+# A CLKA rising-edge flip-flop (M1 on CLKA low, M2 on CLKA high) feeding a latch transparent while
+# CLKB is low.
+[[cell]]
+name = "HPIPE"
+inputs = ["CLKA", "CLKB", "D"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+M1 = "!CLKA*D + CLKA*M1"
+M2 = "CLKA*M1 + !CLKA*M2"
+[cell.outputs]
+Q = "!CLKB*M2 + CLKB*Q"
+
+# Two independent master latches (MA on CLKA low, MB on CLKB low) merged into one output that is
+# transparent to each master in that clock's high phase and holds when both are low: a rising-edge
+# capture on each of the two unrelated clocks.
+[[cell]]
+name = "DCMUX"
+inputs = ["CLKA", "CLKB", "DA", "DB"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+MA = "!CLKA*DA + CLKA*MA"
+MB = "!CLKB*DB + CLKB*MB"
+[cell.outputs]
+Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
+
+# --- clock gates ---------------------------------------------------------------------------------
+
+# Latch transparent while CLK is low (EL) ANDed with CLK: !CLK pins GCLK to 0, a clock gate.
+[[cell]]
+name = "ICG"
+inputs = ["CLK", "EN"]
+clock = ["CLK"]
+[cell.internal]
+EL = "!CLK*EN + CLK*EL"
+[cell.outputs]
+GCLK = "CLK*EL"
+
+# Per-clock synchroniser chains — a rising-edge flip-flop (selX1 on low, selX2 on high) feeding a
+# further latch on the clock's low phase (enX) — interlocked and ORed into GCLK, which !CLKA*!CLKB
+# pins to 0: a clock gate.
+[[cell]]
+name = "ICM"
+inputs = ["CLKA", "CLKB", "RA", "RB", "S"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+sela = "!enB*!S"
+selb = "!enA*S"
+sela1 = "!RA*(!CLKA*sela+CLKA*sela1)"
+sela2 = "!RA*(CLKA*sela1+!CLKA*sela2)"
+enA   = "!RA*(!CLKA*sela2+CLKA*enA)"
+selb1 = "!RB*(!CLKB*selb+CLKB*selb1)"
+selb2 = "!RB*(CLKB*selb1+!CLKB*selb2)"
+enB   = "!RB*(!CLKB*selb2+CLKB*enB)"
+[cell.outputs]
+GCLK = "enA*CLKA+enB*CLKB"
+
+# Latch transparent while C is low (L) ANDed with C: !C pins Y to 0, a clock gate on an undeclared clock.
+[[cell]]
+name = "GL"
+inputs = ["C", "D"]
+[cell.internal]
+L = "!C*D + C*L"
+[cell.outputs]
+Y = "C*L"
+
+# The same C-low latch and clock gate Y, alongside an independent combinational output Z = A*B.
+[[cell]]
+name = "MIX"
+inputs = ["A", "B", "C", "D"]
+[cell.internal]
+L = "!C*D + C*L"
+[cell.outputs]
+Y = "C*L"
+Z = "A*B"
+
+# The same C-low latch whose clock gate W = C*L is internal, reaching the output only through W+E.
+[[cell]]
+name = "TRW"
+inputs = ["C", "D", "E"]
+[cell.internal]
+L = "!C*D + C*L"
+W = "C*L"
+[cell.outputs]
+Z2 = "W + E"
+
+# --- clockless state holders ---------------------------------------------------------------------
+
+# A C-element self-holding on Q, with an input named Q_st that must not collide with the state node.
+[[cell]]
+name = "COLL"
+inputs = ["A", "Q_st"]
+[cell.outputs]
+Q = "A*Q_st + Q*(A+Q_st)"
+
+# A C-element self-holding on Q, with Qc and Qn as bare projections of that one state node.
+[[cell]]
+name = "C2P"
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+Qc = "Q"
+Qn = "!Q"
+
+# A C-element self-holding on Q with an async clear R.
+[[cell]]
+name = "RC2"
+inputs = ["A", "B", "R"]
+async = ["R"]
+[cell.outputs]
+Q = "(A*B + Q*(A+B))*!R"

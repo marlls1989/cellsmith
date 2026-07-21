@@ -60,6 +60,11 @@ pub struct Cell {
     /// default; also enabled globally by the `--constraints` CLI flag.
     #[serde(default)]
     pub constraint_arcs: bool,
+    /// Optional: opt OUT of the behavioural per-arc edge classification for this cell (see
+    /// [`crate::logic::edge`]). Classification is ON by default; setting this true (or the global
+    /// `--no-edge-collapse` CLI flag) suppresses it, leaving every arc in its combinational form.
+    #[serde(default)]
+    pub no_edge_collapse: bool,
 }
 
 /// Deserialize the cell `name` field as a non-empty `Vec<Symbol>` (order preserving). Accepts either a
@@ -193,6 +198,14 @@ pub struct AnalysedCell {
     /// Each signal's state-table regions, precomputed once and cached in `signals()` order (outputs
     /// then internals), so emitters don't rebuild the BDDs per call site.
     pub regions: Vec<crate::logic::regions::StateRegions>,
+    /// The cell's behavioural edge classification ([`crate::logic::edge::EdgeArcs`]): the per-node edge
+    /// seams (`captures`), the per-arc `-type edge` labels (`labels`) — the field the Liberate arc emitter
+    /// reads to type each arc — the cell-level set of internal non-seam master nodes folded away
+    /// (`folded`), and the read-gate factorisations recognised across the cell's outputs (`derived`),
+    /// which the Liberty, Verilog and state-table emitters read to render a read-gated register as its own
+    /// internal node. Default (empty) when the cell opted out (`no_edge_collapse`). Computed purely from
+    /// the already-explored machine — it never alters the exploration.
+    pub edge: crate::logic::edge::EdgeArcs,
 }
 
 impl AnalysedCell {
@@ -261,17 +274,22 @@ impl Cell {
         // the shared exploration over the minimised model: the two detected hazards (order-dependence,
         // oscillation) and the constraints — setup/hold, non_seq — generated to avoid them. Clock
         // suppression and emission gating are applied downstream.
-        let analysis = crate::logic::analysis::analyse_machine(&analysed, &bdds);
+        // The opt-out (`no_edge_collapse`, also set for every cell by the global `--no-edge-collapse`)
+        // gates the classify() call itself, not just its result — no wasted work when collapse is off.
+        let analysis =
+            crate::logic::analysis::analyse_machine(&analysed, &bdds, !self.no_edge_collapse);
         analysed.arcs = analysis.arcs;
         analysed.hidden_arcs = analysis.hidden_arcs;
         analysed.leakage = analysis.leakage;
         analysed.constraints = analysis.constraints;
         analysed.order_dependence = analysis.order_dependence;
         analysed.oscillation = analysis.oscillation;
+        analysed.edge = analysis.edge;
 
         // Cache each signal's state-table regions once, in `signals()` order, from the shared folded
         // BDDs, so downstream emitters don't rebuild the BDDs per call site.
         analysed.regions = derive_regions(&analysed, &bdds);
+
         Ok(analysed)
     }
 
@@ -391,6 +409,7 @@ impl Cell {
             constraints: Vec::new(),
             constraint_arcs_declared: self.constraint_arcs,
             regions: Vec::new(),
+            edge: Default::default(),
         };
         Ok(analysed)
     }
@@ -766,6 +785,7 @@ Z = "A"
             async_pins: vec![],
             clock: vec![],
             constraint_arcs: false,
+            no_edge_collapse: false,
         };
         let spec = Spec { cells: vec![cell] };
         let err = spec.analyse().unwrap_err();

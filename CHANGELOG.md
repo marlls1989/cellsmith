@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Support for edge-sensitive flip-flops.** cellsmith now recognises edge-triggered sequential cells
+  and emits Cadence Liberate `-type edge` timing arcs for their clock→output transitions, so Liberate
+  characterises their edge-triggered timing. Each clock-related arc is classified per arc, from the
+  cell's toggle-and-settle behaviour, as an edge arc or ordinary combinational propagation; the decision
+  is behavioural, so a cell characterises the same however it is built — a NAND-implemented flop matches
+  its pass-transistor equivalent. On by default; opt out per-cell with `no_edge_collapse = true` or
+  per-run with `--no-edge-collapse`.
+- **Edge-triggered statetable and UDP.** Flip-flops and latches are re-expressed in edge-triggered form
+  in the Liberty joint `statetable` and the Verilog sequential UDP: an inverting flop captures `!D`, a
+  toggle flop decomposes into two opposite-edge captures, and a phase-conditioned clear carries its
+  gating clock literal (`CLK*R`) so it clears in that clock phase alone.
+- **Read-gated registers preserved.** When a register output is read through an enable pin, the register
+  is emitted as its own edge-triggered node and the output as a combinational `state_function` (a Verilog
+  continuous assign) over it, so an output-enabled register is modelled with its held content intact.
+- **Internal state nodes folded out of the artifacts.** An internal node that no longer influences an
+  output is dropped from the emitted pins, UDP primitives and statetable rows — its power
+  characterisation, via its primary-input arcs, unchanged — leaving only the edge-triggered form.
+- **`examples/sequentials.toml`**, a sequential-cell example set (latches and flip-flops) alongside
+  `examples/cells.toml`, with its generated `.tcl`/`.v`/`.lib` outputs.
+
 ### Changed
 
 - The Liberty emitter classifies each sequential cell's output pins independently.
@@ -21,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   node (`Qn = "!Q"`) renders as `state_function` like any other function of state.
   The emitted SOP strings are unchanged; only the attribute key each output carries
   is chosen correctly. Confined to the Liberty emitter.
+- `--no-when` is suppression-only: it omits the `-when` line from each arc and does nothing else, so
+  every derived arc emits in both modes and the output differs from the default solely by the absent
+  `-when` conditions. Overlapping arcs and same-vector siblings that differ only in internal state or
+  prevector are legal in Liberate.
 
 ## [0.1.2] - 2026-07-17
 
