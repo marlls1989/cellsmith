@@ -1092,7 +1092,7 @@ Qn = "!Q"
     /// Three shapes the behavioural classifier leaves fully level (no edge token) even under default (on)
     /// collapse: a single latch, a gated (self-referencing) latch, and a two-latch DFF whose clock is
     /// never declared. Mirrors `statetable.rs`'s shrunk fixtures. EMDFF and MCDFF each have their own
-    /// dedicated fixture: EMDFF's slave Q is a recognised register (see `emdff_emits_edge_statetable`),
+    /// dedicated fixture: EMDFF's slave Q is a recognised register (see `emdff_emits_edge_statetable_over_surviving_master`),
     /// and MCDFF stays level because it has two clocks (see `mcdff_two_clock_stays_level`).
     const NON_COLLAPSIBLE: [&str; 3] = [
         r#"

@@ -1052,7 +1052,6 @@ Q = "CLK*M + !CLK*Q"
         );
     }
 
-    // A master/slave pair split across two DIFFERENT declared clocks: M is a CLKA latch, Q a CLKB latch.
     // Exposed-master DFF: M is a declared output (never foldable). The behavioural classifier recognises
     // the slave Q as a rising-edge register keyed off CLK, over the surviving master M, from its observed
     // toggle-and-settle behaviour.

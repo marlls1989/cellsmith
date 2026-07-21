@@ -2,7 +2,7 @@
 
 How cellsmith decides, for every timing arc a cell can present, whether that arc is an **edge arc** —
 a clock edge whose delivered value depends on retained latch content — or ordinary **combinational**
-propagation, and re-expresses the edge arcs as seams across the emitted artifacts. Classification reads
+propagation, and re-expresses the edge arcs in edge-triggered form across the emitted artifacts. Classification reads
 only the cell's already-explored toggle-and-settle behaviour: it observes how each node reacts to a
 single input toggle from every reachable stable state and decides each arc's type from those
 observations and from the cell's own next-state functions, never from the topology of the source
@@ -30,7 +30,7 @@ token, so the distinction changes nothing in the annotation. A latch's opening i
 arc.
 
 A **conditioned** edge arc — a clock edge reaching an output only through a second, currently-open latch
-— is the same category, with its condition carried in the arc's `-when`: conditioning never reclassifies
+— is an edge arc like any other, with its condition carried in the arc's `-when`: conditioning never reclassifies
 an arc.
 
 ## 2. Where it runs

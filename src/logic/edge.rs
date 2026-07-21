@@ -846,7 +846,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // CARRY a seam are neither seeds nor propagation sources: their raw function is replaced by the edge
     // seam, so their references reach us through `ref_reg` instead. On top of that, any foldable node named
     // by a surviving capture or off-edge cover column is itself live.
-    // A READ-GATED output carries a (now stale) seam but no longer emits its raw δ — it emits a
+    // A READ-GATED output carries a seam but emits a
     // combinational read over its factored register — so it is a live sink like any non-seam output, and it
     // propagates through its READ FUNCTION's support (register + gate pins), not its raw function. That
     // redirect is what folds the masters it re-expresses (`BDET`'s `L1/L2`).
@@ -2539,7 +2539,7 @@ L3 = "!K3*L2 + K3*L3"
             assert!(direct("L3").contains(&"L2".to_string()));
             assert!(
                 !direct("L3").contains(&"L1".to_string()),
-                "L1 is two hops from L3, invisible to a one-step cone"
+                "L1 is two hops from L3, not in its direct support"
             );
             assert!(direct("L2").contains(&"L1".to_string()));
         });
