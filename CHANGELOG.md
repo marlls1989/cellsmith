@@ -11,45 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Behavioural per-arc edge-arc classification inside the arc engine. After exploration, every
-  clock-related timing arc a cell presents is classified — from the cell's own toggle-and-settle
-  behaviour, per arc — as an **edge** arc or ordinary **combinational** propagation. There is one
-  category: an edge arc is a clock toggle that takes a latch from opaque to transparent and delivers
-  latched content rather than a value that arrives regardless. It is BORN two ways — by generation (a
-  latch going opaque→transparent) or by closer-exposure (a mux switch exposing the latch it just closed,
-  possible even at an internal node) — and then PROPAGATES transitively to the output. An arc that meets
-  neither — a data change through an already-transparent latch, or a clock acting by its level (a clock
-  gate) — stays combinational. Edge and combinational arcs coexist freely on one output pin (an
-  async-reset flop carries both), and a conditioned edge arc keeps its condition in `-when` rather than
-  changing category. Classification is per arc at its full `(output, related clock, direction, machine
-  start minterm)` identity, so two firings of one arc that differ only in internal state can type
-  differently, and only fully-determinate reachable stable states are measured for arc eligibility. Edge
-  arcs emit Liberate `-type edge`, so Liberate characterises them as edge-triggered.
-- Read-gated-register factorisation. A register output whose forcing pin merely READS the held state (an
-  output-enable) rather than CHANGING it (a reset) is factored: the state-holding register is pulled out
-  as its own node with native edge capture and the output becomes a combinational read function over it —
-  a Liberty `state_function`, a Verilog continuous assign — so the register's masters can fold without
-  destroying the content the output re-acquires when the gate releases. A matching declared register is
-  reused up to inversion; otherwise a fresh register node is minted.
-- Edge registers re-expressed in edge-triggered form in the Liberty joint `statetable` and the Verilog
-  sequential UDP. A captured next-state function is recorded verbatim, so an inverting flop captures `!D`
-  and a toggle flop decomposes into two opposite-edge captures. The off-edge of a phase-conditioned
-  edge-register clear carries its gating clock literal (`CLK*R`) in the statetable, clearing in that
-  clock phase alone. Folding is decided at emission as a reachability question — does this value still
-  influence an output once collapsed? — computed as a liveness fixpoint over the candidates'
-  raw-function references, so a mutually- or transitively-referencing set of capture-less internal nodes
-  folds together whenever the set as a whole reaches no output, exactly as a single self-holding master
-  folds; a NAND-implemented flop's cross-coupled master pair therefore folds identically to its
-  pass-transistor twin's lone master. A folded node's own pin, UDP primitive, and `statetable` row are
-  elided from every artifact; its internal-power characterisation, carried by its primary-input hidden
-  arcs, is unchanged. Everything is derived behaviourally, never from equation shape and never by
-  branching on a declared input class, so a NAND-implemented cell characterises identically to its
-  pass-transistor twin. Classification changes only which form an arc is emitted in — the state-machine
-  exploration, the discovered arcs' prevectors, and hazard detection are untouched. On by default; a
-  cell can opt out with `no_edge_collapse = true`, and `--no-edge-collapse` opts out every cell in the
-  run.
-- `examples/sequentials.toml`, a sequential-cell example set (latches and flip-flops) alongside the
-  existing `examples/cells.toml`, with its generated `.tcl`/`.v`/`.lib` outputs.
+- **Edge-arc classification.** cellsmith now identifies which of a cell's clock-related timing arcs are
+  edge-triggered and emits Liberate `-type edge` for them; the rest emit `-type combinational`. The
+  decision is made per arc from the cell's toggle-and-settle behaviour, so a cell characterises the same
+  however it is built — a NAND-implemented flop matches its pass-transistor equivalent. On by default;
+  opt out per-cell with `no_edge_collapse = true` or per-run with `--no-edge-collapse`.
+- **Sequential cells emitted in edge-triggered form.** The Liberty joint `statetable` and the Verilog
+  sequential UDP carry edge-triggered rows for edge registers: an inverting flop captures `!D`, a toggle
+  flop decomposes into two opposite-edge captures, and a phase-conditioned clear carries its gating clock
+  literal (`CLK*R`) so it clears in that clock phase alone.
+- **Read-gated registers preserved.** When a register output is read through an enable pin, the register
+  is emitted as its own edge-triggered node and the output as a combinational `state_function` (a Verilog
+  continuous assign) over it, so an output-enabled register is modelled with its held content intact.
+- **Internal state nodes folded out of the artifacts.** An internal node that no longer influences an
+  output is dropped from the emitted pins, UDP primitives and statetable rows — its power
+  characterisation, via its primary-input arcs, unchanged — leaving only the edge-triggered form.
+- **`examples/sequentials.toml`**, a sequential-cell example set (latches and flip-flops) alongside
+  `examples/cells.toml`, with its generated `.tcl`/`.v`/`.lib` outputs.
 
 ### Changed
 
