@@ -42,8 +42,7 @@ Two things are deliberately **not** hazards:
 ## 2. Everything starts from the reachable states
 
 Detection does not run the exploration itself — it re-walks the *shared* exploration, the same one the
-arc discovery uses, built once with the same on/off cover seeding and the same single-input-toggle edges
-(the QDI assumption). It probes hazards **only from the reachable stable states**.
+arc discovery uses, built once with the same on/off cover seeding and the same single-input-toggle edges. It probes hazards **only from the reachable stable states**.
 
 That anchoring is the load-bearing design decision. Held state is the product of the cell's own
 sequential behaviour; the only joint assignments that mean anything are the ones the dynamics can
