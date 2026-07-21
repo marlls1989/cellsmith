@@ -703,8 +703,8 @@ Qb = "!Qa * B"
         );
         let m = build_state_model(&cell).expect("MUT is sequential");
         assert_eq!(names(&m.internal_nodes), ["Qa", "Qb"]);
-        // The old joint race row `H H : L L : H H` is now two per-output rows: each grant drives high
-        // off its own request and the other grant being currently low, the other slot deferred `-`.
+        // The joint race resolves into two per-output rows: each grant drives high off its own request
+        // and the other grant being currently low, the other slot deferred `-`.
         assert!(m.rows.contains(&row(&[T, X], &[X, F], &[HI, DC])));
         assert!(m.rows.contains(&row(&[X, T], &[F, X], &[DC, HI])));
     }
@@ -1053,9 +1053,9 @@ Q = "CLK*M + !CLK*Q"
     }
 
     // A master/slave pair split across two DIFFERENT declared clocks: M is a CLKA latch, Q a CLKB latch.
-    // Exposed-master DFF: M is a declared output (never foldable). The behavioural pass recognises the
-    // slave Q as a rising-edge register keyed off CLK, over the surviving master M -- a NEW recognition
-    // the structural pass rejected.
+    // Exposed-master DFF: M is a declared output (never foldable). The behavioural classifier recognises
+    // the slave Q as a rising-edge register keyed off CLK, over the surviving master M, from its observed
+    // toggle-and-settle behaviour.
     const EMDFF: &str = r#"
 [[cell]]
 name = "EMDFF"
@@ -1100,7 +1100,7 @@ M = "!CLK*D + CLK*M"
 
     // Master/slave pair split across two DIFFERENT declared clocks: M latches on CLKA, Q on CLKB. Q tracks
     // live data through CLKB's transparent phase, so its seam set empties under the fixpoint: the
-    // classifier recognises NO register and Q stays fully level, matching the structural pass.
+    // classifier recognises NO register and Q stays fully level.
     const MCDFF: &str = r#"
 [[cell]]
 name = "MCDFF"

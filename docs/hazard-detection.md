@@ -115,8 +115,9 @@ Q = !C2·M1 + C2·Q (so δ_Q depends on {C2, M1, Q}). The (C1, C2) order-diverge
 latches M1's old value or D's new one depends on which latch closes first — but no single δ sees both C1
 and C2: the divergence is carried across the M1 → Q latch boundary, so it is filtered. The (C1, D) race,
 by contrast, meets directly in δ_M1 and survives as a genuine order-dependent hazard. On the ICM dual-clock
-synchroniser (the same shape at scale) this filter reduces the reported hazards to the two same-domain
-pairs (CLKA, RA) and (CLKB, RB) and removes the meaningless cross-domain clock-vs-clock ones.
+synchroniser (see `state-machine-arc-engine.md` §3 for the cell and its internal signals; the same shape
+at scale) this filter reduces the reported hazards to the two same-domain pairs (CLKA, RA) and (CLKB, RB)
+and removes the meaningless cross-domain clock-vs-clock ones.
 
 Declassifying a relay can legitimately **surface** an order-dependent hazard that used to be latch-masked.
 Once a combinational relay is folded into its consumer (`state-space-minimisation.md`), that consumer's δ

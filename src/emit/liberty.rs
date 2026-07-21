@@ -857,8 +857,8 @@ Qb = "!Qa * B"
         let frag = cell_liberty(&cell);
         eprintln!("{frag}");
         assert!(frag.contains("statetable (\"A B\", \"Qa Qb\")"));
-        // The old joint race row `H H : L L : H H` is split into two per-output rows: each grant drives
-        // high off its own request and the other grant currently low, deferring (`-`) the other node.
+        // Each grant has its own per-output row: it drives high off its own request while the
+        // other grant is held low, deferring (`-`) the other node.
         assert!(!frag.contains("H H : L L : H H"));
         assert!(frag.contains("H - : - L : H -"));
         assert!(frag.contains("- H : L - : - H"));
@@ -1091,9 +1091,9 @@ Qn = "!Q"
 
     /// Three shapes the behavioural classifier leaves fully level (no edge token) even under default (on)
     /// collapse: a single latch, a gated (self-referencing) latch, and a two-latch DFF whose clock is
-    /// never declared. Mirrors `statetable.rs`'s shrunk fixtures. The structural pass's MCDFF/EMDFF are no
-    /// longer here -- EMDFF's slave Q is now a recognised register (see `emdff_emits_edge_statetable`),
-    /// and MCDFF stays level for a different reason (two clocks, see `mcdff_two_clock_stays_level`).
+    /// never declared. Mirrors `statetable.rs`'s shrunk fixtures. EMDFF and MCDFF each have their own
+    /// dedicated fixture: EMDFF's slave Q is a recognised register (see `emdff_emits_edge_statetable`),
+    /// and MCDFF stays level because it has two clocks (see `mcdff_two_clock_stays_level`).
     const NON_COLLAPSIBLE: [&str; 3] = [
         r#"
 [[cell]]

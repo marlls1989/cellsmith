@@ -19,8 +19,8 @@ For every cell in the input spec, cellsmith emits three artifacts:
 
 | Artifact | File | Contents |
 |----------|------|----------|
-| Liberate arcs | `<name>_arcs.tcl` | `define_arc` blocks with prevector walks and `R/F/1/0/X` vectors, plus `define_leakage` blocks — one static leakage state per settled seed state, conditioned on inputs and settled outputs |
-| Behavioural Verilog | `<name>.v` | one sequential UDP `primitive` per signal (outputs + internal state nodes, three-valued next-state table) + a `celldefine`d wrapper `module` (internals as internal `wire`s) with a `specify` block |
+| Liberate arcs | `<name>_arcs.tcl` | `define_arc` blocks with prevector walks and `R/F/1/0/X` vectors, plus `define_leakage` blocks — one static leakage state per settled seed state (an input assignment that forces the cell into a defined state on its own), conditioned on inputs and settled outputs |
+| Behavioural Verilog | `<name>.v` | one sequential UDP `primitive` per signal (outputs + internal state nodes — signals that hold memory — with a three-valued next-state table) + a `celldefine`d wrapper `module` (internals as internal `wire`s) with a `specify` block |
 | Liberty stub | `<name>.lib` | a self-contained `library (<name>) { ... }` file (Liberate can consume it directly) wrapping one `cell (...)` per cell: input `pin`s; a sequential cell gets one joint `statetable` listing every state node — emission-minted `_st` aliases for state outputs plus genuine internals — with output pins expressed as spec projections onto it (`internal_node` + `inverted_output`, or `state_function`) and `direction : internal` pins for the hidden nodes; a cell with no state nodes gets a plain `function` per output instead |
 
 ## The model
@@ -44,8 +44,8 @@ self-reachability check runs over the **already-minimised** model — the raw fe
 the declared signals would over-count: a one-shot minimisation pass folds aliases/relays first, so what
 remains afterwards is genuine memory. For example, a gate-level C-element built from complementary
 internals (`IQ = !QN`, `QN = !(A*B + IQ*(A+B))`) collapses from 3 signals to 1 coordinate, and the ICM
-cell's 8 relay/synchroniser internals fold to 6, taking the machine's width from 13 raw declared
-signals down to 11.
+cell — a dual-clock synchroniser fixture — has its 8 relay/synchroniser internals fold to 6, taking the
+machine's width from 13 raw declared signals down to 11.
 
 ### Arcs by state-machine exploration
 
@@ -60,15 +60,17 @@ Timing arcs are derived by exploring that state machine:
 Three properties follow from this construction:
 
 - **related pins are always primary inputs** — outputs and internal nodes are never arc sources
-  (a `-related_pin Qb` on `Qa` would be invalid); they are established *indirectly* by the prevector,
-  whose input sequence drives every state variable — internal ones included — into the measured edge's
-  start state (e.g. a flop's `CLK→Q` prevector first drives `D` to load the master);
+  (naming one cross-coupled output as the related pin of another would be invalid); they are established
+  *indirectly* by the prevector, whose input sequence drives every state variable — internal ones
+  included — into the measured edge's start state (e.g. a flop's `CLK→Q` prevector first drives `D` to
+  load the master);
 - **impossible arcs are never generated** — a mutex's colliding states oscillate (an oscillation
-  hazard) instead of settling, so the search drops them, and no `Qb→Qa` arc is produced;
-- **input-forced transitions cascade through settling** — with `Qb = Sb + !Qa·B`, toggling `Sb` flips
-  both `Qb` (rise) and, through the coupling, `Qa` (fall); the search discovers both.
+  hazard) instead of settling, so the search drops them, and no arc between its two grants is produced;
+- **input-forced transitions cascade through settling** — in a settable cross-coupled pair, toggling a
+  set input flips both the output it forces (rise) and, through the coupling, that output's partner
+  (fall); the search discovers both.
 
-A cross-coupled cell is also **bistable**: under some input condition (`A·B` for the plain mutex) the
+A cross-coupled cell is also **bistable**: under some input condition (`A·B` for a mutex) the
 joint next-state has two stable states, and the physical cell picks one non-deterministically instead
 of settling — an **oscillation hazard**, whose physical risk is metastability. cellsmith detects this
 during analysis and annotates both the arcs and the Liberty stub with a generic comment naming the
@@ -162,9 +164,9 @@ combinationally in terms of `D`, and its Liberate arc carries `-type edge`. Sett
 exactly as it stands, with `M` staying a separate internal node and `Q`'s arcs discovered by prevector
 as before.
 
-Classification is **per arc**, not per node, and there is one category — the **edge arc**: a clock
-toggle that takes a latch from opaque to transparent and whose delivered value depends on retained latch
-content. The physical event may be a capture (the value then holds until the next edge) or a latch
+Classification is **per arc**: every arc is labelled independently, and the label is the **edge arc**: a
+clock toggle that takes a latch from opaque to transparent and whose delivered value depends on retained
+latch content. The physical event may be a capture (the value then holds until the next edge) or a latch
 opening (the value then tracks its data); both are timing arcs on a clock edge and both emit
 `-type edge`, so a plain latch with no capture still carries its opening arc. An arc that does not meet
 the definition — a data change through an already-transparent latch, or a clock acting by its level —

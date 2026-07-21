@@ -923,8 +923,8 @@ Y = "!(A*B)"
     /// collapse: a single latch, a gated (self-referencing) latch, a master/slave pair split across two
     /// DIFFERENT declared clocks (the slave stays level — its data is transparent in one phase of the
     /// clock that gates it), and a two-latch DFF whose clock is never declared. The exposed-master DFF
-    /// (a master surfaced as a second output) now DOES collapse behaviourally and is covered as a
-    /// positive fixture in `exposed_master_collapses_slave_over_surviving_master`.
+    /// — a master surfaced as a second output — collapses behaviourally and is covered as a positive
+    /// fixture in `exposed_master_collapses_slave_over_surviving_master`.
     const NON_COLLAPSIBLE: [&str; 4] = [
         r#"
 [[cell]]

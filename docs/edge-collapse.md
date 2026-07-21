@@ -12,23 +12,22 @@ only chooses the *form* an arc is annotated in, never what it does. `state-machi
 `hazard-detection.md`, and `state-table-regions.md` cover the passes whose output this one reads;
 `state-space-minimisation.md` covers the model rewrite that runs before all of them.
 
-## 1. One category: the edge arc
+## 1. The edge arc
 
-Classification is **per arc**, not per node. There is no register verdict on a node: a single output
-pin can carry edge arcs and combinational arcs at once (an async-reset flop does), and every arc is
-typed independently of every other.
+Classification is **per arc**: a single output pin's arcs are each typed independently, so edge and
+combinational arcs coexist on it — an async-reset flop carries both.
 
 > **A clock toggle that takes a latch from opaque to transparent, and whose resulting output value
 > depends on latch content rather than arriving regardless, is an edge arc on that output.**
 
-There is one category. An edge arc emits Liberate `-type edge`; an arc that does not meet the
+An edge arc emits Liberate `-type edge`; an arc that does not meet the
 definition — a data change reaching a node while a latch is already transparent, or a clock acting by
 its LEVEL (a clock gate) — carries no label and stays an ordinary combinational data arc. The physical
 event behind an edge arc may be a *capture* (the delivered value then holds independent of the clock
-level until the next edge, a flop seam) or a latch *opening* (the delivered value then tracks its data);
-both are timing arcs measured from a clock edge and both emit the one `-type edge` token, so the
-distinction changes nothing in the annotation and is not a second kind of arc. A latch therefore has a
-real edge arc, its opening, and is not timing-invisible.
+level until the next edge, a flop seam — defined in §3.2) or a latch *opening* (the delivered value then
+tracks its data); both are timing arcs measured from a clock edge and both emit the one `-type edge`
+token, so the distinction changes nothing in the annotation. A latch's opening is itself a real edge
+arc.
 
 A **conditioned** edge arc — a clock edge reaching an output only through a second, currently-open latch
 — is the same category, with its condition carried in the arc's `-when`: conditioning never reclassifies
@@ -46,7 +45,7 @@ exploration with `machine::toggle`/`machine::settle` — exactly mirroring `arcs
 output is one field, `AnalysedCell::edge` (`EdgeArcs`): the per-node captures, the per-arc `-type`
 labels of the cell's clock-related delay arcs (keyed by the arc's full
 `(output, clock, direction, machine start minterm)` identity in the arc pipeline), the cell-level
-set of internal non-seam masters folded away, and the read-gate factorisations
+set of internal non-seam masters folded away (non-seam is defined in §3.2), and the read-gate factorisations
 (`EdgeArcs::derived`, a `DerivedRegister` per read-gated register output — see §6).
 
 The **candidates** are every output (so a combinational output is considered and simply keeps no edge
@@ -62,8 +61,8 @@ cell's own next-state functions — never from the shape of an equation, and nev
 declared input class. An async pin need not be declared to be handled: its effect is classified from its
 own observed moves (see `forcing_pins`, §5). The characterisation is consequently **implementation-style
 invariant**: the NAND-implemented `NDLAT` / `NDFF` / `NHPIPE` fixtures in `src/logic/edge.rs`
-characterise identically to their pass-transistor twins `DLAT` / `DFF` / `HPIPE` — same arcs, same
-seams, same covers, same folds.
+(a latch, a D flip-flop, and a two-clock pipe stage) characterise identically to their pass-transistor
+twins `DLAT` / `DFF` / `HPIPE` — same arcs, same seams, same covers, same folds.
 
 ## 3. The decision pipeline
 
@@ -114,12 +113,14 @@ equation*.
 node to a leg holding a latch this same edge closes. `δ_node` reads, in its **direct** support, a
 generator `g` and a distinct closer `c`, both latches *associated with the clock* (a real latch on it —
 opacity differs across the clock's two phases), with `δ_node` restricted all-but-`c` at `sp` still
-depending on `c` — the two-leg mux shape, `DET`'s rise exposing the content donor it just closed. This
+depending on `c` — the two-leg mux shape, the rise of `DET` (a dual-edge flip-flop: two opposite-phase
+latches `L1`/`L2` behind a clock-driven mux, in `src/logic/edge.rs`) exposing the content donor it just
+closed. This
 direct-support listing (`cone` in `src/logic/edge.rs`) picks the mux's two legs and **nothing more**: it
 is the mux event itself, not a depth bound. A closer-exposure edge can therefore be born at an
-**internal** node and then propagate onward — `DETP`'s DET mux is buried in the cross-clock latch `T`, is
-born there, and reaches the output only through propagation (there is no one-step-cone gate keeping it
-combinational).
+**internal** node and then propagate onward — in `DETP` (a `DET` whose mux output is re-latched by a
+second clock, in `src/logic/edge.rs`) the DET mux is buried in the cross-clock latch `T`, is born there,
+and reaches the output through propagation, with no bound on how many hops the walk crosses.
 
 **Propagation — restriction-survival, transitive, from the output back to the birth node.** From the
 output `o`, walk the dependency chain back toward the birth node `b` (`propagates` in `src/logic/edge.rs`):
@@ -128,9 +129,12 @@ to `sp`'s values, still depends on `w`; a **masked** hop — whose residual is c
 dies. Reaching `b` means `b`'s edge reaches `o`; the output itself is the first node tested, so a birth at
 the output types the arc directly. The walk has **no depth limit**, so a generator revealed through a deep
 same-phase pipe or a buried mux types identically to a shallow one. Masking is per arc, and is where the
-clock gates fall out: the `MASKL` fall splits because different firings restrict to different `sp` and
+clock gates fall out: the `MASKL` fall (`MASKL` is a masked latch, `Y = CLK*A + B*L`, in
+`src/logic/edge.rs`) splits because different firings restrict to different `sp` and
 decide independently — admitting the latch the residual is `L` (edge), masking it the residual is constant
-(combinational). `ICG`'s `EL` is swallowed by the `CLK*EL` gate, and `ICM`'s competing enable is not the
+(combinational). `ICG`'s `EL` (`ICG` is an integrated clock gate, `GCLK = CLK*EL`, in
+`src/logic/edge.rs`) is swallowed by the `CLK*EL` gate, and `ICM`'s competing enable (`ICM` is a
+two-clock interlock clock gate, `GCLK = enA*CLKA + enB*CLKB`) is not the
 toggled clock's associate, so a clock gate's `GCLK` reaches no birth node on either edge and stays
 combinational — the exclusion is causal, a plain absence of any clock-associated birth.
 

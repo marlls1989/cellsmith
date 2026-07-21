@@ -2,15 +2,15 @@
 //!
 //! Timing arcs are NOT derived here. Every arc the cell has already came out of [`super::arcs::derive`],
 //! which exists wherever a single-input toggle between reachable stable states changes an output. This
-//! module only attaches a LABEL to the clock-related ones — it never builds a parallel set of
-//! `(node, clock, direction)` tuples of its own. Labelling is PER ARC: there is no register verdict on a
-//! node, and edge and combinational arcs coexist freely on one output (an async-reset flop carries both).
+//! module only attaches a LABEL to the clock-related ones. Labelling is PER ARC: an output pin's arcs are
+//! each typed independently, so edge and combinational arcs coexist freely on one output (an async-reset
+//! flop carries both).
 //!
 //! # The definition
 //!
 //! **A clock toggle that takes a latch from opaque to transparent, and whose resulting output value
-//! DEPENDS ON LATCH CONTENT rather than arriving regardless, is an EDGE ARC on that output.** There is
-//! ONE category — an edge arc — and it emits Liberate `-type edge` (see [`crate::emit::arcs_tcl`]). An
+//! DEPENDS ON LATCH CONTENT rather than arriving regardless, is an EDGE ARC on that output.** An edge arc
+//! emits Liberate `-type edge` (see [`crate::emit::arcs_tcl`]). An
 //! arc that does not meet the definition — a data change propagating through an already-transparent
 //! latch, or a clock acting by its LEVEL (a clock gate) — carries no label and stays an ordinary
 //! combinational data arc.
@@ -25,7 +25,7 @@
 //! of an equation, and nothing branches on a declared input class — an async pin need not be declared,
 //! its effect being classified from its own observed moves (`forcing_pins`). The characterisation is
 //! consequently IMPLEMENTATION-STYLE INVARIANT: the NAND-implemented `NDLAT` / `NDFF` / `NHPIPE`
-//! fixtures characterise identically to their pass-transistor twins.
+//! fixtures characterise identically to their pass-transistor twins `DLAT` / `DFF` / `HPIPE`.
 //!
 //! [`classify`] is a **post-exploration** read-only pass over the shared [`Machine`]: it re-walks the
 //! exploration with [`machine::toggle`]/[`machine::settle`], mirroring [`super::arcs::derive`]'s
@@ -126,8 +126,8 @@ impl EdgeCaptures {
 /// an output, so a cross-coupled pair — or a longer reference chain — shares one fold, not just a single
 /// self-holding node.
 ///
-/// There is ONE arc category, an EDGE arc: a clock toggle that takes a latch from opaque to transparent
-/// and whose resulting output value depends on latch content. A node that additionally HOLDS its
+/// An EDGE arc is a clock toggle that takes a latch from opaque to transparent and whose resulting output
+/// value depends on latch content. A node that additionally HOLDS its
 /// delivered value through the phase is an edge register, its per-edge next-state functions recorded in
 /// [`EdgeArcs::captures`]; a latch that merely tracks live data through its open phase carries an edge
 /// arc but no capture (its seam set is empty). Both are real timing arcs and both emit Liberate
@@ -224,8 +224,8 @@ impl CandAgg {
 /// input-pin order with Rise first) and its off-edge.
 type Synthesised = (Vec<(Symbol, Edge, StateRegions)>, StateRegions);
 
-/// One candidate edge arc on a node: `(clock, is_rise)`. The decision core's whole currency — arcs, never
-/// a verdict on the node, so edge and combinational arcs coexist freely on one output.
+/// One candidate edge arc on a node: `(clock, is_rise)`. The decision core's whole currency — each arc on
+/// a node is typed independently, so edge and combinational arcs coexist freely on one output.
 type Arc = (Symbol, bool);
 
 /// Discover each node's edge arcs from the cell's toggle-and-settle behaviour and label the cell's
@@ -2497,10 +2497,8 @@ L3 = "!K3*L2 + K3*L3"
         // Three latches in series on three DISTINCT clocks — `L1@K1 -> L2@K2 -> L3@K3`, output `L3`, with
         // `L2`/`L3` open (transparent) at the firing. A `K1` edge captures into `L1` and flows through the
         // two open cross-clock latches to `L3`. The generator `L1` sits TWO hops from `L3` (`L3`'s direct
-        // support is `{L2}`, a `K2`-latch carrying no `K1` birth), invisible to the old one-step cone which
-        // types the `K1->L3` arc COMBINATIONAL; the two-birth transitive gate propagates `L1`'s generation
-        // birth through the open latches and types it EDGE. Confirmed COMBINATIONAL under the pre-145ba4c
-        // one-step gate by a throwaway probe during development (the generator-in-DIRECT-support gate).
+        // support is `{L2}`, a `K2`-latch carrying no `K1` birth); the two-birth transitive gate propagates
+        // `L1`'s generation birth through the open latches and types the `K1->L3` arc EDGE.
         with_machine!(CHAIN3_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             // A pure latch chain holds no capture: no register, nothing minted — full replay faithfulness.
@@ -2519,9 +2517,9 @@ L3 = "!K3*L2 + K3*L3"
                 label_list(&es)
             );
 
-            // The teeth: the generator `L1` is beyond `L3`'s one-step cone — `L3` reads `L2` directly, `L2`
-            // reads `L1`, two hops — so the old one-step cone (needing the generator in `L3`'s DIRECT
-            // support) cannot see it.
+            // The teeth: the generator `L1` sits two hops from `L3` — `L3` reads `L2` directly, `L2` reads
+            // `L1` — so the two-birth gate reaches it by propagating `L1`'s generation birth transitively
+            // along the dependency chain, hop by hop from `L2` up to `L3`.
             let direct = |n: &str| -> Vec<String> {
                 let f = m
                     .out_deltas
@@ -2629,10 +2627,8 @@ Y = "!(T*A)"
         // cofactored content `!T` matches `T` up to inversion — and mints NOTHING.
         //
         // Two-birth teeth: the CLK->Y arcs are the closer-exposure-at-an-internal-node case. The DET mux
-        // switch is a closer-exposure birth at the internal node `T`; the old gate only births
-        // closer-exposure via a generator in the OUTPUT's direct support (and `T` is not `CLK`-associated),
-        // so it types the CLK->Y arcs COMBINATIONAL. Confirmed under the pre-145ba4c one-step gate by a
-        // throwaway probe (only the CLKB->Y arc survives there); the two-birth gate types them EDGE.
+        // switch is a closer-exposure birth at the internal node `T` (itself not `CLK`-associated); the
+        // two-birth gate propagates that birth onward from `T` to `Y` and types the CLK->Y arcs EDGE.
         with_machine!(DETP_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert_captures_faithful(&m, &es);
@@ -2640,7 +2636,7 @@ Y = "!(T*A)"
             assert_no_dropped_references(&m, &es);
 
             // The two CLK->Y arcs type EDGE under the two-birth gate (the internal-node birth propagates
-            // onward to Y). This is the teeth arc — combinational under the old one-step gate.
+            // onward to Y). This is the teeth arc.
             assert!(label_list(&es).contains(&("Y", "CLK", Edge::Rise)));
             assert!(label_list(&es).contains(&("Y", "CLK", Edge::Fall)));
 
