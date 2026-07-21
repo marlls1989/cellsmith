@@ -11,15 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Edge-arc classification.** cellsmith now identifies which of a cell's clock-related timing arcs are
-  edge-triggered and emits Liberate `-type edge` for them; the rest emit `-type combinational`. The
-  decision is made per arc from the cell's toggle-and-settle behaviour, so a cell characterises the same
-  however it is built — a NAND-implemented flop matches its pass-transistor equivalent. On by default;
-  opt out per-cell with `no_edge_collapse = true` or per-run with `--no-edge-collapse`.
-- **Sequential cells emitted in edge-triggered form.** The Liberty joint `statetable` and the Verilog
-  sequential UDP carry edge-triggered rows for edge registers: an inverting flop captures `!D`, a toggle
-  flop decomposes into two opposite-edge captures, and a phase-conditioned clear carries its gating clock
-  literal (`CLK*R`) so it clears in that clock phase alone.
+- **Support for edge-sensitive flip-flops.** cellsmith now recognises edge-triggered sequential cells
+  and emits Cadence Liberate `-type edge` timing arcs for their clock→output transitions, so Liberate
+  characterises their edge-triggered timing. Each clock-related arc is classified per arc, from the
+  cell's toggle-and-settle behaviour, as an edge arc or ordinary combinational propagation; the decision
+  is behavioural, so a cell characterises the same however it is built — a NAND-implemented flop matches
+  its pass-transistor equivalent. On by default; opt out per-cell with `no_edge_collapse = true` or
+  per-run with `--no-edge-collapse`.
+- **Edge-triggered statetable and UDP.** Flip-flops and latches are re-expressed in edge-triggered form
+  in the Liberty joint `statetable` and the Verilog sequential UDP: an inverting flop captures `!D`, a
+  toggle flop decomposes into two opposite-edge captures, and a phase-conditioned clear carries its
+  gating clock literal (`CLK*R`) so it clears in that clock phase alone.
 - **Read-gated registers preserved.** When a register output is read through an enable pin, the register
   is emitted as its own edge-triggered node and the output as a combinational `state_function` (a Verilog
   continuous assign) over it, so an output-enabled register is modelled with its held content intact.
