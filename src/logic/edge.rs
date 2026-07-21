@@ -80,7 +80,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
-use espresso_logic::{Cover, CoverType, CubeType, Minimizable, Minterm, Symbol};
+use espresso_logic::{Anonymous, Cover, CoverType, CubeType, Minimizable, Minterm, Symbol};
 use rayon::prelude::*;
 
 use crate::logic::analysis::Machine;
@@ -146,6 +146,37 @@ pub struct EdgeArcs {
     /// already-transparent latch. Membership is PER FIRING, so two firings of one
     /// `(output, clock, direction)` that differ only in internal state can type differently.
     pub labels: BTreeSet<(Symbol, Symbol, Edge, Minterm<Symbol>)>,
+    /// The read-gate factorisations recognised across the cell's outputs (see [`DerivedRegister`]). Empty
+    /// for every cell that carries no read-gated register output. Each entry names a state-holding register
+    /// the emitters render as a first-class internal node, and carries the combinational read function(s)
+    /// of the output(s) that read it through a gate.
+    pub derived: Vec<DerivedRegister>,
+}
+
+/// A post-processing derived internal edge register: content is a function of already-explored state,
+/// never a new state variable — nothing is re-explored and no machine field is touched. It is minted only
+/// for a READ-GATED register output — one whose forcing pin READS the held state without changing it
+/// (`BDET`'s output-enable `A`), as opposed to one that CHANGES the state (`RDFF`'s reset `R`). Folding
+/// such an output's master into the output would destroy the content the output re-acquires when the gate
+/// releases; instead the state-holding register is factored out as its own node (`Yst`) with native edge
+/// capture, and the output becomes a combinational [`state_function`](crate::emit::liberty) over it.
+///
+/// The register additionally carries an ordinary [`EdgeCaptures`] entry on [`EdgeArcs::captures`] (its
+/// captures are the output's already-synthesised covers cofactored at the read-gates' pass levels), so the
+/// entire downstream edge-row / UDP machinery — which is name-driven — flows through unchanged. When the
+/// factored content matches an ALREADY-DECLARED register (up to inversion — `DETP`'s buried `T`), that
+/// register is reused and nothing is minted; the entry then only records the reading output's function.
+#[derive(Debug, Clone)]
+pub struct DerivedRegister {
+    /// The register node's name — a freshly minted, collision-checked name, or the name of the reused
+    /// declared register when a match was found (nothing minted).
+    pub name: Symbol,
+    /// The register's value over machine coordinates, evaluable at any explored stable state — the harness
+    /// resolves the derived node's value through this instead of [`Machine::output_value`].
+    pub content: Cover<Symbol, Anonymous>,
+    /// Per read-gated output that reads this register: the output's combinational read function, as
+    /// state-table regions over the register node and the gate pins.
+    pub reads: Vec<(Symbol, StateRegions)>,
 }
 
 /// A single clock edge's observations for one candidate: whether any sample changed the value (the
@@ -592,6 +623,201 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         });
     }
 
+    // READ-GATE FACTORISATION: a register output whose forcing pin merely READS the held state (`BDET`'s
+    // output-enable) rather than CHANGING it (`RDFF`'s reset) is refactored — the state-holding register
+    // becomes its own node with native edge capture and the output a combinational read over it — so the
+    // fold does not destroy the content the output re-acquires when the gate releases. The discriminator is
+    // STATE-CHANGE-IN-CONE: a forcing pin that never moves a state variable in the output's cone is a
+    // read-gate. `derived` carries the factored registers (minted, or an existing declared register reused
+    // up to inversion) and the reading outputs' combinational functions; `read_support` redirects each
+    // read-gated output's fold seed onto its read function's support so its masters fold.
+    let mut derived: Vec<DerivedRegister> = Vec::new();
+    let mut read_support: HashMap<Symbol, Vec<Symbol>> = HashMap::new();
+    let mut factored: BTreeSet<Symbol> = BTreeSet::new();
+    if let Some(b) = builder.as_ref() {
+        // The transitive state cone of a node: the state variables its δ depends on, directly or through
+        // other state variables' δ.
+        let cone_of = |o: &str| -> BTreeSet<Symbol> {
+            let mut seen: BTreeSet<Symbol> = BTreeSet::new();
+            let mut stack: Vec<Symbol> = fn_of
+                .get(o)
+                .map(|f| f.variables().filter(|v| m.state_set.contains(v)).collect())
+                .unwrap_or_default();
+            while let Some(w) = stack.pop() {
+                if !seen.insert(w.clone()) {
+                    continue;
+                }
+                if let Some(f) = fn_of.get(w.as_str()) {
+                    for v in f.variables() {
+                        if m.state_set.contains(&v) && !seen.contains(&v) {
+                            stack.push(v);
+                        }
+                    }
+                }
+            }
+            seen
+        };
+        let index_of: HashMap<&str, usize> = candidates
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.as_str(), i))
+            .collect();
+        let mut taken: BTreeSet<String> = inputs
+            .iter()
+            .map(|s| s.to_string())
+            .chain(candidates.iter().map(|s| s.to_string()))
+            .collect();
+        let mut derived_map: BTreeMap<Symbol, DerivedRegister> = BTreeMap::new();
+        let mut minted: Vec<EdgeCaptures> = Vec::new();
+
+        // Every register output, in candidate order.
+        let output_regs: Vec<usize> = seam_of
+            .iter()
+            .enumerate()
+            .filter(|(i, s)| !s.is_empty() && output_names.contains(candidates[*i].as_str()))
+            .map(|(i, _)| i)
+            .collect();
+        for iy in output_regs {
+            let y = candidates[iy].clone();
+            let Some(dy) = fn_of.get(y.as_str()).copied() else {
+                continue;
+            };
+            let cone = cone_of(y.as_str());
+            // A forcing pin is a READ-GATE iff toggling it never moves any state variable in the output's
+            // cone (its pass level is the pin's un-asserted level).
+            let mut gate_pass: Vec<(Symbol, bool)> = Vec::new();
+            for (pin, (asserted, _)) in &forcing_of[iy] {
+                let changes_cone = cone.iter().any(|w| {
+                    index_of
+                        .get(w.as_str())
+                        .is_some_and(|&iw| aggs[iw].moves.iter().any(|(p, _, _, _)| p == pin))
+                });
+                if !changes_cone {
+                    gate_pass.push((pin.clone(), !*asserted));
+                }
+            }
+            if gate_pass.is_empty() {
+                continue; // an ordinary register: its forcing pins all change the held state
+            }
+
+            // The register content the output reads: δ_Y cofactored at the read-gates' pass levels.
+            let pass_min = Minterm::with_labels(
+                &gate_pass
+                    .iter()
+                    .map(|(g, p)| (g.as_str(), Some(*p)))
+                    .collect::<Vec<_>>(),
+            )
+            .expect("distinct read-gate pins");
+            let content_bdd = dy.restrict_to(&pass_min);
+            // The read function's columns: the register node plus every non-clock input the output reads.
+            let gate_cols: Vec<Symbol> = inputs
+                .iter()
+                .filter(|p| {
+                    !clock_set.contains(p.as_str())
+                        && dy.variables().any(|v| v.as_str() == p.as_str())
+                })
+                .cloned()
+                .collect();
+
+            // Reuse a declared register whose content matches (up to inversion — a NAND read of a DET
+            // holds `!T`), else mint a fresh node holding the cofactored content.
+            let matched = seam_of
+                .iter()
+                .enumerate()
+                .filter(|(j, s)| *j != iy && !s.is_empty())
+                .map(|(j, _)| candidates[j].clone())
+                .find(|reg| {
+                    let v = b.var(reg.as_str());
+                    content_bdd.equivalent_to(&v) || content_bdd.equivalent_to(&!&v)
+                });
+            let reg_name = match &matched {
+                Some(reg) => reg.clone(),
+                None => {
+                    let mut nm = format!("{y}st");
+                    let mut k = 2;
+                    while taken.contains(&nm) {
+                        nm = format!("{y}st{k}");
+                        k += 1;
+                    }
+                    taken.insert(nm.clone());
+                    Symbol::from(nm.as_str())
+                }
+            };
+
+            // The read function over [register, read-columns], sampled from the machine: the register
+            // value is resolved through the cofactored content, the output value directly.
+            let read_header: Vec<Symbol> = std::iter::once(reg_name.clone())
+                .chain(gate_cols.iter().cloned())
+                .collect();
+            let read_samples: Vec<(Minterm<Symbol>, bool)> = ex
+                .order
+                .iter()
+                .filter_map(|s| {
+                    if !is_eligible(s) {
+                        return None;
+                    }
+                    // The register node's value at this state: a reused declared register resolves through
+                    // its own value (it holds `T`, while the cofactored content is `!T`); a minted register
+                    // holds exactly the cofactored content.
+                    let rv = match &matched {
+                        Some(reg) => value(reg, s)?,
+                        None => content_bdd.evaluate_fast(s)?,
+                    };
+                    let yv = value(&y, s)?;
+                    let mut labels: Vec<(&str, Option<bool>)> = vec![(reg_name.as_str(), Some(rv))];
+                    for g in &gate_cols {
+                        labels.push((g.as_str(), s.value_of(g.as_str())));
+                    }
+                    Some((Minterm::with_labels(&labels).ok()?, yv))
+                })
+                .collect();
+            let reads_sr = synth_capture(b, &read_header, &read_samples)
+                .expect("a read-gated output is a function of its register and gate pins");
+
+            // Mint the register's EdgeCaptures from the output's own — cofactored gate-free: the captures
+            // lose the gate columns, the off-edge collapses to a pure hold.
+            if matched.is_none() {
+                let y_ec = captures
+                    .iter()
+                    .find(|ec| ec.node == y)
+                    .expect("a register output has an EdgeCaptures entry");
+                let node_captures: Vec<(Symbol, Edge, StateRegions)> = y_ec
+                    .captures
+                    .iter()
+                    .map(|(clock, edge, sr)| {
+                        (clock.clone(), *edge, cofactor_capture(b, sr, &pass_min))
+                    })
+                    .collect();
+                let off_edge = cofactor_off_edge(b, &y_ec.off_edge, &pass_min);
+                let cols = capture_cols(&node_captures, &off_edge);
+                minted.push(EdgeCaptures {
+                    node: reg_name.clone(),
+                    captures: node_captures,
+                    off_edge,
+                    cols,
+                });
+            }
+
+            let content = regions::minimise_bdd(&content_bdd);
+            derived_map
+                .entry(reg_name.clone())
+                .or_insert_with(|| DerivedRegister {
+                    name: reg_name.clone(),
+                    content,
+                    reads: Vec::new(),
+                })
+                .reads
+                .push((y.clone(), reads_sr));
+            read_support.insert(y.clone(), read_header);
+            factored.insert(y);
+        }
+
+        // Drop the factored outputs' register entries and add the minted registers.
+        captures.retain(|ec| !factored.contains(&ec.node));
+        captures.extend(minted);
+        derived = derived_map.into_values().collect();
+    }
+
     // FOLD (cell-level): folding is decided at emission as a REACHABILITY question — once the collapse is
     // done, does this value still influence anything the cell emits? An internal non-seam node folds unless
     // a chain of raw-function references, starting from surviving emitted content — a surviving
@@ -620,9 +846,13 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // CARRY a seam are neither seeds nor propagation sources: their raw function is replaced by the edge
     // seam, so their references reach us through `ref_reg` instead. On top of that, any foldable node named
     // by a surviving capture or off-edge cover column is itself live.
+    // A READ-GATED output carries a (now stale) seam but no longer emits its raw δ — it emits a
+    // combinational read over its factored register — so it is a live sink like any non-seam output, and it
+    // propagates through its READ FUNCTION's support (register + gate pins), not its raw function. That
+    // redirect is what folds the masters it re-expresses (`BDET`'s `L1/L2`).
     let mut live: BTreeSet<&str> = BTreeSet::new();
     for (name, s) in candidates.iter().zip(&seam_of) {
-        if !s.is_empty() {
+        if !s.is_empty() && !factored.contains(name) {
             continue;
         }
         if !foldable.contains(name.as_str()) || ref_reg.contains(name.as_str()) {
@@ -632,8 +862,18 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     let mut worklist: Vec<&str> = live.iter().copied().collect();
 
     // Propagate liveness along each live node's raw-function support — semantic BDD support, never equation
-    // shape — until the least fixpoint is reached.
+    // shape — until the least fixpoint is reached. A read-gated output propagates through its read support.
     while let Some(l) = worklist.pop() {
+        if let Some(sup) = read_support.get(l) {
+            for v in sup {
+                if let Some(&n) = foldable.get(v.as_str()) {
+                    if live.insert(n) {
+                        worklist.push(n);
+                    }
+                }
+            }
+            continue;
+        }
         let Some(f) = fn_of.get(l) else {
             continue;
         };
@@ -658,6 +898,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         captures,
         folded,
         labels,
+        derived,
     }
 }
 
@@ -1116,6 +1357,47 @@ fn regions_from<B: Brand, C: ManagerCell>(
     }
 }
 
+/// Cofactor a TOTAL capture's regions at the read-gates' pass levels (`pass` fixes the gate pins): the gate
+/// columns vanish and the capture is re-based over its surviving support. The on-set is the cofactored
+/// on-cover, the off-set its complement (a capture is total), the hold empty. Used to mint a factored
+/// register's captures from the read-gated output's own (`!(D*A)|A=1 → !D`).
+fn cofactor_capture<B: Brand, C: ManagerCell>(
+    builder: &BddBuilder<B, C>,
+    sr: &StateRegions,
+    pass: &Minterm<Symbol>,
+) -> StateRegions {
+    let on = builder.build_cover(&sr.on_cover).restrict_to(pass);
+    let off = !&on;
+    let hold = builder.constant(false);
+    let header: Vec<Symbol> = sr
+        .cols
+        .iter()
+        .filter(|c| pass.value_of(c.as_str()).is_none())
+        .cloned()
+        .collect();
+    regions_from(&on, &off, &hold, &header)
+}
+
+/// Cofactor an off-edge's regions at the read-gates' pass levels: the set/clear/hold covers each lose the
+/// gate columns. A read-gate whose non-pass level forces the output collapses to a PURE HOLD at the pass
+/// level (`BDET`, whose factored register has no async set/clear of its own).
+fn cofactor_off_edge<B: Brand, C: ManagerCell>(
+    builder: &BddBuilder<B, C>,
+    sr: &StateRegions,
+    pass: &Minterm<Symbol>,
+) -> StateRegions {
+    let on = builder.build_cover(&sr.on_cover).restrict_to(pass);
+    let off = builder.build_cover(&sr.off_cover).restrict_to(pass);
+    let hold = !&on.or(&off);
+    let header: Vec<Symbol> = sr
+        .cols
+        .iter()
+        .filter(|c| pass.value_of(c.as_str()).is_none())
+        .cloned()
+        .collect();
+    regions_from(&on, &off, &hold, &header)
+}
+
 /// Synthesise a capture region from its `(pre-state, post-value)` samples over `header`. The witnessed
 /// on-samples are the ON-set, the witnessed off-samples the OFF-set and the unwitnessed remainder a
 /// don't-care set: the capture is the ON-set generalised (incompletely-specified minimisation) so it
@@ -1416,9 +1698,29 @@ mod tests {
             false
         };
 
+        // The read-gate factorisation's MINTED registers are not machine nodes, so their value is resolved
+        // through their content cover (built once on the harness builder) rather than `output_value`. A
+        // declared register reused by the factorisation stays a machine node and resolves normally. This is
+        // what makes the derived register's captures and off-edge replay for real against the machine below,
+        // rather than passing vacuously on an all-`None` value.
+        let is_machine_node = |name: &Symbol| {
+            m.state_set.contains(name.as_str()) || m.cell.outputs.iter().any(|o| &o.name == name)
+        };
+        let derived_content: BTreeMap<Symbol, Bdd<B, C>> = es
+            .derived
+            .iter()
+            .filter(|d| !is_machine_node(&d.name))
+            .map(|d| (d.name.clone(), builder.build_cover(&d.content)))
+            .collect();
+
         for r in &es.captures {
             let node = r.node.as_str();
-            let value = |s: &Minterm<Symbol>| m.output_value(node, s);
+            let value = |s: &Minterm<Symbol>| -> Option<bool> {
+                match derived_content.get(&r.node) {
+                    Some(cb) => cb.evaluate_fast(s),
+                    None => m.output_value(node, s),
+                }
+            };
 
             // The emitted model: one capture cover per arc, plus the clock-inclusive forcing covers.
             let covers: BTreeMap<Arc, Bdd<B, C>> = r
@@ -1595,12 +1897,36 @@ mod tests {
             }
         }
 
+        // A read-gated output emits its READ FUNCTION (over the factored register and gate pins), not its
+        // raw δ — that function must name no folded node, and the output is excluded from the raw-function
+        // check (b) below, which would otherwise flag the masters it re-expresses.
+        let read_gated: BTreeSet<&str> = es
+            .derived
+            .iter()
+            .flat_map(|d| d.reads.iter().map(|(o, _)| o.as_str()))
+            .collect();
+        for d in &es.derived {
+            for (o, sr) in &d.reads {
+                for col in &sr.cols {
+                    assert!(
+                        !folded.contains(col.as_str()),
+                        "dropped reference: read function of {o} names folded node {col}, folded {:?}",
+                        folded_list(es)
+                    );
+                }
+            }
+        }
+
         // (b) no surviving capture-less candidate's raw function has a folded node in its support. The
         // candidate population is the classifier's own: every output plus every non-output state
         // variable. A candidate that carries a capture is not a survivor of this kind — its raw function
-        // is replaced by the edge seam — and the folded nodes themselves are gone.
+        // is replaced by the edge seam — and the folded nodes themselves are gone. A read-gated output is
+        // likewise not a survivor of this kind — it emits its read function, checked above.
         let output_names: BTreeSet<&str> = m.cell.outputs.iter().map(|o| o.name.as_str()).collect();
-        let captured: BTreeSet<&str> = node_list(es).into_iter().collect();
+        let captured: BTreeSet<&str> = node_list(es)
+            .into_iter()
+            .chain(read_gated.iter().copied())
+            .collect();
         let mut fn_of: BTreeMap<&str, &Bdd<B, C>> = BTreeMap::new();
         for (n, d) in &m.deltas {
             fn_of.insert(n.as_str(), d);
@@ -1627,6 +1953,61 @@ mod tests {
                      folded {:?}",
                     folded_list(es)
                 );
+            }
+        }
+    }
+
+    /// Replay-faithfulness for the read-gate factorisation's READ FUNCTIONS: at every reachable stable
+    /// state, the emitted read cover — evaluated with the factored register resolved through its own value
+    /// (a minted register through its content cover, a reused declared register through `output_value`) and
+    /// the gate pins at their state values — reproduces the machine's output. This is the semantic
+    /// correctness gate for `Y = state_function(register, gates)`, stronger than any literal SOP match.
+    fn assert_reads_faithful<B: Brand, C: ManagerCell + Send + Sync>(
+        m: &Machine<B, C>,
+        es: &EdgeArcs,
+    ) {
+        let Some((_, any)) = m.deltas.first() else {
+            return;
+        };
+        let b = any.builder();
+        let is_machine = |n: &str| {
+            m.state_set.contains(n) || m.cell.outputs.iter().any(|o| o.name.as_str() == n)
+        };
+        for d in &es.derived {
+            let content = b.build_cover(&d.content);
+            let reg_value = |s: &Minterm<Symbol>| -> Option<bool> {
+                if is_machine(d.name.as_str()) {
+                    m.output_value(d.name.as_str(), s)
+                } else {
+                    content.evaluate_fast(s)
+                }
+            };
+            for (o, sr) in &d.reads {
+                let read = b.build_cover(&sr.on_cover);
+                let mut exercised = false;
+                for s in &m.explored.order {
+                    let (Some(rv), Some(yv)) = (reg_value(s), m.output_value(o.as_str(), s)) else {
+                        continue;
+                    };
+                    let mut labels: Vec<(&str, Option<bool>)> = vec![(d.name.as_str(), Some(rv))];
+                    for c in &sr.cols {
+                        if c != &d.name {
+                            labels.push((c.as_str(), s.value_of(c.as_str())));
+                        }
+                    }
+                    let mm: Minterm<Symbol> =
+                        Minterm::with_labels(&labels).expect("distinct read columns");
+                    let Some(got) = read.evaluate_fast(&mm) else {
+                        continue;
+                    };
+                    exercised = true;
+                    assert_eq!(
+                        got, yv,
+                        "read unfaithful: {o} over {} at {s:?}: read {got} != machine {yv}",
+                        d.name
+                    );
+                }
+                assert!(exercised, "read function of {o} was never exercised");
             }
         }
     }
@@ -2099,6 +2480,281 @@ Q = "CLK*L1 + !CLK*L2"
         });
     }
 
+    const CHAIN3_TOML: &str = r#"
+[[cell]]
+name = "CHAIN3"
+inputs = ["K1", "K2", "K3", "D"]
+clock = ["K1", "K2", "K3"]
+[cell.internal]
+L1 = "!K1*D + K1*L1"
+L2 = "!K2*L1 + K2*L2"
+[cell.outputs]
+L3 = "!K3*L2 + K3*L3"
+"#;
+
+    #[test]
+    fn edge_three_latch_chain_two_birth_teeth() {
+        // Three latches in series on three DISTINCT clocks — `L1@K1 -> L2@K2 -> L3@K3`, output `L3`, with
+        // `L2`/`L3` open (transparent) at the firing. A `K1` edge captures into `L1` and flows through the
+        // two open cross-clock latches to `L3`. The generator `L1` sits TWO hops from `L3` (`L3`'s direct
+        // support is `{L2}`, a `K2`-latch carrying no `K1` birth), invisible to the old one-step cone which
+        // types the `K1->L3` arc COMBINATIONAL; the two-birth transitive gate propagates `L1`'s generation
+        // birth through the open latches and types it EDGE. Confirmed COMBINATIONAL under the pre-145ba4c
+        // one-step gate by a throwaway probe during development (the generator-in-DIRECT-support gate).
+        with_machine!(CHAIN3_TOML, |_b, _a, _m2, m| {
+            let es = classify(&m);
+            // A pure latch chain holds no capture: no register, nothing minted — full replay faithfulness.
+            assert!(
+                es.captures.is_empty(),
+                "a pure latch chain holds no capture"
+            );
+            assert!(es.derived.is_empty());
+            assert_captures_faithful(&m, &es);
+
+            // The two-birth gate types the `K1->L3` arc EDGE (the generator two hops away, through the open
+            // cross-clock latches).
+            assert!(
+                label_list(&es).contains(&("L3", "K1", Edge::Fall)),
+                "K1->L3 must type edge under the two-birth gate: {:?}",
+                label_list(&es)
+            );
+
+            // The teeth: the generator `L1` is beyond `L3`'s one-step cone — `L3` reads `L2` directly, `L2`
+            // reads `L1`, two hops — so the old one-step cone (needing the generator in `L3`'s DIRECT
+            // support) cannot see it.
+            let direct = |n: &str| -> Vec<String> {
+                let f = m
+                    .out_deltas
+                    .get(&Symbol::from(n))
+                    .or_else(|| {
+                        m.deltas
+                            .iter()
+                            .find(|(s, _)| s.as_str() == n)
+                            .map(|(_, d)| d)
+                    })
+                    .expect("a delta for the queried node");
+                f.variables()
+                    .filter(|v| m.state_set.contains(v))
+                    .map(|v| v.to_string())
+                    .collect()
+            };
+            assert!(direct("L3").contains(&"L2".to_string()));
+            assert!(
+                !direct("L3").contains(&"L1".to_string()),
+                "L1 is two hops from L3, invisible to a one-step cone"
+            );
+            assert!(direct("L2").contains(&"L1".to_string()));
+        });
+    }
+
+    const BDET_TOML: &str = r#"
+[[cell]]
+name = "BDET"
+inputs = ["CLK", "D", "A"]
+clock = ["CLK"]
+[cell.internal]
+L1 = "!CLK*D + CLK*L1"
+L2 = "CLK*D + !CLK*L2"
+[cell.outputs]
+Y = "!((CLK*L1 + !CLK*L2)*A)"
+"#;
+
+    const DETP_TOML: &str = r#"
+[[cell]]
+name = "DETP"
+inputs = ["CLK", "CLKB", "D", "A"]
+clock = ["CLK", "CLKB"]
+[cell.internal]
+L1 = "!CLK*D + CLK*L1"
+L2 = "CLK*D + !CLK*L2"
+T = "!CLKB*(CLK*L1 + !CLK*L2) + CLKB*T"
+[cell.outputs]
+Y = "!(T*A)"
+"#;
+
+    #[test]
+    fn edge_bdet_read_gate_factorisation() {
+        // BDET: a dual-edge flop read through an output-enable `A` (`Y = !(M*A)`, `M = CLK*L1+!CLK*L2`). `A`
+        // is a READ-GATE — toggling it never moves the DET latches `L1/L2` in `Y`'s cone — so the register
+        // is factored out as `Yst` with native dual-edge capture and `Y` becomes a combinational read over
+        // it, freeing the masters to fold.
+        with_machine!(BDET_TOML, |builder, _a, _m2, m| {
+            let es = classify(&m);
+            assert_captures_faithful(&m, &es);
+            assert_reads_faithful(&m, &es);
+            assert_no_dropped_references(&m, &es);
+
+            // The DET latches fold; the sole state node is the minted register.
+            let mut folded = folded_list(&es);
+            folded.sort();
+            assert_eq!(folded, ["L1", "L2"]);
+            assert_eq!(node_list(&es), ["Yst"], "Y is factored out, Yst minted");
+
+            // `Yst` is a dual-edge register; its native captures deliver `!D` on both edges (the NAND read
+            // inverts the held content — inversion is not special-cased).
+            let yst = reg(&es, "Yst");
+            assert_eq!(yst.captures.len(), 2, "dual edge");
+            let nd = !&builder.var("D");
+            for (_, _, cap) in &yst.captures {
+                assert!(
+                    builder.build_cover(&cap.on_cover).equivalent_to(&nd),
+                    "each edge captures !D"
+                );
+            }
+
+            // One derived register `Yst`, read by `Y`; nothing else minted. The read function's
+            // machine-faithfulness (equivalent to `Y = !(M*A)`) is proven by assert_reads_faithful.
+            assert_eq!(es.derived.len(), 1);
+            assert_eq!(es.derived[0].name, "Yst");
+            let reads: Vec<&str> = es.derived[0]
+                .reads
+                .iter()
+                .map(|(o, _)| o.as_str())
+                .collect();
+            assert_eq!(reads, ["Y"]);
+
+            // `CLK->Y` stays edge on both edges; `A` carries no edge label (it is not a clock), so `A->Y`
+            // arcs render `-type combinational`.
+            assert_eq!(
+                labels_of(&es, "Y"),
+                [("CLK", Edge::Rise), ("CLK", Edge::Fall)]
+            );
+        });
+    }
+
+    #[test]
+    fn edge_detp_reads_declared_register_no_mint() {
+        // DETP: a DET mux buried in a cross-clock latch `T` (`T = !CLKB*(CLK*L1+!CLK*L2)+CLKB*T`), read
+        // through `A` (`Y = !(T*A)`). `T` is a declared register; the factorisation REUSES it — `Y`'s
+        // cofactored content `!T` matches `T` up to inversion — and mints NOTHING.
+        //
+        // Two-birth teeth: the CLK->Y arcs are the closer-exposure-at-an-internal-node case. The DET mux
+        // switch is a closer-exposure birth at the internal node `T`; the old gate only births
+        // closer-exposure via a generator in the OUTPUT's direct support (and `T` is not `CLK`-associated),
+        // so it types the CLK->Y arcs COMBINATIONAL. Confirmed under the pre-145ba4c one-step gate by a
+        // throwaway probe (only the CLKB->Y arc survives there); the two-birth gate types them EDGE.
+        with_machine!(DETP_TOML, |_b, _a, _m2, m| {
+            let es = classify(&m);
+            assert_captures_faithful(&m, &es);
+            assert_reads_faithful(&m, &es);
+            assert_no_dropped_references(&m, &es);
+
+            // The two CLK->Y arcs type EDGE under the two-birth gate (the internal-node birth propagates
+            // onward to Y). This is the teeth arc — combinational under the old one-step gate.
+            assert!(label_list(&es).contains(&("Y", "CLK", Edge::Rise)));
+            assert!(label_list(&es).contains(&("Y", "CLK", Edge::Fall)));
+
+            // `T` keeps its native edge register; `Y` is factored to a read over it; nothing minted.
+            assert!(
+                node_list(&es).contains(&"T"),
+                "T stays a register: {:?}",
+                node_list(&es)
+            );
+            assert!(
+                !node_list(&es).contains(&"Y"),
+                "Y is a combinational read, not a register"
+            );
+            assert_eq!(es.derived.len(), 1);
+            assert_eq!(es.derived[0].name, "T", "reuses the declared register");
+            let reads: Vec<&str> = es.derived[0]
+                .reads
+                .iter()
+                .map(|(o, _)| o.as_str())
+                .collect();
+            assert_eq!(reads, ["Y"]);
+        });
+    }
+
+    #[test]
+    fn edge_read_gate_controls_do_not_factor() {
+        // Register-forcing control (RDFF: reset `R` CHANGES the held state) and no-gate control (plain DET:
+        // no forcing read pin) both leave `derived` empty — the factorisation fires only for a read-gate.
+        with_machine!(RDFF_TOML, |_b, _a, _m2, m| {
+            let es = classify(&m);
+            assert!(
+                es.derived.is_empty(),
+                "RDFF's reset changes state, not a read-gate"
+            );
+        });
+        with_machine!(DET_TOML, |_b, _a, _m2, m| {
+            let es = classify(&m);
+            assert!(es.derived.is_empty(), "plain DET has no read gate");
+            assert!(node_list(&es).contains(&"Q"), "DET's Q stays a register");
+        });
+    }
+
+    const COMPOSED_TOML: &str = r#"
+[[cell]]
+name = "RDFFRE"
+inputs = ["CLK", "D", "R", "A"]
+clock = ["CLK"]
+[cell.internal]
+M = "!R*(!CLK*D + CLK*M)"
+[cell.outputs]
+Q = "!R*(CLK*M + !CLK*Q)"
+Y = "!(Q*A)"
+"#;
+
+    #[test]
+    fn edge_composed_register_clear_and_read_gate() {
+        // A resettable DFF register `Q` (register-forcing reset `R`) with a read-gated second output
+        // `Y = !(Q*A)`. Only the gated output factors: `Q` keeps its native register and its off-edge `R`
+        // clear, and `Y` reuses `Q` (content `!Q` matches `Q` up to inversion), minting nothing.
+        with_machine!(COMPOSED_TOML, |builder, _a, _m2, m| {
+            let es = classify(&m);
+            assert_captures_faithful(&m, &es);
+            assert_reads_faithful(&m, &es);
+            assert_no_dropped_references(&m, &es);
+
+            let q = reg(&es, "Q");
+            let off = builder.build_cover(&q.off_edge.off_cover);
+            assert!(
+                off.equivalent_to(&builder.var("R")),
+                "Q keeps its off-edge R clear"
+            );
+
+            assert_eq!(es.derived.len(), 1);
+            assert_eq!(
+                es.derived[0].name, "Q",
+                "the register keeps its clear, only Y factors"
+            );
+            let reads: Vec<&str> = es.derived[0]
+                .reads
+                .iter()
+                .map(|(o, _)| o.as_str())
+                .collect();
+            assert_eq!(reads, ["Y"]);
+            assert!(
+                !node_list(&es).contains(&"Y"),
+                "Y is a combinational read, not a register"
+            );
+        });
+    }
+
+    #[test]
+    fn edge_read_gate_corrupted_cover_teeth() {
+        // The harness has teeth on the DERIVED registers: corrupt a derived content cover and the
+        // replay must fail. A test that cannot fail on the bug it targets is not a test.
+        with_machine!(BDET_TOML, |builder, _a, _m2, m| {
+            let mut es = classify(&m);
+            assert!(!es.derived.is_empty(), "BDET factors a derived register");
+            // Invert the minted register's content: the resolver now reads the wrong held value.
+            let good = builder.build_cover(&es.derived[0].content);
+            es.derived[0].content = regions::minimise_bdd(&!&good);
+
+            let prev = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {}));
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                assert_captures_faithful(&m, &es)
+            }));
+            std::panic::set_hook(prev);
+            assert!(
+                result.is_err(),
+                "corrupting a derived cover must make the replay harness fail"
+            );
+        });
+    }
+
     // === Phase-symmetric data transparency stays a level cell ===
 
     // Two opposite-phase D latches XORed: M follows D while CLK=0, M2 follows D while CLK=1, and T = M⊕M2
@@ -2389,13 +3045,15 @@ GCLK = "CLK*EL"
     /// exploration, prevector/vector and hazard outputs) is byte-for-byte identical whether classification
     /// is on or off.
     ///
-    /// The invariant holds BY CONSTRUCTION: `classify` takes `&Machine` read-only, mutates nothing, and
-    /// mints only names that already exist in the explored machine. This test additionally proves the
+    /// The invariant holds BY CONSTRUCTION: `classify` takes `&Machine` read-only, mutates nothing, and the
+    /// annotation may carry emission-time derived registers (the read-gate factorisation) that are
+    /// functions of already-explored state, never new state variables. This test additionally proves the
     /// flag-gating is PURE — when opted out (`no_edge_collapse`) the classify() call is skipped and the
-    /// annotation is the byte-identical Default, with every other field untouched.
+    /// annotation is the byte-identical Default, with every other field untouched. `BDET`/`DETP` exercise
+    /// the factorisation path: only `edge` differs there too.
     #[test]
     fn edge_classification_changes_only_the_edge_annotation() {
-        for src in [DFF_TOML, ICM_TOML] {
+        for src in [DFF_TOML, ICM_TOML, BDET_TOML, DETP_TOML] {
             let off = analyse_toggled(src, true); // classification suppressed
             let on = analyse_toggled(src, false); // classification active
 

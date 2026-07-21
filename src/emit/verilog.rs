@@ -38,15 +38,35 @@ pub fn cell_verilog(cell: &AnalysedCell) -> String {
         .map(|er| (er.node.as_str(), er))
         .collect();
     let folded: BTreeSet<&str> = cell.edge.folded.iter().map(Symbol::as_str).collect();
+    // Read-gated outputs read a factored register combinationally: they emit a continuous `assign` in the
+    // wrapper, no UDP of their own. Their factored register (minted, not a declared signal) emits an
+    // edge-sensitive UDP like any register.
+    let read_of: BTreeMap<&str, &StateRegions> = read_functions(cell);
+    let signal_names: BTreeSet<&str> = cell
+        .signal_regions()
+        .map(|(s, _)| s.name.as_str())
+        .collect();
 
     let mut out = String::new();
     for (sig, sr) in cell.signal_regions() {
         if folded.contains(sig.name.as_str()) {
             continue; // pure master folded into its edge register
         }
+        if read_of.contains_key(sig.name.as_str()) {
+            continue; // a read-gated output is a continuous assign, not a UDP
+        }
         match edge_by_node.get(sig.name.as_str()) {
             Some(er) => out.push_str(&edge_primitive(&prim_name(cell, &sig.name), &sig.name, er)),
             None => out.push_str(&primitive(&prim_name(cell, &sig.name), &sig.name, sr)),
+        }
+    }
+    // The minted derived registers: an edge-sensitive UDP from their EdgeCaptures.
+    for d in &cell.edge.derived {
+        if signal_names.contains(d.name.as_str()) {
+            continue; // a reused declared register already emitted its UDP above
+        }
+        if let Some(er) = edge_by_node.get(d.name.as_str()) {
+            out.push_str(&edge_primitive(&prim_name(cell, &d.name), &d.name, er));
         }
     }
     // One `celldefine`d wrapper per name; all wrappers instantiate the same shared primitives.
@@ -54,6 +74,16 @@ pub fn cell_verilog(cell: &AnalysedCell) -> String {
         out.push_str(&wrapper_module(cell, name, &edge_by_node, &folded));
     }
     out
+}
+
+/// The cell's read-gated outputs mapped to their combinational read function over the factored register
+/// and gate pins (the read-gate factorisation). Empty for a cell with no such output.
+fn read_functions(cell: &AnalysedCell) -> BTreeMap<&str, &StateRegions> {
+    cell.edge
+        .derived
+        .iter()
+        .flat_map(|d| d.reads.iter().map(|(o, sr)| (o.as_str(), sr)))
+        .collect()
 }
 
 /// `<cell>_<pin>` — the UDP primitive name for one output pin.
@@ -343,12 +373,28 @@ fn wrapper_module(
     folded: &BTreeSet<&str>,
 ) -> String {
     let outputs: Vec<Symbol> = cell.outputs.iter().map(|o| o.name.clone()).collect();
-    // Folded masters vanish: they are neither a wire nor an instance.
+    // Read-gated outputs (continuous assigns) and their minted factored registers (internal wires driven
+    // by an edge UDP).
+    let read_of: BTreeMap<&str, &StateRegions> = read_functions(cell);
+    let signal_names: BTreeSet<&str> = cell
+        .signal_regions()
+        .map(|(s, _)| s.name.as_str())
+        .collect();
+    let derived_minted: Vec<&Symbol> = cell
+        .edge
+        .derived
+        .iter()
+        .map(|d| &d.name)
+        .filter(|n| !signal_names.contains(n.as_str()))
+        .collect();
+    // Folded masters vanish: they are neither a wire nor an instance. A minted factored register is an
+    // internal wire like a surviving internal state node.
     let internals: Vec<Symbol> = cell
         .internals
         .iter()
         .filter(|o| !folded.contains(o.name.as_str()))
         .map(|o| o.name.clone())
+        .chain(derived_minted.iter().map(|n| (*n).clone()))
         .collect();
     // Ports are the external face only: outputs and primary inputs. Internal state nodes are not ports.
     let ports = outputs
@@ -378,9 +424,9 @@ fn wrapper_module(
     s.push_str("endspecify\n");
 
     // Instantiate every surviving signal's UDP (outputs and internals); an internal drives its own
-    // wire. A folded master has no instance.
+    // wire. A folded master has no instance; a read-gated output is a continuous assign, added below.
     for (sig, sr) in cell.signal_regions() {
-        if folded.contains(sig.name.as_str()) {
+        if folded.contains(sig.name.as_str()) || read_of.contains_key(sig.name.as_str()) {
             continue;
         }
         let name = prim_name(cell, &sig.name);
@@ -404,9 +450,66 @@ fn wrapper_module(
         s.push_str(&format!("{name} u_{name} ({args});\n"));
     }
 
+    // The minted factored registers: an edge UDP instance driving the register's own wire, in port order
+    // `(pin, data cols…, clocks…)` — the same layout as any edge register.
+    for d in &derived_minted {
+        let Some(er) = edge_by_node.get(d.as_str()) else {
+            continue;
+        };
+        let pname = prim_name(cell, d);
+        let clocks = er.clocks();
+        let args = std::iter::once(d.as_str())
+            .chain(data_cols(er).iter().map(|c| c.as_str()))
+            .chain(clocks.iter().map(|c| c.as_str()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        s.push_str(&format!("{pname} u_{pname} ({args});\n"));
+    }
+    // The read-gated outputs: a continuous assign of the read function over the factored register and gate
+    // pins.
+    for (sig, _) in cell.signal_regions() {
+        if let Some(reads) = read_of.get(sig.name.as_str()) {
+            s.push_str(&format!("assign {} = {};\n", sig.name, verilog_expr(reads)));
+        }
+    }
+
     s.push_str("endmodule\n");
     s.push_str("`endcelldefine\n");
     s
+}
+
+/// A read function's on-region as a Verilog sum-of-products expression over its columns: literals joined by
+/// `&`, product terms by `|`, negation `~`. An empty on-set is `1'b0`, a tautology `1'b1`.
+fn verilog_expr(sr: &StateRegions) -> String {
+    if sr.on.is_empty() {
+        return "1'b0".to_owned();
+    }
+    let terms: Vec<String> = sr
+        .on
+        .iter()
+        .map(|cube| {
+            let lits: Vec<String> = sr
+                .cols
+                .iter()
+                .zip(cube.iter())
+                .filter_map(|(c, v)| match v {
+                    Some(true) => Some(c.to_string()),
+                    Some(false) => Some(format!("~{c}")),
+                    None => None,
+                })
+                .collect();
+            if lits.is_empty() {
+                "1'b1".to_owned()
+            } else {
+                format!("({})", lits.join(" & "))
+            }
+        })
+        .collect();
+    if terms.iter().any(|t| t == "1'b1") {
+        "1'b1".to_owned()
+    } else {
+        terms.join(" | ")
+    }
 }
 
 #[cfg(test)]
@@ -522,6 +625,42 @@ Q = "CLK*M + !CLK*Q"
         // Instance connects in port order (pin, cols…, clock).
         assert!(v.contains("DFF_Q u_DFF_Q (Q, D, CLK);"));
         assert!(v.contains("module DFF(Q, CLK, D);"));
+    }
+
+    #[test]
+    fn bdet_read_gate_factorisation_verilog() {
+        // BDET: the factored register `Yst` emits an edge UDP; the read-gated output `Y` a continuous
+        // assign. The DET masters `L1/L2` fold entirely.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "BDET"
+inputs = ["CLK", "D", "A"]
+clock = ["CLK"]
+[cell.internal]
+L1 = "!CLK*D + CLK*L1"
+L2 = "CLK*D + !CLK*L2"
+[cell.outputs]
+Y = "!((CLK*L1 + !CLK*L2)*A)"
+"#,
+        );
+        let v = cell_verilog(&cell);
+        eprintln!("{v}");
+        // The factored register is a dual-edge UDP capturing !D (D=0 -> 1, D=1 -> 0 on both edges).
+        assert!(v.contains("primitive BDET_Yst(Yst, D, CLK);"));
+        assert!(v.contains("0 (01) : ? : 1;") && v.contains("1 (01) : ? : 0;"));
+        assert!(v.contains("0 (10) : ? : 1;") && v.contains("1 (10) : ? : 0;"));
+        // The read-gated output is a continuous assign over Yst and A — never a UDP of its own.
+        assert!(v.contains("assign Y = "));
+        assert!(
+            !v.contains("primitive BDET_Y("),
+            "Y is an assign, not a primitive"
+        );
+        // Yst is an internal wire, instantiated; Y is the module output. Folded masters leave no trace.
+        assert!(v.contains("wire   Yst;"));
+        assert!(v.contains("BDET_Yst u_BDET_Yst (Yst, D, CLK);"));
+        assert!(v.contains("module BDET(Y, CLK, D, A);"));
+        assert!(!v.contains("BDET_L1") && !v.contains("BDET_L2"));
     }
 
     #[test]

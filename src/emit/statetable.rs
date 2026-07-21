@@ -144,14 +144,31 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     let is_node = |sig: &Symbol, sr: &StateRegions| {
         (sr.hysteretic || edge_nodes.contains(sig)) && !folded.contains(sig)
     };
+    // Registers factored out of read-gated outputs (the read-gate factorisation) that are not themselves
+    // declared signals are first-class internal nodes: their edge rows flow through the name-driven
+    // machinery in (e) exactly like a declared register's, and their cols name primary inputs. A declared
+    // register reused by the factorisation is already a signal, so it is not re-appended here.
+    let signal_names: BTreeSet<Symbol> = cell
+        .signal_regions()
+        .map(|(sig, _)| sig.name.clone())
+        .collect();
+    let derived_nodes: Vec<Symbol> = cell
+        .edge
+        .derived
+        .iter()
+        .map(|d| d.name.clone())
+        .filter(|n| !signal_names.contains(n))
+        .collect();
 
     // (a) State signals = the hysteretic signals plus the (possibly non-hysteretic) edge-register nodes,
-    // in `signals()` order, minus any folded master (absorbed into its register's capture, no column).
-    let state_names: BTreeSet<Symbol> = cell
+    // in `signals()` order, then the minted derived registers, minus any folded master (absorbed into its
+    // register's capture, no column).
+    let mut state_names: BTreeSet<Symbol> = cell
         .signal_regions()
         .filter(|(sig, sr)| is_node(&sig.name, sr))
         .map(|(sig, _)| sig.name.clone())
         .collect();
+    state_names.extend(derived_nodes.iter().cloned());
     if state_names.is_empty() {
         return None;
     }
@@ -167,6 +184,11 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
         }
         node_of.insert(sig.name.clone(), sig.name.clone());
         internal_nodes.push(sig.name.clone());
+    }
+    // The minted derived registers, appended in `edge.derived` order: each keeps its own name as its node.
+    for n in &derived_nodes {
+        node_of.insert(n.clone(), n.clone());
+        internal_nodes.push(n.clone());
     }
 
     // (c) Column partition: a state-signal-named col is a current-value column (middle field); every
@@ -571,6 +593,59 @@ Q = "CLK*M + !CLK*Q"
         assert!(m.edge_rows.contains(&rise_hi));
         assert!(m.edge_rows.contains(&rise_lo));
         assert!(m.edge_rows.contains(&hold));
+    }
+
+    #[test]
+    fn bdet_read_gate_factorisation_statetable() {
+        // BDET: the read-gate factorisation makes `Yst` a first-class state node with native dual-edge
+        // rows; the DET masters L1/L2 fold away. The read-gated output `Y` is not a table node (it emits a
+        // state_function), so it never appears in the state model.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "BDET"
+inputs = ["CLK", "D", "A"]
+clock = ["CLK"]
+[cell.internal]
+L1 = "!CLK*D + CLK*L1"
+L2 = "CLK*D + !CLK*L2"
+[cell.outputs]
+Y = "!((CLK*L1 + !CLK*L2)*A)"
+"#,
+        );
+        let m = build_state_model(&cell).expect("BDET is sequential");
+        // Yst is the sole state node; the masters folded; Y is not a table node; A is not a table column.
+        assert_eq!(names(&m.internal_nodes), ["Yst"]);
+        assert_eq!(names(&m.input_nodes), ["CLK", "D"]);
+        assert!(!m.node_of.contains_key(&Symbol::from("L1")));
+        assert!(!m.node_of.contains_key(&Symbol::from("Y")));
+        // Native dual-edge rows: BOTH edges capture, delivering !D (D=L drives Yst high on each edge).
+        assert!(m.edge_rows.iter().any(|r| r.token == EdgeTok::Rise));
+        assert!(m.edge_rows.iter().any(|r| r.token == EdgeTok::Fall));
+        let rise_hi = EdgeRow {
+            clock: Symbol::from("CLK"),
+            token: EdgeTok::Rise,
+            inputs: vec![X, F],
+            current: vec![X],
+            next: vec![HI],
+        };
+        let fall_lo = EdgeRow {
+            clock: Symbol::from("CLK"),
+            token: EdgeTok::Fall,
+            inputs: vec![X, T],
+            current: vec![X],
+            next: vec![LO],
+        };
+        assert!(
+            m.edge_rows.contains(&rise_hi),
+            "rise captures !D: {:?}",
+            m.edge_rows
+        );
+        assert!(
+            m.edge_rows.contains(&fall_lo),
+            "fall captures !D: {:?}",
+            m.edge_rows
+        );
     }
 
     #[test]

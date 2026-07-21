@@ -38,6 +38,8 @@ use liberty_parse::{
     liberty::{Attribute, Group, Liberty},
 };
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use espresso_logic::Symbol;
 use rayon::prelude::*;
 
@@ -136,10 +138,22 @@ fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
         Some(model) => {
             group.subgroups.push(statetable_group(&model));
 
+            // A read-gated output reads a factored register combinationally: it prints a `state_function`
+            // over that register and its gate pins, not its raw region (which names the folded masters).
+            let read_of: BTreeMap<&str, &StateRegions> = cell
+                .edge
+                .derived
+                .iter()
+                .flat_map(|d| d.reads.iter().map(|(o, sr)| (o.as_str(), sr)))
+                .collect();
+
             let n_out = cell.outputs.len();
             for (i, (sig, sr)) in cell.signal_regions().enumerate() {
                 if i < n_out {
-                    group.subgroups.push(output_pin(&sig.name, sr, &model));
+                    match read_of.get(sig.name.as_str()) {
+                        Some(reads) => group.subgroups.push(state_function_pin(&sig.name, reads)),
+                        None => group.subgroups.push(output_pin(&sig.name, sr, &model)),
+                    }
                 }
             }
             for (i, (sig, _)) in cell.signal_regions().enumerate() {
@@ -147,6 +161,17 @@ fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
                 // surviving state nodes (`node_of` members) get a pin group.
                 if i >= n_out && model.node_of.contains_key(&sig.name) {
                     group.subgroups.push(internal_pin(&sig.name));
+                }
+            }
+            // The minted derived registers (factored out of read-gated outputs, not declared signals) get
+            // an internal pin binding their same-named state-table node to a port.
+            let signal_names: BTreeSet<&str> = cell
+                .signal_regions()
+                .map(|(s, _)| s.name.as_str())
+                .collect();
+            for d in &cell.edge.derived {
+                if !signal_names.contains(d.name.as_str()) {
+                    group.subgroups.push(internal_pin(&d.name));
                 }
             }
         }
@@ -204,6 +229,24 @@ fn output_pin(name: &Symbol, sr: &StateRegions, model: &StateModel) -> Group {
         // 'no node_of column' == 'no transitive state dependence' (ref statetable.rs:112-122).
         set_attr(&mut pin, "function", Value::String(function_sop(sr)));
     }
+    pin
+}
+
+/// `pin (<name>) { direction : output; state_function : "<sop>"; }` — a read-gated output. It reads a
+/// factored register (the read-gate factorisation) combinationally, so it names PIN ports — the register's
+/// internal pin and the gate pins — through `state_function`, never a folded master.
+fn state_function_pin(name: &Symbol, reads: &StateRegions) -> Group {
+    let mut pin = Group::new("pin", name);
+    set_attr(
+        &mut pin,
+        "direction",
+        Value::Expression("output".to_owned()),
+    );
+    set_attr(
+        &mut pin,
+        "state_function",
+        Value::String(function_sop(reads)),
+    );
     pin
 }
 
@@ -716,6 +759,90 @@ Y = "C*L"
         // The internal state node L is a direction:internal pin.
         assert!(frag.contains("pin (L)"));
         assert!(frag.contains("direction : internal;"));
+    }
+
+    #[test]
+    fn bdet_read_gate_factorisation_liberty() {
+        // BDET: the read-gate factorisation mints `Yst` and prints `Y` as a state_function over it. The DET
+        // masters `L1/L2` fold away entirely.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "BDET"
+inputs = ["CLK", "D", "A"]
+clock = ["CLK"]
+[cell.internal]
+L1 = "!CLK*D + CLK*L1"
+L2 = "CLK*D + !CLK*L2"
+[cell.outputs]
+Y = "!((CLK*L1 + !CLK*L2)*A)"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        let lib = parse_frag(&frag);
+        let cellg = find_cell(&lib, "BDET");
+
+        // The statetable names `Yst` as its sole state node; the folded masters vanish.
+        assert!(frag.contains("\"Yst\""), "statetable node is Yst: {frag}");
+        assert!(
+            !frag.contains("L1") && !frag.contains("L2"),
+            "masters folded: {frag}"
+        );
+
+        // `Y` reads the factored register combinationally — a state_function over `Yst` and `A`, no own
+        // internal_node, never a folded master.
+        let y = find_pin(cellg, "Y");
+        let sf = attr_string(y, "state_function").expect("Y prints a state_function");
+        assert!(
+            sf.contains("Yst") && sf.contains('A'),
+            "Y reads Yst and A: {sf}"
+        );
+        assert!(!y.attributes.contains_key("internal_node"));
+
+        // `Yst` is a first-class internal-node pin.
+        let yst = find_pin(cellg, "Yst");
+        assert_eq!(attr_expr(yst, "direction").as_deref(), Some("internal"));
+        assert_eq!(attr_string(yst, "internal_node").as_deref(), Some("Yst"));
+    }
+
+    #[test]
+    fn detp_read_gate_reuses_declared_register_liberty() {
+        // DETP: the factorisation REUSES the declared cross-clock register `T` (no mint); `Y` prints a
+        // state_function over `T`.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DETP"
+inputs = ["CLK", "CLKB", "D", "A"]
+clock = ["CLK", "CLKB"]
+[cell.internal]
+L1 = "!CLK*D + CLK*L1"
+L2 = "CLK*D + !CLK*L2"
+T = "!CLKB*(CLK*L1 + !CLK*L2) + CLKB*T"
+[cell.outputs]
+Y = "!(T*A)"
+"#,
+        );
+        let frag = cell_liberty(&cell);
+        let lib = parse_frag(&frag);
+        let cellg = find_cell(&lib, "DETP");
+
+        // `Y` is a state_function over the reused declared register `T` and the gate `A`.
+        let y = find_pin(cellg, "Y");
+        let sf = attr_string(y, "state_function").expect("Y prints a state_function");
+        assert!(
+            sf.contains('T') && sf.contains('A'),
+            "Y reads T and A: {sf}"
+        );
+        assert!(!y.attributes.contains_key("internal_node"));
+
+        // `T` keeps its internal-node pin; nothing is minted (no `*st` pin).
+        let t = find_pin(cellg, "T");
+        assert_eq!(attr_string(t, "internal_node").as_deref(), Some("T"));
+        assert!(
+            cellg.subgroups.iter().all(|g| !g.name.ends_with("st")),
+            "no minted register pin"
+        );
     }
 
     #[test]
