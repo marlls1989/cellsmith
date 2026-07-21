@@ -395,8 +395,10 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
 
 /// Assemble one [`EdgeRow`] from a region cube, splitting each set literal by name into an input column
 /// (aligned to `input_nodes` via `input_index`) or a current-state column (aligned to `internal_nodes`
-/// via `node_index`). The register's clock keeps its `None` placeholder — a cofactor never references it —
-/// so the renderer prints the edge token there. Only the register's own next slot carries `action`.
+/// via `node_index`). A capture cofactor never references the register's clock, so that column keeps its
+/// `None` placeholder and the renderer prints the edge token there; an off-edge forcing cover MAY pin the
+/// clock (a phase-conditioned `CLK*R` clear), and that level lands in `inputs` so the renderer prints the
+/// clock literal instead. Only the register's own next slot carries `action`.
 #[allow(clippy::too_many_arguments)]
 fn edge_row(
     clock: &Symbol,
@@ -439,7 +441,7 @@ mod tests {
     use crate::logic::regions::StateRegions;
     use crate::model::{analyse_one as analyse, AnalysedOutput};
     use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
-    use espresso_logic::bdd_builder;
+    use espresso_logic::{bdd_builder, sync_bdd_builder};
 
     const T: Option<bool> = Some(true);
     const F: Option<bool> = Some(false);
@@ -1261,5 +1263,342 @@ Q = "!CLKB*M2 + CLKB*Q"
             .iter()
             .position(|n| n == name)
             .unwrap_or_else(|| panic!("{name} is a state node"))
+    }
+
+    // A rising-edge DFF with a MASTER-ONLY (phase-conditioned) clear: R clears only the master M, so Q
+    // clears only while the slave is transparent (CLK high). The clear cover is `CLK*R`, the row that the
+    // pre-fix renderer corrupted to `~R - H : - : L`.
+    const MOR: &str = r#"
+[[cell]]
+name = "MOR"
+inputs = ["CLK", "D", "R"]
+clock = ["CLK"]
+[cell.internal]
+M = "!R*(!CLK*D + CLK*M)"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+
+    // The same master-only clear with R declared async — identical statetable, distinct code path.
+    const MORA: &str = r#"
+[[cell]]
+name = "MORA"
+inputs = ["CLK", "D", "R"]
+clock = ["CLK"]
+async = ["R"]
+[cell.internal]
+M = "!R*(!CLK*D + CLK*M)"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+
+    // A cross-coupled set/reset latch: a two-node LEVEL model whose settle takes several steps, exercising
+    // deferral (`-`) and multi-step first-match jointly.
+    const SR_FLOP: &str = r#"
+[[cell]]
+name = "SR"
+inputs = ["S", "R"]
+[cell.outputs]
+Q = "!(R + Qn)"
+Qn = "!(S + Q)"
+"#;
+
+    // The canonical single rising-edge DFF (master folds; Q is the register).
+    const DFF: &str = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+
+    // A rising-edge DFF with a FULL-async clear (R clears Q directly) declared alongside CLK as a clock.
+    // R is level-acting on Q, so its clear is the free-clock `~R - H` row that stays correct under the fix.
+    const RDFF: &str = r#"
+[[cell]]
+name = "RDFF"
+inputs = ["CLK", "D", "R"]
+clock = ["CLK", "R"]
+[cell.internal]
+M = "!R*(!CLK*D + CLK*M)"
+[cell.outputs]
+Q = "!R*(CLK*M + !CLK*Q)"
+"#;
+
+    /// One rendered statetable row as its emitted token strings: `H`/`L`/`-` levels, the clock-edge tokens
+    /// `R`/`F`/`~R`/`~F`, and `N` (hold) in the next field.
+    struct RenderedRow {
+        inputs: Vec<String>,
+        current: Vec<String>,
+        next: Vec<String>,
+    }
+
+    /// Parse the `statetable ("<inputs>", "<nodes>") { table : "..."; }` block out of a rendered cell: the
+    /// two header node lists and the rows, each field split into its emitted tokens. Reads the RENDERED
+    /// output (not the model), so it is the one place `edge_input_pattern`'s clock-column rendering is
+    /// exercised behaviourally — a dropped clock literal reaches the replay through here.
+    fn parse_rendered_statetable(liberty: &str) -> (Vec<String>, Vec<String>, Vec<RenderedRow>) {
+        let start = liberty
+            .find("statetable (")
+            .expect("fixture renders a statetable");
+        let block = &liberty[start..];
+        let brace = block.find('{').expect("statetable header brace");
+        // The header carries exactly two quoted fields: the input nodes then the state nodes.
+        let quoted: Vec<&str> = block[..brace].split('"').collect();
+        let words = |f: &str| {
+            f.split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<String>>()
+        };
+        let input_names = words(quoted[1]);
+        let state_names = words(quoted[3]);
+
+        // Search past the header brace so the `table :` attribute is not confused with `statetable`.
+        let table_at = brace + block[brace..].find("table").expect("a table attribute");
+        let rest = &block[table_at..];
+        let q1 = rest.find('"').expect("table opening quote");
+        let q2 = rest[q1 + 1..].find('"').expect("table closing quote") + q1 + 1;
+        // Rows are comma-separated, fields colon-separated; drop the line-continuation backslashes first.
+        let content = rest[q1 + 1..q2].replace('\\', " ");
+        let rows = content
+            .split(',')
+            .map(|row| {
+                let fields: Vec<&str> = row.split(':').collect();
+                assert_eq!(fields.len(), 3, "malformed statetable row {row:?}");
+                RenderedRow {
+                    inputs: words(fields[0]),
+                    current: words(fields[1]),
+                    next: words(fields[2]),
+                }
+            })
+            .collect();
+        (input_names, state_names, rows)
+    }
+
+    /// Does a rendered row match one machine event `(cur, toggled input, destination)`? Input columns
+    /// match the destination's steady input level (`H`/`L`) or the toggled clock's edge (`R`/`F` fire only
+    /// for the toggled clock on this step; `~R`/`~F` match every event that is NOT that rising/falling
+    /// edge); current-state columns match the evolving node vector `cur`. `-` matches anything — a level
+    /// don't-care, or a dual-edge off-edge's free clock column.
+    fn row_matches(
+        input_names: &[String],
+        row: &RenderedRow,
+        cur: &[bool],
+        event: Option<&str>,
+        dest: &Minterm<Symbol>,
+    ) -> bool {
+        for (name, tok) in input_names.iter().zip(&row.inputs) {
+            let toggled_here = event == Some(name.as_str());
+            let rose = toggled_here && dest.value_of(name.as_str()) == Some(true);
+            let fell = toggled_here && dest.value_of(name.as_str()) == Some(false);
+            let ok = match tok.as_str() {
+                "-" => true,
+                "H" => dest.value_of(name.as_str()) == Some(true),
+                "L" => dest.value_of(name.as_str()) == Some(false),
+                "R" => rose,
+                "F" => fell,
+                "~R" => !rose,
+                "~F" => !fell,
+                other => panic!("unknown input token {other:?}"),
+            };
+            if !ok {
+                return false;
+            }
+        }
+        for (idx, tok) in row.current.iter().enumerate() {
+            let ok = match tok.as_str() {
+                "-" => true,
+                "H" => cur[idx],
+                "L" => !cur[idx],
+                other => panic!("unknown current token {other:?}"),
+            };
+            if !ok {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The rendered rows' first-match next value for one node under a single event: scan rows in emission
+    /// order (level rows then edge rows), skip any that defer this node (`-`) or fail to match, and take
+    /// the first definite action. No matching row leaves the node held.
+    fn predict_node(
+        input_names: &[String],
+        rows: &[RenderedRow],
+        node: usize,
+        cur: &[bool],
+        event: Option<&str>,
+        dest: &Minterm<Symbol>,
+    ) -> bool {
+        for row in rows {
+            match row.next[node].as_str() {
+                "-" => continue, // deferred to a lower-priority row per Liberty per-output resolution
+                action if row_matches(input_names, row, cur, event, dest) => {
+                    return match action {
+                        "H" => true,
+                        "L" => false,
+                        "N" => cur[node],
+                        other => panic!("unknown next token {other:?}"),
+                    };
+                }
+                _ => {}
+            }
+        }
+        cur[node] // no row decides this node: it holds
+    }
+
+    /// Settle the rendered statetable as a next-state machine: apply the joint first-match next-state, with
+    /// the toggled input's clock edge live only on the first step (later steps are quiescent settling), to
+    /// a fixpoint. Mirrors the async cell's own `settle`, so the fixpoint is comparable to the machine's
+    /// settled state; an oscillation where the machine settled is a faithfulness failure.
+    fn settle_rendered(
+        input_names: &[String],
+        rows: &[RenderedRow],
+        cur0: Vec<bool>,
+        toggled: &str,
+        dest: &Minterm<Symbol>,
+    ) -> Vec<bool> {
+        let mut cur = cur0;
+        let mut event = Some(toggled);
+        let mut seen: BTreeSet<Vec<bool>> = BTreeSet::new();
+        loop {
+            let next: Vec<bool> = (0..cur.len())
+                .map(|i| predict_node(input_names, rows, i, &cur, event, dest))
+                .collect();
+            if next == cur {
+                return cur;
+            }
+            assert!(
+                seen.insert(next.clone()),
+                "rendered statetable oscillates where the machine settled"
+            );
+            cur = next;
+            event = None; // the clock edge is a one-time event; later settle steps are quiescent
+        }
+    }
+
+    /// Replay the RENDERED statetable of one fixture against its machine: for every reachable-stable
+    /// transition, settle the rendered rows (level and edge, jointly, under Liberty first-match) and check
+    /// the settled node values against the machine's own settled state. This is the joint edge+level
+    /// coverage `emitted_rows_reconstruct_per_node_regions` lacks — the only test that fails when
+    /// `edge_input_pattern` drops a clock literal (the MOR/MORA `~R - H` clear-on-any-non-rising bug).
+    fn replay_rendered_statetable(src: &str) {
+        let cell = analyse(src);
+        // The rendered rows are the device under test — the sole path through `edge_input_pattern`.
+        let liberty = crate::emit::liberty::cell_liberty(&cell);
+        let (input_names, state_names, rows) = parse_rendered_statetable(&liberty);
+        let model = build_state_model(&cell).expect("fixture is sequential");
+        assert_eq!(
+            input_names.iter().map(String::as_str).collect::<Vec<_>>(),
+            names(&model.input_nodes),
+        );
+        assert_eq!(
+            state_names.iter().map(String::as_str).collect::<Vec<_>>(),
+            names(&model.internal_nodes),
+        );
+
+        // Rebuild the machine from the folded cell to read its settled reference values. `build_signal_bdds`
+        // is pure over the folded `expr`s, so this reproduces the machine `analyse` explored.
+        let builder = sync_bdd_builder!();
+        let bdds = crate::model::build_signal_bdds(&cell, &builder);
+        let machine =
+            crate::logic::analysis::Machine::build(&cell, &bdds).expect("fixture is explored");
+
+        // Per-node async-forcing covers (the off-edge set/clear), for the RELEASE carve-out below. A node
+        // with no edge-register entry (a pure level node) has no forcing and is never a release.
+        let forcing: BTreeMap<&str, _> = cell
+            .edge
+            .captures
+            .iter()
+            .map(|er| {
+                (
+                    er.node.as_str(),
+                    (
+                        builder.build_cover(&er.off_edge.on_cover),
+                        builder.build_cover(&er.off_edge.off_cover),
+                    ),
+                )
+            })
+            .collect();
+        // `forced(node, s)` = the constant the async set/clear clamps `node` to at `s`, or `None` when
+        // nothing forces it there.
+        let forced = |node: &str, s: &Minterm<Symbol>| -> Option<bool> {
+            forcing.get(node).and_then(|(on, off)| {
+                if on.evaluate_fast(s) == Some(true) {
+                    Some(true)
+                } else if off.evaluate_fast(s) == Some(true) {
+                    Some(false)
+                } else {
+                    None
+                }
+            })
+        };
+
+        // Eligible = every STATE column determinate; an uninitialised start is traversal-only, per the
+        // measurement-eligibility filter, and a partial destination is likewise not a measurement context.
+        let eligible = |s: &Minterm<Symbol>| {
+            machine
+                .state_vars
+                .iter()
+                .all(|w| s.value_of(w.as_str()).is_some())
+        };
+
+        for s in &machine.explored.order {
+            if !eligible(s) {
+                continue;
+            }
+            for x in &cell.inputs {
+                let toggled = crate::logic::machine::toggle(s, &[x.as_str()]);
+                let Some(dest) = crate::logic::machine::settle(&machine.deltas, &toggled) else {
+                    continue; // the toggle oscillates ⇒ not a measurable transition
+                };
+                if !eligible(&dest) {
+                    continue;
+                }
+                let cur0: Vec<bool> = state_names
+                    .iter()
+                    .map(|n| {
+                        machine
+                            .output_value(n, s)
+                            .expect("eligible start is determinate")
+                    })
+                    .collect();
+                let got = settle_rendered(&input_names, &rows, cur0, x.as_str(), &dest);
+                for (i, node) in state_names.iter().enumerate() {
+                    // RELEASE carve-out: when an async set/clear RELEASES, the node re-acquires through
+                    // level transparency the edge model abstracts away (TFF's master re-tracking `!Q` when
+                    // R releases at CLK=0). The established replay harness (`assert_captures_faithful`
+                    // clause 4) checks only determinism there, never the exact value, and the statetable is
+                    // deterministic by construction — so skip the exact check on a release.
+                    if forced(node, s).is_some() && forced(node, &dest).is_none() {
+                        continue;
+                    }
+                    let want = machine.output_value(node, &dest);
+                    assert_eq!(
+                        Some(got[i]),
+                        want,
+                        "replay unfaithful: {} node {node} from {s:?} toggling {x} settled to {dest:?}: \
+                         rendered rows predict {:?} != machine {want:?}",
+                        cell.repr_name(),
+                        got[i],
+                    );
+                }
+            }
+        }
+    }
+
+    /// The rendered-row replay over the joint level+edge first-match semantics, for the fixtures that
+    /// carry the phase-conditioned clear (MOR/MORA), a multi-step two-node level model (SR), a dual-edge
+    /// register (DET), a two-seam toggle register (TFF), the canonical DFF, and a full-async clear DFF
+    /// (RDFF). Fails against the pre-S6 `edge_input_pattern` (the dropped `CLK*R` clock literal makes
+    /// MOR/MORA clear on any non-rising event with R high, including CLK=0 where the cell holds).
+    #[test]
+    fn rendered_rows_replay_machine_settled_values() {
+        for src in [MOR, MORA, SR_FLOP, TOGGLE_FLOP, DET, DFF, RDFF] {
+            replay_rendered_statetable(src);
+        }
     }
 }

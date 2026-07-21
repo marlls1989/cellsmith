@@ -266,13 +266,16 @@ fn table_string(model: &StateModel) -> String {
 }
 
 /// Render an edge row's input field: the ordinary `H`/`L`/`-` level symbols, except the register's clock
-/// column carries the edge token (`R`/`F`/`~R`/`~F`) in place of a level.
+/// column carries the edge token (`R`/`F`/`~R`/`~F`/`-`) in place of a level — but ONLY when the row's cube
+/// leaves the clock free (its `inputs` slot is `None`). A phase-conditioned cover (a `CLK*R` forcing clear)
+/// pins the clock in the cube, so `er.inputs` carries its level there; that literal `H`/`L` is printed
+/// instead of the token, so the clear fires in the intended clock phase rather than on any non-edge event.
 fn edge_input_pattern(er: &EdgeRow, input_nodes: &[Symbol]) -> String {
     input_nodes
         .iter()
         .zip(er.inputs.iter())
         .map(|(node, val)| {
-            if *node == er.clock {
+            if *node == er.clock && val.is_none() {
                 edge_token(er.token)
             } else {
                 level_symbol(val)
