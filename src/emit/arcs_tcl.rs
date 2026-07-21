@@ -138,7 +138,10 @@ fn constraint_vector_str(cell: &AnalysedCell, c: &Constraint) -> String {
             } else if input == c.pin {
                 c.pin_edge.rf().to_string()
             } else {
-                if *held.get(input).unwrap_or(&false) {
+                if *held
+                    .get(input)
+                    .expect("every input has a held value in the constraint prevector")
+                {
                     "1"
                 } else {
                     "0"
@@ -171,7 +174,10 @@ fn oscillation_comment(cell: &AnalysedCell) -> String {
 /// [`crate::logic::edge::EdgeArcs::labels`], the per-arc label map the classifier sourced from these
 /// same pipeline arcs.
 fn related_edge(arc: &Arc) -> Edge {
-    if *assignment(&arc.end).get(&arc.related).unwrap_or(&false) {
+    if *assignment(&arc.end)
+        .get(&arc.related)
+        .expect("the arc's related clock pin is assigned in its end state")
+    {
         Edge::Rise
     } else {
         Edge::Fall
@@ -253,7 +259,10 @@ fn format_hidden_arc(cell: &AnalysedCell, h: &HiddenArc, opts: ArcsTclOptions) -
             if input == h.pin.as_str() {
                 h.edge.rf().to_string()
             } else {
-                if *end.get(input).unwrap_or(&false) {
+                if *end
+                    .get(input)
+                    .expect("every input is assigned in the hidden arc's end state")
+                {
                     "1"
                 } else {
                     "0"
@@ -310,7 +319,10 @@ fn prevector_str(
             cell.inputs
                 .iter()
                 .map(|i| {
-                    if *a.get(i).unwrap_or(&false) {
+                    if *a
+                        .get(i)
+                        .expect("every input is assigned in each prevector step")
+                    {
                         '1'
                     } else {
                         '0'
@@ -345,7 +357,9 @@ fn vector_str(cell: &AnalysedCell, arc: &Arc) -> String {
     vector(
         cell,
         |input| {
-            let value = *end.get(input).unwrap_or(&false);
+            let value = *end
+                .get(input)
+                .expect("every input is assigned in the arc's end state");
             if input == arc.related {
                 (if value { Edge::Rise } else { Edge::Fall })
                     .rf()

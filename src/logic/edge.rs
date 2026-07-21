@@ -34,12 +34,14 @@
 //!
 //! # The mechanism
 //!
-//! Only FULLY-DETERMINATE reachable states take part in any measurement — a state with a don't-care
-//! (uninitialised) state column is arc-INELIGIBLE (a don't-care is a MISSING variable, never coerced to
-//! 0/1, in the `Minterm` and in BDD evaluation alike). Traversal is untouched: partial states remain
-//! seeds, they are simply not measured from. NO machine state is ever coerced, defaulted or re-settled
-//! under a held value — an oscillating configuration is an invalid state and never participates in any
-//! test; everything is read off the combinational stable-state machinery
+//! Only FULLY-DETERMINATE reachable states take part in ARC MEASUREMENT and typing — a state with a
+//! don't-care (uninitialised) state column is arc-INELIGIBLE (a don't-care is a MISSING variable, never
+//! coerced to 0/1, in the `Minterm` and in BDD evaluation alike). Traversal is untouched: partial states
+//! remain seeds, they are simply not measured from. (`forcing_pins`'s constant-pinning scan is a
+//! separate behavioural classification, not an arc measurement: it ranges over every reachable stable
+//! state, reading a node only where that node's own value is determinate there.) NO machine state is ever
+//! coerced, defaulted or re-settled under a held value — an oscillating configuration is an invalid state
+//! and never participates in any test; everything is read off the combinational stable-state machinery
 //! [`machine::explore`]/[`machine::settle`] already produce.
 //!
 //! The pipeline is one analysis over the machine's `toggle`/`settle` observations:
@@ -308,7 +310,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     );
 
     // The single-input transition table is node-independent, so it is built once and shared by every
-    // stores/seam scan rather than re-settling.
+    // seam and phase scan rather than re-settling.
     let trans = Transitions::build(m);
 
     // Each candidate's forcing pins. Computed BEFORE any synthesis, so the seam set — which decides the
@@ -394,24 +396,59 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         opaque_of[&(w.clone(), clock.clone(), false)]
             != opaque_of[&(w.clone(), clock.clone(), true)]
     };
-    // The output's CONE: the state variables `δ_output` depends on directly — the latches whose content can
-    // reach the output in one step. The generator gate and the propagation's candidate sources both scope
-    // to this cone.
-    let cone = |o: &str| -> BTreeSet<Symbol> {
+    // A node's DIRECT-SUPPORT K-LATCHES: the state variables `δ_node` reads in ONE step that are
+    // K-associated (a real latch on `clock`). Used SOLELY by the closer-exposure birth test to pick a
+    // mux's two legs. It BOUNDS NOTHING — it is NOT a propagation depth. Propagation (see `propagates`) is
+    // transitive and unbounded; this listing only names what a node reads DIRECTLY, which is exactly what
+    // the two-leg mux shape reads off, and no more.
+    let cone = |n: &str, clock: &Symbol| -> Vec<Symbol> {
         fn_of
-            .get(o)
-            .map(|f| f.variables().filter(|v| m.state_set.contains(v)).collect())
+            .get(n)
+            .map(|f| {
+                f.variables()
+                    .filter(|v| m.state_set.contains(v) && k_assoc(v, clock))
+                    .collect()
+            })
             .unwrap_or_default()
     };
-    // PROPAGATION: does `o`'s value at the post-arc stable state `sp` depend on a K-associated latch's
-    // content? Restriction-survival from `o` back along the surviving dependency chain, succeeding at the
-    // first K-associated latch reached — the arc's SOURCE (`DET`'s exposed donor `L1`, a flop slave's own
-    // content). A masked source (`ICG`'s `EL`, swallowed by `CLK*EL` at `CLK=0`) never survives the
-    // restriction; intermediate non-latch nodes are walked through.
-    let propagates = |o: &Symbol, clock: &Symbol, sp: &Minterm<Symbol>| -> bool {
+    // BIRTH: is an edge BORN at node `n` on `(clock, is_rise)` at the post-arc stable state `sp`? Two ways,
+    // both evaluated at ANY node — never only the output:
+    //   (a) BY GENERATION — a latch at `n` goes opaque→transparent across the edge (`generates`).
+    //   (b) BY CLOSER-EXPOSURE — the toggle switches `n` to expose a latch it closes on THIS edge: a closer
+    //       `c` and a generator `g`, distinct from `n` and from each other, both K-associated and in
+    //       `δ_n`'s DIRECT support (`cone`), with `δ_n` restricted all-but-`c` at `sp` still depending on
+    //       `c` (the two-leg mux shape — `DET`'s `Q` exposing the donor it just closed). The direct-support
+    //       condition is the mux event itself, not a depth bound; a closer-exposure edge can be born at an
+    //       internal node and then propagate onward.
+    let born = |n: &Symbol, clock: &Symbol, is_rise: bool, sp: &Minterm<Symbol>| -> bool {
+        if m.state_set.contains(n.as_str()) && generates(n, clock, is_rise) {
+            return true;
+        }
+        let Some(f) = fn_of.get(n.as_str()) else {
+            return false;
+        };
+        let legs = cone(n.as_str(), clock);
+        legs.iter().any(|g| {
+            g != n
+                && generates(g, clock, is_rise)
+                && legs
+                    .iter()
+                    .any(|c| c != g && c != n && residual_depends(f, sp, c.as_str()))
+        })
+    };
+    // PROPAGATION (transitive, NO depth limit): from the output `o`, restriction-survival back along the
+    // dependency chain to a `root` node. A hop `node → w` survives iff `δ_node` restricted to all-but-`w`
+    // at the post-arc stable state `sp` still depends on `w`; a MASKED hop — whose residual is constant in
+    // its predecessor (`ICG`'s `CLK*EL` swallowing `EL` at `CLK=0`, or a closed next stage) — dies.
+    // Reaching `root` means `root`'s edge reaches `o`; `o` itself is the first node tested (a birth at `o`
+    // types the arc directly).
+    let propagates = |o: &Symbol, sp: &Minterm<Symbol>, root: &Symbol| -> bool {
         let mut visited: BTreeSet<Symbol> = BTreeSet::new();
         let mut stack: Vec<Symbol> = vec![o.clone()];
         while let Some(node) = stack.pop() {
+            if &node == root {
+                return true;
+            }
             if !visited.insert(node.clone()) {
                 continue;
             }
@@ -423,27 +460,24 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                     continue;
                 }
                 if residual_depends(f, sp, w.as_str()) {
-                    if k_assoc(&w, clock) {
-                        return true;
-                    }
                     stack.push(w);
                 }
             }
         }
         false
     };
-    // ARC TYPING at a firing's post-arc stable state `sp`: GENERATION at the output types it directly;
-    // otherwise the gate (some K-associated latch in the output's cone GENERATES on `(K, d)`) plus
-    // PROPAGATION from a surviving source. Per firing — `sp` is that firing's own destination, so two
-    // firings of one `(output, clock, direction)` can type differently.
+    // ARC TYPING at a firing's post-arc stable state `sp`: an arc is EDGE iff some BIRTH node's edge
+    // PROPAGATES to the output — `∃ b: born(b, K, d, sp) ∧ propagates(o, sp, root=b)`. Births are the
+    // generators (a latch opaque→transparent) plus the closer-exposure nodes, both found at ANY node; the
+    // birth universe is every candidate (an output or a state variable, each carrying a raw function).
+    // Propagation is transitive with no depth cutoff, so a generator revealed through a DEEP same-phase
+    // pipe or a BURIED mux types identically to a shallow one — there is no one-step-cone gate. Per firing
+    // — `sp` is that firing's own destination — so two firings of one `(output, clock, direction)` can
+    // type differently.
     let types_edge = |o: &Symbol, clock: &Symbol, is_rise: bool, sp: &Minterm<Symbol>| -> bool {
-        if m.state_set.contains(o.as_str()) && generates(o, clock, is_rise) {
-            return true;
-        }
-        let gated = cone(o.as_str())
+        candidates
             .iter()
-            .any(|w| k_assoc(w, clock) && generates(w, clock, is_rise));
-        gated && propagates(o, clock, sp)
+            .any(|b| born(b, clock, is_rise, sp) && propagates(o, sp, b))
     };
 
     // THE PER-ARC LABELS: each derived delay arc whose related pin is a declared clock is an edge arc iff it
@@ -2666,8 +2700,9 @@ Q = "CLKB*M + !CLKB*Q"
     // (`Qn = !(!(!D*CLK) * Q)`, `Q = !(!(D*CLK) * Qn)`) and pins the same arcs, clocks and covers.
     //
     // The NAND idiom carries its complement node explicitly, so each latch contributes a second state
-    // variable that the pass-transistor style does not have. That complement is NOT a carrier (it never
-    // moves without the node it complements), which is exactly what keeps the arc sets invariant.
+    // variable that the pass-transistor style does not have. That complement is the node's exact negation
+    // on every reachable state — it moves only in lockstep with the node it complements — which is exactly
+    // what keeps the arc sets invariant.
 
     const NDLAT_TOML: &str = r#"
 [[cell]]
@@ -2821,8 +2856,8 @@ Q = "!( !(M2*!CLKB) * Qn )"
             );
 
             let reach = reachable(&builder, &m);
-            // The complement node is the node's negation on every reachable state — which is why it is
-            // not an independent carrier and does not disqualify the CLKA edge.
+            // The complement node is the node's negation on every reachable state — it moves only in
+            // lockstep with the node it complements, so it does not disqualify the CLKA edge.
             let q_var = builder.var("Q");
             let qn_var = builder.var("Qn");
             assert!(
@@ -3297,6 +3332,65 @@ Y = "!CLK*R + L"
                 label_list(&es)
             );
         });
+    }
+
+    // === Birth + transitive propagation: a generation reveal types edge at any pipe depth ===
+
+    // A rising-edge flop written as a two-latch same-clock pipe: Q (transparent while K2=0) captures D on
+    // the rise, Y (transparent while K2=1) reveals it. Y generates on the rise.
+    const PIPE2_TOML: &str = r#"
+[[cell]]
+name = "PIPE2"
+inputs = ["K2", "D"]
+clock = ["K2"]
+[cell.internal]
+Q = "!K2*D + K2*Q"
+[cell.outputs]
+Y = "K2*Q + !K2*Y"
+"#;
+
+    // The same reveal one stage deeper: Q → T → Y, with T (transparent while K2=1) between the master and
+    // the output. Y still generates on the rise; the birth propagates through the extra stage with no depth
+    // limit, so Y types EDGE identically to PIPE2. (PIPE2's `Q` is the master; PIPE3 inserts a same-phase
+    // slave `T` before `Y`.)
+    const PIPE3_TOML: &str = r#"
+[[cell]]
+name = "PIPE3"
+inputs = ["K2", "D"]
+clock = ["K2"]
+[cell.internal]
+Q = "!K2*D + K2*Q"
+T = "K2*Q + !K2*T"
+[cell.outputs]
+Y = "K2*T + !K2*Y"
+"#;
+
+    #[test]
+    fn edge_birth_propagation_is_depth_invariant() {
+        // The reveal types EDGE at any pipe depth: propagation is a single transitive restriction-survival
+        // chain with no cutoff, so the shallow pipe (PIPE2) and the one-deeper pipe (PIPE3) carry the SAME
+        // `Y@K2:Rise` edge label. Each is proven against the machine by the replay harness.
+        let y_labels = |src: &str| -> Vec<(String, Edge)> {
+            with_machine!(src, |_b, _a, _m2, m| {
+                let es = classify(&m);
+                assert_captures_faithful(&m, &es);
+                labels_of(&es, "Y")
+                    .into_iter()
+                    .map(|(c, e)| (c.to_string(), e))
+                    .collect()
+            })
+        };
+        let pipe2 = y_labels(PIPE2_TOML);
+        let pipe3 = y_labels(PIPE3_TOML);
+        assert_eq!(
+            pipe2,
+            [("K2".to_string(), Edge::Rise)],
+            "shallow pipe reveals on the rise"
+        );
+        assert_eq!(
+            pipe3, pipe2,
+            "the one-deeper pipe types identically — propagation is depth-invariant"
+        );
     }
 
     // === Generation and propagation coerce no state: no state-coercion identifier survives ===
