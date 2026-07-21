@@ -1157,10 +1157,10 @@ Q = "CLK*L1 + !CLK*L2"
     }
 
     #[test]
-    fn dcmux_statetable_renders_both_clock_edge_tokens() {
-        // DCMUX: a genuinely independent two-clock capture. The joint statetable keys Q off BOTH clocks,
-        // with capture rows carrying an edge token in each clock's OWN column and the other keying clock
-        // rendered as a level (never two edge tokens in one row) -- no clock-privileging, no suppression.
+    fn dcmux_statetable_is_a_level_model() {
+        // DCMUX collapses to a LEVEL model: its falls are combinational and the seam fixpoint empties Q's
+        // set, so the joint statetable renders level rows with NO edge (R/F) token in any column. The two
+        // rise DELAY arcs still render `-type edge` (covered in the arcs_tcl emitter tests).
         let cell = analyse(
             r#"
 [[cell]]
@@ -1187,11 +1187,7 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
             .expect("input header field")
             .split_whitespace()
             .collect();
-        let clka = cols.iter().position(|c| *c == "CLKA").expect("CLKA column");
-        let clkb = cols.iter().position(|c| *c == "CLKB").expect("CLKB column");
         let is_edge = |t: &str| t == "R" || t == "F";
-        let mut saw_clka_edge = false;
-        let mut saw_clkb_edge = false;
         for line in frag.lines() {
             let Some((pattern, _)) = line.trim().split_once(':') else {
                 continue;
@@ -1200,14 +1196,11 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
             if toks.len() != cols.len() {
                 continue; // not a statetable data row
             }
-            let a = is_edge(toks[clka]);
-            let b = is_edge(toks[clkb]);
-            assert!(!(a && b), "at most one clock-edge token per row: {line}");
-            saw_clka_edge |= a;
-            saw_clkb_edge |= b;
+            assert!(
+                toks.iter().all(|t| !is_edge(t)),
+                "DCMUX is a level model: no edge token in {line}"
+            );
         }
-        assert!(saw_clka_edge, "a CLKA edge capture row in the statetable");
-        assert!(saw_clkb_edge, "a CLKB edge capture row in the statetable");
         parse_frag(&frag);
     }
 }

@@ -1205,35 +1205,18 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
 "#;
 
     #[test]
-    fn dcmux_edge_rows_carry_both_clocks() {
+    fn dcmux_is_a_level_model_no_edge_rows() {
+        // DCMUX collapses to a LEVEL model: its falls are combinational and the seam fixpoint empties Q's
+        // set, so nothing contributes an edge capture row -- the whole cell renders as level rows. The two
+        // rises stay `-type edge` DELAY arcs (covered in the arcs_tcl emitter tests).
         let cell = analyse(DCMUX);
-        let m = build_state_model(&cell).expect("DCMUX is sequential");
+        let m = build_state_model(&cell).expect("DCMUX has level state (MA/MB/Q)");
         assert!(
-            names(&m.internal_nodes).contains(&"Q"),
-            "Q is the register node"
+            !m.edge_rows
+                .iter()
+                .any(|r| matches!(r.token, EdgeTok::Rise | EdgeTok::Fall)),
+            "a level model carries no edge capture rows"
         );
-        // Both independent clocks contribute capture rows -- no clock-privileging, no suppression. Each
-        // capture row names its OWN clock with a Rise/Fall token; the off-edge rows carry the Level token.
-        for clock in ["CLKA", "CLKB"] {
-            assert!(
-                m.edge_rows
-                    .iter()
-                    .any(|r| r.clock == clock && matches!(r.token, EdgeTok::Rise | EdgeTok::Fall)),
-                "{clock} must key a capture row"
-            );
-        }
-        // Every capture row carries exactly ONE clock's edge token; the other keying clock sits in the
-        // input columns as an ordinary level (never a second edge token in the same row).
-        let clkb_i = m.input_nodes.iter().position(|n| n == "CLKB").unwrap();
-        for r in &m.edge_rows {
-            if r.clock == "CLKA" && matches!(r.token, EdgeTok::Rise | EdgeTok::Fall) {
-                // CLKB in a CLKA capture row is only ever a level don't-care/level, i.e. an input value.
-                assert!(
-                    matches!(r.inputs[clkb_i], None | Some(_)),
-                    "CLKB is a level column in a CLKA capture row"
-                );
-            }
-        }
     }
 
     // Hierarchical master-slave across two clocks (HPIPE): a CLKA rising-edge master pair feeds a CLKB

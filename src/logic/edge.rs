@@ -35,20 +35,30 @@
 //! # The mechanism
 //!
 //! Only FULLY-DETERMINATE reachable states take part in any measurement — a state with a don't-care
-//! (uninitialised) state column is arc-INELIGIBLE and quantified out of every witness (a don't-care is a
-//! MISSING variable, never coerced to 0/1). Traversal is untouched: partial states remain seeds, they are
-//! simply not measured from.
+//! (uninitialised) state column is arc-INELIGIBLE (a don't-care is a MISSING variable, never coerced to
+//! 0/1, in the `Minterm` and in BDD evaluation alike). Traversal is untouched: partial states remain
+//! seeds, they are simply not measured from. NO machine state is ever coerced, defaulted or re-settled
+//! under a held value — an oscillating configuration is an invalid state and never participates in any
+//! test; everything is read off the combinational stable-state machinery
+//! [`machine::explore`]/[`machine::settle`] already produce.
 //!
 //! The pipeline is one analysis over the machine's `toggle`/`settle` observations:
 //!
-//! 1. **Arc typing** — per arc at full identity `(output, related, direction, machine start minterm)`.
-//!    **Condition 1'** (a latch opens): some state variable `W` in `{output} ∪ support(δ_output)` that
-//!    [`stores`] in the source phase but not the delivered phase — the clock edge takes it
-//!    opaque→transparent — the delivered phase non-empty after forcing exclusion. Then, over the changed
-//!    firing, ONE of: **(a) generation** — the output is itself the opener; **(b) frozen-exposure** — an
-//!    eligible reachable state anchored at the destination, differing in one clock-associated latch,
-//!    shows the output a different value; **(c) masked-delivery** — withholding the opener's δ reverts the
-//!    output's change. Condition 1' plus any arm ⇒ the arc is edge.
+//! 1. **Arc typing — GENERATION and PROPAGATION**, per arc at full identity
+//!    `(output, related, direction, machine start minterm)`, gated by vacuity (only a firing that changed
+//!    the output) and by a GENERATOR in the output's cone (the state variables `δ_output` depends on).
+//!    * **Generation** — a latch goes OPAQUE→TRANSPARENT across the clock's edge. Opacity is read from the
+//!      live dependency loops at the eligible stable states: at a stable state a dependency edge `n → m`
+//!      between state variables is LIVE iff `δ_m`, restricted ([`Bdd::restrict_to`]) to all of its support
+//!      EXCEPT `n` at the state's values, still depends on `n` (the residual is non-constant in `n`); a
+//!      latch is OPAQUE in a phase iff some eligible stable state of that phase carries a live dependency
+//!      cycle through it, TRANSPARENT iff none does. A latch GENERATES on `(K, d)` iff it is opaque at the
+//!      source level and transparent at the delivered level. Generation at the output itself types the arc.
+//!    * **Propagation** — restriction-survival from the arc's SOURCE: restrict `δ_output` on all of its
+//!      support MINUS the source latch `W` to the post-arc stable state's values; the arc propagates iff
+//!      the residual still depends on `W`. Candidate sources are the K-associated latches in the output's
+//!      cone (generator and closer); applied PER ARC (each firing restricts to its own post-state) and
+//!      transitively along the dependency chain.
 //! 2. **The seam set `S`** — per candidate node (every output and internal state variable), the
 //!    `(clock, direction)` toggles on which the node carries an edge SEAM: the typing holds AND the
 //!    delivered value HOLDS through the phase, the last a greatest fixpoint (`seam_fixpoint`) that removes
@@ -314,8 +324,9 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         .map(|(n, f)| (n.as_str(), f))
         .collect();
 
-    // Every candidate's raw function δ (state δ then combinational-output δ), for the opener SCOPE
-    // `{node} ∪ support(δ_node)` and the fold's surviving-signal reference check.
+    // Every candidate's raw function δ (state δ then combinational-output δ), for the output CONE
+    // (`support(δ_node)` state variables), the propagation walk and the fold's surviving-signal reference
+    // check.
     let mut fn_of: BTreeMap<&str, &Bdd<B, C>> = BTreeMap::new();
     for (n, d) in deltas {
         fn_of.insert(n.as_str(), d);
@@ -324,154 +335,149 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         fn_of.insert(n.as_str(), d);
     }
 
-    // `stores(W, K, level)` for every state variable, clock and phase — node-independent, so computed
-    // once over the ELIGIBLE states. A latch OPENS on `(K, d)` when it stores in the source phase (`!d`)
-    // but not the delivered one (`d`); it is K-ASSOCIATED when its two phases disagree.
+    // OPACITY over the live dependency loops. `live_succ[i]` is state `i`'s live-dependency graph among the
+    // state variables (built once); a latch is OPAQUE in a `(clock, level)` phase iff some ELIGIBLE stable
+    // state of that phase carries a live dependency cycle through it. Node-independent, so precomputed for
+    // every `(state variable, clock, level)` — the memoisation the generation test reads back.
     let clocks: Vec<&Symbol> = inputs
         .iter()
         .filter(|p| clock_set.contains(p.as_str()))
         .collect();
-    let mut stores_of: HashMap<(Symbol, Symbol, bool), bool> = HashMap::new();
+    let live_succ = live_successors(m, &trans, &eligible);
+    let mut opaque_of: HashMap<(Symbol, Symbol, bool), bool> = HashMap::new();
     for w in &m.state_vars {
-        let fw = forcing_by_name[w.as_str()];
         for clock in &clocks {
             for level in [false, true] {
-                let v = stores(m, &trans, &eligible, w, clock, level, fw);
-                stores_of.insert((w.clone(), (*clock).clone(), level), v);
+                let v = trans.order.iter().enumerate().any(|(i, s)| {
+                    eligible[i]
+                        && s.value_of(clock.as_str()) == Some(level)
+                        && reaches_self(&live_succ[i], w)
+                });
+                opaque_of.insert((w.clone(), (*clock).clone(), level), v);
             }
         }
     }
-    let opens = |w: &Symbol, clock: &Symbol, is_rise: bool| -> bool {
-        stores_of[&(w.clone(), clock.clone(), !is_rise)]
-            && !stores_of[&(w.clone(), clock.clone(), is_rise)]
-    };
-
-    // The opener SCOPE of a candidate: the state variables in `{node} ∪ support(δ_node)` — the only
-    // latches whose opening can deliver content to `node` (condition 1').
-    let opener_scope = |node: &str| -> Vec<Symbol> {
-        let mut scope: BTreeSet<Symbol> = BTreeSet::new();
-        if m.state_set.contains(node) {
-            scope.insert(Symbol::from(node));
-        }
-        if let Some(f) = fn_of.get(node) {
-            for v in f.variables() {
-                if m.state_set.contains(&v) {
-                    scope.insert(v);
-                }
-            }
-        }
-        scope.into_iter().collect()
-    };
-
-    // Is the delivered phase (`clock == is_rise`) non-empty over the eligible states once the node's own
-    // forcing region is excluded?
-    let delivered_nonempty =
-        |clock: &Symbol, is_rise: bool, node_forcing: &BTreeMap<Symbol, (bool, bool)>| -> bool {
+    // Is the delivered phase (`clock == is_rise`) POPULATED by an eligible state where the latch is NOT
+    // forced? A phase entirely under the latch's own forcing (a reset holding it at a constant) is not
+    // genuine transparency — the constant arrives from the forcing pin, a coexisting combinational arc, not
+    // from the latch opening — so it does not count as the delivered side of a generation. This is what
+    // keeps a clock-DECLARED reset (`RDFF`'s `R`) from reading as a generating edge on the node it clears.
+    let delivered_populated =
+        |w_forcing: &BTreeMap<Symbol, (bool, bool)>, clock: &Symbol, is_rise: bool| -> bool {
             trans.order.iter().enumerate().any(|(i, s)| {
                 eligible[i]
                     && s.value_of(clock.as_str()) == Some(is_rise)
-                    && !node_forcing
+                    && !w_forcing
                         .iter()
                         .any(|(p, (a, _))| s.value_of(p.as_str()) == Some(*a))
             })
         };
+    // A latch GENERATES on `(K, d)` iff it is opaque at the source level (`!d`), transparent at the
+    // delivered level (`d`) and that delivered phase is populated outside the latch's own forcing region.
+    // It is K-ASSOCIATED when its opacity differs across `K`'s two phases (a real latch on `K` — the
+    // generator that opens on `d`, or the closer that shuts).
+    let generates = |w: &Symbol, clock: &Symbol, is_rise: bool| -> bool {
+        opaque_of[&(w.clone(), clock.clone(), !is_rise)]
+            && !opaque_of[&(w.clone(), clock.clone(), is_rise)]
+            && delivered_populated(forcing_by_name[w.as_str()], clock, is_rise)
+    };
+    let k_assoc = |w: &Symbol, clock: &Symbol| -> bool {
+        opaque_of[&(w.clone(), clock.clone(), false)]
+            != opaque_of[&(w.clone(), clock.clone(), true)]
+    };
+    // The output's CONE: the state variables `δ_output` depends on directly — the latches whose content can
+    // reach the output in one step. The generator gate and the propagation's candidate sources both scope
+    // to this cone.
+    let cone = |o: &str| -> BTreeSet<Symbol> {
+        fn_of
+            .get(o)
+            .map(|f| f.variables().filter(|v| m.state_set.contains(v)).collect())
+            .unwrap_or_default()
+    };
+    // PROPAGATION: does `o`'s value at the post-arc stable state `sp` depend on a K-associated latch's
+    // content? Restriction-survival from `o` back along the surviving dependency chain, succeeding at the
+    // first K-associated latch reached — the arc's SOURCE (`DET`'s exposed donor `L1`, a flop slave's own
+    // content). A masked source (`ICG`'s `EL`, swallowed by `CLK*EL` at `CLK=0`) never survives the
+    // restriction; intermediate non-latch nodes are walked through.
+    let propagates = |o: &Symbol, clock: &Symbol, sp: &Minterm<Symbol>| -> bool {
+        let mut visited: BTreeSet<Symbol> = BTreeSet::new();
+        let mut stack: Vec<Symbol> = vec![o.clone()];
+        while let Some(node) = stack.pop() {
+            if !visited.insert(node.clone()) {
+                continue;
+            }
+            let Some(f) = fn_of.get(node.as_str()) else {
+                continue;
+            };
+            for w in f.variables() {
+                if !m.state_set.contains(&w) || visited.contains(&w) {
+                    continue;
+                }
+                if residual_depends(f, sp, w.as_str()) {
+                    if k_assoc(&w, clock) {
+                        return true;
+                    }
+                    stack.push(w);
+                }
+            }
+        }
+        false
+    };
+    // ARC TYPING at a firing's post-arc stable state `sp`: GENERATION at the output types it directly;
+    // otherwise the gate (some K-associated latch in the output's cone GENERATES on `(K, d)`) plus
+    // PROPAGATION from a surviving source. Per firing — `sp` is that firing's own destination, so two
+    // firings of one `(output, clock, direction)` can type differently.
+    let types_edge = |o: &Symbol, clock: &Symbol, is_rise: bool, sp: &Minterm<Symbol>| -> bool {
+        if m.state_set.contains(o.as_str()) && generates(o, clock, is_rise) {
+            return true;
+        }
+        let gated = cone(o.as_str())
+            .iter()
+            .any(|w| k_assoc(w, clock) && generates(w, clock, is_rise));
+        gated && propagates(o, clock, sp)
+    };
 
-    // THE PER-ARC LABELS (arc typing): each derived delay arc whose related pin is a declared clock is an
-    // edge arc iff CONDITION 1' (an in-scope latch opens on the clock's own direction, delivered phase
-    // non-empty) holds AND one of the three arms — GENERATION, FROZEN-EXPOSURE, MASKED-DELIVERY — fires at
-    // the arc's OWN firing (its full machine start context). Membership is the identity itself, so two
+    // THE PER-ARC LABELS: each derived delay arc whose related pin is a declared clock is an edge arc iff it
+    // TYPES EDGE at its own firing's post-arc stable state. Membership is the identity itself, so two
     // firings of one `(output, clock, direction)` can type differently, and an unobserved edge — masked in
     // `arcs::derive`, or from an ineligible start — has no identity to add.
     let mut labels: BTreeSet<(Symbol, Symbol, Edge, Minterm<Symbol>)> = BTreeSet::new();
     for a in delay_arcs {
-        if !clock_set.contains(a.related.as_str()) {
+        if !clock_set.contains(a.related.as_str()) || !is_eligible(&a.start) {
             continue;
         }
         let is_rise = a.end.value_of(a.related.as_str()) == Some(true);
-        let scope = opener_scope(a.output.as_str());
-        let opened: Vec<&Symbol> = scope
-            .iter()
-            .filter(|w| opens(w, &a.related, is_rise))
-            .collect();
-        let node_forcing = forcing_by_name[a.output.as_str()];
-        if opened.is_empty() || !delivered_nonempty(&a.related, is_rise, node_forcing) {
-            continue; // condition 1' fails: no in-scope latch opens, or no delivered phase to reason about
-        }
-        let Some(np) = machine::settle(deltas, &machine::toggle(&a.start, &[a.related.as_str()]))
+        let Some(sp) = machine::settle(deltas, &machine::toggle(&a.start, &[a.related.as_str()]))
         else {
             continue;
         };
-        let k_assoc = |w: &Symbol| {
-            stores_of[&(w.clone(), a.related.clone(), false)]
-                != stores_of[&(w.clone(), a.related.clone(), true)]
-        };
-        let is_edge = opened.iter().any(|w| w.as_str() == a.output.as_str())
-            || frozen_exposure(
-                m,
-                &trans,
-                &eligible,
-                inputs,
-                a.output.as_str(),
-                &np,
-                &k_assoc,
-            )
-            || masked_delivery(
-                m,
-                builder.as_ref(),
-                deltas,
-                a.output.as_str(),
-                &a.related,
-                &opened,
-                &a.start,
-                &np,
-            );
-        if is_edge {
+        if types_edge(&a.output, &a.related, is_rise, &sp) {
             let edge = if is_rise { Edge::Rise } else { Edge::Fall };
             labels.insert((a.output.clone(), a.related.clone(), edge, a.start.clone()));
         }
     }
 
-    // THE SEAM SET per candidate: the `(clock, direction)` toggles on which the node carries an edge seam —
-    // the typing holds for some eligible changed firing AND the delivered value holds through the phase
-    // (the greatest fixpoint in `seam_fixpoint`). A non-empty seam set is an edge register; an empty one is
+    // THE SEAM SET per candidate: the `(clock, direction)` toggles the node TYPES EDGE on at some eligible
+    // CHANGED firing (the initial set), tightened by the greatest fixpoint in `seam_fixpoint` — the
+    // delivered value must hold through the phase. A non-empty seam set is an edge register; an empty one is
     // level (a latch that merely tracks, or a clock gate).
     let seam_of: Vec<BTreeSet<Arc>> = candidates
         .iter()
         .zip(&aggs)
         .zip(&forcing_of)
         .map(|((name, agg), node_forcing)| {
-            let scope = opener_scope(name.as_str());
             let mut s: BTreeSet<Arc> = BTreeSet::new();
             for ((clock, is_rise), cap) in &agg.captures {
                 if !cap.changed {
                     continue; // vacuity gate: some eligible firing must change the node
                 }
-                let opened: Vec<&Symbol> =
-                    scope.iter().filter(|w| opens(w, clock, *is_rise)).collect();
-                if opened.is_empty() || !delivered_nonempty(clock, *is_rise, node_forcing) {
-                    continue;
-                }
-                let k_assoc = |w: &Symbol| {
-                    stores_of[&(w.clone(), clock.clone(), false)]
-                        != stores_of[&(w.clone(), clock.clone(), true)]
-                };
-                // (a) GENERATION short-circuits; otherwise (b) FROZEN-EXPOSURE / (c) MASKED-DELIVERY over
-                // the firings.
-                let content = opened.iter().any(|w| w.as_str() == name.as_str())
-                    || cap.firings.iter().any(|(pre, np, _)| {
-                        frozen_exposure(m, &trans, &eligible, inputs, name.as_str(), np, &k_assoc)
-                            || masked_delivery(
-                                m,
-                                builder.as_ref(),
-                                deltas,
-                                name.as_str(),
-                                clock,
-                                &opened,
-                                pre,
-                                np,
-                            )
-                    });
-                if content {
+                let edge = cap.firings.iter().any(|(pre, np, post)| {
+                    is_eligible(pre)
+                        && is_eligible(np)
+                        && m.output_value(name.as_str(), pre) != Some(*post)
+                        && types_edge(name, clock, *is_rise, np)
+                });
+                if edge {
                     s.insert((clock.clone(), *is_rise));
                 }
             }
@@ -720,199 +726,65 @@ fn transparent<B: Brand, C: ManagerCell>(
     moves
 }
 
-/// A MEMORY WITNESS for state variable `w` in `clock`'s `level` phase: two forcing-excluded ELIGIBLE
-/// stable states of that phase that DIFFER in `w` while AGREEING on the inputs and on every state variable
-/// NOT DRIVEN BY `w` in that phase. When such a pair exists the phase is not pinning `w` — something is
-/// being remembered across it, the latch signature. [`stores`]`(w, K, source-level)` and not
-/// [`stores`]`(w, K, delivered-level)` is condition 1': `K`'s edge takes `w` from opaque (remembers) to
-/// transparent (pinned by the phase).
-///
-/// It is reshaped from a phase-transparency test with two load-bearing changes:
-///
-/// 1. **No MOVING conjunct.** A memory witness is enough — the `DFF` slave holds its value across its own
-///    hold phase without moving there (its tracked master is frozen at the moment of the edge), and the
-///    slave is exactly what opens. Requiring movement would deny it.
-/// 2. **PER-PHASE DIRECTIONAL co-mover projection.** A co-mover `W'` is projected out of the witness
-///    columns ONLY where `w` DRIVES it in this phase — flipping `w` at an eligible in-phase stable state
-///    and re-settling leaves `w` flipped (it did not snap back — `w` is not transparent here) and moves
-///    `W'` to a different defined value. A `W'` that snaps back, is unmoved, or only oscillates keeps its
-///    column. This is what makes a toggle flop's `Q` open (a global, undirected projection did not) while
-///    a NAND latch's `Qn = !Q` — driven by `Q` in both phases — is still projected out, so the NAND form
-///    classifies like its pass-transistor twin.
-///
-/// The FORCING region takes no part: a set/clear that overrides `w` in the phase is a coexisting
-/// combinational arc, not memory, so both witness states must lie outside it.
-fn stores<B: Brand, C: ManagerCell>(
+/// Does `f`, once every variable of its support EXCEPT `freed` is fixed to `state`'s values, still depend
+/// on `freed`? The restriction-survival probe underlying both the live-dependency test and propagation:
+/// [`Bdd::restrict_to`] fixes the pinned variables and leaves `freed` free (a variable the minterm does not
+/// carry is left free — no silent default), and the residual depends on `freed` iff `freed` remains in its
+/// support (the residual is non-constant in `freed`).
+fn residual_depends<B: Brand, C: ManagerCell>(
+    f: &Bdd<B, C>,
+    state: &Minterm<Symbol>,
+    freed: &str,
+) -> bool {
+    let fixed: Vec<Symbol> = f.variables().filter(|v| v.as_str() != freed).collect();
+    let residual = f.restrict_to(&state.project_to(fixed.iter().map(Symbol::as_str)));
+    residual.variables().any(|v| v.as_str() == freed)
+}
+
+/// The LIVE dependency graph among the state variables at every reachable stable state. `live_succ[i]` maps
+/// each state variable `n` to the state variables whose δ, restricted to all of its support EXCEPT `n` at
+/// state `i`'s values, still depends on `n` — `n`'s successors in state `i`'s live-dependency graph. A
+/// cycle through a latch in this graph is the memory signature: the latch is bistable (opaque) there. Only
+/// ELIGIBLE states carry a graph; an ineligible state's entry is empty and is never measured from. No
+/// machine state is constructed — every edge is decided by restriction of the existing δ at the state.
+fn live_successors<B: Brand, C: ManagerCell>(
     m: &Machine<'_, B, C>,
     tr: &Transitions<'_>,
     eligible: &[bool],
-    w: &Symbol,
-    clock: &Symbol,
-    level: bool,
-    forcing: &BTreeMap<Symbol, (bool, bool)>,
-) -> bool {
-    let is_forced = |s: &Minterm<Symbol>| {
-        forcing
-            .iter()
-            .any(|(p, (a, _))| s.value_of(p.as_str()) == Some(*a))
-    };
-    let state_set: BTreeSet<&str> = m.state_vars.iter().map(Symbol::as_str).collect();
-    let builder = m.deltas.first().map(|(_, d)| d.builder());
-    // Does `w` DRIVE `wprime` in this phase? At some eligible, forcing-excluded in-phase stable state,
-    // FREEZE `w` at its flipped value (withhold its δ, hold it there) and re-settle the rest: `wprime` is
-    // driven when it moves to a different defined value. Freezing is what makes this a clean causal probe —
-    // a free toggle of a cross-coupled complement pair (`Qn = !Q`) merely oscillates, settling nowhere, so
-    // the complement would never be recognised as driven and a NAND latch would not open; holding `w`
-    // resolves the pair (`Qn` follows to `!w`) so the NAND form classifies like its pass-transistor twin.
-    // A settle that still oscillates yields no witness and keeps the column.
-    let driven_by_w = |wprime: &str| -> bool {
-        let Some(builder) = builder.as_ref() else {
-            return false;
-        };
-        tr.order.iter().enumerate().any(|(i, s)| {
-            if !eligible[i] || s.value_of(clock.as_str()) != Some(level) || is_forced(s) {
-                return false;
-            }
-            let Some(w0) = s.value_of(w.as_str()) else {
-                return false;
-            };
-            let Some(p0) = s.value_of(wprime) else {
-                return false;
-            };
-            let frozen = freeze_delta(builder, &m.deltas, w, !w0);
-            match machine::settle(&frozen, &machine::toggle(s, &[w.as_str()])) {
-                Some(re) => matches!(re.value_of(wprime), Some(p1) if p1 != p0),
-                None => false,
-            }
-        })
-    };
-    // The witness columns: every column but `w`, dropping any state variable `w` drives in this phase.
-    let cols: Vec<&str> = tr
-        .order
-        .first()
-        .map(|s| {
-            s.vars()
-                .iter()
-                .map(Symbol::as_str)
-                .filter(|c| *c != w.as_str())
-                .filter(|c| !state_set.contains(c) || !driven_by_w(c))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let mut seen: BTreeMap<Minterm<Symbol>, bool> = BTreeMap::new();
-    for (i, s) in tr.order.iter().enumerate() {
-        if !eligible[i] || s.value_of(clock.as_str()) != Some(level) || is_forced(s) {
-            continue;
-        }
-        let Some(v) = m.output_value(w.as_str(), s) else {
-            continue;
-        };
-        if let Some(prev) = seen.insert(s.project_to(cols.iter().copied()), v) {
-            if prev != v {
-                return true; // two phase states agree on the columns yet differ in `w`: memory
-            }
-        }
-    }
-    false
-}
-
-/// `deltas` with `w`'s next-state function replaced by the constant `value`, freezing `w` there while
-/// everything else settles. The order is preserved (a positional slice of the node's state columns), so
-/// [`machine::settle`] over the result is well-formed.
-fn freeze_delta<B: Brand, C: ManagerCell>(
-    builder: &BddBuilder<B, C>,
-    deltas: &[machine::Delta<B, C>],
-    w: &Symbol,
-    value: bool,
-) -> Vec<machine::Delta<B, C>> {
-    deltas
+) -> Vec<BTreeMap<Symbol, BTreeSet<Symbol>>> {
+    tr.order
         .iter()
-        .map(|(n, d)| {
-            if n == w {
-                (n.clone(), builder.constant(value))
-            } else {
-                (n.clone(), d.clone())
+        .enumerate()
+        .map(|(i, s)| {
+            let mut succ: BTreeMap<Symbol, BTreeSet<Symbol>> = BTreeMap::new();
+            if !eligible[i] {
+                return succ;
             }
+            for (target, delta) in &m.deltas {
+                for n in delta.variables() {
+                    if m.state_set.contains(&n) && residual_depends(delta, s, n.as_str()) {
+                        succ.entry(n).or_default().insert(target.clone());
+                    }
+                }
+            }
+            succ
         })
         .collect()
 }
 
-/// Arm (b) FROZEN-EXPOSURE for output `o` at a firing's destination `np`: is there an ELIGIBLE reachable
-/// stable state anchored at `np` — same input projection — agreeing with `np` on every latch except ONE
-/// K-ASSOCIATED state variable `W`, where `o`'s value differs? Then `o`'s post-edge value depends on the
-/// frozen content of a latch the clock's edge exposes (`DET`'s `Q` reads whichever of `L1`/`L2` the edge
-/// froze). `k_associated(W)` reuses the per-phase [`stores`]: `W`'s two phases of `K` disagree.
-fn frozen_exposure<B: Brand, C: ManagerCell>(
-    m: &Machine<'_, B, C>,
-    tr: &Transitions<'_>,
-    eligible: &[bool],
-    inputs: &[Symbol],
-    o: &str,
-    np: &Minterm<Symbol>,
-    k_associated: &impl Fn(&Symbol) -> bool,
-) -> bool {
-    let sp_inputs = np.project_to(inputs.iter().map(Symbol::as_str));
-    let Some(o_sp) = m.output_value(o, np) else {
-        return false;
-    };
-    for (i, t) in tr.order.iter().enumerate() {
-        if !eligible[i] || t.project_to(inputs.iter().map(Symbol::as_str)) != sp_inputs {
-            continue;
-        }
-        // Differ from `np` in exactly one state variable.
-        let mut diff: Option<&Symbol> = None;
-        let mut single = true;
-        for w in &m.state_vars {
-            if t.value_of(w.as_str()) != np.value_of(w.as_str()) {
-                if diff.is_some() {
-                    single = false;
-                    break;
-                }
-                diff = Some(w);
-            }
-        }
-        if !single {
-            continue;
-        }
-        let Some(w) = diff else { continue };
-        if k_associated(w) && m.output_value(o, t) != Some(o_sp) {
+/// Does state variable `w` lie on a directed cycle of live dependency edges — is `w` reachable from itself
+/// by following `succ`? A self-loop (`w → w` live) or any longer loop through `w` answers yes: `w` is
+/// opaque (bistable) at this state.
+fn reaches_self(succ: &BTreeMap<Symbol, BTreeSet<Symbol>>, w: &Symbol) -> bool {
+    let mut seen: BTreeSet<&Symbol> = BTreeSet::new();
+    let mut stack: Vec<&Symbol> = succ.get(w).into_iter().flatten().collect();
+    while let Some(x) = stack.pop() {
+        if x == w {
             return true;
         }
-    }
-    false
-}
-
-/// Arm (c) MASKED-DELIVERY for a firing `s -> np` of clock `k` on output `o` (which CHANGED): withhold an
-/// opened latch's δ — freeze it at its pre-edge value, so it cannot deliver — and re-settle the same
-/// firing. If `o`'s change REVERTS (`o` returns to its pre-edge value), `o` carried the opener's delivered
-/// content, so the edge is what moved it. `o` itself, if opened, is handled by arm (a) and excluded here.
-#[allow(clippy::too_many_arguments)]
-fn masked_delivery<B: Brand, C: ManagerCell>(
-    m: &Machine<'_, B, C>,
-    builder: Option<&BddBuilder<B, C>>,
-    deltas: &[machine::Delta<B, C>],
-    o: &str,
-    k: &Symbol,
-    opened: &[&Symbol],
-    s: &Minterm<Symbol>,
-    np: &Minterm<Symbol>,
-) -> bool {
-    let (Some(before), Some(after)) = (m.output_value(o, s), m.output_value(o, np)) else {
-        return false;
-    };
-    if before == after {
-        return false; // masked-delivery reasons about a change to revert
-    }
-    let builder = builder.expect("a non-empty opener set implies a state variable and a builder");
-    for w in opened.iter().filter(|w| w.as_str() != o) {
-        let Some(wv) = s.value_of(w.as_str()) else {
-            continue;
-        };
-        let frozen = freeze_delta(builder, deltas, w, wv);
-        if let Some(re) = machine::settle(&frozen, &machine::toggle(s, &[k.as_str()])) {
-            if m.output_value(o, &re) == Some(before) {
-                return true;
+        if seen.insert(x) {
+            if let Some(next) = succ.get(x) {
+                stack.extend(next.iter());
             }
         }
     }
@@ -1006,16 +878,16 @@ fn forcing_pins<B: Brand, C: ManagerCell>(
     moves: &[(Symbol, Minterm<Symbol>, Minterm<Symbol>, bool)],
 ) -> BTreeMap<Symbol, (bool, bool)> {
     let inputs = &m.cell.inputs;
-    // Clause 2 - GLOBAL CLAMP: exactly one level of the pin pins the node to one constant across ALL
-    // reachable stable states (an async override whose release re-acquires, like a toggle flop's reset).
+    // Clause 2 - GLOBAL CONSTANT-PINNING: exactly one level of the pin holds the node at one constant across
+    // ALL reachable stable states (an async override whose release re-acquires, like a toggle flop's reset).
     // No tracked data pin satisfies this: its tracking is confined to a clock-phase region, and elsewhere
     // the node varies under the same pin level. A REAL capture clock never pins the node to a constant
     // either (the node carries content in both phases), so declaration plays no part — a level-forcing
     // reset is a forcing pin whether or not it was declared a clock (the behavioural principle the deleted
     // level veto used to serve for `RDFF`'s clock-declared `R`).
-    let mut clamp: BTreeMap<Symbol, (bool, bool)> = BTreeMap::new();
+    let mut pinning: BTreeMap<Symbol, (bool, bool)> = BTreeMap::new();
     for x in inputs {
-        let clamp_value = |level: bool| -> Option<bool> {
+        let pinned_value = |level: bool| -> Option<bool> {
             let mut seen: Option<bool> = None;
             for s in tr.order {
                 if s.value_of(x.as_str()) != Some(level) {
@@ -1032,19 +904,19 @@ fn forcing_pins<B: Brand, C: ManagerCell>(
             }
             seen
         };
-        match (clamp_value(false), clamp_value(true)) {
-            (Some(_), Some(_)) | (None, None) => {} // both levels clamp (degenerate) or neither
+        match (pinned_value(false), pinned_value(true)) {
+            (Some(_), Some(_)) | (None, None) => {} // both levels pin to a constant (degenerate) or neither
             (Some(v), None) => {
-                clamp.insert(x.clone(), (false, v));
+                pinning.insert(x.clone(), (false, v));
             }
             (None, Some(v)) => {
-                clamp.insert(x.clone(), (true, v));
+                pinning.insert(x.clone(), (true, v));
             }
         }
     }
     // Monotone accumulation: established forcing pins are never re-litigated, so each round can only
     // ADD pins and the loop terminates within `inputs.len()` rounds.
-    let mut forcing: BTreeMap<Symbol, (bool, bool)> = clamp;
+    let mut forcing: BTreeMap<Symbol, (bool, bool)> = pinning;
     loop {
         let mut added = false;
         for x in inputs {
@@ -2584,10 +2456,13 @@ GCLK = "CLK*EL"
 
     // === Step 8: grounded per-arc fixtures (DCMUX, COEX, transparent-cascade, clock-and-async) ===
 
-    // DCMUX -- a genuinely INDEPENDENT two-clock capture: Q captures each independently-clocked master at
-    // that clock's own edge, holding otherwise. CLKA and CLKB are unrelated inputs (no structural
-    // derivation, no privileging), so Q carries edge arcs on BOTH clocks with a joint off-edge universal
-    // hold. The internal masters are level (transparent to their data) and carry no arcs.
+    // DCMUX -- two independently-clocked masters merged into one output Q. Each clock's RISING edge is a
+    // generation at Q (Q self-loops only when both clocks are low, and each rise takes it transparent to
+    // that clock's master), so both rises carry `-type edge`. But the FALLS are combinational: nothing
+    // generates on a fall (each master generates on its own rise), and Q switching away delivers the OTHER
+    // clock's held value, arriving regardless. With no fall seam to hold against, the seam fixpoint empties
+    // Q's set — an in-phase fall of the co-resident clock is a non-seam change — so Q is NOT an edge
+    // register; it models as level rows with edge-labelled rises. The internal masters carry no arcs.
     const DCMUX_TOML: &str = r#"
 [[cell]]
 name = "DCMUX"
@@ -2601,31 +2476,24 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
 "#;
 
     #[test]
-    fn edge_dcmux_carries_both_clocks_joint_hold() {
+    fn edge_dcmux_level_model_with_edge_labelled_rises() {
         with_machine!(DCMUX_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert_captures_faithful(&m, &es);
-            // Only Q carries arcs; the internal masters carry none.
-            assert_eq!(node_list(&es), ["Q"], "only Q carries edge arcs");
-            let q = reg(&es, "Q");
-            // Both independent clocks keep edge arcs on the one output (per-arc, no privileging).
-            let clks = clocks_of(q);
+            // The seam fixpoint empties Q's set (its falls are combinational, so each in-phase fall is a
+            // non-seam change), so NOTHING is an edge register — the cell is a level model.
             assert!(
-                clks.contains(&"CLKA") && clks.contains(&"CLKB"),
-                "Q carries both clocks' arcs, got {clks:?}"
+                es.captures.is_empty(),
+                "DCMUX models as level rows, no edge register, got {:?}",
+                node_list(&es)
             );
-            assert!(
-                q.captures.iter().any(|(c, _, _)| c == "CLKA"),
-                "a CLKA edge arc"
+            // The two rises stay `-type edge` (generation at Q); the falls are combinational, so no fall
+            // label. Q carries exactly the two rising edge labels.
+            assert_eq!(
+                label_list(&es),
+                [("Q", "CLKA", Edge::Rise), ("Q", "CLKB", Edge::Rise)],
+                "rises edge-labelled, falls combinational"
             );
-            assert!(
-                q.captures.iter().any(|(c, _, _)| c == "CLKB"),
-                "a CLKB edge arc"
-            );
-            // Joint off-edge is a universal hold: no async set/clear, no columns.
-            assert!(q.off_edge.cols.is_empty(), "no off-edge columns");
-            assert!(q.off_edge.on.is_empty() && q.off_edge.off.is_empty());
-            assert_eq!(q.off_edge.hold, vec![vec![]], "universal hold");
         });
     }
 
@@ -3080,27 +2948,28 @@ Q = "!( !(M2*!CLKB) * Qn )"
         });
 
         // A plain latch has no capture anywhere, but its enable's OPENING edge (opaque→transparent) is a
-        // real edge arc — arm (a): Q is the opener — so the CLK-rise arc is labelled edge.
+        // real edge arc — GENERATION at the output, `Q` opaque at `CLK=0` and transparent at `CLK=1` — so
+        // the CLK-rise arc is labelled edge while `Q`'s seam empties (it tracks `D` in its open phase).
         with_machine!(DLAT_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert!(es.captures.is_empty(), "a latch has no capture");
             assert_eq!(label_list(&es), [("Q", "CLK", Edge::Rise)]);
         });
 
-        // Two latches on the SAME phase never form a flop, and the cascade holds NO independently
-        // distinguishable state — `Q == M` in every reachable state, so neither node has a memory witness
-        // (condition 1' finds no opener). The transparent cascade is a ZERO-ARC cell: no capture AND no
-        // edge label, exactly as its own fixture describes it.
+        // A transparent-LOW cascade is the fall-mirror of `DLAT`: `Q` is opaque across the high phase and
+        // transparent through the low phase, so it GENERATES on the fall — the CLK-fall opening is a real
+        // edge arc labelled on the output — while its seam empties (it tracks `M`/`D` once open) so it keeps
+        // NO capture. The internal master carries no delay arc, so the label set is exactly `Q`'s fall.
         with_machine!(TCASC_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert!(
                 es.captures.is_empty(),
                 "a transparent cascade has no capture"
             );
-            assert!(
-                es.labels.is_empty(),
-                "a transparent cascade carries no edge label: {:?}",
-                label_list(&es)
+            assert_eq!(
+                label_list(&es),
+                [("Q", "CLK", Edge::Fall)],
+                "the transparent-low cascade opens on the fall — a generation on the output"
             );
         });
 
@@ -3117,11 +2986,11 @@ Q = "!( !(M2*!CLKB) * Qn )"
 
     #[test]
     fn edge_labels_two_clock_sourced_from_arcs() {
-        // Two independent flops merging into one output. Each clock's RISING edge captures its own master
-        // (edge), but the falling edges are switch-away / CROSS-CLOCK exposures — the settled value arrives
-        // regardless of the exposed master's frozen content (the mux delivers the OTHER clock's master, or
-        // the held value), so no arm fires and they emit `-type combinational`. The internal masters carry
-        // no delay arc and take no key.
+        // Two independently-clocked masters merged into one output. Each clock's RISING edge is a
+        // GENERATION at Q (Q opaque only when both clocks are low, transparent to that clock's master on the
+        // rise) — edge — but the falls have no generator in Q's cone and no surviving source (the mux
+        // delivers the OTHER clock's held value, arriving regardless), so they emit `-type combinational`.
+        // The internal masters carry no delay arc and take no key.
         with_machine!(DCMUX_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert_eq!(

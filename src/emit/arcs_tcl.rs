@@ -886,9 +886,10 @@ Q = "CLK*L1 + !CLK*L2"
         }
     }
 
-    /// DCMUX: a genuinely independent two-clock capture -- Q captures each independently-clocked master at
-    /// that clock's own edge. Both clocks' Q delay arcs are re-labelled `-type edge` (no clock-privileging,
-    /// no per-output suppression); neither clock's related arcs stay combinational.
+    /// DCMUX: two independently-clocked masters merged into one output. Q collapses to a LEVEL model (its
+    /// falls are combinational and the seam fixpoint empties its set), so Q is NOT an edge register, yet
+    /// each clock's RISING Q delay arc still renders `-type edge` (generation at Q). Both clocks therefore
+    /// carry an edge-labelled Q arc; the falls stay combinational.
     #[test]
     fn dcmux_marks_both_clocks_q_arcs_edge_type() {
         let cell = analyse(
@@ -904,16 +905,17 @@ MB = "!CLKB*DB + CLKB*MB"
 Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
 "#,
         );
-        assert!(cell.edge.captures.iter().any(|r| r.node == "Q"));
+        // Q is a level model, not an edge register -- the label lives on the delay arc, not a capture.
+        assert!(!cell.edge.captures.iter().any(|r| r.node == "Q"));
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
-        // BOTH clocks' Q delay arcs are re-labelled edge.
+        // Each clock's RISING Q delay arc is re-labelled edge.
         for clock in ["CLKA", "CLKB"] {
             let related = format!("-related_pin {clock}");
             let saw_edge = tcl.split("define_arc").any(|frag| {
                 frag.contains("-pin Q") && frag.contains(&related) && frag.contains("-type edge \\")
             });
-            assert!(saw_edge, "a {clock}-related Q arc must be -type edge");
+            assert!(saw_edge, "a {clock}-related Q rise arc must be -type edge");
         }
     }
 
