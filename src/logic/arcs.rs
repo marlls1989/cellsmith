@@ -1,8 +1,10 @@
 //! Transition-arc derivation over the cell's **asynchronous state machine**.
 //!
 //! A cell is a state machine over `inputs × state-variables` (each output's own feedback and every
-//! internal state node; see [`resolve`](super::resolve)). A node is a fully-fixed [`Minterm<Symbol>`] over
-//! `inputs…, state_vars…` ([`machine`]). Arcs are derived by exploring it:
+//! internal state node; see [`resolve`](super::resolve)). A node is a [`Minterm<Symbol>`] over
+//! `inputs…, state_vars…` ([`machine`]); traversal states may be partial — an uninitialised latch
+//! leaves its state column a don't-care — but every MEASURED arc comes only from a fully-initialised
+//! (determinate) state, per the eligibility filter below. Arcs are derived by exploring it:
 //!
 //!   1. Each state variable's δ comes directly from the cell's minimised signal functions; [`machine::settle`] applies them
 //!      via [`Bdd::evaluate`](espresso_logic::bdd::Bdd::evaluate) until the state stops changing.
@@ -90,9 +92,11 @@ type ArcKey = (Symbol, Symbol, bool, Minterm<Symbol>);
 type HiddenKey = (Symbol, bool, Minterm<Symbol>);
 
 /// Derive transition arcs for every output of a cell by re-walking its shared asynchronous state machine
-/// (see [`machine`] and [`Machine`]). A machine node is a fully-fixed [`Minterm<Symbol>`] over
-/// `[inputs…, state_vars…]`. Also derives the whole-cell internal-power ('hidden') arcs — single input
-/// toggles that settle but leave every output unchanged.
+/// (see [`machine`] and [`Machine`]). A machine node is a [`Minterm<Symbol>`] over
+/// `[inputs…, state_vars…]`; traversal states may be partial, but each arc is measured only from a
+/// fully-initialised (determinate) state (see the eligibility check below). Also derives the
+/// whole-cell internal-power ('hidden') arcs — single input toggles that settle but leave every
+/// output unchanged.
 pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
     m: &Machine<B, C>,
 ) -> (Vec<Arc>, Vec<HiddenArc>) {
@@ -117,6 +121,16 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
         |node: &Minterm<Symbol>| -> (BTreeMap<ArcKey, Arc>, BTreeMap<HiddenKey, HiddenArc>) {
             let mut arc_map: BTreeMap<ArcKey, Arc> = BTreeMap::new();
             let mut hidden_map: BTreeMap<HiddenKey, HiddenArc> = BTreeMap::new();
+            // ELIGIBILITY: only measure from a FULLY-DETERMINATE start — every state column concrete. A
+            // partially-fixed start carries an uninitialised (don't-care) latch that must not be read as a
+            // held value, so it seeds traversal but is never an arc context (see `logic::edge`).
+            if !m
+                .state_vars
+                .iter()
+                .all(|w| node.value_of(w.as_str()).is_some())
+            {
+                return (arc_map, hidden_map);
+            }
             for related in inputs {
                 // Toggle one input, hold the (partial) state, and let the state settle.
                 let toggled = machine::toggle(node, &[related.as_str()]);

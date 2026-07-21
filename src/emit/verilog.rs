@@ -688,19 +688,30 @@ Q = "!CLKB*M2 + CLKB*Q"
                 .to_string()
         };
         let mut saw_clka_rise = false;
+        let mut saw_clkb_fall = false;
         for row in q
             .lines()
             .filter(|l| l.contains("(01)") || l.contains("(10)"))
         {
-            if field(row, clka_i) == "(01)" {
+            // Each edge row keys exactly ONE clock; the other keying clock sits as a level condition.
+            if field(row, clka_i) == "(01)"
+                && field(row, clkb_i) != "(01)"
+                && field(row, clkb_i) != "(10)"
+            {
                 saw_clka_rise = true;
             }
-            assert!(
-                field(row, clkb_i) != "(01)" && field(row, clkb_i) != "(10)",
-                "CLKB is a level condition of Q's UDP, never an edge row: {row}"
-            );
+            if field(row, clkb_i) == "(10)"
+                && field(row, clka_i) != "(01)"
+                && field(row, clka_i) != "(10)"
+            {
+                saw_clkb_fall = true;
+            }
         }
         assert!(saw_clka_rise, "Q captures on CLKA rising");
+        assert!(
+            saw_clkb_fall,
+            "Q captures on CLKB falling (its own latch opening) -- both keying clocks trail, no arc dropped"
+        );
     }
 
     /// The zero-based position of `port` among the UDP `head`'s ports AFTER the output pin (i.e. the data
@@ -900,8 +911,10 @@ M = "!CLK*D + CLK*M"
         );
         let v = cell_verilog(&cell);
         eprintln!("{v}");
-        // Q is a rising-edge register over the surviving master M; the master keeps its own level UDP.
-        assert!(v.contains("primitive EMDFF_Q(Q, M, CLK);"));
+        // Q is a rising-edge register; its capture cover PREFERS the input D over the internal M (D and M
+        // coincide over the CLK=0 capture domain), so Q's UDP keys off D. The master M keeps its own level
+        // UDP and survives as an output.
+        assert!(v.contains("primitive EMDFF_Q(Q, D, CLK);"));
         assert!(prim_block(&v, "primitive EMDFF_Q(").contains("0 (01) : ? : 0;"));
         assert!(prim_block(&v, "primitive EMDFF_Q(").contains("1 (01) : ? : 1;"));
         assert!(v.contains("primitive EMDFF_M(M, CLK, D);"));
@@ -977,10 +990,11 @@ Q = "CLK*!M + !CLK*Q"
 
     #[test]
     fn toggle_flop_self_column_is_reg_field_not_input_port() {
-        // A resettable toggle flip-flop decomposes into TWO edge registers: Q captures the master M on
-        // the rising edge, and M captures !Q (== !M over the reachable pre-fall states) on the falling
-        // edge. M is SELF-referencing: its own symbol must NOT become a UDP input port -- it is the
-        // `reg` current-state field, carrying M's own literal in the capture rows.
+        // A resettable toggle flip-flop decomposes into TWO edge registers over the ring cols [R, Q]: Q
+        // captures the toggle `!R*!Q` on the rising edge, and M captures the same toggle on the falling
+        // edge (keying off the surviving output Q, since the drop-loop prefers Q over the internal M). Q is
+        // SELF-referencing: its own symbol must NOT become a UDP input port -- it is the `reg`
+        // current-state field, carrying Q's own literal in the capture rows.
         let cell = analyse(
             r#"
 [[cell]]
@@ -996,18 +1010,18 @@ Q = "!R*(CLK*M + !CLK*Q)"
         );
         let v = cell_verilog(&cell);
         eprintln!("{v}");
-        // Two edge registers: Q (rising, captures M) and the self-fed master M (falling).
-        assert!(v.contains("primitive TFF_Q(Q, M, R, CLK);"));
-        // M's own symbol is excluded from its ports/inputs: the self column is the reg, not an input.
-        assert!(v.contains("primitive TFF_M(M, R, CLK);"));
-        let m = prim_block(&v, "primitive TFF_M(");
-        assert!(m.contains("input  R, CLK;"), "self M is not an input port");
-        // The falling capture prints M's own literal in the current-state (reg) field, not `?`.
-        assert!(m.contains("0 (10) : 0 : 1;"));
-        assert!(m.contains("? (10) : 1 : 0;"));
+        // Q is the self-referencing rising-edge register: its own symbol is the reg field, not an input.
+        assert!(v.contains("primitive TFF_Q(Q, R, CLK);"));
+        let q = prim_block(&v, "primitive TFF_Q(");
+        assert!(q.contains("input  R, CLK;"), "self Q is not an input port");
+        // The rising capture prints Q's own literal in the current-state (reg) field, not `?`.
+        assert!(q.contains("0 (01) : 0 : 1;"));
+        assert!(q.contains("? (01) : 1 : 0;"));
+        // M captures the same toggle on the falling edge, keying off the surviving Q (an input to M's UDP).
+        assert!(v.contains("primitive TFF_M(M, R, Q, CLK);"));
         // The self-fed master survives as an internal wire, and neither instance duplicates M.
         assert!(v.contains("wire   M;"));
-        assert!(v.contains("TFF_M u_TFF_M (M, R, CLK);"));
-        assert!(v.contains("TFF_Q u_TFF_Q (Q, M, R, CLK);"));
+        assert!(v.contains("TFF_Q u_TFF_Q (Q, R, CLK);"));
+        assert!(v.contains("TFF_M u_TFF_M (M, R, Q, CLK);"));
     }
 }

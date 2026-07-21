@@ -1078,9 +1078,10 @@ M = "!CLK*D + CLK*M"
         assert_eq!(frag.matches("statetable").count(), 1);
         // Node order follows signals() (outputs sorted: M before Q).
         assert!(frag.contains("statetable (\"CLK D\", \"M Q\")"));
-        // Q (second column) captures the master M's current value at the rising edge; the ~R face holds.
-        assert!(frag.contains("R - : H - : - H"));
-        assert!(frag.contains("R - : L - : - L"));
+        // Q (second column) captures the INPUT D at the rising edge — the cover prefers the input over the
+        // internal master M (they coincide over the CLK=0 capture domain); the ~R face holds.
+        assert!(frag.contains("R H : - - : - H"));
+        assert!(frag.contains("R L : - - : - L"));
         assert!(frag.contains("~R - : - - : - N"));
         // M (first column) is a level latch on CLK, sampling D while transparent-low.
         assert!(frag.contains("L H : - - : H -"));

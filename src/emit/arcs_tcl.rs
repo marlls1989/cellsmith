@@ -26,9 +26,9 @@ use crate::model::AnalysedCell;
 #[derive(Debug, Clone, Copy)]
 pub struct ArcsTclOptions {
     /// Emit a `-when` condition (the other inputs' fixed values in the end state) on each arc, keeping
-    /// every held-input context as its own conditioned arc. **On by default.** When off, arcs that share
-    /// a (related, pin, edge) collapse to one — a single prevector exercises the transition, so the
-    /// distinct held contexts (which only `-when` would distinguish) are redundant.
+    /// every held-input context as its own conditioned arc. **On by default.** When off, only the
+    /// `-when` line is suppressed: every arc still emits, so the two modes differ solely by the absent
+    /// conditions.
     pub emit_when: bool,
     /// Emit hidden (whole-cell internal-power) arcs — an input toggles but no output changes — as
     /// `-type hidden` blocks. **On by default.**
@@ -55,25 +55,14 @@ impl Default for ArcsTclOptions {
 /// follow the delay arcs.
 pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     let mut out = oscillation_comment(cell);
-    // Without `-when`, arcs of the same (related, pin, edge) that differ only in the held-input context
-    // are the *same* arc — one prevector is enough to exercise it, so collapse them (keeping the
-    // shortest prevector). With `-when` each held context is a distinct characterisation condition and
-    // is kept.
-    let arcs = if opts.emit_when {
-        cell.arcs.clone()
-    } else {
-        collapse_conditions(&cell.arcs)
-    };
-    for arc in &arcs {
+    // `--no-when` suppresses only the `-when` line (handled in `format_arc`/`format_hidden_arc`): every
+    // arc still emits in both modes. Overlapping arcs and same-vector siblings differing only in internal
+    // state or prevector are legal in Liberate.
+    for arc in &cell.arcs {
         out.push_str(&format_arc(cell, arc, opts));
     }
     if opts.emit_internal {
-        let hidden = if opts.emit_when {
-            cell.hidden_arcs.clone()
-        } else {
-            collapse_hidden(&cell.hidden_arcs)
-        };
-        for h in &hidden {
+        for h in &cell.hidden_arcs {
             out.push_str(&format_hidden_arc(cell, h, opts));
         }
     }
@@ -176,58 +165,6 @@ fn oscillation_comment(cell: &AnalysedCell) -> String {
     s
 }
 
-/// Collapse arcs that share a `(pin, related, edge)` — the same physical transition reached under
-/// different held-input contexts — to one, keeping the shortest prevector. Used when `-when` is off,
-/// where the held context is not emitted, so a single prevector suffices to exercise the arc.
-fn collapse_conditions(arcs: &[Arc]) -> Vec<Arc> {
-    use std::collections::btree_map::Entry;
-    use std::collections::BTreeMap;
-    // Keep references while deduping so only the surviving arcs are cloned.
-    let mut best: BTreeMap<(Symbol, Symbol, bool), &Arc> = BTreeMap::new();
-    for arc in arcs {
-        let key = (
-            arc.output.clone(),
-            arc.related.clone(),
-            matches!(arc.edge, Edge::Rise),
-        );
-        match best.entry(key) {
-            Entry::Vacant(e) => {
-                e.insert(arc);
-            }
-            Entry::Occupied(mut e) => {
-                if arc.prevector.len() < e.get().prevector.len() {
-                    e.insert(arc);
-                }
-            }
-        }
-    }
-    best.into_values().cloned().collect()
-}
-
-/// Collapse hidden arcs that share a `(pin, edge)` — the same physical input toggle reached under
-/// different held-input contexts — to one, keeping the shortest prevector. Used when `-when` is off,
-/// where the held context is not emitted, so a single prevector suffices to exercise the arc.
-fn collapse_hidden(arcs: &[HiddenArc]) -> Vec<HiddenArc> {
-    use std::collections::btree_map::Entry;
-    use std::collections::BTreeMap;
-    // Keep references while deduping so only the surviving arcs are cloned.
-    let mut best: BTreeMap<(Symbol, bool), &HiddenArc> = BTreeMap::new();
-    for arc in arcs {
-        let key = (arc.pin.clone(), matches!(arc.edge, Edge::Rise));
-        match best.entry(key) {
-            Entry::Vacant(e) => {
-                e.insert(arc);
-            }
-            Entry::Occupied(mut e) => {
-                if arc.prevector.len() < e.get().prevector.len() {
-                    e.insert(arc);
-                }
-            }
-        }
-    }
-    best.into_values().cloned().collect()
-}
-
 /// The edge the arc's `related` clock pin makes, read from its value in the end state — the same
 /// derivation the vector uses to render its `R`/`F`. `Rise` when the clock settles high, `Fall` when it
 /// settles low. Together with the output and related pin it is the arc's identity in
@@ -242,14 +179,16 @@ fn related_edge(arc: &Arc) -> Edge {
 }
 
 fn format_arc(cell: &AnalysedCell, arc: &Arc, opts: ArcsTclOptions) -> String {
-    // A capture and a release are distinct categories internally, but both are clock-edge timing arcs
-    // and share the Liberate `-type edge` token; the label is looked up by the arc's own identity. An
-    // unlabelled arc is combinational, and a declared-async related pin keeps `-type async`.
+    // There is ONE edge category — a clock-edge timing arc, emitted with Liberate `-type edge`. The label
+    // is looked up by the arc's FULL identity `(output, related, direction, machine start)`, so two firings
+    // that differ only in internal state can type differently. An arc whose identity is absent is
+    // combinational, and a declared-async related pin keeps `-type async`.
     let is_edge = !arc.is_async
-        && cell.edge.labels.contains_key(&(
+        && cell.edge.labels.contains(&(
             arc.output.clone(),
             arc.related.clone(),
             related_edge(arc),
+            arc.start.clone(),
         ));
     let type_line = format!(
         "\t-type {} \\\n",
@@ -610,7 +549,7 @@ Y = "A*B"
     }
 
     #[test]
-    fn hidden_arcs_collapse_without_when() {
+    fn hidden_arcs_keep_every_block_without_when() {
         let cell = analyse(
             r#"
 [[cell]]
@@ -632,9 +571,10 @@ Y = "A*B"
         );
         let with_when = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         assert!(!without_when.contains("-when"));
-        assert!(
-            without_when.matches("-type hidden").count()
-                <= with_when.matches("-type hidden").count()
+        // Suppression-only: no hidden block is collapsed away, so the count is unchanged.
+        assert_eq!(
+            without_when.matches("-type hidden").count(),
+            with_when.matches("-type hidden").count()
         );
     }
 
@@ -671,10 +611,10 @@ Q = "A*B + Q*(A+B)"
     }
 
     #[test]
-    fn collapse_conditions_reduces_shared_context_arcs() {
+    fn no_when_suppresses_only_the_when_line() {
         // A 3-input majority gate: its output rises via one pin under two distinct held contexts (the
-        // other two inputs at 10 or 01). With `-when` off those share a (output, related, edge) and
-        // collapse to one representative, so the collapsed set has strictly fewer arcs than the raw set.
+        // other two inputs at 10 or 01). `-when` suppression is suppression-only — nothing collapses —
+        // so both modes carry the same `define_arc` count and differ solely by the absent `-when` lines.
         let cell = analyse(
             r#"
 [[cell]]
@@ -684,31 +624,29 @@ inputs = ["A", "B", "C"]
 Y = "A*B + B*C + A*C"
 "#,
         );
-        let collapsed = collapse_conditions(&cell.arcs);
-        assert!(
-            collapsed.len() < cell.arcs.len(),
-            "collapse should drop redundant held-context duplicates: {} vs {}",
-            collapsed.len(),
-            cell.arcs.len(),
+        // Isolate arc `-when` suppression from `define_leakage`, which is inherently `-when`-conditioned.
+        let opts = |emit_when| ArcsTclOptions {
+            emit_when,
+            emit_leakage: false,
+            ..Default::default()
+        };
+        let with_when = cell_arcs_tcl(&cell, opts(true));
+        let without_when = cell_arcs_tcl(&cell, opts(false));
+        assert_eq!(
+            with_when.matches("define_arc").count(),
+            without_when.matches("define_arc").count(),
+            "every arc emits in both modes"
         );
-        // The emitter reflects the collapse: fewer `define_arc` blocks once `-when` is suppressed.
-        let with_when = cell_arcs_tcl(
-            &cell,
-            ArcsTclOptions {
-                emit_when: true,
-                ..Default::default()
-            },
-        );
-        let without_when = cell_arcs_tcl(
-            &cell,
-            ArcsTclOptions {
-                emit_when: false,
-                ..Default::default()
-            },
-        );
-        assert!(
-            without_when.matches("define_arc").count() < with_when.matches("define_arc").count()
-        );
+        assert!(with_when.contains("-when"));
+        assert!(!without_when.contains("-when"));
+        // Dropping the `-when` lines from the default output reproduces the suppressed output exactly.
+        let strip_when = |s: &str| {
+            s.lines()
+                .filter(|l| !l.contains("-when"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert_eq!(strip_when(&with_when), strip_when(&without_when));
     }
 
     #[test]
@@ -1004,16 +942,19 @@ Q = "!CLKB*M2 + CLKB*Q"
             .captures
             .iter()
             .any(|(c, e, _)| c == "CLKA" && *e == Edge::Rise));
+        // Q captures on its own CLKB FALLING edge (the master-slave reveal) alongside the CLKA capture.
         assert!(
-            !q.captures.iter().any(|(c, _, _)| c == "CLKB"),
-            "Q does not CAPTURE on CLKB -- it is released by it"
+            q.captures
+                .iter()
+                .any(|(c, e, _)| c == "CLKB" && *e == Edge::Fall),
+            "Q captures on CLKB's falling (opening) edge"
         );
         assert!(
-            cell.edge.labels.iter().any(|((n, c, e), cls)| n == "Q"
-                && c == "CLKB"
-                && *e == Edge::Fall
-                && *cls == crate::logic::edge::ArcClass::Release),
-            "Q is RELEASED by CLKB's falling edge: {:?}",
+            cell.edge
+                .labels
+                .iter()
+                .any(|(n, c, e, _)| n == "Q" && c == "CLKB" && *e == Edge::Fall),
+            "Q's own latch opens on CLKB's falling edge (an edge arc): {:?}",
             cell.edge.labels
         );
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
@@ -1141,11 +1082,11 @@ Q = "EN*D + !EN*Q"
         );
         assert!(cell.edge.captures.is_empty(), "a latch has no capture");
         assert!(
-            cell.edge.labels.iter().any(|((n, c, e), cls)| n == "Q"
-                && c == "EN"
-                && *e == Edge::Rise
-                && *cls == crate::logic::edge::ArcClass::Release),
-            "the enable's rising edge opens the latch: {:?}",
+            cell.edge
+                .labels
+                .iter()
+                .any(|(n, c, e, _)| n == "Q" && c == "EN" && *e == Edge::Rise),
+            "the enable's rising edge opens the latch (an edge arc): {:?}",
             cell.edge.labels
         );
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
@@ -1509,11 +1450,11 @@ M = "!CLK*D + CLK*M"
         eprintln!("{tcl}");
         assert!(tcl.matches("-type edge").count() >= 1);
         assert!(
-            cell.edge.labels.iter().any(|((n, c, e), cls)| n == "M"
-                && c == "CLK"
-                && *e == Edge::Fall
-                && *cls == crate::logic::edge::ArcClass::Release),
-            "the exposed master is released by CLK's fall: {:?}",
+            cell.edge
+                .labels
+                .iter()
+                .any(|(n, c, e, _)| n == "M" && c == "CLK" && *e == Edge::Fall),
+            "the exposed master opens on CLK's fall (an edge arc): {:?}",
             cell.edge.labels
         );
         // Vector order is {CLK D M Q} (inputs then outputs, declaration order): CLK's own field is the

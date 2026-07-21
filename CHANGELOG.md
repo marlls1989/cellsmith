@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `examples/sequentials.toml`, a sequential-cell example set (latches and flip-flops) alongside the
   existing `examples/cells.toml`, with its generated `.tcl`/`.v`/`.lib` outputs.
 
+### Changed
+
+- `--no-when` is suppression-only: it omits the `-when` line from each arc and does nothing else, so
+  every derived arc emits in both modes and the output differs from the default solely by the absent
+  `-when` conditions. Overlapping arcs and same-vector siblings that differ only in internal state or
+  prevector are legal in Liberate.
+
 ## [0.1.2] - 2026-07-17
 
 ### Added

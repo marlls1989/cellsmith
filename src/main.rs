@@ -32,8 +32,8 @@ struct Cli {
     #[arg(short, long)]
     name: Option<String>,
 
-    /// Suppress the `-when` conditions on arcs (emitted by default); collapses arcs that share a
-    /// (related, pin, edge) to a single representative.
+    /// Suppress the `-when` conditions on arcs (emitted by default). Suppression only: every arc still
+    /// emits, so the output differs from the default solely by the absent `-when` lines.
     #[arg(long)]
     no_when: bool,
 

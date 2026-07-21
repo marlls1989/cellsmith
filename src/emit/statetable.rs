@@ -1172,20 +1172,21 @@ Q = "!R*(CLK*M + !CLK*Q)"
         assert_eq!(names(&m.internal_nodes), ["Q", "M"]);
         let qi = index_of_node(&m, "Q");
         let mi = index_of_node(&m, "M");
-        // M's falling-edge capture is self-referential: it constrains M's OWN current column and drives
-        // M's next -- the edge_row self-column path (a capture cube carrying the register's own node).
-        assert!(
-            m.edge_rows
-                .iter()
-                .any(|r| r.next[mi].is_some() && r.current[mi].is_some()),
-            "toggle-flop M capture must stamp its own current column"
-        );
-        // Q's rising-edge capture references the master M (the ring), driving Q off M's current column.
+        // Both captures are the toggle ring `!R*!Q` over cols [R, Q]: they drive their node's next off Q's
+        // OWN current column (the master M is dropped from the cover in favour of the output Q). Q's rising
+        // capture is thus the self-column path — a capture cube carrying the register's own node.
         assert!(
             m.edge_rows.iter().any(|r| r.token == EdgeTok::Rise
                 && r.next[qi].is_some()
-                && r.current[mi].is_some()),
-            "Q's rising capture references the master M"
+                && r.current[qi].is_some()),
+            "Q's rising capture stamps its OWN current column (the toggle ring)"
+        );
+        // M's falling-edge capture closes the same ring on Q's current column.
+        assert!(
+            m.edge_rows.iter().any(|r| r.token == EdgeTok::Fall
+                && r.next[mi].is_some()
+                && r.current[qi].is_some()),
+            "toggle-flop M capture closes the ring on Q's current column"
         );
     }
 
@@ -1254,9 +1255,9 @@ Q = "!CLKB*M2 + CLKB*Q"
         let cell = analyse(HPIPE);
         let m = build_state_model(&cell).expect("HPIPE is sequential");
         let qi = index_of_node(&m, "Q");
-        // The slave Q's own next-slot is stamped by the conditioned CLKA:Rise capture ONLY: Q is a
-        // latch on CLKB, so CLKB stamps no capture row for Q — it appears as a level condition
-        // inside the CLKA rows instead.
+        // The slave Q's own next-slot is stamped by BOTH the conditioned CLKA:Rise capture AND its own
+        // CLKB:Fall opening (the master-slave reveal). The CLKB-fall rows close the imprecision the old
+        // model carved out of the replay harness — the CLKB reveal is now a first-class capture row.
         assert!(
             m.edge_rows
                 .iter()
@@ -1264,10 +1265,10 @@ Q = "!CLKB*M2 + CLKB*Q"
             "Q carries a CLKA:Rise capture row"
         );
         assert!(
-            !m.edge_rows
+            m.edge_rows
                 .iter()
-                .any(|r| r.clock == "CLKB" && r.next[qi].is_some()),
-            "Q carries no CLKB capture row: the latch clock is a condition, not a capture"
+                .any(|r| r.clock == "CLKB" && r.token == EdgeTok::Fall && r.next[qi].is_some()),
+            "Q carries a CLKB:Fall capture row (its own latch opening)"
         );
     }
 
