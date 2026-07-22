@@ -214,6 +214,9 @@ delay = "inv_delay_x2"         # only `delay` differs; power/constrain still inh
 `define_cell` block naming both; `INVX2` resolves to `(inv_delay_x2, inv_power, inv_constrain)` and
 gets its own block.
 
+This cell is a runnable example in `examples/cells.toml`, and its two generated `define_cell` blocks
+are in `examples/cells_cells.tcl`.
+
 `define_cell`'s pin flags follow the same clock/async split as the arcs: `-input` lists the plain
 data inputs only — clock pins (`clock`) and async pins (`async`) are excluded and instead get their
 own `-clock` and `-async` flags, each omitted (like `-input` itself) when its pin set is empty.

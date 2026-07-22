@@ -87,6 +87,28 @@ define_leakage -when "!A*B*!Y" { AND2 }
 define_leakage -when "A*!B*!Y" { AND2 }
 define_leakage -when "A*B*Y" { AND2 }
 define_arc \
+	-prevector_pinlist {A} \
+	-prevector {0} \
+	-type combinational \
+	-pinlist {A Y} \
+	-vector {R F} \
+	-related_pin A \
+	-pin Y \
+	{ INVX1 INVX2 INVX3 }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {A} \
+	-prevector {1} \
+	-pinlist {A Y} \
+	-vector {F R} \
+	-related_pin A \
+	-pin Y \
+	{ INVX1 INVX2 INVX3 }
+
+define_leakage -when "!A*Y" { INVX1 INVX2 INVX3 }
+define_leakage -when "A*!Y" { INVX1 INVX2 INVX3 }
+define_arc \
 	-prevector_pinlist {A B} \
 	-prevector {11 10} \
 	-type combinational \

@@ -19,6 +19,45 @@ endspecify
 AND2_Y u_AND2_Y (Y, A, B);
 endmodule
 `endcelldefine
+primitive INVX1_Y(Y, A);
+output Y;
+input  A;
+reg    Y;
+table
+	0 : ? : 1;
+	1 : ? : 0;
+endtable
+endprimitive
+`celldefine
+module INVX1(Y, A);
+output Y;
+input  A;
+specify
+	(A => Y) = (0.1, 0.1);
+endspecify
+INVX1_Y u_INVX1_Y (Y, A);
+endmodule
+`endcelldefine
+`celldefine
+module INVX2(Y, A);
+output Y;
+input  A;
+specify
+	(A => Y) = (0.1, 0.1);
+endspecify
+INVX1_Y u_INVX1_Y (Y, A);
+endmodule
+`endcelldefine
+`celldefine
+module INVX3(Y, A);
+output Y;
+input  A;
+specify
+	(A => Y) = (0.1, 0.1);
+endspecify
+INVX1_Y u_INVX1_Y (Y, A);
+endmodule
+`endcelldefine
 primitive C2_Q(Q, A, B);
 output Q;
 input  A, B;
