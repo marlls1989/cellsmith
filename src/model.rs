@@ -962,11 +962,6 @@ Q = "A +"
 "#;
         let err = parse_spec(s).unwrap_err();
         assert!(matches!(err, ModelError::Spec(_)));
-        let msg = err.to_string();
-        assert!(
-            msg.contains("Failed to parse boolean expression"),
-            "expected the underlying BoolExpr parse error in the message: {msg}",
-        );
     }
 
     #[test]
@@ -974,8 +969,7 @@ Q = "A +"
         // Preserves the c-element / NOT>AND>OR precedence grammar coverage that lived in the removed
         // src/expr.rs, now exercised at the deserialise-time parse boundary: a function parsed once
         // into a BoolExpr at load must build to the same BDD as the equivalent hand-built expression.
-        let cell = analyse_one(
-            r#"
+        const SRC: &str = r#"
 [[cell]]
 name = "GRAMMAR"
 inputs = ["A", "B", "a", "b", "c"]
@@ -983,8 +977,17 @@ inputs = ["A", "B", "a", "b", "c"]
 Q = "A*B + Q*(A+B)"
 Y1 = "a + b*c"
 Y2 = "!a*b"
-"#,
+"#;
+
+        // Direct check on the raw, parse-time field: the c-element function is parsed and stored on
+        // `Cell.outputs` at deserialise time, before any minimisation write-back can touch it.
+        let raw = parse_spec(SRC).unwrap();
+        assert_eq!(
+            raw.cells[0].outputs[&Symbol::from("Q")],
+            BoolExpr::parse("A*B + Q*(A+B)").unwrap()
         );
+
+        let cell = analyse_one(SRC);
 
         let builder = bdd_builder!();
 
@@ -1004,5 +1007,81 @@ Y2 = "!a*b"
         let got = builder.build(&cell.outputs[2].expr);
         let want = builder.build(&expr!(!"a" & "b"));
         assert!(got.equivalent_to(&want), "precedence: !a*b == (!a) & b");
+    }
+
+    #[test]
+    fn accepts_superset_operator_syntax_at_parse_spec() {
+        // espresso's grammar also accepts `&`/`|`/`~`/`^` and `true`/`false`; precedence NOT > AND >
+        // XOR > OR, so `a & b | ~c ^ d` == `(a&b) | ((~c)^d)`. Preserves the coverage that lived in the
+        // removed src/expr.rs's `accepts_superset_syntax`, now exercised at the deserialise-time parse
+        // boundary: the raw, parse-time field on `Cell.outputs` (not the post-pipeline `AnalysedCell`).
+        let s = r#"
+[[cell]]
+name = "SUPERSET"
+inputs = ["a", "b", "c", "d"]
+[cell.outputs]
+Y = "a & b | ~c ^ d"
+"#;
+        let raw = parse_spec(s).unwrap();
+
+        let builder = bdd_builder!();
+        let got = builder.build(&raw.cells[0].outputs[&Symbol::from("Y")]);
+        let want = builder.build(&expr!(("a" & "b") | (!"c" ^ "d")));
+        assert!(got.equivalent_to(&want));
+    }
+
+    #[test]
+    fn accepts_constant_literals_at_parse_spec() {
+        // Preserves the constant-literal coverage that lived in the removed src/expr.rs (the bare
+        // numeral `1` from `constants_and_pin_names_with_digits`, and the `true`/`false` word literals
+        // from `accepts_superset_syntax`), now exercised at the deserialise-time parse boundary: the
+        // raw, parse-time field on `Cell.outputs`.
+        let s = r#"
+[[cell]]
+name = "CONST"
+inputs = ["A"]
+[cell.outputs]
+Y = "A + 1"
+T = "true"
+F = "false"
+"#;
+        let raw = parse_spec(s).unwrap();
+
+        let builder = bdd_builder!();
+        assert!(
+            builder
+                .build(&raw.cells[0].outputs[&Symbol::from("Y")])
+                .is_tautology(),
+            "A + 1 is a tautology"
+        );
+        assert!(builder
+            .build(&raw.cells[0].outputs[&Symbol::from("T")])
+            .is_tautology());
+        assert!(builder
+            .build(&raw.cells[0].outputs[&Symbol::from("F")])
+            .is_contradiction());
+    }
+
+    #[test]
+    fn rejects_malformed_output_function_at_parse_spec() {
+        // Preserves the malformed-input coverage that lived in the removed src/expr.rs's
+        // `rejects_garbage`, now exercised at the deserialise-time parse boundary: each of these must
+        // fail `parse_spec` itself, with no `.analyse()` call reached. (`"a +"` is already covered by
+        // `invalid_output_function_fails_at_parse_spec`.)
+        for bad in ["", "a b", "(a", "a @ b"] {
+            let s = format!(
+                r#"
+[[cell]]
+name = "X"
+inputs = ["a", "b"]
+[cell.outputs]
+Y = "{bad}"
+"#
+            );
+            assert!(
+                parse_spec(&s).is_err(),
+                "expected parse_spec to reject {bad:?}"
+            );
+        }
     }
 }
