@@ -37,12 +37,17 @@ pub struct Cell {
     pub inputs: Vec<Symbol>,
     /// Output pin name -> Boolean function, parsed at deserialise time. Order preserved (stable
     /// output order).
+    ///
+    /// The function text's grammar is a superset of the `a*b+!c` form: `*`/`&` AND, `+`/`|` OR,
+    /// `!`/`~` NOT, `^` XOR, `0`/`1`/`true`/`false` constants, and parentheses for grouping.
+    /// Precedence, tightest first: NOT > AND > XOR > OR. Identifiers are a letter/`_` followed by
+    /// letters/digits/`_` (so pin names like `M1`, `P2`, `Q` are fine).
     #[serde(deserialize_with = "de_symbol_expr_map")]
     pub outputs: IndexMap<Symbol, BoolExpr>,
-    /// Optional: internal state variable name -> Boolean function, parsed at deserialise time. Order
-    /// preserved. An internal signal is referenceable by other functions and is a driven state
-    /// variable (modelled in the Verilog and the Liberty state table), but emits **no** external
-    /// output pin and is never an arc source or target.
+    /// Optional: internal state variable name -> Boolean function, parsed at deserialise time (same
+    /// grammar as [`Cell::outputs`]). Order preserved. An internal signal is referenceable by other
+    /// functions and is a driven state variable (modelled in the Verilog and the Liberty state
+    /// table), but emits **no** external output pin and is never an arc source or target.
     #[serde(default, deserialize_with = "de_symbol_expr_map")]
     pub internal: IndexMap<Symbol, BoolExpr>,
     /// Optional: input pins that force the output regardless of held state (async set/reset),
@@ -1028,6 +1033,51 @@ Y = "a & b | ~c ^ d"
         let got = builder.build(&raw.cells[0].outputs[&Symbol::from("Y")]);
         let want = builder.build(&expr!(("a" & "b") | (!"c" ^ "d")));
         assert!(got.equivalent_to(&want));
+    }
+
+    #[test]
+    fn xor_precedence_pinned_between_and_and_or_at_parse_spec() {
+        // Pins the one precedence boundary left uncovered: NOT > AND > XOR > OR, so XOR binds looser
+        // than AND but tighter than OR. Each case asserts both an equivalence to the correctly
+        // parenthesised reading and a non-equivalence to the wrongly parenthesised reading — the
+        // non-equivalence is what actually pins the boundary, since a merely-equivalent pair would
+        // pass under either precedence.
+        let s = r#"
+[[cell]]
+name = "XORPREC"
+inputs = ["a", "b", "c"]
+[cell.outputs]
+AndBeforeXor = "a*b ^ c"
+XorBeforeOr = "a ^ b + c"
+"#;
+        let raw = parse_spec(s).unwrap();
+        let builder = bdd_builder!();
+
+        // AND binds tighter than XOR: `a*b ^ c` == `(a*b)^c`, not `a*(b^c)`.
+        let got = builder.build(&raw.cells[0].outputs[&Symbol::from("AndBeforeXor")]);
+        let want_and_first = builder.build(&expr!(("a" & "b") ^ "c"));
+        let want_xor_first = builder.build(&expr!("a" & ("b" ^ "c")));
+        assert!(
+            got.equivalent_to(&want_and_first),
+            "precedence: a*b ^ c == (a*b)^c"
+        );
+        assert!(
+            !got.equivalent_to(&want_xor_first),
+            "precedence: a*b ^ c must NOT equal a*(b^c)"
+        );
+
+        // XOR binds tighter than OR: `a ^ b + c` == `(a^b)+c`, not `a^(b+c)`.
+        let got = builder.build(&raw.cells[0].outputs[&Symbol::from("XorBeforeOr")]);
+        let want_xor_first = builder.build(&expr!(("a" ^ "b") | "c"));
+        let want_or_first = builder.build(&expr!("a" ^ ("b" | "c")));
+        assert!(
+            got.equivalent_to(&want_xor_first),
+            "precedence: a ^ b + c == (a^b)+c"
+        );
+        assert!(
+            !got.equivalent_to(&want_or_first),
+            "precedence: a ^ b + c must NOT equal a^(b+c)"
+        );
     }
 
     #[test]

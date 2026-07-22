@@ -178,8 +178,9 @@ invariants.
 Function syntax: the primary operators are `*` (AND), `+` (OR), `!` (NOT), the constants `1`/`0`, and
 parentheses for grouping. The parser is a superset of that form: it also accepts `&` for AND, `|` for
 OR, `~` for NOT, `^` for XOR, and `true`/`false` as constants. Precedence, tightest first, is
-NOT > AND > XOR > OR. Every variable in a function must be a declared input, an output, or an internal
-signal of the cell.
+NOT > AND > XOR > OR. Identifiers are a letter or `_` followed by letters, digits, or `_`, so pin
+names like `M1`, `P2`, and `Q` are fine. Every variable in a function must be a declared input, an
+output, or an internal signal of the cell.
 
 ### Characterisation templates
 
