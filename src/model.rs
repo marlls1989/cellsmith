@@ -83,12 +83,12 @@ pub struct Cell {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TemplateSpec {
-    #[serde(default)]
-    pub delay: Option<String>,
-    #[serde(default)]
-    pub power: Option<String>,
-    #[serde(default)]
-    pub constrain: Option<String>,
+    #[serde(default, deserialize_with = "de_opt_symbol")]
+    pub delay: Option<Symbol>,
+    #[serde(default, deserialize_with = "de_opt_symbol")]
+    pub power: Option<Symbol>,
+    #[serde(default, deserialize_with = "de_opt_symbol")]
+    pub constrain: Option<Symbol>,
 }
 
 /// Deserialize the cell `name` field as a non-empty `Vec<Symbol>` (order preserving). Accepts either a
@@ -133,6 +133,13 @@ fn de_symbol_map<'de, D: serde::Deserializer<'de>>(
 ) -> Result<IndexMap<Symbol, String>, D::Error> {
     IndexMap::<String, String>::deserialize(d)
         .map(|m| m.into_iter().map(|(k, v)| (Symbol::from(k), v)).collect())
+}
+
+/// Deserialize an optional template-name field as `Option<Symbol>`, interning the name when present.
+/// `Symbol` has no `serde` impl, so the value is read as `Option<String>` and interned via
+/// `Symbol::from` (a template name is created once at parse time and shared across many cells).
+fn de_opt_symbol<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Symbol>, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.map(Symbol::from))
 }
 
 /// Deserialize an `alias -> template overrides` table as `IndexMap<Symbol, TemplateSpec>`, interning

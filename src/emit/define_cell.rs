@@ -22,7 +22,7 @@ use crate::model::AnalysedCell;
 
 /// A resolved template triple: the `(delay, power, constrain)` names an alias attaches, each `Some`
 /// only when the alias override or the cell-wide template supplies it.
-type Triple = (Option<String>, Option<String>, Option<String>);
+type Triple = (Option<Symbol>, Option<Symbol>, Option<Symbol>);
 
 /// All `define_cell` blocks for a cell, one per resolved template triple. Aliases sharing a triple are
 /// bundled into a single block; the blocks follow the first-appearance order of their aliases.
