@@ -3,7 +3,7 @@
 # src/logic/edge.rs and src/emit/{arcs_tcl,statetable,verilog,liberty}.rs, so this file doubles as a
 # hand-runnable exercise of the edge-register collapse, the state tables and the emitters.
 #
-#   cellsmith examples/sequentials.toml -o out      # -> out/sequentials_arcs.tcl, .v, .lib
+#   cellsmith examples/sequentials.toml -o out      # -> out/sequentials_arcs.tcl, .v, .lib, _cells.tcl
 #   cellsmith examples/sequentials.toml --stdout    # preview everything on stdout
 #
 # Each cell carries a one-line structural note derived from its equations: a node `X = !CLK*D+CLK*X`
@@ -24,6 +24,10 @@ clock = ["CLK"]
 M = "!CLK*D + CLK*M"
 [cell.outputs]
 Q = "CLK*M + !CLK*Q"
+[cell.template]
+delay = "dly_10x10"
+power = "pwr_10x10"
+constrain = "con_10x10"
 
 # The same rising-edge flip-flop with the edge collapse opted out: it stays two level latches.
 [[cell]]

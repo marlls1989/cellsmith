@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`<base>_cells.tcl`, a fourth generated artifact.** cellsmith now emits Cadence Liberate
+  `define_cell` blocks — the structural cell declaration the transition arcs attach to: pins
+  (`-input`/`-clock`/`-async`/`-output`/`-pinlist`) and characterisation-template references
+  (`-delay`/`-power`/`-constrain`), with no logic or timing. On by default; suppress with the
+  `--no-cells` flag.
+- **`[cell.template]` and `[cell.template_overrides.<ALIAS>]`.** A cell names its characterisation
+  templates (`delay`/`power`/`constrain`, each optional) under `[cell.template]`; a drive-strength
+  alias can override them under `[cell.template_overrides.<ALIAS>]`, merged per field (an override
+  field wins, otherwise the cell-wide template's field is inherited). Aliases sharing a resolved
+  `(delay, power, constrain)` triple are bundled into one `define_cell` block; an override key must
+  be one of the cell's declared names.
+
 ## [0.2.0] - 2026-07-22
 
 ### Added
