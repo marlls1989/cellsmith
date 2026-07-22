@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `(delay, power, constrain)` triple are bundled into one `define_cell` block; an override key must
   be one of the cell's declared names.
 
+### Changed
+
+- Boolean expressions for output and internal nodes are now parsed when the cell specification is
+  read, reporting any errors at load time with the offending line and column rather than during
+  analysis.
+
 ## [0.2.0] - 2026-07-22
 
 ### Added

@@ -11,9 +11,6 @@ use rayon::prelude::*;
 use serde::Deserialize;
 use thiserror::Error;
 
-use espresso_logic::expression::ParseBoolExprError;
-
-use crate::expr;
 use crate::logic::arcs::{Arc, HiddenArc};
 use crate::logic::confluence::Constraint;
 use crate::logic::hazard::{OrderDependence, Oscillation};
@@ -38,15 +35,22 @@ pub struct Cell {
     /// Primary input pins. Order matters: it defines the pinlist/vector order.
     #[serde(deserialize_with = "de_symbol_vec")]
     pub inputs: Vec<Symbol>,
-    /// Output pin name -> Boolean function. Order preserved (stable output order).
-    #[serde(deserialize_with = "de_symbol_map")]
-    pub outputs: IndexMap<Symbol, String>,
-    /// Optional: internal state variable name -> Boolean function. Order preserved. An internal
-    /// signal is referenceable by other functions and is a driven state variable (modelled in the
-    /// Verilog and the Liberty state table), but emits **no** external output pin and is never an arc
-    /// source or target.
-    #[serde(default, deserialize_with = "de_symbol_map")]
-    pub internal: IndexMap<Symbol, String>,
+    /// Output pin name -> Boolean function, parsed at deserialise time. Entries arrive in the order
+    /// the TOML parser yields them — sorted by name, not as written in the file — and that order is
+    /// stable from then on.
+    ///
+    /// The function text's grammar is a superset of the `a*b+!c` form: `*`/`&` AND, `+`/`|` OR,
+    /// `!`/`~` NOT, `^` XOR, `0`/`1`/`true`/`false` constants, and parentheses for grouping.
+    /// Precedence, tightest first: NOT > AND > XOR > OR. Identifiers are a letter/`_` followed by
+    /// letters/digits/`_` (so pin names like `M1`, `P2`, `Q` are fine).
+    #[serde(deserialize_with = "de_symbol_expr_map")]
+    pub outputs: IndexMap<Symbol, BoolExpr>,
+    /// Optional: internal state variable name -> Boolean function, parsed at deserialise time (same
+    /// grammar and name-sorted ordering as [`Cell::outputs`]). An internal signal is referenceable by other
+    /// functions and is a driven state variable (modelled in the Verilog and the Liberty state
+    /// table), but emits **no** external output pin and is never an arc source or target.
+    #[serde(default, deserialize_with = "de_symbol_expr_map")]
+    pub internal: IndexMap<Symbol, BoolExpr>,
     /// Optional: input pins that force the output regardless of held state (async set/reset),
     /// so their arcs are emitted as `-type async` rather than combinational.
     #[serde(rename = "async", default, deserialize_with = "de_symbol_vec")]
@@ -126,13 +130,48 @@ fn de_symbol_vec<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Symbol>, 
     Vec::<String>::deserialize(d).map(|v| v.into_iter().map(Symbol::from).collect())
 }
 
-/// Deserialize a `name -> function` table as `IndexMap<Symbol, String>`, interning the keys and keeping
-/// the function text (and the insertion order) as-is.
-fn de_symbol_map<'de, D: serde::Deserializer<'de>>(
+/// A private newtype around [`BoolExpr`] with a hand-written `Deserialize` impl: `BoolExpr` has no
+/// `serde` impl of its own (espresso-logic has no serde dependency), so this parses the TOML string
+/// value directly via [`BoolExpr::parse`] — a bad function is a hard error surfaced at file-load, at
+/// the value's own TOML span.
+struct DeBoolExpr(BoolExpr);
+
+impl<'de> Deserialize<'de> for DeBoolExpr {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct FuncVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for FuncVisitor {
+            type Value = DeBoolExpr;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a Boolean function string")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                BoolExpr::parse(v)
+                    .map(DeBoolExpr)
+                    .map_err(serde::de::Error::custom)
+            }
+
+            fn visit_borrowed_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                BoolExpr::parse(v)
+                    .map(DeBoolExpr)
+                    .map_err(serde::de::Error::custom)
+            }
+        }
+
+        d.deserialize_str(FuncVisitor)
+    }
+}
+
+/// Deserialize a `name -> function` table as `IndexMap<Symbol, BoolExpr>`, interning the keys and
+/// parsing each function's text into a [`BoolExpr`] (insertion order preserved). A malformed function
+/// is a hard error at deserialise time, reported at the value's TOML span.
+fn de_symbol_expr_map<'de, D: serde::Deserializer<'de>>(
     d: D,
-) -> Result<IndexMap<Symbol, String>, D::Error> {
-    IndexMap::<String, String>::deserialize(d)
-        .map(|m| m.into_iter().map(|(k, v)| (Symbol::from(k), v)).collect())
+) -> Result<IndexMap<Symbol, BoolExpr>, D::Error> {
+    IndexMap::<String, DeBoolExpr>::deserialize(d)
+        .map(|m| m.into_iter().map(|(k, v)| (Symbol::from(k), v.0)).collect())
 }
 
 /// Deserialize an optional template-name field as `Option<Symbol>`, interning the name when present.
@@ -160,13 +199,6 @@ pub enum ModelError {
     EmptyName,
     #[error("duplicate cell name {name:?} used by more than one cell")]
     DuplicateCellName { name: Symbol },
-    #[error("cell {cell:?}: cannot parse function for output {output:?}: {source}")]
-    Function {
-        cell: Symbol,
-        output: Symbol,
-        #[source]
-        source: ParseBoolExprError,
-    },
     #[error("cell {cell:?}: duplicate input pin {pin:?}")]
     DuplicateInput { cell: Symbol, pin: Symbol },
     #[error("cell {cell:?}: pin {pin:?} is both an input and an output")]
@@ -423,16 +455,13 @@ impl Cell {
             .chain(internal_names.iter().cloned())
             .collect();
 
-        // Parse every function (outputs then internals) into one signal list.
+        // Every function (outputs then internals) is already parsed into a `BoolExpr` at deserialise
+        // time; classify its support here into one signal list.
         let n_outputs = self.outputs.len();
         let mut all: Vec<AnalysedOutput> = Vec::with_capacity(n_outputs + self.internal.len());
         for (name, func) in self.outputs.iter().chain(self.internal.iter()) {
-            let parsed = expr::parse(func).map_err(|source| ModelError::Function {
-                cell: self.name[0].clone(),
-                output: name.clone(),
-                source,
-            })?;
-            for v in &parsed.vars {
+            let vars: BTreeSet<Symbol> = func.variables().collect();
+            for v in &vars {
                 if !input_set.contains(v) && !output_set.contains(v) && !internal_set.contains(v) {
                     return Err(ModelError::UnknownVar {
                         cell: self.name[0].clone(),
@@ -443,13 +472,13 @@ impl Cell {
             }
             let feedback: Vec<Symbol> = signal_names
                 .iter()
-                .filter(|s| parsed.vars.contains(*s))
+                .filter(|s| vars.contains(*s))
                 .cloned()
                 .collect();
             all.push(AnalysedOutput {
                 name: name.clone(),
-                expr: parsed.expr,
-                vars: parsed.vars,
+                expr: func.clone(),
+                vars,
                 feedback,
             });
         }
@@ -562,6 +591,7 @@ pub(crate) fn analyse_one(src: &str) -> AnalysedCell {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use espresso_logic::{bdd_builder, expr};
 
     const SAMPLE: &str = r#"
 [[cell]]
@@ -841,7 +871,7 @@ Z = "A"
         // `Cell` has all-pub fields, so a hand-built empty name list bypasses `de_name_list` and would
         // otherwise panic on `self.name[0]`. The guard returns `EmptyName` rather than panicking.
         let mut outputs = IndexMap::new();
-        outputs.insert(Symbol::from("Y"), "A".to_string());
+        outputs.insert(Symbol::from("Y"), BoolExpr::parse("A").unwrap());
         let cell = Cell {
             name: vec![],
             inputs: vec![Symbol::from("A")],
@@ -922,5 +952,231 @@ Y = "!A"
 delay = "delay_template"
 "#;
         assert!(parse_spec(s).unwrap().cells[0].analyse().is_ok());
+    }
+
+    #[test]
+    fn invalid_output_function_fails_at_parse_spec() {
+        // A malformed function under `[cell.outputs]` is a hard error at TOML deserialise time
+        // (parse_spec), never reaching `.analyse()` — parse failures now surface at LOAD, at the
+        // value's own TOML span, carrying the underlying BoolExpr parse error through.
+        let s = r#"
+[[cell]]
+name = "BAD"
+inputs = ["A"]
+[cell.outputs]
+Q = "A +"
+"#;
+        let err = parse_spec(s).unwrap_err();
+        assert!(matches!(err, ModelError::Spec(_)));
+    }
+
+    #[test]
+    fn output_function_builds_to_expected_bdd() {
+        // Preserves the c-element / NOT>AND>OR precedence grammar coverage that lived in the removed
+        // src/expr.rs, now exercised at the deserialise-time parse boundary: a function parsed once
+        // into a BoolExpr at load must build to the same BDD as the equivalent hand-built expression.
+        const SRC: &str = r#"
+[[cell]]
+name = "GRAMMAR"
+inputs = ["A", "B", "a", "b", "c"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+Y1 = "a + b*c"
+Y2 = "!a*b"
+"#;
+
+        // Direct check on the raw, parse-time field: the c-element function is parsed and stored on
+        // `Cell.outputs` at deserialise time, before any minimisation write-back can touch it.
+        let raw = parse_spec(SRC).unwrap();
+        assert_eq!(
+            raw.cells[0].outputs[&Symbol::from("Q")],
+            BoolExpr::parse("A*B + Q*(A+B)").unwrap()
+        );
+
+        let cell = analyse_one(SRC);
+
+        // Look each output up by name. Positions would only happen to line up because the TOML
+        // parser hands the table over sorted by key; a renamed output would silently shift them.
+        let out = |n: &str| {
+            let name = Symbol::from(n);
+            &cell
+                .outputs
+                .iter()
+                .find(|o| o.name == name)
+                .unwrap_or_else(|| panic!("output {n} missing"))
+                .expr
+        };
+
+        let builder = bdd_builder!();
+
+        let got = builder.build(out("Q"));
+        let want = builder.build(&expr!(("A" & "B") | ("Q" & ("A" | "B"))));
+        assert!(got.equivalent_to(&want), "c-element function must match");
+
+        // NOT > AND > OR: `a + b*c` == `a | (b & c)`.
+        let got = builder.build(out("Y1"));
+        let want = builder.build(&expr!("a" | ("b" & "c")));
+        assert!(
+            got.equivalent_to(&want),
+            "precedence: a + b*c == a | (b & c)"
+        );
+
+        // `!a*b` == `(!a) & b`.
+        let got = builder.build(out("Y2"));
+        let want = builder.build(&expr!(!"a" & "b"));
+        assert!(got.equivalent_to(&want), "precedence: !a*b == (!a) & b");
+    }
+
+    #[test]
+    fn accepts_superset_operator_syntax_at_parse_spec() {
+        // espresso's grammar also accepts `&`/`|`/`~`/`^` and `true`/`false`; precedence NOT > AND >
+        // XOR > OR, so `a & b | ~c ^ d` == `(a&b) | ((~c)^d)`. Preserves the coverage that lived in the
+        // removed src/expr.rs's `accepts_superset_syntax`, now exercised at the deserialise-time parse
+        // boundary: the raw, parse-time field on `Cell.outputs` (not the post-pipeline `AnalysedCell`).
+        let s = r#"
+[[cell]]
+name = "SUPERSET"
+inputs = ["a", "b", "c", "d"]
+[cell.outputs]
+Y = "a & b | ~c ^ d"
+"#;
+        let raw = parse_spec(s).unwrap();
+
+        let builder = bdd_builder!();
+        let got = builder.build(&raw.cells[0].outputs[&Symbol::from("Y")]);
+        let want = builder.build(&expr!(("a" & "b") | (!"c" ^ "d")));
+        assert!(got.equivalent_to(&want));
+    }
+
+    #[test]
+    fn xor_precedence_pinned_between_and_and_or_at_parse_spec() {
+        // Pins the one precedence boundary left uncovered: NOT > AND > XOR > OR, so XOR binds looser
+        // than AND but tighter than OR. Each case asserts both an equivalence to the correctly
+        // parenthesised reading and a non-equivalence to the wrongly parenthesised reading — the
+        // non-equivalence is what actually pins the boundary, since a merely-equivalent pair would
+        // pass under either precedence.
+        let s = r#"
+[[cell]]
+name = "XORPREC"
+inputs = ["a", "b", "c"]
+[cell.outputs]
+AndBeforeXor = "a*b ^ c"
+XorBeforeOr = "a ^ b + c"
+"#;
+        let raw = parse_spec(s).unwrap();
+        let builder = bdd_builder!();
+
+        // AND binds tighter than XOR: `a*b ^ c` == `(a*b)^c`, not `a*(b^c)`.
+        let got = builder.build(&raw.cells[0].outputs[&Symbol::from("AndBeforeXor")]);
+        let want_and_first = builder.build(&expr!(("a" & "b") ^ "c"));
+        let want_xor_first = builder.build(&expr!("a" & ("b" ^ "c")));
+        assert!(
+            got.equivalent_to(&want_and_first),
+            "precedence: a*b ^ c == (a*b)^c"
+        );
+        assert!(
+            !got.equivalent_to(&want_xor_first),
+            "precedence: a*b ^ c must NOT equal a*(b^c)"
+        );
+
+        // XOR binds tighter than OR: `a ^ b + c` == `(a^b)+c`, not `a^(b+c)`.
+        let got = builder.build(&raw.cells[0].outputs[&Symbol::from("XorBeforeOr")]);
+        let want_xor_first = builder.build(&expr!(("a" ^ "b") | "c"));
+        let want_or_first = builder.build(&expr!("a" ^ ("b" | "c")));
+        assert!(
+            got.equivalent_to(&want_xor_first),
+            "precedence: a ^ b + c == (a^b)+c"
+        );
+        assert!(
+            !got.equivalent_to(&want_or_first),
+            "precedence: a ^ b + c must NOT equal a^(b+c)"
+        );
+    }
+
+    #[test]
+    fn accepts_constant_literals_at_parse_spec() {
+        // Preserves the constant-literal coverage that lived in the removed src/expr.rs (the bare
+        // numeral `1` from `constants_and_pin_names_with_digits`, and the `true`/`false` word literals
+        // from `accepts_superset_syntax`), now exercised at the deserialise-time parse boundary: the
+        // raw, parse-time field on `Cell.outputs`.
+        let s = r#"
+[[cell]]
+name = "CONST"
+inputs = ["A"]
+[cell.outputs]
+Y = "A + 1"
+T = "true"
+F = "false"
+"#;
+        let raw = parse_spec(s).unwrap();
+
+        let builder = bdd_builder!();
+        assert!(
+            builder
+                .build(&raw.cells[0].outputs[&Symbol::from("Y")])
+                .is_tautology(),
+            "A + 1 is a tautology"
+        );
+        assert!(builder
+            .build(&raw.cells[0].outputs[&Symbol::from("T")])
+            .is_tautology());
+        assert!(builder
+            .build(&raw.cells[0].outputs[&Symbol::from("F")])
+            .is_contradiction());
+    }
+
+    #[test]
+    fn accepts_digit_and_underscore_identifiers_at_parse_spec() {
+        // Pins the identifier rule stated as a guarantee on [`Cell::outputs`] and in the README: an
+        // identifier is a letter or `_` followed by letters, digits or `_`. Preserves the pin-name
+        // half of the removed src/expr.rs's `constants_and_pin_names_with_digits`, now exercised at
+        // the deserialise-time parse boundary.
+        let s = r#"
+[[cell]]
+name = "IDENT"
+inputs = ["M1", "P2", "_x"]
+[cell.outputs]
+Y = "M1*P2 + 1"
+Z = "_x*M1"
+"#;
+        let raw = parse_spec(s).unwrap();
+        let outputs = &raw.cells[0].outputs;
+
+        let vars: BTreeSet<Symbol> = outputs[&Symbol::from("Y")].variables().collect();
+        assert_eq!(
+            vars,
+            BTreeSet::from([Symbol::from("M1"), Symbol::from("P2")]),
+            "digit-bearing pin names parse as identifiers"
+        );
+
+        let vars: BTreeSet<Symbol> = outputs[&Symbol::from("Z")].variables().collect();
+        assert_eq!(
+            vars,
+            BTreeSet::from([Symbol::from("_x"), Symbol::from("M1")]),
+            "a leading underscore is a valid identifier start"
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_output_function_at_parse_spec() {
+        // Preserves the malformed-input coverage that lived in the removed src/expr.rs's
+        // `rejects_garbage`, now exercised at the deserialise-time parse boundary: each of these must
+        // fail `parse_spec` itself, with no `.analyse()` call reached. (`"a +"` is already covered by
+        // `invalid_output_function_fails_at_parse_spec`.)
+        for bad in ["", "a b", "(a", "a @ b"] {
+            let s = format!(
+                r#"
+[[cell]]
+name = "X"
+inputs = ["a", "b"]
+[cell.outputs]
+Y = "{bad}"
+"#
+            );
+            assert!(
+                parse_spec(&s).is_err(),
+                "expected parse_spec to reject {bad:?}"
+            );
+        }
     }
 }
