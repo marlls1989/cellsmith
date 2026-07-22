@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-22
+
 ### Added
 
 - **`<base>_cells.tcl`, a fourth generated artifact.** cellsmith now emits Cadence Liberate
@@ -119,7 +121,8 @@ Initial release.
 - Emit Liberty, Verilog, and Tcl (arc) artefacts from a TOML cell specification.
 - Multi-threaded analysis with rayon.
 
-[Unreleased]: https://github.com/marlls1989/cellsmith/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/marlls1989/cellsmith/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/marlls1989/cellsmith/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/marlls1989/cellsmith/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/marlls1989/cellsmith/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/marlls1989/cellsmith/compare/v0.1.0...v0.1.1
