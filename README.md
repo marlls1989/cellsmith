@@ -247,19 +247,27 @@ endmodule
 `endcelldefine
 ```
 
+## Install
+
+```sh
+cargo install cellsmith
+```
+
+cellsmith's one external requirement is **`clang-devel`** (it provides `libclang`):
+[`espresso-logic`](https://crates.io/crates/espresso-logic), the BDD/cover engine, compiles a C FFI at
+build time and needs `libclang`. Every Rust dependency is fetched by cargo.
+
 ## Build
+
+From a clone, for development:
 
 ```sh
 cargo build --release
 cargo test
 ```
 
-Requirements:
-
-- A C toolchain and **libclang** — [`espresso-logic`](https://crates.io/crates/espresso-logic) (the
-  BDD / cover engine) builds a C FFI.
-- Git dependencies are fetched through the system `git` (configured in `.cargo/config.toml` via
-  `net.git-fetch-with-cli`), so a working `git` on `PATH` is needed for the first build.
+`cargo install` and a source build both compile espresso-logic's C FFI, so both need the same
+`clang-devel` / `libclang` toolchain described under [Install](#install).
 
 ## Benchmarks
 
@@ -300,11 +308,17 @@ cargo bench -- --baseline before
 
 ## Dependencies
 
-- [`espresso-logic`](https://crates.io/crates/espresso-logic) `5.4` — the maintainer's own crate; it
+cargo resolves these Rust crates automatically — the only *external* requirement is `clang-devel`
+(see [Install](#install)):
+
+- [`espresso-logic`](https://crates.io/crates/espresso-logic) `5.6.2` — the maintainer's own crate; it
   provides the BDD and cover/minterm engine cellsmith is built on (BDD feedback projection and
   cover/minterm extraction).
-- [`liberty-parse`](https://github.com/marlls1989/liberty-parse) (git) — generic Liberty `Group`
-  trees for emitting the `.lib` file.
+- [`liberty-parser`](https://crates.io/crates/liberty-parser) `0.3` — the published Liberty parser
+  crate (used as `liberty_parse`); its generic Liberty `Group` trees back the `.lib` emitter.
+
+Plus the standard ecosystem crates: `serde`/`toml` (spec parsing), `clap` (CLI), `indexmap`,
+`thiserror`, and `rayon` (parallelism).
 
 ## Status and scope
 

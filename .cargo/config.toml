@@ -1,5 +1,0 @@
-# Fetch git dependencies (liberty-parse) through the system `git` CLI rather than the built-in
-# libgit2 client. This honours the user's global git config (credential helpers, `insteadOf`
-# HTTPS→SSH rewrites) which libgit2 does not, and avoids libgit2's ssh-agent handshake failures.
-[net]
-git-fetch-with-cli = true
