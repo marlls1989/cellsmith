@@ -240,6 +240,7 @@ Options:
                           (emitted by default)
       --no-leakage        Suppress `define_leakage` blocks — static leakage states derived from the
                           machine's settled seed states (emitted by default)
+      --no-cells          Suppress the `<base>_cells.tcl` define_cell artifact (emitted by default)
       --constraints       Emit derived setup/hold & non_seq constraint arcs (off by default; a cell can
                           opt in with `constraint_arcs = true`)
       --no-edge-collapse  Suppress the behavioural edge-register annotation (on by default); a cell can
@@ -252,7 +253,7 @@ Options:
 Examples:
 
 ```sh
-# Write cells_arcs.tcl, cells.v, cells.lib into ./out
+# Write cells_arcs.tcl, cells.v, cells.lib, cells_cells.tcl into ./out
 cellsmith cells.toml -o out
 
 # Preview everything on stdout
