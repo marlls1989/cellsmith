@@ -1,6 +1,6 @@
 # Example cellsmith input — the cells cited in the README.
 #
-#   cellsmith examples/cells.toml -o out      # -> out/cells_arcs.tcl, out/cells.v, out/cells.lib
+#   cellsmith examples/cells.toml -o out      # -> out/cells_arcs.tcl, out/cells.v, out/cells.lib, out/cells_cells.tcl
 #   cellsmith examples/cells.toml --stdout    # preview everything on stdout
 
 [[cell]]
@@ -8,6 +8,18 @@ name = "AND2"
 inputs = ["A", "B"]
 [cell.outputs]
 Y = "A*B"
+
+[[cell]]
+name = ["INVX1", "INVX2", "INVX3"]   # multi-drive inverter: demonstrates -delay/-power/-constrain
+inputs = ["A"]                          #   emission and a per-drive template override (INVX2 splits off)
+[cell.outputs]
+Y = "!A"
+[cell.template]
+delay = "inv_delay"
+power = "inv_power"
+constrain = "inv_constrain"
+[cell.template_overrides.INVX2]
+delay = "inv_delay_x2"
 
 [[cell]]
 name = "C2"                    # physical cell name used in the arcs

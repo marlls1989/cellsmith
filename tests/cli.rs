@@ -1,5 +1,5 @@
 //! CLI integration checks driving the built binary directly (no extra dependencies): stdout mode and
-//! its banners, file mode and its three artifacts, stdin (`-`), and the non-zero exit on a bad spec.
+//! its banners, file mode and its four artifacts, stdin (`-`), and the non-zero exit on a bad spec.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -23,7 +23,7 @@ fn scratch_dir(tag: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn stdout_mode_emits_all_three_banners() {
+fn stdout_mode_emits_all_four_banners() {
     let dir = scratch_dir("stdout");
     let spec = dir.join("cells.toml");
     std::fs::write(&spec, C2).unwrap();
@@ -38,13 +38,14 @@ fn stdout_mode_emits_all_three_banners() {
     assert!(stdout.contains("// ===== cellsmith arcs.tcl ====="));
     assert!(stdout.contains("// ===== cellsmith verilog ====="));
     assert!(stdout.contains("// ===== cellsmith liberty ====="));
+    assert!(stdout.contains("// ===== cellsmith cells.tcl ====="));
     assert!(stdout.contains("define_arc"));
 
     std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
-fn file_mode_writes_the_three_artifacts() {
+fn file_mode_writes_the_four_artifacts() {
     let dir = scratch_dir("file");
     let spec = dir.join("cells.toml");
     std::fs::write(&spec, C2).unwrap();
@@ -62,6 +63,7 @@ fn file_mode_writes_the_three_artifacts() {
     assert!(outdir.join("cli_arcs.tcl").is_file());
     assert!(outdir.join("cli.v").is_file());
     assert!(outdir.join("cli.lib").is_file());
+    assert!(outdir.join("cli_cells.tcl").is_file());
 
     std::fs::remove_dir_all(&dir).ok();
 }

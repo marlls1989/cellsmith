@@ -11,6 +11,33 @@ library (cells) {
       function : "A*B";
     }
   }
+  cell (INVX1) {
+    pin (A) {
+      direction : input;
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+    }
+  }
+  cell (INVX2) {
+    pin (A) {
+      direction : input;
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+    }
+  }
+  cell (INVX3) {
+    pin (A) {
+      direction : input;
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+    }
+  }
   cell (C2) {
     pin (A) {
       direction : input;

@@ -15,13 +15,14 @@ by a minimal, general (any-gate) TOML input.
 
 ## What it produces
 
-For every cell in the input spec, cellsmith emits three artifacts:
+For every cell in the input spec, cellsmith emits four artifacts:
 
 | Artifact | File | Contents |
 |----------|------|----------|
 | Liberate arcs | `<name>_arcs.tcl` | `define_arc` blocks with prevector walks and `R/F/1/0/X` vectors, plus `define_leakage` blocks — one static leakage state per settled seed state (an input assignment that forces the cell into a defined state on its own), conditioned on inputs and settled outputs |
 | Behavioural Verilog | `<name>.v` | one sequential UDP `primitive` per signal (outputs + internal state nodes — signals that hold memory — with a three-valued next-state table) + a `celldefine`d wrapper `module` (internals as internal `wire`s) with a `specify` block |
 | Liberty stub | `<name>.lib` | a self-contained `library (<name>) { ... }` file (Liberate can consume it directly) wrapping one `cell (...)` per cell: input `pin`s; a sequential cell gets one joint `statetable` listing every state node — emission-minted `_st` aliases for state outputs plus genuine internals — with output pins expressed as spec projections onto it (`internal_node` + `inverted_output`, or `state_function`) and `direction : internal` pins for the hidden nodes; a cell with no state nodes gets a plain `function` per output instead |
+| Liberate cell declaration | `<name>_cells.tcl` | `define_cell` blocks: the structural pin declaration (`-input`/`-clock`/`-async`/`-output`/`-pinlist`) and characterisation-template references (`-delay`/`-power`/`-constrain`) from `[cell.template]`/`[cell.template_overrides]` — no logic or timing; one block per distinct resolved `(delay, power, constrain)` triple, bundling the drive-strength aliases that share it. Suppressed by `--no-cells` |
 
 ## The model
 
@@ -180,6 +181,50 @@ OR, `~` for NOT, `^` for XOR, and `true`/`false` as constants. Precedence, tight
 NOT > AND > XOR > OR. Every variable in a function must be a declared input, an output, or an internal
 signal of the cell.
 
+### Characterisation templates
+
+`[cell.template]` names the characterisation templates the `<name>_cells.tcl` artifact's
+`define_cell` blocks attach to the cell: `delay`, `power` and `constrain`, each an optional template
+name taken verbatim from the spec (cellsmith never generates or validates the names — Liberate is
+the consumer). `[cell.template_overrides.<ALIAS>]` overrides these for one drive-strength alias (a
+name from the cell's `name` list); the alias key must be one of the cell's declared names, or it is a
+hard error. Overriding merges **per field**: a field set on the override wins, otherwise it falls back
+to the cell-wide `[cell.template]` value; a field unset on both means the corresponding
+`-delay`/`-power`/`-constrain` flag is omitted for that alias.
+
+Aliases that resolve to the same `(delay, power, constrain)` triple after merging are bundled into one
+`define_cell` block, in first-appearance order; an alias whose override changes even one field splits
+off into its own block.
+
+```toml
+[[cell]]
+name = ["INVX1", "INVX2", "INVX3"]
+inputs = ["A"]
+[cell.outputs]
+Y = "!A"
+[cell.template]
+delay = "inv_delay"
+power = "inv_power"
+constrain = "inv_constrain"
+[cell.template_overrides.INVX2]
+delay = "inv_delay_x2"         # only `delay` differs; power/constrain still inherit the default
+```
+
+`INVX1` and `INVX3` both resolve to `(inv_delay, inv_power, inv_constrain)` and share one
+`define_cell` block naming both; `INVX2` resolves to `(inv_delay_x2, inv_power, inv_constrain)` and
+gets its own block.
+
+This cell is a runnable example in `examples/cells.toml`, and its two generated `define_cell` blocks
+are in `examples/cells_cells.tcl`.
+
+`define_cell`'s pin flags follow the same clock/async split as the arcs: `-input` lists the plain
+data inputs only — clock pins (`clock`) and async pins (`async`) are excluded and instead get their
+own `-clock` and `-async` flags, each omitted (like `-input` itself) when its pin set is empty.
+`-pinlist` is unaffected by the split: it always lists every pin — inputs, clock pins and async pins,
+in declaration order — followed by the outputs. `define_cell` is purely structural: it carries no
+`-type`, `-when`, `-related_pin` or `-function`; timing and function live in `<name>_arcs.tcl`, not
+here.
+
 ## Usage
 
 ```
@@ -198,11 +243,12 @@ Options:
                           (emitted by default)
       --no-leakage        Suppress `define_leakage` blocks — static leakage states derived from the
                           machine's settled seed states (emitted by default)
+      --no-cells          Suppress the `<base>_cells.tcl` define_cell artifact (emitted by default)
       --constraints       Emit derived setup/hold & non_seq constraint arcs (off by default; a cell can
                           opt in with `constraint_arcs = true`)
       --no-edge-collapse  Suppress the behavioural edge-register annotation (on by default); a cell can
                           opt out individually with `no_edge_collapse = true`
-      --stdout            Write all three artifacts to stdout (with banners) instead of writing files
+      --stdout            Write all four artifacts to stdout (with banners) instead of writing files
   -h, --help              Print help
   -V, --version           Print version
 ```
@@ -210,7 +256,7 @@ Options:
 Examples:
 
 ```sh
-# Write cells_arcs.tcl, cells.v, cells.lib into ./out
+# Write cells_arcs.tcl, cells.v, cells.lib, cells_cells.tcl into ./out
 cellsmith cells.toml -o out
 
 # Preview everything on stdout
