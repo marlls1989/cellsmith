@@ -65,6 +65,30 @@ pub struct Cell {
     /// `--no-edge-collapse` CLI flag) suppresses it, leaving every arc in its combinational form.
     #[serde(default)]
     pub no_edge_collapse: bool,
+    /// Optional: the cell-wide characterisation-template references for the `define_cell` emitter
+    /// (delay/power/constrain). Structural only — the template names come from the spec, never
+    /// generated. `None` fields carry through unset.
+    #[serde(default)]
+    pub template: Option<TemplateSpec>,
+    /// Optional: per-drive-strength-alias template overrides, keyed by a name from this cell's `name`
+    /// list. Each alias's [`TemplateSpec`] is merged per-field over the cell-wide `template`. Keys are
+    /// validated against the cell's declared names at analyse time.
+    #[serde(default, deserialize_with = "de_template_overrides")]
+    pub template_overrides: IndexMap<Symbol, TemplateSpec>,
+}
+
+/// The characterisation-template references for a cell (or a drive-strength alias override): the
+/// `delay`, `power` and `constrain` template names the `define_cell` emitter attaches. Structural
+/// only — each name is taken verbatim from the spec, never generated; an absent field is `None`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TemplateSpec {
+    #[serde(default)]
+    pub delay: Option<String>,
+    #[serde(default)]
+    pub power: Option<String>,
+    #[serde(default)]
+    pub constrain: Option<String>,
 }
 
 /// Deserialize the cell `name` field as a non-empty `Vec<Symbol>` (order preserving). Accepts either a
@@ -111,6 +135,16 @@ fn de_symbol_map<'de, D: serde::Deserializer<'de>>(
         .map(|m| m.into_iter().map(|(k, v)| (Symbol::from(k), v)).collect())
 }
 
+/// Deserialize an `alias -> template overrides` table as `IndexMap<Symbol, TemplateSpec>`, interning
+/// the keys and keeping the insertion order. `Symbol` has no `serde` impl, so the keys are read as
+/// `String` and interned via `Symbol::from`.
+fn de_template_overrides<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<IndexMap<Symbol, TemplateSpec>, D::Error> {
+    IndexMap::<String, TemplateSpec>::deserialize(d)
+        .map(|m| m.into_iter().map(|(k, v)| (Symbol::from(k), v)).collect())
+}
+
 #[derive(Debug, Error)]
 pub enum ModelError {
     #[error("cannot parse spec: {0}")]
@@ -142,6 +176,8 @@ pub enum ModelError {
     AsyncNotInput { cell: Symbol, pin: Symbol },
     #[error("cell {cell:?}: clock pin {pin:?} is not a declared input")]
     ClockNotInput { cell: Symbol, pin: Symbol },
+    #[error("cell {cell:?}: template override alias {alias:?} is not a declared cell name")]
+    UnknownTemplateOverride { cell: Symbol, alias: Symbol },
 }
 
 /// A signal (output **or** internal) after analysis: its function, the variables it references, and
@@ -206,6 +242,14 @@ pub struct AnalysedCell {
     /// internal node. Default (empty) when the cell opted out (`no_edge_collapse`). Computed purely from
     /// the already-explored machine — it never alters the exploration.
     pub edge: crate::logic::edge::EdgeArcs,
+    /// The cell-wide characterisation-template references (delay/power/constrain) carried verbatim from
+    /// the spec for the `define_cell` emitter. `None` when the cell declares no `template`. Raw carry —
+    /// analysis never reads or synthesises it.
+    pub template: Option<TemplateSpec>,
+    /// Per-drive-strength-alias template overrides carried verbatim from the spec, keyed by an alias
+    /// from `name`. Merged per-field over `template` by the `define_cell` emitter. Keys are validated
+    /// against the declared names in [`Cell::analyse_signals`]; raw carry otherwise.
+    pub template_overrides: IndexMap<Symbol, TemplateSpec>,
 }
 
 impl AnalysedCell {
@@ -353,6 +397,18 @@ impl Cell {
             }
         }
 
+        // Every template-override key must name one of this cell's (de_name_list-deduped) drive-strength
+        // aliases. Iterating in insertion order keeps the reported error deterministic.
+        let name_set: BTreeSet<Symbol> = self.name.iter().cloned().collect();
+        for alias in self.template_overrides.keys() {
+            if !name_set.contains(alias) {
+                return Err(ModelError::UnknownTemplateOverride {
+                    cell: self.name[0].clone(),
+                    alias: alias.clone(),
+                });
+            }
+        }
+
         // Signal order: outputs first, then internals. Feedback references are classified against it.
         let signal_names: Vec<Symbol> = output_names
             .iter()
@@ -410,6 +466,8 @@ impl Cell {
             constraint_arcs_declared: self.constraint_arcs,
             regions: Vec::new(),
             edge: Default::default(),
+            template: self.template.clone(),
+            template_overrides: self.template_overrides.clone(),
         };
         Ok(analysed)
     }
@@ -786,6 +844,8 @@ Z = "A"
             clock: vec![],
             constraint_arcs: false,
             no_edge_collapse: false,
+            template: None,
+            template_overrides: IndexMap::new(),
         };
         let spec = Spec { cells: vec![cell] };
         let err = spec.analyse().unwrap_err();
@@ -824,5 +884,36 @@ Y = "A"
 "#;
         let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
         assert!(matches!(err, ModelError::AsyncNotInput { .. }));
+    }
+
+    #[test]
+    fn template_override_alias_must_be_a_declared_name() {
+        // An override keyed by a name absent from the cell's `name` list is rejected at analyse time.
+        let s = r#"
+[[cell]]
+name = ["INVX1", "INVX2"]
+inputs = ["A"]
+[cell.outputs]
+Y = "!A"
+[cell.template_overrides.NOPE]
+delay = "delay_template"
+"#;
+        let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
+        assert!(matches!(err, ModelError::UnknownTemplateOverride { .. }));
+    }
+
+    #[test]
+    fn template_override_on_declared_alias_analyses_ok() {
+        // An override keyed by a declared drive-strength alias parses and analyses cleanly.
+        let s = r#"
+[[cell]]
+name = ["INVX1", "INVX2"]
+inputs = ["A"]
+[cell.outputs]
+Y = "!A"
+[cell.template_overrides.INVX2]
+delay = "delay_template"
+"#;
+        assert!(parse_spec(s).unwrap().cells[0].analyse().is_ok());
     }
 }
