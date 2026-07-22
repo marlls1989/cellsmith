@@ -300,7 +300,7 @@ fn format_hidden_arc(cell: &AnalysedCell, h: &HiddenArc, opts: ArcsTclOptions) -
     s
 }
 
-fn pinlist_str(cell: &AnalysedCell) -> String {
+pub(crate) fn pinlist_str(cell: &AnalysedCell) -> String {
     let mut pins = cell.inputs.clone();
     pins.extend(cell.outputs.iter().map(|o| o.name.clone()));
     pins.join(" ")

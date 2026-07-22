@@ -1,6 +1,7 @@
 //! cellsmith CLI: read a minimal multi-cell TOML spec and emit, for every cell, the Liberate arcs
-//! (`define_arc` + prevectors), a behavioural Verilog model (sequential UDP + wrapper), and a minimal
-//! Liberty fragment (`statetable` for hysteretic outputs, plain `function` for combinational ones).
+//! (`define_arc` + prevectors), the structural Liberate `define_cell` blocks (`cells.tcl`), a
+//! behavioural Verilog model (sequential UDP + wrapper), and a minimal Liberty fragment (`statetable`
+//! for hysteretic outputs, plain `function` for combinational ones).
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -12,6 +13,7 @@ use clap::Parser;
 use rayon::prelude::*;
 
 use cellsmith::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
+use cellsmith::emit::define_cell::cell_define_cell;
 use cellsmith::emit::liberty::library_liberty;
 use cellsmith::emit::verilog::cell_verilog;
 use cellsmith::model::{parse_spec, AnalysedCell};
@@ -46,6 +48,10 @@ struct Cli {
     #[arg(long)]
     no_leakage: bool,
 
+    /// Suppress the `<base>_cells.tcl` define_cell artifact (emitted by default).
+    #[arg(long)]
+    no_cells: bool,
+
     /// Emit derived setup/hold & non_seq constraint arcs (off by default; a cell can opt in with
     /// `constraint_arcs = true`).
     #[arg(long)]
@@ -56,7 +62,7 @@ struct Cli {
     #[arg(long)]
     no_edge_collapse: bool,
 
-    /// Write all three artifacts to stdout (with banners) instead of writing files.
+    /// Write all four artifacts to stdout (with banners) instead of writing files.
     #[arg(long)]
     stdout: bool,
 }
@@ -168,12 +174,16 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     let arcs = render(&cells, |c| cell_arcs_tcl(c, arc_opts));
     let verilog = render(&cells, cell_verilog);
     let liberty = library_liberty(&base, &cells);
+    let cells_tcl = render(&cells, cell_define_cell);
 
     if cli.stdout {
         let mut out = io::stdout().lock();
         write!(out, "{}", banner("arcs.tcl", &arcs))?;
         write!(out, "{}", banner("verilog", &verilog))?;
         write!(out, "{}", banner("liberty", &liberty))?;
+        if !cli.no_cells {
+            write!(out, "{}", banner("cells.tcl", &cells_tcl))?;
+        }
         return Ok(());
     }
 
@@ -181,6 +191,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     write_file(&cli.outdir, &format!("{base}_arcs.tcl"), &arcs)?;
     write_file(&cli.outdir, &format!("{base}.v"), &verilog)?;
     write_file(&cli.outdir, &format!("{base}.lib"), &liberty)?;
+    if !cli.no_cells {
+        write_file(&cli.outdir, &format!("{base}_cells.tcl"), &cells_tcl)?;
+    }
     Ok(())
 }
 
