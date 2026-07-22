@@ -35,8 +35,9 @@ pub struct Cell {
     /// Primary input pins. Order matters: it defines the pinlist/vector order.
     #[serde(deserialize_with = "de_symbol_vec")]
     pub inputs: Vec<Symbol>,
-    /// Output pin name -> Boolean function, parsed at deserialise time. Order preserved (stable
-    /// output order).
+    /// Output pin name -> Boolean function, parsed at deserialise time. Entries arrive in the order
+    /// the TOML parser yields them — sorted by name, not as written in the file — and that order is
+    /// stable from then on.
     ///
     /// The function text's grammar is a superset of the `a*b+!c` form: `*`/`&` AND, `+`/`|` OR,
     /// `!`/`~` NOT, `^` XOR, `0`/`1`/`true`/`false` constants, and parentheses for grouping.
@@ -45,7 +46,7 @@ pub struct Cell {
     #[serde(deserialize_with = "de_symbol_expr_map")]
     pub outputs: IndexMap<Symbol, BoolExpr>,
     /// Optional: internal state variable name -> Boolean function, parsed at deserialise time (same
-    /// grammar as [`Cell::outputs`]). Order preserved. An internal signal is referenceable by other
+    /// grammar and name-sorted ordering as [`Cell::outputs`]). An internal signal is referenceable by other
     /// functions and is a driven state variable (modelled in the Verilog and the Liberty state
     /// table), but emits **no** external output pin and is never an arc source or target.
     #[serde(default, deserialize_with = "de_symbol_expr_map")]
@@ -994,14 +995,26 @@ Y2 = "!a*b"
 
         let cell = analyse_one(SRC);
 
+        // Look each output up by name. Positions would only happen to line up because the TOML
+        // parser hands the table over sorted by key; a renamed output would silently shift them.
+        let out = |n: &str| {
+            let name = Symbol::from(n);
+            &cell
+                .outputs
+                .iter()
+                .find(|o| o.name == name)
+                .unwrap_or_else(|| panic!("output {n} missing"))
+                .expr
+        };
+
         let builder = bdd_builder!();
 
-        let got = builder.build(&cell.outputs[0].expr);
+        let got = builder.build(out("Q"));
         let want = builder.build(&expr!(("A" & "B") | ("Q" & ("A" | "B"))));
         assert!(got.equivalent_to(&want), "c-element function must match");
 
         // NOT > AND > OR: `a + b*c` == `a | (b & c)`.
-        let got = builder.build(&cell.outputs[1].expr);
+        let got = builder.build(out("Y1"));
         let want = builder.build(&expr!("a" | ("b" & "c")));
         assert!(
             got.equivalent_to(&want),
@@ -1009,7 +1022,7 @@ Y2 = "!a*b"
         );
 
         // `!a*b` == `(!a) & b`.
-        let got = builder.build(&cell.outputs[2].expr);
+        let got = builder.build(out("Y2"));
         let want = builder.build(&expr!(!"a" & "b"));
         assert!(got.equivalent_to(&want), "precedence: !a*b == (!a) & b");
     }
@@ -1110,6 +1123,38 @@ F = "false"
         assert!(builder
             .build(&raw.cells[0].outputs[&Symbol::from("F")])
             .is_contradiction());
+    }
+
+    #[test]
+    fn accepts_digit_and_underscore_identifiers_at_parse_spec() {
+        // Pins the identifier rule stated as a guarantee on [`Cell::outputs`] and in the README: an
+        // identifier is a letter or `_` followed by letters, digits or `_`. Preserves the pin-name
+        // half of the removed src/expr.rs's `constants_and_pin_names_with_digits`, now exercised at
+        // the deserialise-time parse boundary.
+        let s = r#"
+[[cell]]
+name = "IDENT"
+inputs = ["M1", "P2", "_x"]
+[cell.outputs]
+Y = "M1*P2 + 1"
+Z = "_x*M1"
+"#;
+        let raw = parse_spec(s).unwrap();
+        let outputs = &raw.cells[0].outputs;
+
+        let vars: BTreeSet<Symbol> = outputs[&Symbol::from("Y")].variables().collect();
+        assert_eq!(
+            vars,
+            BTreeSet::from([Symbol::from("M1"), Symbol::from("P2")]),
+            "digit-bearing pin names parse as identifiers"
+        );
+
+        let vars: BTreeSet<Symbol> = outputs[&Symbol::from("Z")].variables().collect();
+        assert_eq!(
+            vars,
+            BTreeSet::from([Symbol::from("_x"), Symbol::from("M1")]),
+            "a leading underscore is a valid identifier start"
+        );
     }
 
     #[test]

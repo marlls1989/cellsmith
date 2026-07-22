@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`-input`/`-clock`/`-async`/`-output`/`-pinlist`) and characterisation-template references
   (`-delay`/`-power`/`-constrain`), with no logic or timing. On by default; suppress with the
   `--no-cells` flag.
-- **`[cell.template]` and `[cell.template_overrides.<ALIAS>]`**. A cell names its characterisation
+- **`[cell.template]` and `[cell.template_overrides.<ALIAS>]`.** A cell names its characterisation
   templates (`delay`/`power`/`constrain`, each optional) under `[cell.template]`; a drive-strength
   alias can override them under `[cell.template_overrides.<ALIAS>]`, merged per field (an override
   field wins, otherwise the cell-wide template's field is inherited). Aliases sharing a resolved
