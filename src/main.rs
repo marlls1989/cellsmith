@@ -16,7 +16,7 @@ use cellsmith::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
 use cellsmith::emit::define_cell::cell_define_cell;
 use cellsmith::emit::liberty::library_liberty;
 use cellsmith::emit::verilog::cell_verilog;
-use cellsmith::model::{parse_spec, AnalysedCell};
+use cellsmith::model::{parse_spec, AnalysedCell, ArcClass, ArcClasses};
 
 /// Generate Cadence Liberate transition arcs (with prevectors), a behavioural Verilog model and a
 /// Liberty fragment for logic cells, including state-holding/hysteretic cells.
@@ -34,10 +34,12 @@ struct Cli {
     #[arg(short, long)]
     name: Option<String>,
 
-    /// Suppress the `-when` conditions on arcs (emitted by default). Suppression only: every arc still
-    /// emits, so the output differs from the default solely by the absent `-when` lines.
-    #[arg(long)]
-    no_when: bool,
+    /// Suppress the `-when` conditions on arcs, per arc class (emitted by default). Bare `--no-when`
+    /// selects every class; `--no-when=hidden` / `--no-when=transition` select one; repeat the flag to
+    /// select several. A value must be attached with `=` (the space form is not accepted). A cell can
+    /// select classes itself with `no_when = ...`, and the two selections are unioned.
+    #[arg(long, value_name = "CLASS", value_enum, num_args = 0..=1, require_equals = true)]
+    no_when: Option<Vec<ArcClass>>,
 
     /// Suppress hidden (internal-power) arcs — input toggles where no output changes (emitted by default).
     #[arg(long)]
@@ -91,6 +93,16 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         for c in &mut spec.cells {
             c.no_edge_collapse = true;
         }
+    }
+    // `--no-when` is a blanket UNION: every class selected on the command line is added to each cell's
+    // own `no_when` set, so a cell can select more classes but never opt back out of a CLI-selected one.
+    let cli_no_when = match cli.no_when.as_deref() {
+        None => ArcClasses::default(),
+        Some([]) => ArcClasses::ALL, // bare `--no-when`: every class
+        Some(classes) => classes.iter().copied().collect(),
+    };
+    for c in &mut spec.cells {
+        c.no_when = c.no_when.union(cli_no_when);
     }
     let cells: Vec<AnalysedCell> = spec.analyse()?;
 
@@ -166,7 +178,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     // per-cell opt-in) without a separate diagnostic.
 
     let arc_opts = ArcsTclOptions {
-        emit_when: !cli.no_when,
         emit_internal: !cli.no_internal,
         emit_leakage: !cli.no_leakage,
     };
@@ -261,6 +272,48 @@ fn write_file(dir: &Path, name: &str, body: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn no_when_bare_flag_selects_all_and_keeps_positional() {
+        let cli = Cli::try_parse_from(["cellsmith", "--no-when", "s.toml"]).unwrap();
+        // A bare occurrence records the id with zero values: `Some(vec![])`, distinct from an absent flag.
+        assert_eq!(cli.no_when, Some(vec![]));
+        // `require_equals` keeps the positional `<SPEC>` from being swallowed as the class value.
+        assert_eq!(cli.spec, "s.toml");
+    }
+
+    #[test]
+    fn no_when_equals_selects_one_class() {
+        let cli = Cli::try_parse_from(["cellsmith", "--no-when=hidden", "s.toml"]).unwrap();
+        assert_eq!(cli.no_when, Some(vec![ArcClass::Hidden]));
+    }
+
+    #[test]
+    fn no_when_repeats_accumulate_in_order() {
+        let cli = Cli::try_parse_from([
+            "cellsmith",
+            "--no-when=hidden",
+            "--no-when=transition",
+            "s.toml",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.no_when,
+            Some(vec![ArcClass::Hidden, ArcClass::Transition])
+        );
+    }
+
+    #[test]
+    fn no_when_absent_is_none() {
+        let cli = Cli::try_parse_from(["cellsmith", "s.toml"]).unwrap();
+        assert_eq!(cli.no_when, None);
+    }
+
+    #[test]
+    fn no_when_rejects_an_unknown_class() {
+        assert!(Cli::try_parse_from(["cellsmith", "--no-when=bogus", "s.toml"]).is_err());
+    }
 
     #[test]
     fn base_name_strips_dir_and_extension() {

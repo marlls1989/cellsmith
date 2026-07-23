@@ -69,6 +69,12 @@ pub struct Cell {
     /// `--no-edge-collapse` CLI flag) suppresses it, leaving every arc in its combinational form.
     #[serde(default)]
     pub no_edge_collapse: bool,
+    /// Optional: the per-cell mirror of `--no-when` — the arc classes whose `-when` is suppressed,
+    /// unioned with the global flag. Accepts a bool (`true` = every class, `false` = none), a scalar
+    /// class name, or a list of them. Absent = the empty set = today's behaviour (every class keeps its
+    /// `-when`).
+    #[serde(default, deserialize_with = "de_no_when")]
+    pub no_when: ArcClasses,
     /// Optional: the cell-wide characterisation-template references for the `define_cell` emitter
     /// (delay/power/constrain). Structural only — the template names come from the spec, never
     /// generated. `None` fields carry through unset.
@@ -93,6 +99,62 @@ pub struct TemplateSpec {
     pub power: Option<Symbol>,
     #[serde(default, deserialize_with = "de_opt_symbol")]
     pub constrain: Option<Symbol>,
+}
+
+/// A class of emitted arc, the granularity at which `-when` suppression is selected. The `clap::ValueEnum`
+/// derive kebab-cases the variants, so the tokens `transition` and `hidden` name the classes on both the
+/// CLI (`--no-when=<CLASS>`) and in the spec (`no_when = ...`) — one token table, shared by both surfaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
+pub enum ArcClass {
+    /// The `define_arc` delay/transition arcs (`crate::logic::arcs::Arc`).
+    Transition,
+    /// The internal-power arcs (`crate::logic::arcs::HiddenArc`).
+    Hidden,
+}
+
+/// The set of arc classes whose `-when` is suppressed. `Default` is the EMPTY set — nothing suppressed,
+/// today's behaviour.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ArcClasses {
+    transition: bool,
+    hidden: bool,
+}
+
+impl ArcClasses {
+    /// Every class suppressed.
+    pub const ALL: Self = Self {
+        transition: true,
+        hidden: true,
+    };
+
+    /// Whether `class`'s `-when` is suppressed.
+    pub fn contains(self, class: ArcClass) -> bool {
+        match class {
+            ArcClass::Transition => self.transition,
+            ArcClass::Hidden => self.hidden,
+        }
+    }
+
+    /// The field-wise union of two sets: a class is suppressed iff either set suppresses it.
+    pub fn union(self, other: Self) -> Self {
+        Self {
+            transition: self.transition || other.transition,
+            hidden: self.hidden || other.hidden,
+        }
+    }
+}
+
+impl FromIterator<ArcClass> for ArcClasses {
+    fn from_iter<I: IntoIterator<Item = ArcClass>>(iter: I) -> Self {
+        let mut set = Self::default();
+        for class in iter {
+            match class {
+                ArcClass::Transition => set.transition = true,
+                ArcClass::Hidden => set.hidden = true,
+            }
+        }
+        set
+    }
 }
 
 /// Deserialize the cell `name` field as a non-empty `Vec<Symbol>` (order preserving). Accepts either a
@@ -191,6 +253,40 @@ fn de_template_overrides<'de, D: serde::Deserializer<'de>>(
         .map(|m| m.into_iter().map(|(k, v)| (Symbol::from(k), v)).collect())
 }
 
+/// Deserialize the per-cell `no_when` field as an [`ArcClasses`] set. Accepts a bool (`true` = every
+/// class, `false` = none), a scalar class name (`"hidden"`), or a list of names (`["hidden",
+/// "transition"]`). Each name is validated through [`ArcClass`]'s `ValueEnum` parser, so the CLI and the
+/// spec share one token table. A bad name is a hard error at the value's own TOML span.
+fn de_no_when<'de, D: serde::Deserializer<'de>>(d: D) -> Result<ArcClasses, D::Error> {
+    // Bool and scalar-string variants FIRST so a TOML bool or scalar matches `All`/`One` rather than
+    // being probed as a sequence. Any string matches `One`, so the class-name validation happens AFTER
+    // this untagged match — a bad name surfaces the `custom` message below, not "did not match any
+    // variant".
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum BoolOrClasses {
+        All(bool),
+        One(String),
+        Many(Vec<String>),
+    }
+    let names: Vec<String> = match BoolOrClasses::deserialize(d)? {
+        BoolOrClasses::All(true) => return Ok(ArcClasses::ALL),
+        BoolOrClasses::All(false) => return Ok(ArcClasses::default()),
+        BoolOrClasses::One(s) => vec![s],
+        BoolOrClasses::Many(v) => v,
+    };
+    names
+        .iter()
+        .map(|s| {
+            <ArcClass as clap::ValueEnum>::from_str(s, false).map_err(|_| {
+                serde::de::Error::custom(format!(
+                    "unknown no_when arc class {s:?}: expected \"hidden\" or \"transition\", a bool, or a list of them"
+                ))
+            })
+        })
+        .collect::<Result<ArcClasses, _>>()
+}
+
 #[derive(Debug, Error)]
 pub enum ModelError {
     #[error("cannot parse spec: {0}")]
@@ -270,6 +366,9 @@ pub struct AnalysedCell {
     pub constraints: Vec<Constraint>,
     /// Whether the cell opted in to constraint-arc emission (`constraint_arcs = true`).
     pub constraint_arcs_declared: bool,
+    /// The arc classes whose `-when` is suppressed (per-cell `no_when` unioned with the global
+    /// `--no-when`), read by the arcs emitter. Raw carry — analysis never reads it.
+    pub no_when: ArcClasses,
     /// Each signal's state-table regions, precomputed once and cached in `signals()` order (outputs
     /// then internals), so emitters don't rebuild the BDDs per call site.
     pub regions: Vec<crate::logic::regions::StateRegions>,
@@ -500,6 +599,7 @@ impl Cell {
             clock_pins: self.clock.clone(),
             constraints: Vec::new(),
             constraint_arcs_declared: self.constraint_arcs,
+            no_when: self.no_when,
             regions: Vec::new(),
             edge: Default::default(),
             template: self.template.clone(),
@@ -711,6 +811,95 @@ Y = "A"
     }
 
     #[test]
+    fn no_when_absent_is_the_empty_set() {
+        let s = r#"
+[[cell]]
+name = "X"
+inputs = ["A"]
+[cell.outputs]
+Y = "A"
+"#;
+        let spec = parse_spec(s).unwrap();
+        assert_eq!(spec.cells[0].no_when, ArcClasses::default());
+    }
+
+    #[test]
+    fn no_when_true_selects_every_class() {
+        let s = r#"
+[[cell]]
+name = "X"
+inputs = ["A"]
+no_when = true
+[cell.outputs]
+Y = "A"
+"#;
+        let spec = parse_spec(s).unwrap();
+        assert_eq!(spec.cells[0].no_when, ArcClasses::ALL);
+    }
+
+    #[test]
+    fn no_when_false_is_the_empty_set() {
+        let s = r#"
+[[cell]]
+name = "X"
+inputs = ["A"]
+no_when = false
+[cell.outputs]
+Y = "A"
+"#;
+        let spec = parse_spec(s).unwrap();
+        assert_eq!(spec.cells[0].no_when, ArcClasses::default());
+    }
+
+    #[test]
+    fn no_when_scalar_selects_only_that_class() {
+        let s = r#"
+[[cell]]
+name = "X"
+inputs = ["A"]
+no_when = "hidden"
+[cell.outputs]
+Y = "A"
+"#;
+        let spec = parse_spec(s).unwrap();
+        let no_when = spec.cells[0].no_when;
+        assert!(no_when.contains(ArcClass::Hidden));
+        assert!(!no_when.contains(ArcClass::Transition));
+    }
+
+    #[test]
+    fn no_when_list_selects_every_named_class() {
+        let s = r#"
+[[cell]]
+name = "X"
+inputs = ["A"]
+no_when = ["hidden", "transition"]
+[cell.outputs]
+Y = "A"
+"#;
+        let spec = parse_spec(s).unwrap();
+        assert_eq!(spec.cells[0].no_when, ArcClasses::ALL);
+    }
+
+    #[test]
+    fn no_when_rejects_an_unknown_class() {
+        let s = r#"
+[[cell]]
+name = "X"
+inputs = ["A"]
+no_when = "propagation"
+[cell.outputs]
+Y = "A"
+"#;
+        let err = parse_spec(s).unwrap_err();
+        assert!(matches!(err, ModelError::Spec(_)));
+        assert!(
+            err.to_string().contains("unknown no_when arc class"),
+            "unexpected error: {err}",
+        );
+    }
+
+    #[test]
     fn internal_signal_is_classified_and_kept_off_the_output_list() {
         // A DFF: internal master latch M, external slave output Q referencing M.
         let s = r#"
@@ -881,6 +1070,7 @@ Z = "A"
             clock: vec![],
             constraint_arcs: false,
             no_edge_collapse: false,
+            no_when: ArcClasses::default(),
             template: None,
             template_overrides: IndexMap::new(),
         };

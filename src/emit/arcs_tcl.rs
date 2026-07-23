@@ -19,16 +19,11 @@ use crate::logic::confluence::{Constraint, ConstraintKind};
 use crate::logic::hazard::Oscillation;
 use crate::logic::leakage::LeakageState;
 use crate::logic::literal_product;
-use crate::model::AnalysedCell;
+use crate::model::{AnalysedCell, ArcClass};
 
 /// Knobs for the arc emitter.
 #[derive(Debug, Clone, Copy)]
 pub struct ArcsTclOptions {
-    /// Emit a `-when` condition (the other inputs' fixed values in the end state) on each arc, keeping
-    /// every held-input context as its own conditioned arc. **On by default.** When off, only the
-    /// `-when` line is suppressed: every arc still emits, so the two modes differ solely by the absent
-    /// conditions.
-    pub emit_when: bool,
     /// Emit hidden (whole-cell internal-power) arcs — an input toggles but no output changes — as
     /// `-type hidden` blocks. **On by default.**
     pub emit_internal: bool,
@@ -40,7 +35,6 @@ pub struct ArcsTclOptions {
 impl Default for ArcsTclOptions {
     fn default() -> Self {
         Self {
-            emit_when: true,
             emit_internal: true,
             emit_leakage: true,
         }
@@ -54,15 +48,16 @@ impl Default for ArcsTclOptions {
 /// follow the delay arcs.
 pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     let mut out = oscillation_comment(cell);
-    // `--no-when` suppresses only the `-when` line (handled in `format_arc`/`format_hidden_arc`): every
-    // arc still emits in both modes. Overlapping arcs and same-vector siblings differing only in internal
-    // state or prevector are legal in Liberate.
+    // `-when` suppression is selected PER ARC CLASS by the cell's resolved `no_when` set (handled in
+    // `format_arc`/`format_hidden_arc`): a class in the set drops its arcs' `-when` line, every other
+    // class keeps it, and every arc still emits regardless. Overlapping arcs and same-vector siblings
+    // differing only in internal state or prevector are legal in Liberate.
     for arc in &cell.arcs {
-        out.push_str(&format_arc(cell, arc, opts));
+        out.push_str(&format_arc(cell, arc));
     }
     if opts.emit_internal {
         for h in &cell.hidden_arcs {
-            out.push_str(&format_hidden_arc(cell, h, opts));
+            out.push_str(&format_hidden_arc(cell, h));
         }
     }
     if opts.emit_leakage {
@@ -183,7 +178,7 @@ fn related_edge(arc: &Arc) -> Edge {
     }
 }
 
-fn format_arc(cell: &AnalysedCell, arc: &Arc, opts: ArcsTclOptions) -> String {
+fn format_arc(cell: &AnalysedCell, arc: &Arc) -> String {
     // There is ONE edge category — a clock-edge timing arc, emitted with Liberate `-type edge`. The label
     // is looked up by the arc's FULL identity `(output, related, direction, machine start)`, so two firings
     // that differ only in internal state can type differently. An arc whose identity is absent is
@@ -212,8 +207,11 @@ fn format_arc(cell: &AnalysedCell, arc: &Arc, opts: ArcsTclOptions) -> String {
     );
     let pinlist = format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell));
     let vector = format!("\t-vector {{{}}} \\\n", vector_str(cell, arc));
-    let when = match (opts.emit_when, when_str(&arc.end, &arc.related)) {
-        (true, Some(w)) => format!("\t-when \"{w}\" \\\n"),
+    let when = match (
+        cell.no_when.contains(ArcClass::Transition),
+        when_str(&arc.end, &arc.related),
+    ) {
+        (false, Some(w)) => format!("\t-when \"{w}\" \\\n"),
         _ => String::new(),
     };
     let related = format!("\t-related_pin {} \\\n", arc.related);
@@ -248,7 +246,7 @@ fn format_arc(cell: &AnalysedCell, arc: &Arc, opts: ArcsTclOptions) -> String {
 /// `R`/`F` edge, every other input sits at its held value in the end state, and every output is pinned
 /// at its held `1`/`0` value (never `X` — a hidden arc measures no output transition). Unlike transition
 /// arcs there is no `-related_pin`, and `-type hidden` always leads regardless of edge direction.
-fn format_hidden_arc(cell: &AnalysedCell, h: &HiddenArc, opts: ArcsTclOptions) -> String {
+fn format_hidden_arc(cell: &AnalysedCell, h: &HiddenArc) -> String {
     let held: std::collections::BTreeMap<&str, bool> =
         h.outputs.iter().map(|(s, b)| (s.as_str(), *b)).collect();
     let end = assignment(&h.end);
@@ -291,7 +289,7 @@ fn format_hidden_arc(cell: &AnalysedCell, h: &HiddenArc, opts: ArcsTclOptions) -
     ));
     s.push_str(&format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell)));
     s.push_str(&format!("\t-vector {{{vec}}} \\\n"));
-    if let (true, Some(w)) = (opts.emit_when, hidden_when_str(h)) {
+    if let (false, Some(w)) = (cell.no_when.contains(ArcClass::Hidden), hidden_when_str(h)) {
         s.push_str(&format!("\t-when \"{w}\" \\\n"));
     }
     s.push_str(&format!("\t-pin {} \\\n", h.pin.as_str()));
@@ -572,12 +570,22 @@ inputs = ["A", "B"]
 Y = "A*B"
 "#,
         );
+        // A second cell identical but for `no_when = true`, which suppresses every arc class's `-when`.
+        let suppressed = analyse(
+            r#"
+[[cell]]
+name = "AND2"
+inputs = ["A", "B"]
+no_when = true
+[cell.outputs]
+Y = "A*B"
+"#,
+        );
         let without_when = cell_arcs_tcl(
-            &cell,
+            &suppressed,
+            // define_leakage is inherently -when-conditioned; disabled here to isolate arc -when
+            // suppression.
             ArcsTclOptions {
-                emit_when: false,
-                // define_leakage is inherently -when-conditioned; disabled here to isolate arc -when
-                // suppression.
                 emit_leakage: false,
                 ..Default::default()
             },
@@ -602,23 +610,27 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
+        // The same cell but for `no_when = true`, which suppresses every arc class's `-when`.
+        let suppressed = analyse(
+            r#"
+[[cell]]
+name = "C2"
+inputs = ["A", "B"]
+no_when = true
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+"#,
+        );
         let off = cell_arcs_tcl(
-            &cell,
+            &suppressed,
+            // define_leakage is inherently -when-conditioned; disabled here to isolate arc -when
+            // suppression.
             ArcsTclOptions {
-                emit_when: false,
-                // define_leakage is inherently -when-conditioned; disabled here to isolate arc -when
-                // suppression.
                 emit_leakage: false,
                 ..Default::default()
             },
         );
-        let on = cell_arcs_tcl(
-            &cell,
-            ArcsTclOptions {
-                emit_when: true,
-                ..Default::default()
-            },
-        );
+        let on = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         assert!(!off.contains("-when"));
         assert!(on.contains("-when"));
     }
@@ -637,14 +649,24 @@ inputs = ["A", "B", "C"]
 Y = "A*B + B*C + A*C"
 "#,
         );
+        // The same cell but for `no_when = true`, which suppresses every arc class's `-when`.
+        let suppressed = analyse(
+            r#"
+[[cell]]
+name = "MAJ3"
+inputs = ["A", "B", "C"]
+no_when = true
+[cell.outputs]
+Y = "A*B + B*C + A*C"
+"#,
+        );
         // Isolate arc `-when` suppression from `define_leakage`, which is inherently `-when`-conditioned.
-        let opts = |emit_when| ArcsTclOptions {
-            emit_when,
+        let opts = ArcsTclOptions {
             emit_leakage: false,
             ..Default::default()
         };
-        let with_when = cell_arcs_tcl(&cell, opts(true));
-        let without_when = cell_arcs_tcl(&cell, opts(false));
+        let with_when = cell_arcs_tcl(&cell, opts);
+        let without_when = cell_arcs_tcl(&suppressed, opts);
         assert_eq!(
             with_when.matches("define_arc").count(),
             without_when.matches("define_arc").count(),
