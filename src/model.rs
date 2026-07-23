@@ -70,9 +70,12 @@ pub struct Cell {
     #[serde(default)]
     pub no_edge_collapse: bool,
     /// Optional: the per-cell mirror of `--no-when` — the arc classes whose `-when` is suppressed,
-    /// unioned with the global flag. Accepts a bool (`true` = every class, `false` = none), a scalar
-    /// class name, or a list of them. Absent = the empty set = today's behaviour (every class keeps its
-    /// `-when`).
+    /// unioned with the global flag. Suppression and dedup are ONE behaviour applied per selected class:
+    /// the class drops its `-when` lines AND collapses the arcs that become indistinguishable once
+    /// `-when` is gone (same output/related/type/vector, differing only by prevector or internal state),
+    /// keeping the member with the shortest prevector. An unselected class is emitted exactly as before.
+    /// Accepts a bool (`true` = every class, `false` = none), a scalar class name, or a list of them.
+    /// Absent = the empty set = today's behaviour (every class keeps its `-when` and every arc).
     #[serde(default, deserialize_with = "de_no_when")]
     pub no_when: ArcClasses,
     /// Optional: the cell-wide characterisation-template references for the `define_cell` emitter
@@ -367,7 +370,11 @@ pub struct AnalysedCell {
     /// Whether the cell opted in to constraint-arc emission (`constraint_arcs = true`).
     pub constraint_arcs_declared: bool,
     /// The arc classes whose `-when` is suppressed (per-cell `no_when` unioned with the global
-    /// `--no-when`), read by the arcs emitter. Raw carry — analysis never reads it.
+    /// `--no-when`), read by the arcs emitter. For a selected class, suppression and dedup are ONE
+    /// behaviour: the class drops its `-when` lines AND collapses arcs that become indistinguishable once
+    /// `-when` is gone (same output/related/type/vector, differing only by prevector or internal state),
+    /// keeping the shortest prevector; an unselected class is emitted exactly as before. Raw carry —
+    /// analysis never reads it.
     pub no_when: ArcClasses,
     /// Each signal's state-table regions, precomputed once and cached in `signals()` order (outputs
     /// then internals), so emitters don't rebuild the BDDs per call site.

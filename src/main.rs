@@ -36,8 +36,11 @@ struct Cli {
 
     /// Suppress the `-when` conditions on arcs, per arc class (emitted by default). Bare `--no-when`
     /// selects every class; `--no-when=hidden` / `--no-when=transition` select one; repeat the flag to
-    /// select several. A value must be attached with `=` (the space form is not accepted). A cell can
-    /// select classes itself with `no_when = ...`, and the two selections are unioned.
+    /// select several. A value must be attached with `=` (the space form is not accepted). A selected
+    /// class also collapses arcs that become indistinguishable once `-when` is gone, keeping one arc
+    /// per emitted vector with the shortest prevector; arcs whose `-vector` still differs are
+    /// unaffected. A cell can select classes itself with `no_when = ...`, and the two selections are
+    /// unioned.
     #[arg(long, value_name = "CLASS", value_enum, num_args = 0..=1, require_equals = true)]
     no_when: Option<Vec<ArcClass>>,
 

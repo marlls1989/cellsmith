@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`--no-when` takes an optional per-class value.** `--no-when=hidden` / `--no-when=transition`
+  select one arc class to suppress `-when` on; the flag is repeatable to select several, and bare
+  `--no-when` selects every class.
+- **Per-cell `no_when` key.** A cell can select its own arc classes with `no_when = true` /
+  `"hidden"` / `["hidden", "transition"]`, unioned with whatever classes are selected on the command
+  line — a cell can add classes but never opt back out of one the CLI selected.
+- **`--no-when` deduplicates again.** A selected class no longer just drops the `-when` line: arcs
+  that become indistinguishable once `-when` is gone are collapsed to one arc per emitted vector,
+  keeping the shortest prevector, while arcs whose `-vector` still differs are unaffected. This
+  supersedes the 0.2.0 "suppression only" note; with no `--no-when` on the command line and no
+  `no_when` key in the spec, output is unchanged from before this rework.
+
 ## [0.2.1] - 2026-07-22
 
 ### Added

@@ -291,11 +291,31 @@ fn default_run_emits_arc_when_lines() {
 
 #[test]
 fn bare_no_when_suppresses_every_arc_when_line() {
+    let default = run_spec("two_default_for_bare", TWO, &[]);
     let out = run_spec("two_none", TWO, &["--no-when"]);
     assert!(
         !has_arc_when(arcs_section(&out)),
         "bare --no-when leaves no arc -when line anywhere"
     );
+    // Dedup fires: with `-when` gone, `TWO`'s colliding arcs collapse, so bare --no-when emits strictly
+    // fewer `define_arc` blocks than the default run.
+    let define_arcs = |s: &str| arcs_section(s).matches("define_arc").count();
+    assert!(
+        define_arcs(&out) < define_arcs(&default),
+        "bare --no-when collapses colliding arcs: {} not < {}",
+        define_arcs(&out),
+        define_arcs(&default),
+    );
+}
+
+/// Bare `--no-when` output is byte-identical run to run on the same multi-cell spec: the cross-PROCESS
+/// guard against a future `HashMap` regression reordering the deduplicated `.tcl` under a per-process
+/// random hash seed.
+#[test]
+fn bare_no_when_output_is_deterministic_across_runs() {
+    let a = run_spec("multi_det_a", MULTI, &["--no-when"]);
+    let b = run_spec("multi_det_b", MULTI, &["--no-when"]);
+    assert_eq!(a, b, "bare --no-when output is byte-identical run to run");
 }
 
 #[test]

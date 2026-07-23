@@ -149,6 +149,11 @@ constraint_arcs = true         # optional: opt this cell in to emitting the deri
                                #   (equivalent to the global --constraints flag, per cell)
 # no_edge_collapse = true      # optional: opt this cell OUT of the edge classification below
                                #   (equivalent to the global --no-edge-collapse flag, per cell)
+# no_when = true               # optional: suppress `-when` per arc class — true/"hidden"/["hidden",
+                               #   "transition"]; a selected class also loses duplicate arcs, keeping
+                               #   one per emitted vector with the shortest prevector; unioned with the
+                               #   CLI's --no-when selection, so a cell can add classes but never opt
+                               #   back out of one the CLI selected
 [cell.internal]                # internal state node: referenceable, but emits no external pin
 M = "!CLK*D + CLK*M"           #   the master latch (transparent low)
 [cell.outputs]
@@ -237,9 +242,15 @@ Arguments:
 Options:
   -o, --outdir <OUTDIR>   Directory for the generated files [default: .]
   -n, --name <NAME>       Base name for the output files (defaults to the spec file stem, or "cells" for stdin)
-      --no-when           Suppress the `-when` conditions on arcs (emitted by default). Suppression only:
-                          every arc still emits, so the output differs from the default solely by the
-                          absent `-when` lines
+      --no-when[=<CLASS>] Suppress the `-when` conditions on arcs, per arc class (emitted by default).
+                          Bare `--no-when` selects every class; `--no-when=hidden` /
+                          `--no-when=transition` select one; repeat the flag to select several. A value
+                          must be attached with `=` (the space form is not accepted: the value is
+                          optional and the spec path is positional). A selected class also collapses arcs
+                          that become indistinguishable once `-when` is gone, keeping one arc per emitted
+                          vector with the shortest prevector; arcs whose `-vector` still differs survive.
+                          A cell can select classes itself with `no_when = ...`, and the two selections
+                          are unioned
       --no-internal       Suppress hidden (internal-power) arcs — input toggles where no output changes
                           (emitted by default)
       --no-leakage        Suppress `define_leakage` blocks — static leakage states derived from the
