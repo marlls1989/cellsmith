@@ -241,14 +241,20 @@ Arguments:
 Options:
   -o, --outdir <OUTDIR>   Directory for the generated files [default: .]
   -n, --name <NAME>       Base name for the output files (defaults to the spec file stem, or "cells" for stdin)
-      --when[=<CLASS>]   Also emit the `-when`-conditioned arcs, per arc class (off by default). The
-                          deduplicated arcs without `-when` — one per emitted vector, keeping the
-                          shortest prevector — are always emitted; a selected class adds its `-when`
-                          arcs on top, so an arc can appear both with and without its condition. Bare
-                          `--when` selects every class; `--when=hidden` / `--when=transition` select
-                          one; repeat the flag to select several. A value must be attached with `=` (the
-                          space form is not accepted). A cell can select classes itself with `when =
-                          ...`, and the two selections are unioned
+      --when[=<CLASS>]    Also emit the `-when`-conditioned arcs, per arc class (off by default). The
+                          deduplicated arcs without `-when` — one per output/related-pin/arc-type/vector
+                          combination, keeping the shortest prevector — are always emitted; a selected
+                          class adds its `-when` arcs on top, so an arc can appear both with and without
+                          its condition. Bare `--when` selects every class; `--when=hidden` /
+                          `--when=transition` select one; repeat the flag to select several. A value
+                          must be attached with `=` (the space form is not accepted). A cell can select
+                          classes itself with `when = ...`, and the two selections are unioned
+
+                          Possible values:
+                          - transition: The `define_arc` delay/transition arcs: an input edge on a
+                                        related pin driving an output edge
+                          - hidden:     The hidden (internal-power) arcs: an input toggle that settles
+                                        without changing any output
       --no-internal       Suppress hidden (internal-power) arcs — input toggles where no output changes
                           (emitted by default)
       --no-leakage        Suppress `define_leakage` blocks — static leakage states derived from the

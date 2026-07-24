@@ -57,9 +57,11 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     // differing only by prevector or internal state — keeping the member with the shortest prevector (see
     // `deduplicated`). A class the cell selected in its resolved `when` set then ADDS a `-when` block for
     // every one of its arcs, on top of the catch-alls, so one arc can appear twice: once as its vector's
-    // unconditional representative, once carrying its own condition. An arc that renders NO condition is
-    // skipped in that second pass — it is unconditional, which is already the catch-all's job, so its
-    // block would be a byte-identical duplicate.
+    // unconditional representative, once carrying its own condition. An arc whose end state fixes no other
+    // input (`when_str` returns `None`) is unconditional, so the second pass skips it: unconditional arcs
+    // are the catch-all pass's job, and that pass keeps only the shortest-prevector member of each dedup
+    // group. A longer-prevector member of the group — even one that itself renders no condition — is
+    // therefore not emitted by either pass.
     for arc in deduplicated(
         &cell.arcs,
         |arc| {

@@ -12,9 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`--no-when` and the per-cell `no_when` key are removed, with no alias.** `--when` and the
   per-cell `when` key take their place. This is a breaking CLI change against the released 0.2.1: a
   spec that still carries `no_when` fails to parse.
-- **The deduplicated arcs without `-when` — one per emitted vector, keeping the shortest prevector —
-  are the default output** for every cell; arcs whose `-vector` still differs are unaffected. The
-  generated `.tcl` changes for every existing spec.
+- **The deduplicated arcs without `-when` — one per output/related-pin/arc-type/vector combination,
+  keeping the shortest prevector — are the default output** for every cell; arcs whose `-vector` still
+  differs are unaffected. The generated `.tcl` changes for every existing spec.
 - **`--when` and the per-cell `when` key add the selected class's `-when`-conditioned arcs on top of
   the catch-all**, so an arc can appear both with and without its condition. Bare `--when` selects
   every class; `--when=hidden` / `--when=transition` select one; repeat the flag to select several. A

@@ -108,9 +108,9 @@ pub struct TemplateSpec {
 /// CLI (`--when=<CLASS>`) and in the spec (`when = ...`) — one token table, shared by both surfaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 pub enum ArcClass {
-    /// The `define_arc` delay/transition arcs (`crate::logic::arcs::Arc`).
+    /// The `define_arc` delay/transition arcs: an input edge on a related pin driving an output edge.
     Transition,
-    /// The internal-power arcs (`crate::logic::arcs::HiddenArc`).
+    /// The hidden (internal-power) arcs: an input toggle that settles without changing any output.
     Hidden,
 }
 
