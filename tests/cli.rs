@@ -418,6 +418,31 @@ fn when_hidden_and_transition_equals_bare_when() {
     assert_eq!(both, bare, "selecting both classes equals the bare flag");
 }
 
+/// A bare `--when` is the blanket selection, so combining it with a valued occurrence selects every
+/// class — in either order — and the run is indistinguishable from bare `--when` alone.
+#[test]
+fn bare_when_unions_with_a_valued_when_in_either_order() {
+    let bare = run_spec("two_mixed_bare_eq", TWO, &["--when"]);
+    let bare_first = run_spec("two_mixed", TWO, &["--when", "--when=hidden"]);
+    let valued_first = run_spec("two_mixed_rev", TWO, &["--when=hidden", "--when"]);
+    assert_eq!(
+        bare_first, bare,
+        "a bare --when before a valued one still selects every class"
+    );
+    assert_eq!(
+        valued_first, bare,
+        "a bare --when after a valued one still selects every class"
+    );
+    // Both classes carry their `-when` blocks, so the equality above is not two empty selections.
+    let arcs = arcs_section(&bare_first);
+    assert!(
+        transition_when_count(arcs) >= 1 && hidden_when_count(arcs) >= 1,
+        "both arc classes carry -when lines: {} transition, {} hidden",
+        transition_when_count(arcs),
+        hidden_when_count(arcs),
+    );
+}
+
 #[test]
 fn cli_class_unions_with_cell_when() {
     // The cell selects `transition`; the CLI adds `hidden`; the union equals bare `--when`.
