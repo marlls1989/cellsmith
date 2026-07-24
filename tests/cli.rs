@@ -1,6 +1,7 @@
 //! CLI integration checks driving the built binary directly (no extra dependencies): stdout mode and
 //! its banners, file mode and its four artifacts, stdin (`-`), and the non-zero exit on a bad spec.
 
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -301,6 +302,88 @@ fn arc_blocks(arcs: &str) -> Vec<&str> {
             None => b,
         })
         .collect()
+}
+
+/// An OR-AND 2-2: `A` rising drives `Y` rising from three side-input contexts (`B` low, `(C,D)` at `01`,
+/// `10` or `11`), all firings of ONE transition.
+const OA22: &str = r#"
+[[cell]]
+name = "OA22"
+inputs = ["A", "B", "C", "D"]
+[cell.outputs]
+Y = "(A+B)*(C+D)"
+"#;
+
+/// The value of a single-token `define_arc` field (`-type`, `-related_pin`, `-pin`). The trailing space
+/// in the match keeps `-pin` from picking up the `-pinlist` line.
+fn tag_of(block: &str, tag: &str) -> Option<String> {
+    block
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with(&format!("{tag} ")))
+        .and_then(|l| l.split_whitespace().nth(1))
+        .map(str::to_string)
+}
+
+/// The block's `-vector` column for `pin`, indexed through its own `-pinlist` line.
+fn vector_column(block: &str, pin: &str) -> String {
+    let pinlist = block
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("-pinlist {"))
+        .and_then(|l| l.split('{').nth(1))
+        .and_then(|l| l.split('}').next())
+        .expect("a block renders a -pinlist");
+    let idx = pinlist
+        .split_whitespace()
+        .position(|p| p == pin)
+        .expect("the pin appears in the block's -pinlist");
+    vector_of(block)
+        .split_whitespace()
+        .nth(idx)
+        .expect("the -vector has a column per pin")
+        .to_string()
+}
+
+/// The default run emits ONE unconditioned block per transition — a related pin's edge driving an output
+/// pin's edge at one `-type` — however many side-input contexts the transition was measured from. `OA22`
+/// fires its `A`-rise → `Y`-rise transition from three of them; one block comes out.
+#[test]
+fn default_run_emits_one_general_block_per_transition() {
+    let out = run_spec("oa22_default", OA22, &[]);
+    let arcs = arcs_section(&out);
+    let transitions: Vec<&str> = arc_blocks(arcs)
+        .into_iter()
+        .filter(|b| !b.contains("-type hidden"))
+        .collect();
+    assert!(!transitions.is_empty(), "OA22 emits transition arcs");
+
+    let mut seen: BTreeSet<(String, String, String, String, String)> = BTreeSet::new();
+    for b in &transitions {
+        let related = tag_of(b, "-related_pin").expect("a transition block names its related pin");
+        let pin = tag_of(b, "-pin").expect("a transition block names its measured pin");
+        let ty = tag_of(b, "-type").expect("a transition block declares a -type");
+        let key = (
+            related.clone(),
+            pin.clone(),
+            ty,
+            vector_column(b, &related),
+            vector_column(b, &pin),
+        );
+        assert!(
+            seen.insert(key.clone()),
+            "a transition is emitted twice: {key:?}"
+        );
+    }
+    assert!(
+        seen.iter()
+            .any(|(related, pin, _, r, p)| related == "A" && pin == "Y" && r == "R" && p == "R"),
+        "the A-rise → Y-rise transition is emitted"
+    );
+    assert!(
+        !has_arc_when(arcs),
+        "the default run emits no arc -when lines"
+    );
 }
 
 #[test]

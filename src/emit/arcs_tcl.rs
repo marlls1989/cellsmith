@@ -43,53 +43,50 @@ impl Default for ArcsTclOptions {
     }
 }
 
-/// All `define_arc` blocks for a cell, concatenated. The deduplicated, unconditional arcs are ALWAYS
-/// emitted — one catch-all block per emitted vector; an arc class the cell selected in its resolved
-/// `when` set ADDS its conditional blocks on top, so the same arc can appear twice. A cell with a
-/// detected oscillation hazard is prefixed with a comment recording the racing condition and the
+/// All `define_arc` blocks for a cell, concatenated. The general arcs are ALWAYS emitted — one
+/// representative per transition, rendered without a `-when` line; an arc class the cell selected in
+/// its resolved `when` set ADDS its conditioned blocks on top, so the same arc can appear twice. A cell
+/// with a detected oscillation hazard is prefixed with a comment recording the racing condition and the
 /// competing settled outcomes — the metastability risk timing arcs cannot express. Any derived
 /// constraint arcs (setup/hold, non_seq) the cell opted into — its `constraint_arcs` was set, so
 /// generation populated `cell.constraints` — follow the delay arcs.
 pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     let mut out = oscillation_comment(cell);
-    // Each arc class is emitted in two passes. The deduplicated arcs come out ALWAYS, each stripped of its
-    // `-when` line: one CATCH-ALL block per emitted-block identity — same output/related/type/vector,
-    // differing only by prevector or internal state — keeping the member with the shortest prevector (see
-    // `deduplicated`). A class the cell selected in its resolved `when` set then ADDS a `-when` block for
-    // every one of its arcs, on top of the catch-alls, so one arc can appear twice: once as its vector's
-    // unconditional representative, once carrying its own condition. The conditional pass skips an arc
-    // only where its block would repeat one the catch-all pass has already emitted: the arc is in that
-    // pass's emitted set AND its end state fixes no other input (`when_str` returns `None`), so it renders
-    // no `-when` line to tell the two apart. A member that LOST its dedup group renders its own, longer
-    // prevector, so the conditional pass emits it whether or not it carries a condition.
-    let emitted = deduplicated(
+    // Each arc class is emitted in two passes. The GENERAL pass comes out ALWAYS: one representative per
+    // transition — a related pin's edge driving an output pin's edge — rendered with no `-when` line, so
+    // the block generalises over the side inputs' held levels, the held outputs and the internal state
+    // the transition was measured from, keeping the member with the shortest prevector (see
+    // `generalised`). A class the cell selected in its resolved `when` set then ADDS a `-when` block for
+    // every one of its arcs, on top of the general ones, so one arc can appear twice: once as its
+    // transition's general representative, once carrying its own condition. The conditioned pass skips an
+    // arc only where its block would DUPLICATE one the general pass has already emitted verbatim: the arc
+    // is that pass's representative AND its end state fixes no other input (`when_str` returns `None`),
+    // so it renders no `-when` line to tell the two apart. Any other member renders its own prevector, so
+    // the conditioned pass emits it whether or not it carries a condition.
+    let general = generalised(
         &cell.arcs,
-        |arc| arc_key(cell, arc),
+        |arc| transition_key(cell, arc),
         |arc| arc.prevector.len(),
     );
-    for &i in &emitted {
+    for &i in &general {
         out.push_str(&format_arc(cell, &cell.arcs[i], false));
     }
     if cell.when.contains(ArcClass::Transition) {
         for (i, arc) in cell.arcs.iter().enumerate() {
-            if emitted.contains(&i) && when_str(&arc.end, &arc.related).is_none() {
+            if general.contains(&i) && when_str(&arc.end, &arc.related).is_none() {
                 continue;
             }
             out.push_str(&format_arc(cell, arc, true));
         }
     }
     if opts.emit_internal {
-        for i in deduplicated(
-            &cell.hidden_arcs,
-            |h| (h.pin.clone(), hidden_vector_str(cell, h)),
-            |h| h.prevector.len(),
-        ) {
+        for i in generalised(&cell.hidden_arcs, hidden_arc_key, |h| h.prevector.len()) {
             out.push_str(&format_hidden_arc(cell, &cell.hidden_arcs[i], false));
         }
         if cell.when.contains(ArcClass::Hidden) {
             // A hidden arc's condition carries every held output on top of the other inputs, so a cell with
-            // outputs conditions every one of its hidden arcs: each conditional block differs from its
-            // catch-all by that `-when` line, and a dedup-group loser also keeps its own prevector.
+            // outputs conditions every one of its hidden arcs: each conditioned block differs from its
+            // pin's general block by that `-when` line, and by its own prevector and vector.
             for h in cell
                 .hidden_arcs
                 .iter()
@@ -113,12 +110,13 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     out
 }
 
-/// The catch-all arcs of one class, as their indices into `items`: one arc per emitted-block identity.
-/// `key` is everything the block renders EXCEPT its `-prevector` / `-prevector_pinlist` lines, so two
-/// arcs collide exactly when Liberate cannot tell them apart once `-when` is gone. The kept member is
-/// the one with the SHORTEST prevector; ties keep the first in `items` order. Ascending index order is
-/// `items` order, and membership is what the conditional pass tests to recognise a block it would
-/// otherwise repeat (see [`cell_arcs_tcl`]).
+/// The general arcs of one class, as their indices into `items`: one representative per transition.
+/// `key` is the transition's own identity — the pins and edges of the event, plus the arc's `-type`
+/// kind — so every firing of one transition falls in a single group and exactly one block comes out of
+/// it, generalising over the contexts the firings differed in. The kept member is the one with the
+/// SHORTEST prevector; ties keep the first in `items` order. Ascending index order is `items` order,
+/// and membership is what the conditioned pass tests to recognise a block it would otherwise duplicate
+/// (see [`cell_arcs_tcl`]).
 ///
 /// DETERMINISM IS A HARD REQUIREMENT: the collapse threads through `BTreeMap`/`BTreeSet`, never a
 /// randomly-seeded hash map — a per-process random hash seed would reorder the emitted `.tcl` across
@@ -126,7 +124,7 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
 /// `BTreeMap::into_values()` order (src/logic/arcs.rs) and `render`'s
 /// `par_iter().map().collect::<Vec<_>>().concat()` (src/main.rs) preserves index order, so first-wins
 /// over that order is reproducible run to run.
-fn deduplicated<T, K: Ord>(
+fn generalised<T, K: Ord>(
     items: &[T],
     key: impl Fn(&T) -> K,
     prevector_len: impl Fn(&T) -> usize,
@@ -148,15 +146,31 @@ fn deduplicated<T, K: Ord>(
     winner.into_values().map(|(_, i)| i).collect()
 }
 
-/// A transition arc's dedup key: everything its block renders except the prevector — the measured
-/// output, the related pin, the `-type` token and the `-vector` line.
-fn arc_key(cell: &AnalysedCell, arc: &Arc) -> (Symbol, Symbol, &'static str, String) {
+/// A transition's identity: the measured output and the edge it makes, the related pin and the edge IT
+/// makes, and the arc's `-type` kind. The side inputs' held levels, the held outputs and the internal
+/// state are the firing's CONDITION rather than part of the event, so they are absent — one transition
+/// yields ONE general block however many contexts it was measured from, and every one of those contexts
+/// returns as its own conditioned block under `--when`.
+///
+/// `arc_type_token` belongs in the key: `-type` declares the arc's KIND to Liberate — edge,
+/// combinational or async — and it is sourced per full machine start state (see [`arc_type_token`]), so
+/// a transition that types differently from different start states is two arc kinds, and collapsing
+/// across it would delete one of them from the output.
+fn transition_key(cell: &AnalysedCell, arc: &Arc) -> (Symbol, Edge, Symbol, Edge, &'static str) {
     (
         arc.output.clone(),
+        arc.edge,
         arc.related.clone(),
+        related_edge(arc),
         arc_type_token(cell, arc),
-        vector_str(cell, arc),
     )
+}
+
+/// A hidden arc's identity: the toggled pin and the edge it makes. That pair IS the event; the other
+/// inputs' held levels and the held outputs are its condition and ride in [`hidden_when_str`], so they
+/// are absent here for the same reason as in [`transition_key`].
+fn hidden_arc_key(h: &HiddenArc) -> (Symbol, Edge) {
+    (h.pin.clone(), h.edge)
 }
 
 /// The cell's name(s), braced as a Tcl list: `{ C2 }` for a single name, `{ C2A C2B }` for several.
@@ -266,8 +280,8 @@ fn related_edge(arc: &Arc) -> Edge {
 /// The `-type` token for a transition arc: `async` for a declared-async related pin, else `edge` when the
 /// arc's FULL identity `(output, related, direction, machine start)` is labelled a clock-edge timing arc
 /// in [`crate::logic::edge::EdgeArcs::labels`], else `combinational`. There is ONE edge category, so two
-/// firings that differ only in internal state can type differently. The dedup key and `format_arc`'s
-/// `-type` line share this ONE source.
+/// firings that differ only in internal state can type differently. [`transition_key`] and
+/// `format_arc`'s `-type` line share this ONE source.
 fn arc_type_token(cell: &AnalysedCell, arc: &Arc) -> &'static str {
     let is_edge = !arc.is_async
         && cell.edge.labels.contains(&(
@@ -286,7 +300,10 @@ fn arc_type_token(cell: &AnalysedCell, arc: &Arc) -> &'static str {
 }
 
 /// One transition `define_arc`. `with_when` selects which of the two passes in [`cell_arcs_tcl`] the
-/// block belongs to: the conditional one, carrying the arc's `-when`, or the unconditional catch-all.
+/// block belongs to: the conditioned one, carrying the arc's `-when`, or the general one. Either way the
+/// block renders THIS arc's own concrete `-prevector` and `-vector`: `-vector` is the stimulus Liberate
+/// drives and `X` is legal only in the unmonitored-output columns (see [`vector_str`]), so a general
+/// block's generality lives in the ABSENCE of the `-when` line, not in a relaxed vector.
 fn format_arc(cell: &AnalysedCell, arc: &Arc, with_when: bool) -> String {
     let type_line = format!("\t-type {} \\\n", arc_type_token(cell, arc));
     let prevector_pinlist = format!("\t-prevector_pinlist {{{}}} \\\n", cell.inputs.join(" "));
@@ -330,8 +347,8 @@ fn format_arc(cell: &AnalysedCell, arc: &Arc, with_when: bool) -> String {
 
 /// The measured hidden-arc vector: the toggled `pin` as its `R`/`F` edge, every other input at its held
 /// `1`/`0` value in the end state, and every output pinned at its held `1`/`0` value (never `X` — a hidden
-/// arc measures no output transition). Mirrors [`vector_str`] for [`Arc`]; the dedup key and
-/// `format_hidden_arc`'s `-vector` line share this ONE source.
+/// arc measures no output transition). Mirrors [`vector_str`] for [`Arc`], and is the ONE source of
+/// `format_hidden_arc`'s `-vector` line.
 fn hidden_vector_str(cell: &AnalysedCell, h: &HiddenArc) -> String {
     let held: BTreeMap<&str, bool> = h.outputs.iter().map(|(s, b)| (s.as_str(), *b)).collect();
     let end = assignment(&h.end);
@@ -367,8 +384,9 @@ fn hidden_vector_str(cell: &AnalysedCell, h: &HiddenArc) -> String {
 /// `R`/`F` edge, every other input sits at its held value in the end state, and every output is pinned
 /// at its held `1`/`0` value (never `X` — a hidden arc measures no output transition). Unlike transition
 /// arcs there is no `-related_pin`, and `-type hidden` always leads regardless of edge direction.
-/// `with_when` selects which of the two passes in [`cell_arcs_tcl`] the block belongs to: the conditional
-/// one, carrying the arc's `-when`, or the unconditional catch-all.
+/// `with_when` selects which of the two passes in [`cell_arcs_tcl`] the block belongs to: the
+/// conditioned one, carrying the arc's `-when`, or the general one, which keeps its own concrete
+/// `-prevector` and `-vector` and generalises solely by omitting the `-when` line.
 fn format_hidden_arc(cell: &AnalysedCell, h: &HiddenArc, with_when: bool) -> String {
     let vec = hidden_vector_str(cell, h);
 
@@ -556,7 +574,7 @@ Q = "A*B + Q*(A+B)"
             tcl.matches("-pin Q").count() + tcl.matches("-type hidden").count()
         );
         assert!(!tcl.contains("-type async"));
-        // The default emits the catch-all arcs only, so no BLOCK carries a `-when` line. `define_leakage`
+        // The default emits the general arcs only, so no BLOCK carries a `-when` line. `define_leakage`
         // is inherently `-when`-conditioned, so the discriminator is the line start: an arc's `-when` is
         // its own indented line, a leakage `-when` rides on the `define_leakage` line.
         assert!(!tcl.lines().any(|l| l.trim_start().starts_with("-when")));
@@ -564,8 +582,8 @@ Q = "A*B + Q*(A+B)"
 
     #[test]
     fn and2_emits_hidden_arc_blocks() {
-        // `when = "hidden"` so the conditioned hidden blocks are emitted alongside the catch-alls: the
-        // held-output `-when` asserted below is what the hidden class's conditional pass renders.
+        // `when = "hidden"` so the conditioned hidden blocks are emitted alongside the general ones: the
+        // held-output `-when` asserted below is what the hidden class's conditioned pass renders.
         let cell = analyse(
             r#"
 [[cell]]
@@ -603,7 +621,7 @@ Y = "A*B"
     fn dlatch_hidden_when_carries_held_output() {
         // Transparent-high D-latch: a D toggle in hold (E=0) leaves Q unchanged, but the two stored-value
         // contexts differ in the held Q. Both must be emitted as hidden `-pin D` arcs and disambiguated by
-        // the held Q literal folded into `-when` — which the hidden class's conditional pass renders, so
+        // the held Q literal folded into `-when` — which the hidden class's conditioned pass renders, so
         // the cell opts in with `when = "hidden"`.
         let cell = analyse(
             r#"
@@ -662,8 +680,10 @@ Y = "A*B"
         assert!(on.matches("-type hidden").count() >= 1);
     }
 
+    /// ONE PER PIN EDGE: the general pass emits exactly one hidden block per distinct `(pin, edge)` —
+    /// the toggle event — whatever the other inputs and held outputs were when it was measured.
     #[test]
-    fn hidden_arcs_dedup_per_vector_by_default() {
+    fn hidden_general_arcs_are_one_per_pin_edge() {
         let cell = analyse(
             r#"
 [[cell]]
@@ -676,23 +696,17 @@ Y = "A*B"
         let default = cell_arcs_tcl(&cell, NO_LEAKAGE);
         eprintln!("{default}");
         assert!(!default.lines().any(|l| l.trim_start().starts_with("-when")));
-        // No two `-type hidden` blocks share a `-vector` line: the catch-all pass collapsed the class to
-        // one arc per emitted vector.
-        let hidden_vectors: Vec<&str> = default
-            .split("define_arc")
+        let events: BTreeSet<(Symbol, Edge)> =
+            cell.hidden_arcs.iter().map(hidden_arc_key).collect();
+        assert!(!events.is_empty(), "AND2 emits hidden arcs");
+        let hidden = blocks(&default)
+            .iter()
             .filter(|b| b.contains("-type hidden"))
-            .map(|b| {
-                b.lines()
-                    .find(|l| l.contains("-vector"))
-                    .expect("a hidden block renders a -vector")
-            })
-            .collect();
-        assert!(!hidden_vectors.is_empty(), "AND2 emits hidden arcs");
-        let unique: BTreeSet<&str> = hidden_vectors.iter().copied().collect();
+            .count();
         assert_eq!(
-            hidden_vectors.len(),
-            unique.len(),
-            "no two surviving hidden blocks share a -vector line"
+            hidden,
+            events.len(),
+            "one general hidden block per distinct (pin, edge)"
         );
     }
 
@@ -707,7 +721,7 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        // The same cell but for `when = true`, which selects every arc class's conditional blocks.
+        // The same cell but for `when = true`, which selects every arc class's conditioned blocks.
         let selected = analyse(
             r#"
 [[cell]]
@@ -729,35 +743,43 @@ Q = "A*B + Q*(A+B)"
         assert!(arc_when(&on) >= 1);
     }
 
+    /// NOTHING IS LOST: a 3-input majority gate fires each of its transitions from several side-input
+    /// contexts, so the default output carries one block per transition — strictly fewer than the
+    /// discovered firings — and selecting every class brings every one of those firings back, each with
+    /// its own `-when`.
     #[test]
-    fn when_keeps_arcs_whose_vectors_differ() {
-        // A 3-input majority gate has NO internal state, so every held-input context is already visible
-        // in `-vector` as 0/1 on the other two inputs. Each candidate arc therefore gets a distinct dedup
-        // key and nothing collides: the catch-all pass emits one block per arc, and a selected class adds
-        // its conditional twin — the same block plus a `-when` line.
+    fn when_restores_every_discovered_firing() {
         let cell = analyse(MAJ3);
         let selected = analyse(&when_variant(MAJ3, "true"));
         let default = cell_arcs_tcl(&cell, NO_LEAKAGE);
         let on = cell_arcs_tcl(&selected, NO_LEAKAGE);
+        eprintln!("{default}");
+
+        let transitions: BTreeSet<_> = cell.arcs.iter().map(|a| transition_key(&cell, a)).collect();
+        let events: BTreeSet<_> = cell.hidden_arcs.iter().map(hidden_arc_key).collect();
+        let firings = cell.arcs.len() + cell.hidden_arcs.len();
         assert_eq!(
             blocks(&default).len(),
-            cell.arcs.len() + cell.hidden_arcs.len(),
-            "no MAJ3 arc collides, so the catch-all pass emits one block per arc"
+            transitions.len() + events.len(),
+            "the default output is one block per transition and per hidden event"
         );
-        // Dropping the `-when` lines maps each added conditional block onto its catch-all twin, so the
-        // stripped selected output is exactly the default output with every block doubled.
-        let stripped = strip_when(&on);
-        for b in blocks(&default) {
-            assert_eq!(
-                stripped.iter().filter(|s| **s == b).count(),
-                2,
-                "each MAJ3 block appears as its catch-all and its conditional twin:\n{b}"
+        assert!(
+            blocks(&default).len() < firings,
+            "premise: MAJ3 fires a transition from several contexts, so the general pass collapses \
+             {firings} firings"
+        );
+
+        // Every discovered firing is emitted with its own condition once the class is selected.
+        for a in &selected.arcs {
+            let conditioned = format_arc(&selected, a, true);
+            assert!(
+                has_when(&conditioned) && on.contains(&conditioned),
+                "a discovered firing is missing under `when`:\n{conditioned}"
             );
         }
-        assert_eq!(stripped.len(), 2 * blocks(&default).len());
     }
 
-    // ---- Dedup contract: shortest prevector, class selectivity, determinism ----
+    // ---- General-arc contract: shortest prevector, class selectivity, determinism ----
 
     /// A two-output cell that exhibits a transition-arc collision: `Y = A` is a plain rise/fall, and `Z`
     /// is a C-element whose held value renders as `X` in `Y`'s vector. With `B = 1` both `Z = 0` and
@@ -772,14 +794,25 @@ Y = "A"
 Z = "A*B + Z*(A+B)"
 "#;
 
-    /// A 3-input majority gate: stateless, so every held-input context is already visible in `-vector`
-    /// and no two candidate arcs collide.
+    /// A 3-input majority gate: stateless, so a transition's context is entirely the other two inputs'
+    /// held levels, and each transition fires from several of them.
     const MAJ3: &str = r#"
 [[cell]]
 name = "MAJ3"
 inputs = ["A", "B", "C"]
 [cell.outputs]
 Y = "A*B + B*C + A*C"
+"#;
+
+    /// An OR-AND 2-2: `A` rising drives `Y` rising from every side-input context that holds `B` low and
+    /// the other OR term satisfied — `(C,D)` at `01`, `10` or `11`. Three discovered firings of ONE
+    /// transition.
+    const OA22: &str = r#"
+[[cell]]
+name = "OA22"
+inputs = ["A", "B", "C", "D"]
+[cell.outputs]
+Y = "(A+B)*(C+D)"
 "#;
 
     /// `src` with a `when = <value>` key spliced into its `[[cell]]` table — just before its FIRST
@@ -792,15 +825,15 @@ Y = "A*B + B*C + A*C"
         format!("{}\nwhen = {value}{}", &src[..at], &src[at..])
     }
 
-    /// Isolate arc `-when`/dedup from `define_leakage`, which is inherently `-when`-conditioned.
+    /// Isolate the arc passes from `define_leakage`, which is inherently `-when`-conditioned.
     const NO_LEAKAGE: ArcsTclOptions = ArcsTclOptions {
         emit_internal: true,
         emit_leakage: false,
     };
 
     /// The emitted `define_arc` blocks, in emission order: the text following each `define_arc`, trimmed.
-    /// Block identity is the whole text, so the same arc emitted twice — once as its vector's catch-all,
-    /// once carrying its `-when` — yields two blocks differing by that one line.
+    /// Block identity is the whole text, so the same arc emitted twice — once as its transition's general
+    /// representative, once carrying its `-when` — yields two blocks differing by that one line.
     fn blocks(tcl: &str) -> Vec<String> {
         tcl.split("define_arc")
             .skip(1)
@@ -816,8 +849,8 @@ Y = "A*B + B*C + A*C"
         block.lines().any(|l| l.trim_start().starts_with("-when"))
     }
 
-    /// [`blocks`], each with its own `-when` line dropped — what maps a conditional block onto the
-    /// catch-all block it otherwise duplicates.
+    /// [`blocks`], each with its own `-when` line dropped — what maps a conditioned block onto the
+    /// general block it otherwise duplicates.
     fn strip_when(tcl: &str) -> Vec<String> {
         blocks(tcl)
             .iter()
@@ -830,16 +863,20 @@ Y = "A*B + B*C + A*C"
             .collect()
     }
 
-    /// The number of arcs the conditional pass renders a block for, per class: every arc except one the
-    /// catch-all pass already emitted in the identical form — its dedup-group representative that renders
-    /// no `-when` to tell the two blocks apart.
+    /// The number of arcs the conditioned pass renders a block for, per class: every arc except one the
+    /// general pass already emitted in the identical form — its transition's representative, which
+    /// renders no `-when` to tell the two blocks apart.
     fn conditioned_counts(cell: &AnalysedCell) -> (usize, usize) {
-        let emitted = deduplicated(&cell.arcs, |a| arc_key(cell, a), |a| a.prevector.len());
+        let general = generalised(
+            &cell.arcs,
+            |a| transition_key(cell, a),
+            |a| a.prevector.len(),
+        );
         (
             cell.arcs
                 .iter()
                 .enumerate()
-                .filter(|(i, a)| !(emitted.contains(i) && when_str(&a.end, &a.related).is_none()))
+                .filter(|(i, a)| !(general.contains(i) && when_str(&a.end, &a.related).is_none()))
                 .count(),
             cell.hidden_arcs
                 .iter()
@@ -848,69 +885,52 @@ Y = "A*B + B*C + A*C"
         )
     }
 
-    /// COLLISION: the catch-all pass collapses a genuine same-key collision to a single block, on the
-    /// DEFAULT output — the pass is unconditional, so no opt-in is involved. The premise — two A→Y arcs
-    /// sharing one emitted `-vector` — is read FROM `cell.arcs`, the un-deduplicated source, so a
-    /// non-colliding fixture fails loudly rather than testing nothing.
-    #[test]
-    fn dedup_collapses_a_collision_to_one_block() {
-        // Every A→Y block's `-vector` line, in emission order.
-        let ay_vectors = |tcl: &str| -> Vec<String> {
-            tcl.split("define_arc")
-                .filter(|b| b.contains("-related_pin A") && b.contains("-pin Y \\"))
-                .map(|b| {
-                    b.lines()
-                        .find(|l| l.contains("-vector"))
-                        .expect("a transition block renders a -vector")
-                        .trim()
-                        .to_string()
-                })
-                .collect()
-        };
-
-        // PREMISE: at least two A→Y arcs share a -vector before dedup.
-        let cell = analyse(TWO);
-        let mut groups: BTreeMap<String, usize> = BTreeMap::new();
+    /// The A→Y arcs of `cell`, grouped by [`transition_key`] — the source the general pass groups, so a
+    /// premise read from it fails loudly on a fixture where nothing collides.
+    fn ay_groups(
+        cell: &AnalysedCell,
+    ) -> BTreeMap<(Symbol, Edge, Symbol, Edge, &'static str), Vec<&Arc>> {
+        let mut groups: BTreeMap<_, Vec<&Arc>> = BTreeMap::new();
         for a in cell
             .arcs
             .iter()
             .filter(|a| a.output == "Y" && a.related == "A")
         {
-            *groups.entry(vector_str(&cell, a)).or_default() += 1;
+            groups.entry(transition_key(cell, a)).or_default().push(a);
         }
-        let (shared, _) = groups
-            .iter()
-            .find(|(_, n)| **n >= 2)
-            .expect("premise: two A→Y arcs must share a -vector before dedup");
-
-        // On the default output exactly one block with that shared -vector survives. The braces delimit
-        // the match, so a vector cannot be counted for merely being another one's prefix.
-        let default = cell_arcs_tcl(&cell, NO_LEAKAGE);
-        eprintln!("{default}");
-        let rendered = format!("{{{shared}}}");
-        let survivors = ay_vectors(&default)
-            .iter()
-            .filter(|v| v.contains(&rendered))
-            .count();
-        assert_eq!(survivors, 1, "the colliding A→Y blocks collapse to one");
+        groups
     }
 
-    /// SHORTEST PREVECTOR: the surviving member of a collapsed collision keeps the shortest prevector, on
-    /// the DEFAULT output. The minimum is read FROM `cell.arcs` (never hardcoded), so a length tie cannot
+    /// COLLISION: the general pass collapses a transition measured from several contexts to a single
+    /// block, on the DEFAULT output — the pass is unconditional, so no opt-in is involved.
+    #[test]
+    fn general_collapses_a_collision_to_one_block() {
+        // PREMISE: at least two A→Y arcs share a transition key.
+        let cell = analyse(TWO);
+        let groups = ay_groups(&cell);
+        let (_, group) = groups
+            .iter()
+            .find(|(_, g)| g.len() >= 2)
+            .expect("premise: two A→Y arcs must share a transition key");
+
+        // Exactly one member of the group is emitted, verbatim as its own arc.
+        let default = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{default}");
+        let survivors = group
+            .iter()
+            .filter(|a| default.contains(&format_arc(&cell, a, false)))
+            .count();
+        assert_eq!(survivors, 1, "the colliding A→Y arcs collapse to one block");
+    }
+
+    /// SHORTEST PREVECTOR: the surviving member of a collapsed group keeps the shortest prevector, on the
+    /// DEFAULT output. The minimum is read FROM `cell.arcs` (never hardcoded), so a length tie cannot
     /// make the assertion vacuous.
     #[test]
-    fn dedup_keeps_the_shortest_prevector() {
+    fn general_keeps_the_shortest_prevector() {
         let cell = analyse(TWO);
-        // Group the A→Y arcs by their emitted transition vector; find the colliding group.
-        let mut groups: BTreeMap<String, Vec<&Arc>> = BTreeMap::new();
-        for a in cell
-            .arcs
-            .iter()
-            .filter(|a| a.output == "Y" && a.related == "A")
-        {
-            groups.entry(vector_str(&cell, a)).or_default().push(a);
-        }
-        let (shared_vec, group) = groups
+        let groups = ay_groups(&cell);
+        let (_, group) = groups
             .iter()
             .find(|(_, g)| g.len() >= 2)
             .expect("premise: a colliding A→Y group");
@@ -920,81 +940,59 @@ Y = "A*B + B*C + A*C"
             .min()
             .expect("a non-empty group");
 
-        // In the default output, the surviving block for that vector carries exactly `min_len` steps.
+        // In the default output, the group's emitted member carries exactly `min_len` steps.
         let default = cell_arcs_tcl(&cell, NO_LEAKAGE);
-        let block = default
-            .split("define_arc")
-            .find(|b| {
-                b.contains("-related_pin A")
-                    && b.contains("-pin Y \\")
-                    && b.lines()
-                        .any(|l| l.contains("-vector") && l.contains(shared_vec.as_str()))
-            })
+        let survivor = group
+            .iter()
+            .find(|a| default.contains(&format_arc(&cell, a, false)))
             .expect("the surviving A→Y block");
-        let steps = block
-            .lines()
-            .find(|l| l.trim_start().starts_with("-prevector {"))
-            .and_then(|l| l.split('{').nth(1))
-            .and_then(|s| s.split('}').next())
-            .expect("the surviving block renders a -prevector")
-            .split_whitespace()
-            .count();
-        assert_eq!(steps, min_len, "the shortest-prevector member survives");
+        assert_eq!(
+            survivor.prevector.len(),
+            min_len,
+            "the shortest-prevector member survives"
+        );
     }
 
-    /// CONTRACT: the catch-all block count equals the number of DISTINCT emitted keys — fixture
-    /// independent, and the primary pin on the hidden side where a hand-picked collision is not reliably
-    /// constructible. Asserted on the DEFAULT output, where the catch-alls are all there is.
+    /// CONTRACT: the general block count equals the number of DISTINCT transitions — fixture independent,
+    /// and the primary pin on the hidden side where a hand-picked collision is not reliably
+    /// constructible. Asserted on the DEFAULT output, where the general blocks are all there is.
     #[test]
-    fn dedup_count_equals_distinct_keys() {
+    fn general_count_equals_distinct_transitions() {
         for src in [TWO, MAJ3] {
             let cell = analyse(src);
             let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
 
-            // Transition side: one block per distinct (output, related, type, vector) key.
+            // Transition side: one block per distinct transition.
             let non_hidden = tcl
                 .split("define_arc")
                 .skip(1)
                 .filter(|b| !b.contains("-type hidden"))
                 .count();
-            let distinct_t: BTreeSet<(Symbol, Symbol, &str, String)> = cell
-                .arcs
-                .iter()
-                .map(|a| {
-                    (
-                        a.output.clone(),
-                        a.related.clone(),
-                        arc_type_token(&cell, a),
-                        vector_str(&cell, a),
-                    )
-                })
-                .collect();
+            let transitions: BTreeSet<_> =
+                cell.arcs.iter().map(|a| transition_key(&cell, a)).collect();
             assert_eq!(
                 non_hidden,
-                distinct_t.len(),
-                "transition block count equals distinct transition keys"
+                transitions.len(),
+                "transition block count equals distinct transitions"
             );
 
-            // Hidden side: one block per distinct (pin, hidden vector) key.
+            // Hidden side: one block per distinct (pin, edge) toggle event.
             let hidden = tcl.matches("-type hidden").count();
-            let distinct_h: BTreeSet<(Symbol, String)> = cell
-                .hidden_arcs
-                .iter()
-                .map(|h| (h.pin.clone(), hidden_vector_str(&cell, h)))
-                .collect();
+            let events: BTreeSet<_> = cell.hidden_arcs.iter().map(hidden_arc_key).collect();
             assert_eq!(
                 hidden,
-                distinct_h.len(),
-                "hidden block count equals distinct hidden keys"
+                events.len(),
+                "hidden block count equals distinct hidden events"
             );
         }
     }
 
-    /// DISTINCT VECTORS SURVIVE: two hidden arcs whose vectors DIFFER both survive the catch-all dedup —
-    /// what they lose is only their `-when`. The transparent-high D-latch holds Q at 0 or 1 across its two
-    /// D-toggle contexts, so the held Q makes the two `-vector` lines distinct.
+    /// HELD-OUTPUT CONTEXTS COLLAPSE: a transparent-high D-latch holds Q at 0 or 1 across its two
+    /// D-toggle contexts, but the toggle is ONE hidden event either way, so the general pass emits one
+    /// `-pin D` block per edge. Selecting the class brings both contexts back, told apart by the held Q
+    /// literal in their `-when` lines.
     #[test]
-    fn dedup_hidden_keeps_distinct_vectors() {
+    fn hidden_general_arc_collapses_held_output_contexts() {
         const DLAT: &str = r#"
 [[cell]]
 name = "DLAT"
@@ -1003,40 +1001,366 @@ inputs = ["E", "D"]
 Q = "E*D + !E*Q"
 "#;
         let cell = analyse(DLAT);
-        let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
-        eprintln!("{tcl}");
-        let d_hidden: Vec<&str> = tcl
-            .split("define_arc")
-            .filter(|b| b.contains("-type hidden") && b.contains("-pin D \\"))
-            .collect();
-        // Both hold-context D hidden arcs survive: their held Q makes the vectors differ.
-        let vectors: BTreeSet<&str> = d_hidden
+        // PREMISE: a D toggle is measured from several held-Q contexts, each of which renders a
+        // condition.
+        let mut contexts: BTreeMap<(Symbol, Edge), usize> = BTreeMap::new();
+        for h in cell.hidden_arcs.iter().filter(|h| h.pin == "D") {
+            assert!(
+                hidden_when_str(h).is_some(),
+                "premise: every D hidden arc renders a condition"
+            );
+            *contexts.entry(hidden_arc_key(h)).or_default() += 1;
+        }
+        assert!(
+            contexts.values().any(|n| *n >= 2),
+            "premise: a D toggle fires from several held-Q contexts"
+        );
+
+        let d_hidden = |tcl: &str| -> Vec<String> {
+            blocks(tcl)
+                .into_iter()
+                .filter(|b| b.contains("-type hidden") && b.contains("-pin D \\"))
+                .collect()
+        };
+        let default = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{default}");
+        assert_eq!(
+            d_hidden(&default).len(),
+            contexts.len(),
+            "one general -pin D block per edge"
+        );
+        assert!(
+            d_hidden(&default).iter().all(|b| !has_when(b)),
+            "a general hidden block carries no -when"
+        );
+
+        // Under `when = "hidden"` every held-Q context returns as its own conditioned block. Pinlist
+        // order is {E D Q}, so D's own vector field is the toggle's edge.
+        let selected = cell_arcs_tcl(&analyse(&when_variant(DLAT, "\"hidden\"")), NO_LEAKAGE);
+        let d_field = |b: &str| -> String {
+            b.lines()
+                .find(|l| l.contains("-vector"))
+                .and_then(|l| l.split('{').nth(1))
+                .and_then(|v| v.split_whitespace().nth(1))
+                .expect("a hidden block renders a -vector")
+                .to_string()
+        };
+        let when_line = |b: &str| -> String {
+            b.lines()
+                .find(|l| l.trim_start().starts_with("-when"))
+                .expect("a conditioned block renders a -when")
+                .trim()
+                .to_string()
+        };
+        for ((_, edge), n) in &contexts {
+            let rf = edge.rf().to_string();
+            let conditioned: Vec<String> = d_hidden(&selected)
+                .into_iter()
+                .filter(|b| has_when(b) && d_field(b) == rf)
+                .collect();
+            assert_eq!(
+                conditioned.len(),
+                *n,
+                "every held-Q context of a D {rf} toggle returns as its own conditioned block"
+            );
+            let whens: BTreeSet<String> = conditioned.iter().map(|b| when_line(b)).collect();
+            assert_eq!(
+                whens.len(),
+                conditioned.len(),
+                "each held-Q context carries a distinct -when line"
+            );
+        }
+    }
+
+    // ---- Generalisation invariants: one per transition, a measured representative, shortest prevector ----
+
+    /// The fixtures the generalisation invariants are asserted over: an OR-AND with several side-input
+    /// contexts per transition, a stateless majority gate, a two-output cell whose contexts differ in
+    /// INTERNAL state, and a latch whose contexts differ in the held output.
+    const GENERALISED_FIXTURES: [&str; 4] = [OA22, MAJ3, TWO, DLAT];
+
+    /// A block's text with the `define_arc` keyword stripped — the form [`blocks`] yields, so a rendering
+    /// produced by [`format_arc`] can be compared against an emitted block.
+    fn body(rendered: &str) -> String {
+        rendered.trim_start_matches("define_arc").trim().to_string()
+    }
+
+    /// Each transition block of `tcl` mapped back to the arc in `cell.arcs` whose OWN rendering it is. A
+    /// block matching no discovered arc panics: the general pass may only promote a measured firing, and
+    /// a synthesised stimulus would be one nothing characterises.
+    fn general_transition_arcs<'a>(cell: &'a AnalysedCell, tcl: &str) -> Vec<&'a Arc> {
+        blocks(tcl)
             .iter()
+            .filter(|b| !b.contains("-type hidden"))
             .map(|b| {
-                b.lines()
-                    .find(|l| l.contains("-vector"))
-                    .expect("a hidden block renders a -vector")
-                    .trim()
+                cell.arcs
+                    .iter()
+                    .find(|a| body(&format_arc(cell, a, false)) == *b)
+                    .unwrap_or_else(|| {
+                        panic!("a general block is no discovered arc's own rendering:\n{b}")
+                    })
+            })
+            .collect()
+    }
+
+    /// [`general_transition_arcs`] for the hidden class.
+    fn general_hidden_arcs<'a>(cell: &'a AnalysedCell, tcl: &str) -> Vec<&'a HiddenArc> {
+        blocks(tcl)
+            .iter()
+            .filter(|b| b.contains("-type hidden"))
+            .map(|b| {
+                cell.hidden_arcs
+                    .iter()
+                    .find(|h| body(&format_hidden_arc(cell, h, false)) == *b)
+                    .unwrap_or_else(|| {
+                        panic!("a general hidden block is no discovered arc's own rendering:\n{b}")
+                    })
+            })
+            .collect()
+    }
+
+    /// ONE PER TRANSITION: on the DEFAULT output each of the cell's transitions emits exactly one general
+    /// block, and every general block belongs to one of them — nothing lost, nothing duplicated. The
+    /// hidden class carries the same invariant over its `(pin, edge)` toggle events.
+    #[test]
+    fn general_arcs_are_one_per_transition() {
+        for src in GENERALISED_FIXTURES {
+            let cell = analyse(src);
+            let transitions: BTreeSet<_> =
+                cell.arcs.iter().map(|a| transition_key(&cell, a)).collect();
+            let events: BTreeSet<_> = cell.hidden_arcs.iter().map(hidden_arc_key).collect();
+            // PREMISE: the fixture fires some transition or toggle from several contexts, so there is
+            // something to generalise over.
+            assert!(
+                transitions.len() + events.len() < cell.arcs.len() + cell.hidden_arcs.len(),
+                "premise: {} fires from several contexts",
+                cell.name.join(" ")
+            );
+
+            let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
+            let mut emitted: BTreeMap<_, usize> = BTreeMap::new();
+            for a in general_transition_arcs(&cell, &tcl) {
+                *emitted.entry(transition_key(&cell, a)).or_default() += 1;
+            }
+            assert!(
+                emitted.values().all(|n| *n == 1),
+                "no transition emits two general blocks"
+            );
+            assert_eq!(
+                emitted.into_keys().collect::<BTreeSet<_>>(),
+                transitions,
+                "one general block per transition"
+            );
+
+            let mut emitted_h: BTreeMap<_, usize> = BTreeMap::new();
+            for h in general_hidden_arcs(&cell, &tcl) {
+                *emitted_h.entry(hidden_arc_key(h)).or_default() += 1;
+            }
+            assert!(
+                emitted_h.values().all(|n| *n == 1),
+                "no hidden event emits two general blocks"
+            );
+            assert_eq!(
+                emitted_h.into_keys().collect::<BTreeSet<_>>(),
+                events,
+                "one general block per hidden toggle event"
+            );
+        }
+    }
+
+    /// REPRESENTATIVE IS A REAL FIRING: every general block is the rendering of an arc the pipeline
+    /// discovered, so its `-prevector`/`-vector` pair is a stimulus that was measured together — the
+    /// general pass promotes a firing, it never synthesises one.
+    #[test]
+    fn general_arcs_are_measured_firings() {
+        for src in GENERALISED_FIXTURES {
+            let cell = analyse(src);
+            assert!(
+                !cell.arcs.is_empty() && !cell.hidden_arcs.is_empty(),
+                "premise: {} discovers arcs of both classes",
+                cell.name.join(" ")
+            );
+            let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
+            // Both lookups panic on a block that is no discovered arc's own rendering.
+            let transition = general_transition_arcs(&cell, &tcl).len();
+            let hidden = general_hidden_arcs(&cell, &tcl).len();
+            assert_eq!(
+                transition + hidden,
+                blocks(&tcl).len(),
+                "every default block is a general arc of one of the two classes"
+            );
+        }
+    }
+
+    /// SHORTEST PREVECTOR AT THE TRANSITION GRAIN: each emitted representative carries the minimum
+    /// prevector length of its whole transition group — the minimum read FROM `cell.arcs`, over the
+    /// larger groups the transition grain forms.
+    #[test]
+    fn general_arcs_keep_the_shortest_prevector_per_transition() {
+        for src in GENERALISED_FIXTURES {
+            let cell = analyse(src);
+            let mut shortest: BTreeMap<_, usize> = BTreeMap::new();
+            for a in &cell.arcs {
+                let best = shortest
+                    .entry(transition_key(&cell, a))
+                    .or_insert(usize::MAX);
+                *best = (*best).min(a.prevector.len());
+            }
+            let mut shortest_h: BTreeMap<_, usize> = BTreeMap::new();
+            for h in &cell.hidden_arcs {
+                let best = shortest_h.entry(hidden_arc_key(h)).or_insert(usize::MAX);
+                *best = (*best).min(h.prevector.len());
+            }
+            // PREMISE: some group holds several firings, so its minimum is a real choice between them.
+            assert!(
+                shortest.len() + shortest_h.len() < cell.arcs.len() + cell.hidden_arcs.len(),
+                "premise: {} fires from several contexts",
+                cell.name.join(" ")
+            );
+
+            let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
+            for a in general_transition_arcs(&cell, &tcl) {
+                assert_eq!(
+                    a.prevector.len(),
+                    shortest[&transition_key(&cell, a)],
+                    "the representative carries its transition group's shortest prevector"
+                );
+            }
+            for h in general_hidden_arcs(&cell, &tcl) {
+                assert_eq!(
+                    h.prevector.len(),
+                    shortest_h[&hidden_arc_key(h)],
+                    "the representative carries its toggle event's shortest prevector"
+                );
+            }
+        }
+    }
+
+    /// OA22: `A` rising drives `Y` rising from three side-input contexts. That is ONE transition, so the
+    /// default output carries ONE unconditioned `A`→`Y` rise block; selecting every class brings all
+    /// three firings back, each with its own condition.
+    #[test]
+    fn oa22_collapses_side_input_contexts_to_one_general_arc() {
+        let cell = analyse(OA22);
+        let a_rise_y_rise = |c: &AnalysedCell| -> Vec<usize> {
+            c.arcs
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| {
+                    a.output == "Y"
+                        && a.related == "A"
+                        && a.edge == Edge::Rise
+                        && related_edge(a) == Edge::Rise
+                })
+                .map(|(i, _)| i)
+                .collect()
+        };
+        // PREMISE: at least three arcs share the (Y rise, A rise) transition — `B` low with `(C,D)` at
+        // `01`, `10` and `11`.
+        let firings = a_rise_y_rise(&cell);
+        assert!(
+            firings.len() >= 3,
+            "premise: A-rise→Y-rise fires from at least three side-input contexts, got {}",
+            firings.len()
+        );
+
+        // Pinlist order is {A B C D Y}: A's vector field is index 0, Y's is index 4.
+        let field = |b: &str, i: usize| -> String {
+            b.lines()
+                .find(|l| l.contains("-vector"))
+                .and_then(|l| l.split('{').nth(1))
+                .and_then(|v| v.split('}').next())
+                .and_then(|v| v.split_whitespace().nth(i))
+                .expect("a transition block renders a -vector")
+                .to_string()
+        };
+        let default = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{default}");
+        let general: Vec<String> = blocks(&default)
+            .into_iter()
+            .filter(|b| {
+                b.contains("-related_pin A \\")
+                    && b.contains("-pin Y \\")
+                    && field(b, 0) == "R"
+                    && field(b, 4) == "R"
             })
             .collect();
+        assert_eq!(general.len(), 1, "one general A-rise→Y-rise block");
         assert!(
-            vectors.len() >= 2,
-            "distinct-Q D hidden arcs keep their separate vectors, so both survive"
+            !has_when(&general[0]),
+            "the general block carries no -when:\n{}",
+            general[0]
         );
-        // The default emits catch-alls only, so no hidden block carries a `-when`.
+
+        // Under `when = true` every firing returns, each with its own distinct condition.
+        let selected = analyse(&when_variant(OA22, "true"));
+        let on = cell_arcs_tcl(&selected, NO_LEAKAGE);
+        let mut whens: BTreeSet<String> = BTreeSet::new();
+        for i in a_rise_y_rise(&selected) {
+            let arc = &selected.arcs[i];
+            let block = format_arc(&selected, arc, true);
+            assert!(
+                on.contains(&block),
+                "a discovered A-rise→Y-rise firing is missing under `when`:\n{block}"
+            );
+            whens.insert(
+                when_str(&arc.end, &arc.related).expect("each firing fixes the other inputs"),
+            );
+        }
         assert_eq!(
-            d_hidden.iter().filter(|b| has_when(b)).count(),
-            0,
-            "a catch-all hidden block carries no -when"
+            whens.len(),
+            firings.len(),
+            "each firing carries its own distinct -when"
         );
     }
 
-    /// ADDITIVE: selecting every class ADDS one conditional block per conditioned arc on top of the
-    /// catch-alls — it removes nothing and rewrites nothing. Every default block is still there, each
+    /// GENERALISES OVER INTERNAL STATE: two `A`→`Y` firings of `TWO` agree on every input — the
+    /// C-element `Z` renders as `X` in `Y`'s vector — and differ only in `Z`'s held state. They are one
+    /// transition and collapse to one general block.
+    #[test]
+    fn general_arc_collapses_internal_state_contexts() {
+        let cell = analyse(TWO);
+        // PREMISE: two A→Y firings share a transition AND a rendered vector — every input agrees and `Z`
+        // is `X` — and differ only in the internal state they were measured from.
+        let mut contexts: BTreeMap<_, Vec<&Arc>> = BTreeMap::new();
+        for a in cell
+            .arcs
+            .iter()
+            .filter(|a| a.output == "Y" && a.related == "A")
+        {
+            contexts
+                .entry((transition_key(&cell, a), vector_str(&cell, a)))
+                .or_default()
+                .push(a);
+        }
+        let ((key, _), pair) = contexts
+            .iter()
+            .find(|(_, g)| g.len() >= 2)
+            .expect("premise: two A→Y firings share a transition and a rendered vector");
+        assert!(
+            pair.windows(2).any(|w| w[0].start != w[1].start),
+            "premise: the firings differ in the internal state they start from"
+        );
+
+        // The transition those two belong to emits ONE general block.
+        let default = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{default}");
+        let emitted = ay_groups(&cell)[key]
+            .iter()
+            .filter(|a| default.contains(&format_arc(&cell, a, false)))
+            .count();
+        assert_eq!(
+            emitted, 1,
+            "the internal-state contexts collapse to one general block"
+        );
+    }
+
+    /// ADDITIVE: selecting every class ADDS one conditioned block per conditioned arc on top of the
+    /// general arcs — it removes nothing and rewrites nothing. Every default block is still there, each
     /// added block carries a `-when`, and at least one emitted vector appears twice, the two blocks
     /// differing solely by that line.
     #[test]
-    fn when_all_adds_conditional_blocks_on_top_of_the_catch_alls() {
+    fn when_all_adds_conditioned_blocks_on_top_of_the_general_arcs() {
         let cell = analyse(&when_variant(TWO, "true"));
         let (cond_t, cond_h) = conditioned_counts(&cell);
         assert!(
@@ -1055,7 +1379,7 @@ Q = "E*D + !E*Q"
         );
 
         // Multiset difference over sorted Vecs (never a hash map — this path must stay deterministic):
-        // every default block survives, and what remains is exactly the conditional blocks.
+        // every default block survives, and what remains is exactly the conditioned blocks.
         let mut remaining = blocks(&enabled);
         remaining.sort();
         for b in &default_blocks {
@@ -1070,7 +1394,7 @@ Q = "E*D + !E*Q"
             assert!(has_when(b), "every added block carries a -when:\n{b}");
         }
 
-        // Every arc that renders a condition is emitted with it, whether or not the catch-all pass
+        // Every arc that renders a condition is emitted with it, whether or not the general pass
         // already emitted the same arc unconditioned: that pair IS the additive contract.
         for a in &cell.arcs {
             let conditioned = format_arc(&cell, a, true);
@@ -1080,7 +1404,7 @@ Q = "E*D + !E*Q"
             );
         }
 
-        // At least one arc is emitted twice — once as its vector's catch-all, once carrying its
+        // At least one arc is emitted twice — once as its transition's general representative, once carrying its
         // condition — the two blocks differing only by the `-when` line.
         let stripped = strip_when(&enabled);
         let doubled = stripped
@@ -1088,13 +1412,13 @@ Q = "E*D + !E*Q"
             .any(|s| stripped.iter().filter(|o| *o == s).count() >= 2);
         assert!(
             doubled,
-            "an arc appears both as a catch-all and with its -when"
+            "an arc appears both as a general arc and with its -when"
         );
     }
 
-    /// SELECTIVITY: `--when=transition` adds the transition class's conditional blocks and leaves the
-    /// hidden class at its catch-alls, and its mirror `--when=hidden` leaves the transition class at
-    /// its catch-alls.
+    /// SELECTIVITY: `--when=transition` adds the transition class's conditioned blocks and leaves the
+    /// hidden class at its general arcs, and its mirror `--when=hidden` leaves the transition class at
+    /// its general arcs.
     #[test]
     fn when_one_class_adds_only_that_class() {
         let cell = analyse(TWO);
@@ -1133,7 +1457,7 @@ Q = "E*D + !E*Q"
         assert_eq!(non_hidden_when(&default), 0);
         assert_eq!(hidden_when(&default), 0);
 
-        // --when=transition: the transition class gains its conditional blocks; the hidden class is untouched.
+        // --when=transition: the transition class gains its conditioned blocks; the hidden class is untouched.
         let t_on = cell_arcs_tcl(&analyse(&when_variant(TWO, "\"transition\"")), NO_LEAKAGE);
         assert_eq!(
             non_hidden(&t_on),
@@ -1165,7 +1489,7 @@ Q = "E*D + !E*Q"
     }
 
     /// `--no-internal` outranks the class selection: with the hidden class selected but internal-power
-    /// arcs suppressed, neither the catch-all nor the conditional hidden pass emits anything.
+    /// arcs suppressed, neither the general nor the conditioned hidden pass emits anything.
     #[test]
     fn no_internal_suppresses_hidden_blocks_under_when() {
         let cell = analyse(&when_variant(TWO, "true"));
@@ -1184,11 +1508,11 @@ Q = "E*D + !E*Q"
     }
 
     /// SINGLE INPUT: an arc whose related pin is the cell's only input renders NO condition
-    /// (`when_str` is `None`), so where it is also the catch-all pass's representative the conditional
-    /// pass skips it — the block it would add is the one already emitted. Every INV arc wins its dedup
-    /// group, so selecting every class changes nothing.
+    /// (`when_str` is `None`), so where it is also the general pass's representative the conditioned
+    /// pass skips it — the block it would add is the one already emitted. Every INV arc is its own
+    /// transition's representative, so selecting every class changes nothing.
     #[test]
-    fn when_skips_a_conditionless_catch_all_representative() {
+    fn when_skips_a_conditionless_general_representative() {
         const INV: &str = r#"
 [[cell]]
 name = "INV"
@@ -1203,21 +1527,20 @@ Y = "!A"
             (0, 0),
             "premise: no INV arc renders a condition"
         );
-        // PREMISE: nothing collides, so every arc IS its group's representative — the case the skip is
-        // for. A colliding fixture would exercise the other branch instead.
-        let keys: BTreeSet<(Symbol, Symbol, &str, String)> =
-            cell.arcs.iter().map(|a| arc_key(&cell, a)).collect();
+        // PREMISE: nothing collides, so every arc IS its transition's representative — the case the skip
+        // is for. A colliding fixture would exercise the other branch instead.
+        let keys: BTreeSet<_> = cell.arcs.iter().map(|a| transition_key(&cell, a)).collect();
         assert_eq!(
             keys.len(),
             cell.arcs.len(),
-            "premise: no INV arc loses a dedup group"
+            "premise: no INV arc shares a transition with another"
         );
         let default = cell_arcs_tcl(&analyse(INV), NO_LEAKAGE);
         let enabled = cell_arcs_tcl(&cell, NO_LEAKAGE);
         eprintln!("{enabled}");
         assert_eq!(
             enabled, default,
-            "an unconditional arc is emitted once, by the catch-all pass alone"
+            "an unconditional arc is emitted once, by the general pass alone"
         );
         let emitted = blocks(&default);
         assert!(!emitted.is_empty(), "INV emits arcs");
@@ -1939,7 +2262,7 @@ Q = "CLKB*M + !CLKB*Q"
     #[test]
     fn mcdff_two_clock_releases_are_edge_type_with_conditions_preserved() {
         // `when = "transition"`, so the conditioned release is emitted with its `-when` alongside the
-        // catch-all block — the condition is what this test is about.
+        // general block — the condition is what this test is about.
         let (default, forced) = analyse_both(&when_variant(MCDFF, "\"transition\""));
         let tcl = cell_arcs_tcl(&default, ArcsTclOptions::default());
         eprintln!("{tcl}");
@@ -1966,7 +2289,7 @@ Q = "CLKB*M + !CLKB*Q"
             if frag.contains("-related_pin CLKA") {
                 assert_eq!(field_of(frag, 0).as_deref(), Some("F"), "{frag}");
                 assert!(frag.contains("-type edge \\"), "CLKA release: {frag}");
-                // The condition (CLKB open) rides in `-when` on the conditional block; it does not
+                // The condition (CLKB open) rides in `-when` on the conditioned block; it does not
                 // reclassify the arc, which is `-type edge` in both passes.
                 if has_when(frag) {
                     assert!(
