@@ -57,43 +57,39 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     // differing only by prevector or internal state — keeping the member with the shortest prevector (see
     // `deduplicated`). A class the cell selected in its resolved `when` set then ADDS a `-when` block for
     // every one of its arcs, on top of the catch-alls, so one arc can appear twice: once as its vector's
-    // unconditional representative, once carrying its own condition. An arc whose end state fixes no other
-    // input (`when_str` returns `None`) is unconditional, so the second pass skips it: unconditional arcs
-    // are the catch-all pass's job, and that pass keeps only the shortest-prevector member of each dedup
-    // group. A longer-prevector member of the group — even one that itself renders no condition — is
-    // therefore not emitted by either pass.
-    for arc in deduplicated(
+    // unconditional representative, once carrying its own condition. The conditional pass skips an arc
+    // only where its block would repeat one the catch-all pass has already emitted: the arc is in that
+    // pass's emitted set AND its end state fixes no other input (`when_str` returns `None`), so it renders
+    // no `-when` line to tell the two apart. A member that LOST its dedup group renders its own, longer
+    // prevector, so the conditional pass emits it whether or not it carries a condition.
+    let emitted = deduplicated(
         &cell.arcs,
-        |arc| {
-            (
-                arc.output.clone(),
-                arc.related.clone(),
-                arc_type_token(cell, arc),
-                vector_str(cell, arc),
-            )
-        },
+        |arc| arc_key(cell, arc),
         |arc| arc.prevector.len(),
-    ) {
-        out.push_str(&format_arc(cell, arc, false));
+    );
+    for &i in &emitted {
+        out.push_str(&format_arc(cell, &cell.arcs[i], false));
     }
     if cell.when.contains(ArcClass::Transition) {
-        for arc in cell
-            .arcs
-            .iter()
-            .filter(|a| when_str(&a.end, &a.related).is_some())
-        {
+        for (i, arc) in cell.arcs.iter().enumerate() {
+            if emitted.contains(&i) && when_str(&arc.end, &arc.related).is_none() {
+                continue;
+            }
             out.push_str(&format_arc(cell, arc, true));
         }
     }
     if opts.emit_internal {
-        for h in deduplicated(
+        for i in deduplicated(
             &cell.hidden_arcs,
             |h| (h.pin.clone(), hidden_vector_str(cell, h)),
             |h| h.prevector.len(),
         ) {
-            out.push_str(&format_hidden_arc(cell, h, false));
+            out.push_str(&format_hidden_arc(cell, &cell.hidden_arcs[i], false));
         }
         if cell.when.contains(ArcClass::Hidden) {
+            // A hidden arc's condition carries every held output on top of the other inputs, so a cell with
+            // outputs conditions every one of its hidden arcs: each conditional block differs from its
+            // catch-all by that `-when` line, and a dedup-group loser also keeps its own prevector.
             for h in cell
                 .hidden_arcs
                 .iter()
@@ -117,10 +113,12 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     out
 }
 
-/// The catch-all arcs of one class: one arc per emitted-block identity. `key` is everything the block
-/// renders EXCEPT its `-prevector` / `-prevector_pinlist` lines, so two arcs collide exactly when
-/// Liberate cannot tell them apart once `-when` is gone. The kept member is the one with the SHORTEST
-/// prevector; ties keep the first in `items` order. Survivors keep `items` order.
+/// The catch-all arcs of one class, as their indices into `items`: one arc per emitted-block identity.
+/// `key` is everything the block renders EXCEPT its `-prevector` / `-prevector_pinlist` lines, so two
+/// arcs collide exactly when Liberate cannot tell them apart once `-when` is gone. The kept member is
+/// the one with the SHORTEST prevector; ties keep the first in `items` order. Ascending index order is
+/// `items` order, and membership is what the conditional pass tests to recognise a block it would
+/// otherwise repeat (see [`cell_arcs_tcl`]).
 ///
 /// DETERMINISM IS A HARD REQUIREMENT: the collapse threads through `BTreeMap`/`BTreeSet`, never a
 /// randomly-seeded hash map — a per-process random hash seed would reorder the emitted `.tcl` across
@@ -132,7 +130,7 @@ fn deduplicated<T, K: Ord>(
     items: &[T],
     key: impl Fn(&T) -> K,
     prevector_len: impl Fn(&T) -> usize,
-) -> Vec<&T> {
+) -> BTreeSet<usize> {
     // Winning index per key: the earliest STRICTLY-shortest prevector. Replace only on a strictly shorter
     // prevector, so a length tie keeps the earlier index.
     let mut winner: BTreeMap<K, (usize /* len */, usize /* index */)> = BTreeMap::new();
@@ -147,13 +145,18 @@ fn deduplicated<T, K: Ord>(
             })
             .or_insert((len, i));
     }
-    let winners: BTreeSet<usize> = winner.into_values().map(|(_, i)| i).collect();
-    items
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| winners.contains(i))
-        .map(|(_, t)| t)
-        .collect()
+    winner.into_values().map(|(_, i)| i).collect()
+}
+
+/// A transition arc's dedup key: everything its block renders except the prevector — the measured
+/// output, the related pin, the `-type` token and the `-vector` line.
+fn arc_key(cell: &AnalysedCell, arc: &Arc) -> (Symbol, Symbol, &'static str, String) {
+    (
+        arc.output.clone(),
+        arc.related.clone(),
+        arc_type_token(cell, arc),
+        vector_str(cell, arc),
+    )
 }
 
 /// The cell's name(s), braced as a Tcl list: `{ C2 }` for a single name, `{ C2A C2B }` for several.
@@ -827,13 +830,16 @@ Y = "A*B + B*C + A*C"
             .collect()
     }
 
-    /// The number of arcs whose conditional pass renders a block: those that render a `-when` at all. An
-    /// arc with no condition is skipped — it is unconditional, which is already the catch-all's job.
+    /// The number of arcs the conditional pass renders a block for, per class: every arc except one the
+    /// catch-all pass already emitted in the identical form — its dedup-group representative that renders
+    /// no `-when` to tell the two blocks apart.
     fn conditioned_counts(cell: &AnalysedCell) -> (usize, usize) {
+        let emitted = deduplicated(&cell.arcs, |a| arc_key(cell, a), |a| a.prevector.len());
         (
             cell.arcs
                 .iter()
-                .filter(|a| when_str(&a.end, &a.related).is_some())
+                .enumerate()
+                .filter(|(i, a)| !(emitted.contains(i) && when_str(&a.end, &a.related).is_none()))
                 .count(),
             cell.hidden_arcs
                 .iter()
@@ -1064,6 +1070,16 @@ Q = "E*D + !E*Q"
             assert!(has_when(b), "every added block carries a -when:\n{b}");
         }
 
+        // Every arc that renders a condition is emitted with it, whether or not the catch-all pass
+        // already emitted the same arc unconditioned: that pair IS the additive contract.
+        for a in &cell.arcs {
+            let conditioned = format_arc(&cell, a, true);
+            assert!(
+                has_when(&conditioned) && enabled.contains(&conditioned),
+                "a conditioned arc is missing under `when`:\n{conditioned}"
+            );
+        }
+
         // At least one arc is emitted twice — once as its vector's catch-all, once carrying its
         // condition — the two blocks differing only by the `-when` line.
         let stripped = strip_when(&enabled);
@@ -1168,10 +1184,11 @@ Q = "E*D + !E*Q"
     }
 
     /// SINGLE INPUT: an arc whose related pin is the cell's only input renders NO condition
-    /// (`when_str` is `None`), so the conditional pass skips it — emitting it would hand Liberate a
-    /// byte-identical duplicate of the catch-all. Selecting every class therefore changes nothing.
+    /// (`when_str` is `None`), so where it is also the catch-all pass's representative the conditional
+    /// pass skips it — the block it would add is the one already emitted. Every INV arc wins its dedup
+    /// group, so selecting every class changes nothing.
     #[test]
-    fn when_skips_arcs_that_render_no_condition() {
+    fn when_skips_a_conditionless_catch_all_representative() {
         const INV: &str = r#"
 [[cell]]
 name = "INV"
@@ -1185,6 +1202,15 @@ Y = "!A"
             (cond_t, cond_h),
             (0, 0),
             "premise: no INV arc renders a condition"
+        );
+        // PREMISE: nothing collides, so every arc IS its group's representative — the case the skip is
+        // for. A colliding fixture would exercise the other branch instead.
+        let keys: BTreeSet<(Symbol, Symbol, &str, String)> =
+            cell.arcs.iter().map(|a| arc_key(&cell, a)).collect();
+        assert_eq!(
+            keys.len(),
+            cell.arcs.len(),
+            "premise: no INV arc loses a dedup group"
         );
         let default = cell_arcs_tcl(&analyse(INV), NO_LEAKAGE);
         let enabled = cell_arcs_tcl(&cell, NO_LEAKAGE);
