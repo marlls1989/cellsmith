@@ -9,14 +9,14 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-use clap::Parser;
+use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, Parser};
 use rayon::prelude::*;
 
 use cellsmith::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
 use cellsmith::emit::define_cell::cell_define_cell;
 use cellsmith::emit::liberty::library_liberty;
 use cellsmith::emit::verilog::cell_verilog;
-use cellsmith::model::{parse_spec, AnalysedCell};
+use cellsmith::model::{parse_spec, AnalysedCell, ArcClass, ArcClasses};
 
 /// Generate Cadence Liberate transition arcs (with prevectors), a behavioural Verilog model and a
 /// Liberty fragment for logic cells, including state-holding/hysteretic cells.
@@ -34,10 +34,10 @@ struct Cli {
     #[arg(short, long)]
     name: Option<String>,
 
-    /// Suppress the `-when` conditions on arcs (emitted by default). Suppression only: every arc still
-    /// emits, so the output differs from the default solely by the absent `-when` lines.
-    #[arg(long)]
-    no_when: bool,
+    /// The arc classes whose `-when` arcs are also emitted; the flag's help text lives with
+    /// [`WhenArg`], as clap takes no help from the doc comment of a flattened field.
+    #[command(flatten)]
+    when: WhenArg,
 
     /// Suppress hidden (internal-power) arcs — input toggles where no output changes (emitted by default).
     #[arg(long)]
@@ -67,6 +67,71 @@ struct Cli {
     stdout: bool,
 }
 
+/// The `--when` flag, resolved to the set of arc classes it selects. Every occurrence of the flag is
+/// unioned in, and a bare occurrence — which clap records as an occurrence carrying no value — selects
+/// every class, so `--when --when=hidden` selects every class in either order. Reading the occurrence
+/// groups back from [`ArgMatches`] is what keeps a bare occurrence visible next to a valued one, hence
+/// the hand-written [`Args`] implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WhenArg {
+    /// The selected classes; empty when the flag is absent.
+    classes: ArcClasses,
+}
+
+/// The `--when` argument definition, shared by both `augment_args` entry points.
+fn when_arg() -> Arg {
+    Arg::new("when")
+        .long("when")
+        .value_name("CLASS")
+        .value_parser(clap::value_parser!(ArcClass))
+        .num_args(0..=1)
+        .require_equals(true)
+        .action(ArgAction::Append)
+        .help(
+            "Also emit the `-when`-conditioned arcs, per arc class (off by default). One general \
+             arc per transition — a related pin's edge driving an output pin's edge — is always \
+             emitted, without a `-when` line; a selected class adds its `-when` arcs on top, so an \
+             arc can appear both with and without its condition. Bare `--when` selects every class; \
+             `--when=hidden` / `--when=transition` select one; repeat the flag to select several. A \
+             value must be attached with `=` (the space form is not accepted). A cell can select \
+             classes itself with `when = ...`, and the two selections are unioned",
+        )
+}
+
+impl Args for WhenArg {
+    fn augment_args(cmd: Command) -> Command {
+        cmd.arg(when_arg())
+    }
+
+    fn augment_args_for_update(cmd: Command) -> Command {
+        cmd.arg(when_arg())
+    }
+}
+
+impl FromArgMatches for WhenArg {
+    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, clap::Error> {
+        let mut classes = ArcClasses::default();
+        for occurrence in matches
+            .get_occurrences::<ArcClass>("when")
+            .into_iter()
+            .flatten()
+        {
+            let mut values = occurrence.copied().peekable();
+            classes = classes.union(if values.peek().is_none() {
+                ArcClasses::ALL // a bare `--when`: every class
+            } else {
+                values.collect()
+            });
+        }
+        Ok(Self { classes })
+    }
+
+    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
+        *self = Self::from_arg_matches(matches)?;
+        Ok(())
+    }
+}
+
 fn main() {
     if let Err(e) = run(Cli::parse()) {
         eprintln!("cellsmith: {e}");
@@ -91,6 +156,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         for c in &mut spec.cells {
             c.no_edge_collapse = true;
         }
+    }
+    // `--when` is a blanket UNION: every class selected on the command line is added to each cell's
+    // own `when` set, so a cell can select more classes but never opt back out of a CLI-selected one.
+    for c in &mut spec.cells {
+        c.when = c.when.union(cli.when.classes);
     }
     let cells: Vec<AnalysedCell> = spec.analyse()?;
 
@@ -166,7 +236,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     // per-cell opt-in) without a separate diagnostic.
 
     let arc_opts = ArcsTclOptions {
-        emit_when: !cli.no_when,
         emit_internal: !cli.no_internal,
         emit_leakage: !cli.no_leakage,
     };
@@ -209,15 +278,10 @@ fn read_spec(spec: &str) -> io::Result<String> {
 }
 
 /// Concatenate one artifact across every cell.
-// `one` is only `Sync` (not `Send`); passing it by value into `par_iter().map()` would additionally
-// require `Send`, so it is called through a closure that captures it by reference instead.
-#[allow(clippy::redundant_closure)]
+// `one` has trait bound `Sync` (not `Send`). Rayon's `par_iter().map()` requires `F: Send`,
+// but a reference `&F` is `Fn` with `&F: Send` whenever `F: Sync`. Pass `&one` to satisfy this.
 fn render(cells: &[AnalysedCell], one: impl (Fn(&AnalysedCell) -> String) + Sync) -> String {
-    cells
-        .par_iter()
-        .map(|c| one(c))
-        .collect::<Vec<String>>()
-        .concat()
+    cells.par_iter().map(&one).collect::<Vec<String>>().concat()
 }
 
 /// A stdout section banner for one artifact.
@@ -261,6 +325,74 @@ fn write_file(dir: &Path, name: &str, body: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+
+    /// The classes `args` select, parsed through the real CLI.
+    fn when_classes(args: &[&str]) -> ArcClasses {
+        let mut argv = vec!["cellsmith"];
+        argv.extend_from_slice(args);
+        argv.push("s.toml");
+        Cli::try_parse_from(argv).unwrap().when.classes
+    }
+
+    #[test]
+    fn when_bare_flag_selects_all_and_keeps_positional() {
+        let cli = Cli::try_parse_from(["cellsmith", "--when", "s.toml"]).unwrap();
+        assert_eq!(cli.when.classes, ArcClasses::ALL);
+        // `require_equals` keeps the positional `<SPEC>` from being swallowed as the class value.
+        assert_eq!(cli.spec, "s.toml");
+    }
+
+    #[test]
+    fn when_equals_selects_one_class() {
+        let when = when_classes(&["--when=hidden"]);
+        assert!(when.contains(ArcClass::Hidden));
+        assert!(!when.contains(ArcClass::Transition));
+    }
+
+    #[test]
+    fn when_repeats_union_their_classes() {
+        assert_eq!(
+            when_classes(&["--when=hidden", "--when=transition"]),
+            ArcClasses::ALL,
+        );
+    }
+
+    #[test]
+    fn when_bare_unions_with_a_valued_occurrence_in_either_order() {
+        // The bare occurrence is the superset, so it wins whichever side of the valued one it lands.
+        assert_eq!(when_classes(&["--when", "--when=hidden"]), ArcClasses::ALL);
+        assert_eq!(when_classes(&["--when=hidden", "--when"]), ArcClasses::ALL);
+    }
+
+    #[test]
+    fn when_absent_selects_no_class() {
+        let cli = Cli::try_parse_from(["cellsmith", "s.toml"]).unwrap();
+        assert_eq!(cli.when.classes, ArcClasses::default());
+    }
+
+    #[test]
+    fn when_rejects_an_unknown_class() {
+        assert!(Cli::try_parse_from(["cellsmith", "--when=bogus", "s.toml"]).is_err());
+    }
+
+    #[test]
+    fn when_rejects_an_empty_value() {
+        assert!(Cli::try_parse_from(["cellsmith", "--when=", "s.toml"]).is_err());
+    }
+
+    #[test]
+    fn when_does_not_take_a_spaced_value() {
+        // `require_equals`: the spaced token is the positional `<SPEC>`, so a second one is unexpected.
+        assert!(Cli::try_parse_from(["cellsmith", "--when", "hidden", "s.toml"]).is_err());
+    }
+
+    #[test]
+    fn the_removed_no_when_flag_is_rejected() {
+        // `--no-when` is gone, with no alias: the old flag is an unknown argument, so a stale script
+        // fails loudly instead of silently getting the (now default) unconditional arcs.
+        assert!(Cli::try_parse_from(["cellsmith", "--no-when", "s.toml"]).is_err());
+    }
 
     #[test]
     fn base_name_strips_dir_and_extension() {

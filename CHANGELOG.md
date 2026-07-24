@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`--no-when` and the per-cell `no_when` key are removed, with no alias.** `--when` and the
+  per-cell `when` key take their place. This is a breaking CLI change against the released 0.2.1: a
+  spec that still carries `no_when` fails to parse.
+- **The default output carries one general arc per transition — a related pin's edge driving an output
+  pin's edge — emitted without a `-when` line**, rather than one arc per condition, so the generated
+  `.tcl` changes for every existing spec. Each transition is now characterised in a single context;
+  `--when` restores the full set of discovered firings.
+- **`--when` and the per-cell `when` key add the selected class's `-when`-conditioned arcs on top of
+  the general arcs**, so an arc can appear both with and without its condition. Bare `--when` selects
+  every class; `--when=hidden` / `--when=transition` select one; repeat the flag to select several. A
+  cell can select classes itself with `when = ...`, unioned with whatever the command line selects.
+
 ## [0.2.1] - 2026-07-22
 
 ### Added

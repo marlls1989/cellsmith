@@ -29,9 +29,11 @@ tracks its data); both are timing arcs measured from a clock edge and both emit 
 token, so the distinction changes nothing in the annotation. A latch's opening is itself a real edge
 arc.
 
-A **conditioned** edge arc — a clock edge reaching an output only through a second, currently-open latch
-— is an edge arc like any other, with its condition carried in the arc's `-when`: conditioning never reclassifies
-an arc.
+A **conditioned** edge arc — a clock edge reaching an output only through a second,
+currently-open latch — is an edge arc like any other: conditioning never reclassifies an arc. Its
+condition is not carried in the arc's own block by default; only `--when=transition` (or the
+per-cell `when` selection) adds a `-when`-conditioned block for it, on top of the always-emitted
+general arc for its transition.
 
 ## 2. Where it runs
 

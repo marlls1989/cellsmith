@@ -18,7 +18,8 @@
 //!      and the prevector is the BFS path — each node projected onto the inputs — that drives every
 //!      state variable (internal ones included) into the measured edge's start state.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::HashSet;
+use std::hash::Hash;
 
 use espresso_logic::bdd::{Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
@@ -28,7 +29,7 @@ use crate::logic::analysis::Machine;
 use crate::logic::machine;
 use crate::model::AnalysedOutput;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Edge {
     Rise,
     Fall,
@@ -85,12 +86,6 @@ pub struct HiddenArc {
     pub outputs: Vec<(Symbol, bool)>, // each output's HELD logic value, in cell.outputs order
 }
 
-/// Identity of a transition arc: (output, related, edge-direction, full machine start state).
-#[allow(clippy::type_complexity)]
-type ArcKey = (Symbol, Symbol, bool, Minterm<Symbol>);
-/// Identity of a hidden arc: (toggled pin, edge-direction, full machine start state).
-type HiddenKey = (Symbol, bool, Minterm<Symbol>);
-
 /// Derive transition arcs for every output of a cell by re-walking its shared asynchronous state machine
 /// (see [`machine`] and [`Machine`]). A machine node is a [`Minterm<Symbol>`] over
 /// `[inputs…, state_vars…]`; traversal states may be partial, but each arc is measured only from a
@@ -105,7 +100,7 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
     let deltas = &m.deltas;
     let ex = &m.explored;
 
-    let async_set: BTreeSet<&str> = cell.async_pins.iter().map(|s| s.as_str()).collect();
+    let async_set: HashSet<&str> = cell.async_pins.iter().map(|s| s.as_str()).collect();
     // Arcs are identified by their FULL context: transition arcs by (output, related, edge-direction,
     // full machine start state), hidden ('hidden') arcs by (toggled pin, edge-direction, full machine
     // start state). Nothing merges — every context a firing can happen in emits its own arc with its
@@ -114,119 +109,125 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
     // even where the input vectors and the held output values coincide.
     //
     // The identities are unique by construction: each reachable stable state appears once in
-    // `ex.order` and contributes at most one toggle per input, hence at most one arc per output. The
-    // maps therefore never collide and exist only to give a deterministic, machine-order-independent
-    // emission order under the parallel walk.
-    let per_node =
-        |node: &Minterm<Symbol>| -> (BTreeMap<ArcKey, Arc>, BTreeMap<HiddenKey, HiddenArc>) {
-            let mut arc_map: BTreeMap<ArcKey, Arc> = BTreeMap::new();
-            let mut hidden_map: BTreeMap<HiddenKey, HiddenArc> = BTreeMap::new();
-            // ELIGIBILITY: only measure from a FULLY-DETERMINATE start — every state column concrete. A
-            // partially-fixed start carries an uninitialised (don't-care) latch that must not be read as a
-            // held value, so it seeds traversal but is never an arc context (see `logic::edge`).
-            if !m
-                .state_vars
-                .iter()
-                .all(|w| node.value_of(w.as_str()).is_some())
-            {
-                return (arc_map, hidden_map);
-            }
-            for related in inputs {
-                // Toggle one input, hold the (partial) state, and let the state settle.
-                let toggled = machine::toggle(node, &[related.as_str()]);
-                let Some(np) = machine::settle(deltas, &toggled) else {
-                    continue;
-                };
-                // An arc for every output that is defined at both ends and flips across this input toggle.
-                // The end is projected onto the inputs — it is what the `-vector` and `-when` render from —
-                // while the start keeps the full machine node, the arc's context.
-                let end = np.project_to(inputs);
-                let prevector = ex.path_to(node, inputs);
-                // Collect each output's (before, after) once so both the transition and hidden paths read it.
-                let vals: Vec<(&AnalysedOutput, Option<bool>, Option<bool>)> = cell
-                    .outputs
+    // `ex.order` and contributes at most one toggle per input, hence at most one arc per output, so
+    // two firings never share an identity. The `debug_assert!`s below read that back off the
+    // assembled arcs.
+    let (arcs, hidden) = ex
+        .order
+        .par_iter()
+        .fold(
+            || (Vec::new(), Vec::new()),
+            |mut acc, node| {
+                // ELIGIBILITY: only measure from a FULLY-DETERMINATE start — every state column concrete. A
+                // partially-fixed start carries an uninitialised (don't-care) latch that must not be read as a
+                // held value, so it seeds traversal but is never an arc context (see `logic::edge`).
+                if !m
+                    .state_vars
                     .iter()
-                    .map(|o| {
-                        (
-                            o,
-                            m.output_value(&o.name, node),
-                            m.output_value(&o.name, &np),
-                        )
-                    })
-                    .collect();
-                for (o, before, after) in &vals {
-                    let (Some(before), Some(after)) = (before, after) else {
-                        continue;
-                    };
-                    if before == after {
-                        continue;
-                    }
-                    let edge = if *after { Edge::Rise } else { Edge::Fall };
-                    let key = (o.name.clone(), related.clone(), *after, node.clone());
-                    let arc = Arc {
-                        edge,
-                        output: o.name.clone(),
-                        related: related.clone(),
-                        start: node.clone(),
-                        end: end.clone(),
-                        prevector: prevector.clone(),
-                        is_async: async_set.contains(related.as_str()),
-                    };
-                    let previous = arc_map.insert(key, arc);
-                    debug_assert!(previous.is_none(), "arc identities are unique per firing");
-                }
-
-                // Hidden path: a settled input toggle where every output is defined at both ends and none of
-                // them changed — internal-power characterisation.
-                if !vals.is_empty()
-                    && vals
-                        .iter()
-                        .all(|(_, b, a)| matches!((b, a), (Some(b), Some(a)) if b == a))
+                    .all(|w| node.value_of(w.as_str()).is_some())
                 {
-                    let rose = end
-                        .value_of(related.as_str())
-                        .expect("toggled input is fully fixed in the settled end state");
-                    let pin = related.clone();
-                    let outputs: Vec<(Symbol, bool)> = vals
-                        .iter()
-                        .map(|(o, _, a)| (o.name.clone(), a.unwrap()))
-                        .collect();
-                    let hidden = HiddenArc {
-                        pin: pin.clone(),
-                        edge: if rose { Edge::Rise } else { Edge::Fall },
-                        start: node.clone(),
-                        end: end.clone(),
-                        prevector: prevector.clone(),
-                        outputs,
-                    };
-                    let key = (pin, rose, node.clone());
-                    let previous = hidden_map.insert(key, hidden);
-                    debug_assert!(
-                        previous.is_none(),
-                        "hidden arc identities are unique per firing"
-                    );
+                    return acc;
                 }
-            }
-            (arc_map, hidden_map)
-        };
+                for related in inputs {
+                    // Toggle one input, hold the (partial) state, and let the state settle.
+                    let toggled = machine::toggle(node, &[related.as_str()]);
+                    let Some(np) = machine::settle(deltas, &toggled) else {
+                        continue;
+                    };
+                    // An arc for every output that is defined at both ends and flips across this input toggle.
+                    // The end is projected onto the inputs — it is what the `-vector` and `-when` render from —
+                    // while the start keeps the full machine node, the arc's context.
+                    let end = np.project_to(inputs);
+                    let prevector = ex.path_to(node, inputs);
+                    // Collect each output's (before, after) once so both the transition and hidden paths read it.
+                    let vals: Vec<(&AnalysedOutput, Option<bool>, Option<bool>)> = cell
+                        .outputs
+                        .iter()
+                        .map(|o| {
+                            (
+                                o,
+                                m.output_value(&o.name, node),
+                                m.output_value(&o.name, &np),
+                            )
+                        })
+                        .collect();
+                    for (o, before, after) in &vals {
+                        let (Some(before), Some(after)) = (before, after) else {
+                            continue;
+                        };
+                        if before == after {
+                            continue;
+                        }
+                        let edge = if *after { Edge::Rise } else { Edge::Fall };
+                        acc.0.push(Arc {
+                            edge,
+                            output: o.name.clone(),
+                            related: related.clone(),
+                            start: node.clone(),
+                            end: end.clone(),
+                            prevector: prevector.clone(),
+                            is_async: async_set.contains(related.as_str()),
+                        });
+                    }
 
-    let (arc_map, hidden_map) = ex.order.par_iter().map(per_node).reduce(
-        || (BTreeMap::new(), BTreeMap::new()),
-        |(mut a, mut h), (b, hb)| {
-            a.extend(b);
-            h.extend(hb);
-            (a, h)
-        },
+                    // Hidden path: a settled input toggle where every output is defined at both ends and none of
+                    // them changed — internal-power characterisation.
+                    if !vals.is_empty()
+                        && vals
+                            .iter()
+                            .all(|(_, b, a)| matches!((b, a), (Some(b), Some(a)) if b == a))
+                    {
+                        let rose = end
+                            .value_of(related.as_str())
+                            .expect("toggled input is fully fixed in the settled end state");
+                        let outputs: Vec<(Symbol, bool)> = vals
+                            .iter()
+                            .map(|(o, _, a)| (o.name.clone(), a.unwrap()))
+                            .collect();
+                        acc.1.push(HiddenArc {
+                            pin: related.clone(),
+                            edge: if rose { Edge::Rise } else { Edge::Fall },
+                            start: node.clone(),
+                            end: end.clone(),
+                            prevector: prevector.clone(),
+                            outputs,
+                        });
+                    }
+                }
+                acc
+            },
+        )
+        .reduce(
+            || (Vec::new(), Vec::new()),
+            |(mut a, mut h), (b, hb)| {
+                a.extend(b);
+                h.extend(hb);
+                (a, h)
+            },
+        );
+    debug_assert!(
+        all_distinct(&arcs, |a| (&a.output, &a.related, a.edge, &a.start)),
+        "arc identities are unique per firing"
     );
+    debug_assert!(
+        all_distinct(&hidden, |h| (&h.pin, h.edge, &h.start)),
+        "hidden arc identities are unique per firing"
+    );
+    (arcs, hidden)
+}
 
-    (
-        arc_map.into_values().collect(),
-        hidden_map.into_values().collect(),
-    )
+/// Whether every item carries a distinct identity under `key`, which may borrow from the item it keys.
+/// The sole caller is a [`debug_assert!`] in [`derive`], so the set is built only where debug
+/// assertions are enabled.
+fn all_distinct<'a, T, K: Eq + Hash>(items: &'a [T], key: impl Fn(&'a T) -> K) -> bool {
+    let mut seen = HashSet::with_capacity(items.len());
+    items.iter().all(|item| seen.insert(key(item)))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     use crate::model::analyse_one as analyse;
 

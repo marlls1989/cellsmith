@@ -11,6 +11,9 @@
 //! its level rather than being held — stays `-type combinational`, and a declared-async related pin
 //! takes precedence with `-type async`.
 
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::hash::Hash;
+
 use espresso_logic::Symbol;
 
 use crate::logic::arcs::{Arc, Edge, HiddenArc};
@@ -19,16 +22,11 @@ use crate::logic::confluence::{Constraint, ConstraintKind};
 use crate::logic::hazard::Oscillation;
 use crate::logic::leakage::LeakageState;
 use crate::logic::literal_product;
-use crate::model::AnalysedCell;
+use crate::model::{AnalysedCell, ArcClass};
 
 /// Knobs for the arc emitter.
 #[derive(Debug, Clone, Copy)]
 pub struct ArcsTclOptions {
-    /// Emit a `-when` condition (the other inputs' fixed values in the end state) on each arc, keeping
-    /// every held-input context as its own conditioned arc. **On by default.** When off, only the
-    /// `-when` line is suppressed: every arc still emits, so the two modes differ solely by the absent
-    /// conditions.
-    pub emit_when: bool,
     /// Emit hidden (whole-cell internal-power) arcs — an input toggles but no output changes — as
     /// `-type hidden` blocks. **On by default.**
     pub emit_internal: bool,
@@ -40,29 +38,76 @@ pub struct ArcsTclOptions {
 impl Default for ArcsTclOptions {
     fn default() -> Self {
         Self {
-            emit_when: true,
             emit_internal: true,
             emit_leakage: true,
         }
     }
 }
 
-/// All `define_arc` blocks for a cell, concatenated. A cell with a detected oscillation hazard is
-/// prefixed with a comment recording the racing condition and the competing settled outcomes — the
-/// metastability risk timing arcs cannot express. Any derived constraint arcs (setup/hold, non_seq)
-/// the cell opted into — its `constraint_arcs` was set, so generation populated `cell.constraints` —
-/// follow the delay arcs.
+/// All `define_arc` blocks for a cell, concatenated. The general arcs are ALWAYS emitted — one
+/// representative per transition, rendered without a `-when` line; an arc class the cell selected in
+/// its resolved `when` set ADDS its conditioned blocks on top, so the same arc can appear twice. A cell
+/// with a detected oscillation hazard is prefixed with a comment recording the racing condition and the
+/// competing settled outcomes — the metastability risk timing arcs cannot express. Any derived
+/// constraint arcs (setup/hold, non_seq) the cell opted into — its `constraint_arcs` was set, so
+/// generation populated `cell.constraints` — follow the delay arcs.
 pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     let mut out = oscillation_comment(cell);
-    // `--no-when` suppresses only the `-when` line (handled in `format_arc`/`format_hidden_arc`): every
-    // arc still emits in both modes. Overlapping arcs and same-vector siblings differing only in internal
-    // state or prevector are legal in Liberate.
-    for arc in &cell.arcs {
-        out.push_str(&format_arc(cell, arc, opts));
+    // Each arc class is emitted in two passes. The GENERAL pass comes out ALWAYS: one representative per
+    // transition — a related pin's edge driving an output pin's edge — rendered with no `-when` line, so
+    // the block generalises over the side inputs' held levels, the held outputs and the internal state
+    // the transition was measured from, keeping the member with the shortest prevector (see
+    // `generalised`). A class the cell selected in its resolved `when` set then ADDS a `-when` block for
+    // every one of its arcs, on top of the general ones, so one arc can appear twice: once as its
+    // transition's general representative, once carrying its own condition. The conditioned pass skips an
+    // arc only where its block would DUPLICATE one the general pass has already emitted verbatim: the arc
+    // is that pass's representative AND its end state fixes no other input (`when_str` returns `None`),
+    // so it renders no `-when` line to tell the two apart. Any other member renders its own prevector, so
+    // the conditioned pass emits it whether or not it carries a condition.
+    let general = generalised(
+        &cell.arcs,
+        |arc| ArcIdentity::of(cell, arc),
+        |arc| arc.prevector.len(),
+    );
+    for (_, arc) in cell
+        .arcs
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| general.contains(i))
+    {
+        out.push_str(&format_arc(cell, arc, false));
+    }
+    if cell.when.contains(ArcClass::Transition) {
+        for (i, arc) in cell.arcs.iter().enumerate() {
+            if general.contains(&i) && when_str(&arc.end, &arc.related).is_none() {
+                continue;
+            }
+            out.push_str(&format_arc(cell, arc, true));
+        }
     }
     if opts.emit_internal {
-        for h in &cell.hidden_arcs {
-            out.push_str(&format_hidden_arc(cell, h, opts));
+        let general_hidden = generalised(&cell.hidden_arcs, ArcIdentity::of_hidden, |h| {
+            h.prevector.len()
+        });
+        for (_, h) in cell
+            .hidden_arcs
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| general_hidden.contains(i))
+        {
+            out.push_str(&format_hidden_arc(cell, h, false));
+        }
+        if cell.when.contains(ArcClass::Hidden) {
+            // The same skip rule as the transition pass, over the hidden class's own condition: a hidden
+            // arc's `-when` carries every held output on top of the other inputs, so a cell with outputs
+            // conditions every one of its hidden arcs and each conditioned block differs from its pin's
+            // general block by that `-when` line, and by its own prevector and vector.
+            for (i, h) in cell.hidden_arcs.iter().enumerate() {
+                if general_hidden.contains(&i) && hidden_when_str(h).is_none() {
+                    continue;
+                }
+                out.push_str(&format_hidden_arc(cell, h, true));
+            }
         }
     }
     if opts.emit_leakage {
@@ -77,6 +122,113 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
         out.push_str(&format_constraint(cell, c));
     }
     out
+}
+
+/// The general arcs of one class, as their indices into `items`: one representative per identity. `key`
+/// groups the firings — every firing carrying one [`ArcIdentity`] falls in a single group and exactly
+/// one block comes out of it, generalising over the contexts the firings differed in. The kept member is
+/// one with the SHORTEST prevector: only a strictly shorter prevector displaces the incumbent, so where
+/// several firings tie at the minimum any one of them may be kept — each is an equally valid
+/// representative of the group at this grain. Membership of the returned set is what the conditioned
+/// pass tests to recognise a block it would otherwise duplicate (see [`cell_arcs_tcl`]).
+fn generalised<T, K: Hash + Eq>(
+    items: &[T],
+    key: impl Fn(&T) -> K,
+    prevector_len: impl Fn(&T) -> usize,
+) -> HashSet<usize> {
+    // Winning index per key: a STRICTLY-shortest prevector. Replace only on a strictly shorter prevector.
+    let mut winner: HashMap<K, (usize /* len */, usize /* index */)> = HashMap::new();
+    for (i, item) in items.iter().enumerate() {
+        let len = prevector_len(item);
+        winner
+            .entry(key(item))
+            .and_modify(|best| {
+                if len < best.0 {
+                    *best = (len, i);
+                }
+            })
+            .or_insert((len, i));
+    }
+    winner.into_values().map(|(_, i)| i).collect()
+}
+
+/// The event a transition arc measures: the output pin and the edge it makes, the related pin and the
+/// edge IT makes. The side inputs' held levels, the held outputs and the internal state are the firing's
+/// CONDITION rather than part of the event, so they are absent — one transition yields ONE general block
+/// however many contexts it was measured from, and every one of those contexts returns as its own
+/// conditioned block under `--when`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct Transition {
+    output: Symbol,
+    edge: Edge,
+    related: Symbol,
+    related_edge: Edge,
+}
+
+/// An emitted arc's identity. The variant IS Liberate's `-type` taxonomy: the three transition kinds
+/// carry the [`Transition`] event they measure, while a hidden arc — an input toggle no output follows —
+/// carries the toggled pin and its edge and structurally holds no related pin.
+///
+/// The kind is part of the identity because `-type` declares the arc's nature to Liberate and is decided
+/// per firing, from the full machine start state (see [`ArcIdentity::of`]): a transition that classifies
+/// differently from different start states is two arc kinds, and collapsing across it would delete one
+/// of them from the output.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ArcIdentity {
+    Async(Transition),
+    Edge(Transition),
+    Combinational(Transition),
+    Hidden { pin: Symbol, edge: Edge },
+}
+
+impl ArcIdentity {
+    /// A transition arc's identity: [`ArcIdentity::Async`] for a declared-async related pin, else
+    /// [`ArcIdentity::Edge`] when the arc's FULL context `(output, related, direction, machine start)` is
+    /// labelled a clock-edge timing arc in [`crate::logic::edge::EdgeArcs::labels`], else
+    /// [`ArcIdentity::Combinational`]. There is ONE edge category, so two firings that differ only in
+    /// internal state can classify differently.
+    fn of(cell: &AnalysedCell, arc: &Arc) -> Self {
+        let related_edge = related_edge(arc);
+        let transition = Transition {
+            output: arc.output.clone(),
+            edge: arc.edge,
+            related: arc.related.clone(),
+            related_edge,
+        };
+        if arc.is_async {
+            ArcIdentity::Async(transition)
+        } else if cell.edge.labels.contains(&(
+            arc.output.clone(),
+            arc.related.clone(),
+            related_edge,
+            arc.start.clone(),
+        )) {
+            ArcIdentity::Edge(transition)
+        } else {
+            ArcIdentity::Combinational(transition)
+        }
+    }
+
+    /// A hidden arc's identity: the toggled pin and the edge it makes. That pair IS the event; the other
+    /// inputs' held levels and the held outputs are its condition and ride in [`hidden_when_str`], so
+    /// they are absent here for the same reason as in [`Transition`].
+    fn of_hidden(h: &HiddenArc) -> Self {
+        ArcIdentity::Hidden {
+            pin: h.pin.clone(),
+            edge: h.edge,
+        }
+    }
+
+    /// The `-type` word Liberate reads, and the ONE source of it: every `define_arc` block the emitter
+    /// renders takes its type line from here.
+    fn type_token(&self) -> &'static str {
+        match self {
+            ArcIdentity::Async(_) => "async",
+            ArcIdentity::Edge(_) => "edge",
+            ArcIdentity::Combinational(_) => "combinational",
+            ArcIdentity::Hidden { .. } => "hidden",
+        }
+    }
 }
 
 /// The cell's name(s), braced as a Tcl list: `{ C2 }` for a single name, `{ C2A C2B }` for several.
@@ -183,28 +335,13 @@ fn related_edge(arc: &Arc) -> Edge {
     }
 }
 
-fn format_arc(cell: &AnalysedCell, arc: &Arc, opts: ArcsTclOptions) -> String {
-    // There is ONE edge category — a clock-edge timing arc, emitted with Liberate `-type edge`. The label
-    // is looked up by the arc's FULL identity `(output, related, direction, machine start)`, so two firings
-    // that differ only in internal state can type differently. An arc whose identity is absent is
-    // combinational, and a declared-async related pin keeps `-type async`.
-    let is_edge = !arc.is_async
-        && cell.edge.labels.contains(&(
-            arc.output.clone(),
-            arc.related.clone(),
-            related_edge(arc),
-            arc.start.clone(),
-        ));
-    let type_line = format!(
-        "\t-type {} \\\n",
-        if arc.is_async {
-            "async"
-        } else if is_edge {
-            "edge"
-        } else {
-            "combinational"
-        }
-    );
+/// One transition `define_arc`. `with_when` selects which of the two passes in [`cell_arcs_tcl`] the
+/// block belongs to: the conditioned one, carrying the arc's `-when`, or the general one. Either way the
+/// block renders THIS arc's own concrete `-prevector` and `-vector`: `-vector` is the stimulus Liberate
+/// drives and `X` is legal only in the unmonitored-output columns (see [`vector_str`]), so a general
+/// block's generality lives in the ABSENCE of the `-when` line, not in a relaxed vector.
+fn format_arc(cell: &AnalysedCell, arc: &Arc, with_when: bool) -> String {
+    let type_line = format!("\t-type {} \\\n", ArcIdentity::of(cell, arc).type_token());
     let prevector_pinlist = format!("\t-prevector_pinlist {{{}}} \\\n", cell.inputs.join(" "));
     let prevector = format!(
         "\t-prevector {{{}}} \\\n",
@@ -212,7 +349,7 @@ fn format_arc(cell: &AnalysedCell, arc: &Arc, opts: ArcsTclOptions) -> String {
     );
     let pinlist = format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell));
     let vector = format!("\t-vector {{{}}} \\\n", vector_str(cell, arc));
-    let when = match (opts.emit_when, when_str(&arc.end, &arc.related)) {
+    let when = match (with_when, when_str(&arc.end, &arc.related)) {
         (true, Some(w)) => format!("\t-when \"{w}\" \\\n"),
         _ => String::new(),
     };
@@ -244,15 +381,14 @@ fn format_arc(cell: &AnalysedCell, arc: &Arc, opts: ArcsTclOptions) -> String {
     s
 }
 
-/// A hidden (whole-cell internal-power) `define_arc` of `-type hidden`: the toggled input drives an
-/// `R`/`F` edge, every other input sits at its held value in the end state, and every output is pinned
-/// at its held `1`/`0` value (never `X` — a hidden arc measures no output transition). Unlike transition
-/// arcs there is no `-related_pin`, and `-type hidden` always leads regardless of edge direction.
-fn format_hidden_arc(cell: &AnalysedCell, h: &HiddenArc, opts: ArcsTclOptions) -> String {
-    let held: std::collections::BTreeMap<&str, bool> =
-        h.outputs.iter().map(|(s, b)| (s.as_str(), *b)).collect();
+/// The measured hidden-arc vector: the toggled `pin` as its `R`/`F` edge, every other input at its held
+/// `1`/`0` value in the end state, and every output pinned at its held `1`/`0` value (never `X` — a hidden
+/// arc measures no output transition). Mirrors [`vector_str`] for [`Arc`], and is the ONE source of
+/// `format_hidden_arc`'s `-vector` line.
+fn hidden_vector_str(cell: &AnalysedCell, h: &HiddenArc) -> String {
+    let held: BTreeMap<&str, bool> = h.outputs.iter().map(|(s, b)| (s.as_str(), *b)).collect();
     let end = assignment(&h.end);
-    let vec = vector(
+    vector(
         cell,
         |input| {
             if input == h.pin.as_str() {
@@ -277,10 +413,24 @@ fn format_hidden_arc(cell: &AnalysedCell, h: &HiddenArc, opts: ArcsTclOptions) -
             }
             .to_string()
         },
-    );
+    )
+}
+
+/// A hidden (whole-cell internal-power) `define_arc` of `-type hidden`: the toggled input drives an
+/// `R`/`F` edge, every other input sits at its held value in the end state, and every output is pinned
+/// at its held `1`/`0` value (never `X` — a hidden arc measures no output transition). Unlike transition
+/// arcs there is no `-related_pin`, and `-type hidden` always leads regardless of edge direction.
+/// `with_when` selects which of the two passes in [`cell_arcs_tcl`] the block belongs to: the
+/// conditioned one, carrying the arc's `-when`, or the general one, which keeps its own concrete
+/// `-prevector` and `-vector` and generalises solely by omitting the `-when` line.
+fn format_hidden_arc(cell: &AnalysedCell, h: &HiddenArc, with_when: bool) -> String {
+    let vec = hidden_vector_str(cell, h);
 
     let mut s = String::from("define_arc \\\n");
-    s.push_str("\t-type hidden \\\n");
+    s.push_str(&format!(
+        "\t-type {} \\\n",
+        ArcIdentity::of_hidden(h).type_token()
+    ));
     s.push_str(&format!(
         "\t-prevector_pinlist {{{}}} \\\n",
         cell.inputs.join(" ")
@@ -291,7 +441,7 @@ fn format_hidden_arc(cell: &AnalysedCell, h: &HiddenArc, opts: ArcsTclOptions) -
     ));
     s.push_str(&format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell)));
     s.push_str(&format!("\t-vector {{{vec}}} \\\n"));
-    if let (true, Some(w)) = (opts.emit_when, hidden_when_str(h)) {
+    if let (true, Some(w)) = (with_when, hidden_when_str(h)) {
         s.push_str(&format!("\t-when \"{w}\" \\\n"));
     }
     s.push_str(&format!("\t-pin {} \\\n", h.pin.as_str()));
@@ -429,6 +579,8 @@ fn format_leakage(cell: &AnalysedCell, l: &LeakageState) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     use crate::model::analyse_one as analyse;
 
@@ -463,22 +615,27 @@ Q = "A*B + Q*(A+B)"
             tcl.matches("-pin Q").count() + tcl.matches("-type hidden").count()
         );
         assert!(!tcl.contains("-type async"));
-        // -when is emitted by default.
-        assert!(tcl.contains("-when"));
+        // The default emits the general arcs only, so no BLOCK carries a `-when` line. `define_leakage`
+        // is inherently `-when`-conditioned, so the discriminator is the line start: an arc's `-when` is
+        // its own indented line, a leakage `-when` rides on the `define_leakage` line.
+        assert!(!tcl.lines().any(|l| l.trim_start().starts_with("-when")));
     }
 
     #[test]
     fn and2_emits_hidden_arc_blocks() {
+        // `when = "hidden"` so the conditioned hidden blocks are emitted alongside the general ones: the
+        // held-output `-when` asserted below is what the hidden class's conditioned pass renders.
         let cell = analyse(
             r#"
 [[cell]]
 name = "AND2"
 inputs = ["A", "B"]
+when = "hidden"
 [cell.outputs]
 Y = "A*B"
 "#,
         );
-        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
         eprintln!("{tcl}");
         for frag in tcl.split("define_arc") {
             if !frag.contains("-type hidden") {
@@ -505,26 +662,29 @@ Y = "A*B"
     fn dlatch_hidden_when_carries_held_output() {
         // Transparent-high D-latch: a D toggle in hold (E=0) leaves Q unchanged, but the two stored-value
         // contexts differ in the held Q. Both must be emitted as hidden `-pin D` arcs and disambiguated by
-        // the held Q literal folded into `-when`.
+        // the held Q literal folded into `-when` — which the hidden class's conditioned pass renders, so
+        // the cell opts in with `when = "hidden"`.
         let cell = analyse(
             r#"
 [[cell]]
 name = "DLAT"
 inputs = ["E", "D"]
+when = "hidden"
 [cell.outputs]
 Q = "E*D + !E*Q"
 "#,
         );
-        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
         eprintln!("{tcl}");
         let d_hidden: Vec<&str> = tcl
             .split("define_arc")
             .filter(|frag| frag.contains("-type hidden") && frag.contains("-pin D"))
             .collect();
-        // The `-when` of one context holds Q true (`* Q`, not `!Q`) and another holds Q false (`!Q`).
+        // The `-when` of one context holds Q true (`* Q`, not `!Q`) and another holds Q false (`!Q`). Only
+        // an arc's own `-when` line counts (a leakage `-when` rides on its `define_leakage` line).
         let when_of = |frag: &str| {
             frag.lines()
-                .find(|l| l.contains("-when"))
+                .find(|l| l.trim_start().starts_with("-when"))
                 .unwrap_or("")
                 .to_string()
         };
@@ -561,8 +721,10 @@ Y = "A*B"
         assert!(on.matches("-type hidden").count() >= 1);
     }
 
+    /// ONE PER PIN EDGE: the general pass emits exactly one hidden block per distinct `(pin, edge)` —
+    /// the toggle event — whatever the other inputs and held outputs were when it was measured.
     #[test]
-    fn hidden_arcs_keep_every_block_without_when() {
+    fn hidden_general_arcs_are_one_per_pin_edge() {
         let cell = analyse(
             r#"
 [[cell]]
@@ -572,27 +734,28 @@ inputs = ["A", "B"]
 Y = "A*B"
 "#,
         );
-        let without_when = cell_arcs_tcl(
-            &cell,
-            ArcsTclOptions {
-                emit_when: false,
-                // define_leakage is inherently -when-conditioned; disabled here to isolate arc -when
-                // suppression.
-                emit_leakage: false,
-                ..Default::default()
-            },
-        );
-        let with_when = cell_arcs_tcl(&cell, ArcsTclOptions::default());
-        assert!(!without_when.contains("-when"));
-        // Suppression-only: no hidden block is collapsed away, so the count is unchanged.
+        let default = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{default}");
+        assert!(!default.lines().any(|l| l.trim_start().starts_with("-when")));
+        let events: HashSet<ArcIdentity> = cell
+            .hidden_arcs
+            .iter()
+            .map(ArcIdentity::of_hidden)
+            .collect();
+        assert!(!events.is_empty(), "AND2 emits hidden arcs");
+        let hidden = blocks(&default)
+            .iter()
+            .filter(|b| b.contains("-type hidden"))
+            .count();
         assert_eq!(
-            without_when.matches("-type hidden").count(),
-            with_when.matches("-type hidden").count()
+            hidden,
+            events.len(),
+            "one general hidden block per distinct (pin, edge)"
         );
     }
 
     #[test]
-    fn when_flag_toggles_when_clause() {
+    fn when_flag_adds_the_when_clause() {
         let cell = analyse(
             r#"
 [[cell]]
@@ -602,64 +765,879 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        let off = cell_arcs_tcl(
-            &cell,
-            ArcsTclOptions {
-                emit_when: false,
-                // define_leakage is inherently -when-conditioned; disabled here to isolate arc -when
-                // suppression.
-                emit_leakage: false,
-                ..Default::default()
-            },
+        // The same cell but for `when = true`, which selects every arc class's conditioned blocks.
+        let selected = analyse(
+            r#"
+[[cell]]
+name = "C2"
+inputs = ["A", "B"]
+when = true
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+"#,
         );
-        let on = cell_arcs_tcl(
-            &cell,
-            ArcsTclOptions {
-                emit_when: true,
-                ..Default::default()
-            },
-        );
-        assert!(!off.contains("-when"));
-        assert!(on.contains("-when"));
+        let arc_when = |tcl: &str| {
+            tcl.lines()
+                .filter(|l| l.trim_start().starts_with("-when"))
+                .count()
+        };
+        let off = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        let on = cell_arcs_tcl(&selected, NO_LEAKAGE);
+        assert_eq!(arc_when(&off), 0);
+        assert!(arc_when(&on) >= 1);
     }
 
+    /// NOTHING IS LOST: a 3-input majority gate fires each of its transitions from several side-input
+    /// contexts, so the default output carries one block per transition — strictly fewer than the
+    /// discovered firings — and selecting every class brings every one of those firings back, each with
+    /// its own `-when`.
     #[test]
-    fn no_when_suppresses_only_the_when_line() {
-        // A 3-input majority gate: its output rises via one pin under two distinct held contexts (the
-        // other two inputs at 10 or 01). `-when` suppression is suppression-only — nothing collapses —
-        // so both modes carry the same `define_arc` count and differ solely by the absent `-when` lines.
-        let cell = analyse(
-            r#"
+    fn when_restores_every_discovered_firing() {
+        let cell = analyse(MAJ3);
+        let selected = analyse(&when_variant(MAJ3, "true"));
+        let default = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        let on = cell_arcs_tcl(&selected, NO_LEAKAGE);
+        eprintln!("{default}");
+
+        let transitions: HashSet<_> = cell
+            .arcs
+            .iter()
+            .map(|a| ArcIdentity::of(&cell, a))
+            .collect();
+        let events: HashSet<_> = cell
+            .hidden_arcs
+            .iter()
+            .map(ArcIdentity::of_hidden)
+            .collect();
+        let firings = cell.arcs.len() + cell.hidden_arcs.len();
+        assert_eq!(
+            blocks(&default).len(),
+            transitions.len() + events.len(),
+            "the default output is one block per transition and per hidden event"
+        );
+        assert!(
+            blocks(&default).len() < firings,
+            "premise: MAJ3 fires a transition from several contexts, so the general pass collapses \
+             {firings} firings"
+        );
+
+        // Every discovered firing is emitted with its own condition once the class is selected.
+        for a in &selected.arcs {
+            let conditioned = format_arc(&selected, a, true);
+            assert!(
+                has_when(&conditioned) && on.contains(&conditioned),
+                "a discovered firing is missing under `when`:\n{conditioned}"
+            );
+        }
+    }
+
+    // ---- General-arc contract: shortest prevector, class selectivity ----
+
+    /// A two-output cell that exhibits a transition-arc collision: `Y = A` is a plain rise/fall, and `Z`
+    /// is a C-element whose held value renders as `X` in `Y`'s vector. With `B = 1` both `Z = 0` and
+    /// `Z = 1` are reachable settled states, so the `A`-rise → `Y`-rise arc is measured from both and the
+    /// two blocks are identical apart from their prevectors — a same-key collision once `-when` is gone.
+    const TWO: &str = r#"
+[[cell]]
+name = "TWO"
+inputs = ["A", "B"]
+[cell.outputs]
+Y = "A"
+Z = "A*B + Z*(A+B)"
+"#;
+
+    /// A 3-input majority gate: stateless, so a transition's context is entirely the other two inputs'
+    /// held levels, and each transition fires from several of them.
+    const MAJ3: &str = r#"
 [[cell]]
 name = "MAJ3"
 inputs = ["A", "B", "C"]
 [cell.outputs]
 Y = "A*B + B*C + A*C"
-"#,
+"#;
+
+    /// An OR-AND 2-2: `A` rising drives `Y` rising from every side-input context that holds `B` low and
+    /// the other OR term satisfied — `(C,D)` at `01`, `10` or `11`. Three discovered firings of ONE
+    /// transition.
+    const OA22: &str = r#"
+[[cell]]
+name = "OA22"
+inputs = ["A", "B", "C", "D"]
+[cell.outputs]
+Y = "(A+B)*(C+D)"
+"#;
+
+    /// `src` with a `when = <value>` key spliced into its `[[cell]]` table — just before its FIRST
+    /// `[cell.…]` sub-table, so a fixture declaring `[cell.internal]` gets the key in the cell table
+    /// rather than as an internal function. `value` is the raw TOML: `true`, `"hidden"`, `"transition"`.
+    fn when_variant(src: &str, value: &str) -> String {
+        let at = src
+            .find("\n[cell.")
+            .expect("the fixture declares a [cell.…] sub-table");
+        format!("{}\nwhen = {value}{}", &src[..at], &src[at..])
+    }
+
+    /// Isolate the arc passes from `define_leakage`, which is inherently `-when`-conditioned.
+    const NO_LEAKAGE: ArcsTclOptions = ArcsTclOptions {
+        emit_internal: true,
+        emit_leakage: false,
+    };
+
+    /// The emitted `define_arc` blocks: the text following each `define_arc`, truncated at its trailing
+    /// blank line (the block separator) so the `define_leakage` section that follows the last arc block
+    /// stays out of it, and trimmed. Block identity is the whole text, so the same arc emitted twice —
+    /// once as its transition's general representative, once carrying its `-when` — yields two blocks
+    /// differing by that one line.
+    fn blocks(tcl: &str) -> Vec<String> {
+        tcl.split("define_arc")
+            .skip(1)
+            .map(|b| match b.find("\n\n") {
+                Some(off) => &b[..off],
+                None => b,
+            })
+            .map(str::trim)
+            .map(String::from)
+            .collect()
+    }
+
+    /// [`blocks`], sorted — for comparing two code paths on the same input by the arcs they emit,
+    /// independent of emission order.
+    fn sorted_blocks(tcl: &str) -> Vec<String> {
+        let mut b = blocks(tcl);
+        b.sort();
+        b
+    }
+
+    /// Whether a block carries an ARC `-when` line. The line start is the discriminator: an arc's `-when`
+    /// is its own indented line, whereas `define_leakage` — inherently `-when`-conditioned — rides its
+    /// condition on the `define_leakage` line itself.
+    fn has_when(block: &str) -> bool {
+        block.lines().any(|l| l.trim_start().starts_with("-when"))
+    }
+
+    /// [`blocks`], each with its own `-when` line dropped — what maps a conditioned block onto the
+    /// general block it otherwise duplicates.
+    fn strip_when(tcl: &str) -> Vec<String> {
+        blocks(tcl)
+            .iter()
+            .map(|b| {
+                b.lines()
+                    .filter(|l| !l.trim_start().starts_with("-when"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .collect()
+    }
+
+    /// The number of arcs the conditioned pass renders a block for, per class: every arc except one the
+    /// general pass already emitted in the identical form — its transition's representative, which
+    /// renders no `-when` to tell the two blocks apart.
+    fn conditioned_counts(cell: &AnalysedCell) -> (usize, usize) {
+        let general = generalised(
+            &cell.arcs,
+            |a| ArcIdentity::of(cell, a),
+            |a| a.prevector.len(),
         );
-        // Isolate arc `-when` suppression from `define_leakage`, which is inherently `-when`-conditioned.
-        let opts = |emit_when| ArcsTclOptions {
-            emit_when,
-            emit_leakage: false,
-            ..Default::default()
-        };
-        let with_when = cell_arcs_tcl(&cell, opts(true));
-        let without_when = cell_arcs_tcl(&cell, opts(false));
+        let general_hidden = generalised(&cell.hidden_arcs, ArcIdentity::of_hidden, |h| {
+            h.prevector.len()
+        });
+        (
+            cell.arcs
+                .iter()
+                .enumerate()
+                .filter(|(i, a)| !(general.contains(i) && when_str(&a.end, &a.related).is_none()))
+                .count(),
+            cell.hidden_arcs
+                .iter()
+                .enumerate()
+                .filter(|(i, h)| !(general_hidden.contains(i) && hidden_when_str(h).is_none()))
+                .count(),
+        )
+    }
+
+    /// The A→Y arcs of `cell`, grouped by [`ArcIdentity`] — the source the general pass groups, so a
+    /// premise read from it fails loudly on a fixture where nothing collides.
+    fn ay_groups(cell: &AnalysedCell) -> HashMap<ArcIdentity, Vec<&Arc>> {
+        let mut groups: HashMap<_, Vec<&Arc>> = HashMap::new();
+        for a in cell
+            .arcs
+            .iter()
+            .filter(|a| a.output == "Y" && a.related == "A")
+        {
+            groups.entry(ArcIdentity::of(cell, a)).or_default().push(a);
+        }
+        groups
+    }
+
+    /// COLLISION: the general pass collapses a transition measured from several contexts to a single
+    /// block, on the DEFAULT output — the pass is unconditional, so no opt-in is involved.
+    #[test]
+    fn general_collapses_a_collision_to_one_block() {
+        // PREMISE: at least two A→Y arcs share a transition key.
+        let cell = analyse(TWO);
+        let groups = ay_groups(&cell);
+        let (_, group) = groups
+            .iter()
+            .find(|(_, g)| g.len() >= 2)
+            .expect("premise: two A→Y arcs must share a transition key");
+
+        // Exactly one member of the group is emitted, verbatim as its own arc.
+        let default = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{default}");
+        let survivors = group
+            .iter()
+            .filter(|a| default.contains(&format_arc(&cell, a, false)))
+            .count();
+        assert_eq!(survivors, 1, "the colliding A→Y arcs collapse to one block");
+    }
+
+    /// SHORTEST PREVECTOR: the surviving member of a collapsed group keeps the shortest prevector, on the
+    /// DEFAULT output. The minimum is read FROM `cell.arcs` (never hardcoded), so a length tie cannot
+    /// make the assertion vacuous.
+    #[test]
+    fn general_keeps_the_shortest_prevector() {
+        let cell = analyse(TWO);
+        let groups = ay_groups(&cell);
+        let (_, group) = groups
+            .iter()
+            .find(|(_, g)| g.len() >= 2)
+            .expect("premise: a colliding A→Y group");
+        let min_len = group
+            .iter()
+            .map(|a| a.prevector.len())
+            .min()
+            .expect("a non-empty group");
+
+        // In the default output, the group's emitted member carries exactly `min_len` steps.
+        let default = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        let survivor = group
+            .iter()
+            .find(|a| default.contains(&format_arc(&cell, a, false)))
+            .expect("the surviving A→Y block");
         assert_eq!(
-            with_when.matches("define_arc").count(),
-            without_when.matches("define_arc").count(),
-            "every arc emits in both modes"
+            survivor.prevector.len(),
+            min_len,
+            "the shortest-prevector member survives"
         );
-        assert!(with_when.contains("-when"));
-        assert!(!without_when.contains("-when"));
-        // Dropping the `-when` lines from the default output reproduces the suppressed output exactly.
-        let strip_when = |s: &str| {
-            s.lines()
-                .filter(|l| !l.contains("-when"))
-                .collect::<Vec<_>>()
-                .join("\n")
+    }
+
+    /// CONTRACT: the general block count equals the number of DISTINCT transitions — fixture independent,
+    /// and the primary pin on the hidden side where a hand-picked collision is not reliably
+    /// constructible. Asserted on the DEFAULT output, where the general blocks are all there is.
+    #[test]
+    fn general_count_equals_distinct_transitions() {
+        for src in [TWO, MAJ3] {
+            let cell = analyse(src);
+            let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
+
+            // Transition side: one block per distinct transition.
+            let non_hidden = tcl
+                .split("define_arc")
+                .skip(1)
+                .filter(|b| !b.contains("-type hidden"))
+                .count();
+            let transitions: HashSet<_> = cell
+                .arcs
+                .iter()
+                .map(|a| ArcIdentity::of(&cell, a))
+                .collect();
+            assert_eq!(
+                non_hidden,
+                transitions.len(),
+                "transition block count equals distinct transitions"
+            );
+
+            // Hidden side: one block per distinct (pin, edge) toggle event.
+            let hidden = tcl.matches("-type hidden").count();
+            let events: HashSet<_> = cell
+                .hidden_arcs
+                .iter()
+                .map(ArcIdentity::of_hidden)
+                .collect();
+            assert_eq!(
+                hidden,
+                events.len(),
+                "hidden block count equals distinct hidden events"
+            );
+        }
+    }
+
+    /// HELD-OUTPUT CONTEXTS COLLAPSE: a transparent-high D-latch holds Q at 0 or 1 across its two
+    /// D-toggle contexts, but the toggle is ONE hidden event either way, so the general pass emits one
+    /// `-pin D` block per edge. Selecting the class brings both contexts back, told apart by the held Q
+    /// literal in their `-when` lines.
+    #[test]
+    fn hidden_general_arc_collapses_held_output_contexts() {
+        const DLAT: &str = r#"
+[[cell]]
+name = "DLAT"
+inputs = ["E", "D"]
+[cell.outputs]
+Q = "E*D + !E*Q"
+"#;
+        let cell = analyse(DLAT);
+        // PREMISE: a D toggle is measured from several held-Q contexts, each of which renders a
+        // condition.
+        let mut contexts: HashMap<ArcIdentity, usize> = HashMap::new();
+        for h in cell.hidden_arcs.iter().filter(|h| h.pin == "D") {
+            assert!(
+                hidden_when_str(h).is_some(),
+                "premise: every D hidden arc renders a condition"
+            );
+            *contexts.entry(ArcIdentity::of_hidden(h)).or_default() += 1;
+        }
+        assert!(
+            contexts.values().any(|n| *n >= 2),
+            "premise: a D toggle fires from several held-Q contexts"
+        );
+
+        let d_hidden = |tcl: &str| -> Vec<String> {
+            blocks(tcl)
+                .into_iter()
+                .filter(|b| b.contains("-type hidden") && b.contains("-pin D \\"))
+                .collect()
         };
-        assert_eq!(strip_when(&with_when), strip_when(&without_when));
+        let default = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{default}");
+        assert_eq!(
+            d_hidden(&default).len(),
+            contexts.len(),
+            "one general -pin D block per edge"
+        );
+        assert!(
+            d_hidden(&default).iter().all(|b| !has_when(b)),
+            "a general hidden block carries no -when"
+        );
+
+        // Under `when = "hidden"` every held-Q context returns as its own conditioned block. Pinlist
+        // order is {E D Q}, so D's own vector field is the toggle's edge.
+        let selected = cell_arcs_tcl(&analyse(&when_variant(DLAT, "\"hidden\"")), NO_LEAKAGE);
+        let d_field = |b: &str| -> String {
+            b.lines()
+                .find(|l| l.contains("-vector"))
+                .and_then(|l| l.split('{').nth(1))
+                .and_then(|v| v.split_whitespace().nth(1))
+                .expect("a hidden block renders a -vector")
+                .to_string()
+        };
+        let when_line = |b: &str| -> String {
+            b.lines()
+                .find(|l| l.trim_start().starts_with("-when"))
+                .expect("a conditioned block renders a -when")
+                .trim()
+                .to_string()
+        };
+        for (event, n) in &contexts {
+            let ArcIdentity::Hidden { edge, .. } = event else {
+                panic!("a hidden arc's identity is ArcIdentity::Hidden: {event:?}");
+            };
+            let rf = edge.rf().to_string();
+            let conditioned: Vec<String> = d_hidden(&selected)
+                .into_iter()
+                .filter(|b| has_when(b) && d_field(b) == rf)
+                .collect();
+            assert_eq!(
+                conditioned.len(),
+                *n,
+                "every held-Q context of a D {rf} toggle returns as its own conditioned block"
+            );
+            let whens: BTreeSet<String> = conditioned.iter().map(|b| when_line(b)).collect();
+            assert_eq!(
+                whens.len(),
+                conditioned.len(),
+                "each held-Q context carries a distinct -when line"
+            );
+        }
+    }
+
+    // ---- Generalisation invariants: one per transition, a measured representative, shortest prevector ----
+
+    /// The fixtures the generalisation invariants are asserted over: an OR-AND with several side-input
+    /// contexts per transition, a stateless majority gate, a two-output cell whose contexts differ in
+    /// INTERNAL state, and a latch whose contexts differ in the held output.
+    const GENERALISED_FIXTURES: [&str; 4] = [OA22, MAJ3, TWO, DLAT];
+
+    /// A block's text with the `define_arc` keyword stripped — the form [`blocks`] yields, so a rendering
+    /// produced by [`format_arc`] can be compared against an emitted block.
+    fn body(rendered: &str) -> String {
+        rendered.trim_start_matches("define_arc").trim().to_string()
+    }
+
+    /// Each transition block of `tcl` mapped back to the arc in `cell.arcs` whose OWN rendering it is. A
+    /// block matching no discovered arc panics: the general pass may only promote a measured firing, and
+    /// a synthesised stimulus would be one nothing characterises.
+    fn general_transition_arcs<'a>(cell: &'a AnalysedCell, tcl: &str) -> Vec<&'a Arc> {
+        blocks(tcl)
+            .iter()
+            .filter(|b| !b.contains("-type hidden"))
+            .map(|b| {
+                cell.arcs
+                    .iter()
+                    .find(|a| body(&format_arc(cell, a, false)) == *b)
+                    .unwrap_or_else(|| {
+                        panic!("a general block is no discovered arc's own rendering:\n{b}")
+                    })
+            })
+            .collect()
+    }
+
+    /// [`general_transition_arcs`] for the hidden class.
+    fn general_hidden_arcs<'a>(cell: &'a AnalysedCell, tcl: &str) -> Vec<&'a HiddenArc> {
+        blocks(tcl)
+            .iter()
+            .filter(|b| b.contains("-type hidden"))
+            .map(|b| {
+                cell.hidden_arcs
+                    .iter()
+                    .find(|h| body(&format_hidden_arc(cell, h, false)) == *b)
+                    .unwrap_or_else(|| {
+                        panic!("a general hidden block is no discovered arc's own rendering:\n{b}")
+                    })
+            })
+            .collect()
+    }
+
+    /// ONE PER TRANSITION: on the DEFAULT output each of the cell's transitions emits exactly one general
+    /// block, and every general block belongs to one of them — nothing lost, nothing duplicated. The
+    /// hidden class carries the same invariant over its `(pin, edge)` toggle events.
+    #[test]
+    fn general_arcs_are_one_per_transition() {
+        for src in GENERALISED_FIXTURES {
+            let cell = analyse(src);
+            let transitions: HashSet<_> = cell
+                .arcs
+                .iter()
+                .map(|a| ArcIdentity::of(&cell, a))
+                .collect();
+            let events: HashSet<_> = cell
+                .hidden_arcs
+                .iter()
+                .map(ArcIdentity::of_hidden)
+                .collect();
+            // PREMISE: the fixture fires some transition or toggle from several contexts, so there is
+            // something to generalise over.
+            assert!(
+                transitions.len() + events.len() < cell.arcs.len() + cell.hidden_arcs.len(),
+                "premise: {} fires from several contexts",
+                cell.name.join(" ")
+            );
+
+            let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
+            let mut emitted: HashMap<_, usize> = HashMap::new();
+            for a in general_transition_arcs(&cell, &tcl) {
+                *emitted.entry(ArcIdentity::of(&cell, a)).or_default() += 1;
+            }
+            assert!(
+                emitted.values().all(|n| *n == 1),
+                "no transition emits two general blocks"
+            );
+            assert_eq!(
+                emitted.into_keys().collect::<HashSet<_>>(),
+                transitions,
+                "one general block per transition"
+            );
+
+            let mut emitted_h: HashMap<_, usize> = HashMap::new();
+            for h in general_hidden_arcs(&cell, &tcl) {
+                *emitted_h.entry(ArcIdentity::of_hidden(h)).or_default() += 1;
+            }
+            assert!(
+                emitted_h.values().all(|n| *n == 1),
+                "no hidden event emits two general blocks"
+            );
+            assert_eq!(
+                emitted_h.into_keys().collect::<HashSet<_>>(),
+                events,
+                "one general block per hidden toggle event"
+            );
+        }
+    }
+
+    /// REPRESENTATIVE IS A REAL FIRING: every general block is the rendering of an arc the pipeline
+    /// discovered, so its `-prevector`/`-vector` pair is a stimulus that was measured together — the
+    /// general pass promotes a firing, it never synthesises one.
+    #[test]
+    fn general_arcs_are_measured_firings() {
+        for src in GENERALISED_FIXTURES {
+            let cell = analyse(src);
+            assert!(
+                !cell.arcs.is_empty() && !cell.hidden_arcs.is_empty(),
+                "premise: {} discovers arcs of both classes",
+                cell.name.join(" ")
+            );
+            let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
+            // Both lookups panic on a block that is no discovered arc's own rendering.
+            let transition = general_transition_arcs(&cell, &tcl).len();
+            let hidden = general_hidden_arcs(&cell, &tcl).len();
+            assert_eq!(
+                transition + hidden,
+                blocks(&tcl).len(),
+                "every default block is a general arc of one of the two classes"
+            );
+        }
+    }
+
+    /// SHORTEST PREVECTOR AT THE TRANSITION GRAIN: each emitted representative carries the minimum
+    /// prevector length of its whole transition group — the minimum read FROM `cell.arcs`, over the
+    /// larger groups the transition grain forms.
+    #[test]
+    fn general_arcs_keep_the_shortest_prevector_per_transition() {
+        for src in GENERALISED_FIXTURES {
+            let cell = analyse(src);
+            let mut shortest: HashMap<_, usize> = HashMap::new();
+            for a in &cell.arcs {
+                let best = shortest
+                    .entry(ArcIdentity::of(&cell, a))
+                    .or_insert(usize::MAX);
+                *best = (*best).min(a.prevector.len());
+            }
+            let mut shortest_h: HashMap<_, usize> = HashMap::new();
+            for h in &cell.hidden_arcs {
+                let best = shortest_h
+                    .entry(ArcIdentity::of_hidden(h))
+                    .or_insert(usize::MAX);
+                *best = (*best).min(h.prevector.len());
+            }
+            // PREMISE: some group holds several firings, so its minimum is a real choice between them.
+            assert!(
+                shortest.len() + shortest_h.len() < cell.arcs.len() + cell.hidden_arcs.len(),
+                "premise: {} fires from several contexts",
+                cell.name.join(" ")
+            );
+
+            let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
+            for a in general_transition_arcs(&cell, &tcl) {
+                assert_eq!(
+                    a.prevector.len(),
+                    shortest[&ArcIdentity::of(&cell, a)],
+                    "the representative carries its transition group's shortest prevector"
+                );
+            }
+            for h in general_hidden_arcs(&cell, &tcl) {
+                assert_eq!(
+                    h.prevector.len(),
+                    shortest_h[&ArcIdentity::of_hidden(h)],
+                    "the representative carries its toggle event's shortest prevector"
+                );
+            }
+        }
+    }
+
+    /// OA22: `A` rising drives `Y` rising from three side-input contexts. That is ONE transition, so the
+    /// default output carries ONE unconditioned `A`→`Y` rise block; selecting every class brings all
+    /// three firings back, each with its own condition.
+    #[test]
+    fn oa22_collapses_side_input_contexts_to_one_general_arc() {
+        let cell = analyse(OA22);
+        let a_rise_y_rise = |c: &AnalysedCell| -> Vec<usize> {
+            c.arcs
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| {
+                    a.output == "Y"
+                        && a.related == "A"
+                        && a.edge == Edge::Rise
+                        && related_edge(a) == Edge::Rise
+                })
+                .map(|(i, _)| i)
+                .collect()
+        };
+        // PREMISE: at least three arcs share the (Y rise, A rise) transition — `B` low with `(C,D)` at
+        // `01`, `10` and `11`.
+        let firings = a_rise_y_rise(&cell);
+        assert!(
+            firings.len() >= 3,
+            "premise: A-rise→Y-rise fires from at least three side-input contexts, got {}",
+            firings.len()
+        );
+
+        // Pinlist order is {A B C D Y}: A's vector field is index 0, Y's is index 4.
+        let field = |b: &str, i: usize| -> String {
+            b.lines()
+                .find(|l| l.contains("-vector"))
+                .and_then(|l| l.split('{').nth(1))
+                .and_then(|v| v.split('}').next())
+                .and_then(|v| v.split_whitespace().nth(i))
+                .expect("a transition block renders a -vector")
+                .to_string()
+        };
+        let default = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{default}");
+        let general: Vec<String> = blocks(&default)
+            .into_iter()
+            .filter(|b| {
+                b.contains("-related_pin A \\")
+                    && b.contains("-pin Y \\")
+                    && field(b, 0) == "R"
+                    && field(b, 4) == "R"
+            })
+            .collect();
+        assert_eq!(general.len(), 1, "one general A-rise→Y-rise block");
+        assert!(
+            !has_when(&general[0]),
+            "the general block carries no -when:\n{}",
+            general[0]
+        );
+
+        // Under `when = true` every firing returns, each with its own distinct condition.
+        let selected = analyse(&when_variant(OA22, "true"));
+        let on = cell_arcs_tcl(&selected, NO_LEAKAGE);
+        let mut whens: BTreeSet<String> = BTreeSet::new();
+        for i in a_rise_y_rise(&selected) {
+            let arc = &selected.arcs[i];
+            let block = format_arc(&selected, arc, true);
+            assert!(
+                on.contains(&block),
+                "a discovered A-rise→Y-rise firing is missing under `when`:\n{block}"
+            );
+            whens.insert(
+                when_str(&arc.end, &arc.related).expect("each firing fixes the other inputs"),
+            );
+        }
+        assert_eq!(
+            whens.len(),
+            firings.len(),
+            "each firing carries its own distinct -when"
+        );
+    }
+
+    /// GENERALISES OVER INTERNAL STATE: two `A`→`Y` firings of `TWO` agree on every input — the
+    /// C-element `Z` renders as `X` in `Y`'s vector — and differ only in `Z`'s held state. They are one
+    /// transition and collapse to one general block.
+    #[test]
+    fn general_arc_collapses_internal_state_contexts() {
+        let cell = analyse(TWO);
+        // PREMISE: two A→Y firings share a transition AND a rendered vector — every input agrees and `Z`
+        // is `X` — and differ only in the internal state they were measured from.
+        let mut contexts: HashMap<_, Vec<&Arc>> = HashMap::new();
+        for a in cell
+            .arcs
+            .iter()
+            .filter(|a| a.output == "Y" && a.related == "A")
+        {
+            contexts
+                .entry((ArcIdentity::of(&cell, a), vector_str(&cell, a)))
+                .or_default()
+                .push(a);
+        }
+        let ((key, _), pair) = contexts
+            .iter()
+            .find(|(_, g)| g.len() >= 2)
+            .expect("premise: two A→Y firings share a transition and a rendered vector");
+        assert!(
+            pair.windows(2).any(|w| w[0].start != w[1].start),
+            "premise: the firings differ in the internal state they start from"
+        );
+
+        // The transition those two belong to emits ONE general block.
+        let default = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{default}");
+        let emitted = ay_groups(&cell)[key]
+            .iter()
+            .filter(|a| default.contains(&format_arc(&cell, a, false)))
+            .count();
+        assert_eq!(
+            emitted, 1,
+            "the internal-state contexts collapse to one general block"
+        );
+    }
+
+    /// ADDITIVE: selecting every class ADDS one conditioned block per conditioned arc on top of the
+    /// general arcs — it removes nothing and rewrites nothing. Every default block is still there, each
+    /// added block carries a `-when`, and at least one emitted vector appears twice, the two blocks
+    /// differing solely by that line.
+    #[test]
+    fn when_all_adds_conditioned_blocks_on_top_of_the_general_arcs() {
+        let cell = analyse(&when_variant(TWO, "true"));
+        let (cond_t, cond_h) = conditioned_counts(&cell);
+        assert!(
+            cond_t >= 1 && cond_h >= 1,
+            "premise: TWO conditions arcs of both classes"
+        );
+        let default = cell_arcs_tcl(&analyse(TWO), NO_LEAKAGE);
+        let enabled = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{enabled}");
+
+        let default_blocks = blocks(&default);
+        assert_eq!(
+            blocks(&enabled).len(),
+            default_blocks.len() + cond_t + cond_h,
+            "one added block per conditioned arc"
+        );
+
+        // Multiset difference over sorted Vecs: every default block survives, and what remains is
+        // exactly the conditioned blocks.
+        let mut remaining = blocks(&enabled);
+        remaining.sort();
+        for b in &default_blocks {
+            let i = remaining
+                .iter()
+                .position(|r| r == b)
+                .unwrap_or_else(|| panic!("a default block is missing under `when`:\n{b}"));
+            remaining.remove(i);
+        }
+        assert_eq!(remaining.len(), cond_t + cond_h);
+        for b in &remaining {
+            assert!(has_when(b), "every added block carries a -when:\n{b}");
+        }
+
+        // Every arc that renders a condition is emitted with it, whether or not the general pass
+        // already emitted the same arc unconditioned: that pair IS the additive contract.
+        for a in &cell.arcs {
+            let conditioned = format_arc(&cell, a, true);
+            assert!(
+                has_when(&conditioned) && enabled.contains(&conditioned),
+                "a conditioned arc is missing under `when`:\n{conditioned}"
+            );
+        }
+
+        // At least one arc is emitted twice — once as its transition's general representative, once carrying its
+        // condition — the two blocks differing only by the `-when` line.
+        let stripped = strip_when(&enabled);
+        let doubled = stripped
+            .iter()
+            .any(|s| stripped.iter().filter(|o| *o == s).count() >= 2);
+        assert!(
+            doubled,
+            "an arc appears both as a general arc and with its -when"
+        );
+    }
+
+    /// SELECTIVITY: `--when=transition` adds the transition class's conditioned blocks and leaves the
+    /// hidden class at its general arcs, and its mirror `--when=hidden` leaves the transition class at
+    /// its general arcs.
+    #[test]
+    fn when_one_class_adds_only_that_class() {
+        let cell = analyse(TWO);
+        let (cond_t, cond_h) = conditioned_counts(&cell);
+        assert!(
+            cond_t >= 1 && cond_h >= 1,
+            "premise: TWO conditions arcs of both classes"
+        );
+
+        let non_hidden = |tcl: &str| {
+            blocks(tcl)
+                .iter()
+                .filter(|b| !b.contains("-type hidden"))
+                .count()
+        };
+        let hidden = |tcl: &str| {
+            blocks(tcl)
+                .iter()
+                .filter(|b| b.contains("-type hidden"))
+                .count()
+        };
+        let non_hidden_when = |tcl: &str| {
+            blocks(tcl)
+                .iter()
+                .filter(|b| !b.contains("-type hidden") && has_when(b))
+                .count()
+        };
+        let hidden_when = |tcl: &str| {
+            blocks(tcl)
+                .iter()
+                .filter(|b| b.contains("-type hidden") && has_when(b))
+                .count()
+        };
+
+        let default = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        assert_eq!(non_hidden_when(&default), 0);
+        assert_eq!(hidden_when(&default), 0);
+
+        // --when=transition: the transition class gains its conditioned blocks; the hidden class is untouched.
+        let t_on = cell_arcs_tcl(&analyse(&when_variant(TWO, "\"transition\"")), NO_LEAKAGE);
+        assert_eq!(
+            non_hidden(&t_on),
+            non_hidden(&default) + cond_t,
+            "one added transition block per conditioned transition arc"
+        );
+        assert_eq!(non_hidden_when(&t_on), cond_t);
+        assert_eq!(
+            hidden(&t_on),
+            hidden(&default),
+            "hidden block count is unchanged by --when=transition"
+        );
+        assert_eq!(hidden_when(&t_on), 0, "no hidden -when is added");
+
+        // Mirror --when=hidden: the transition class is untouched.
+        let h_on = cell_arcs_tcl(&analyse(&when_variant(TWO, "\"hidden\"")), NO_LEAKAGE);
+        assert_eq!(
+            hidden(&h_on),
+            hidden(&default) + cond_h,
+            "one added hidden block per conditioned hidden arc"
+        );
+        assert_eq!(hidden_when(&h_on), cond_h);
+        assert_eq!(
+            non_hidden(&h_on),
+            non_hidden(&default),
+            "transition block count is unchanged by --when=hidden"
+        );
+        assert_eq!(non_hidden_when(&h_on), 0, "no transition -when is added");
+    }
+
+    /// `--no-internal` outranks the class selection: with the hidden class selected but internal-power
+    /// arcs suppressed, neither the general nor the conditioned hidden pass emits anything.
+    #[test]
+    fn no_internal_suppresses_hidden_blocks_under_when() {
+        let cell = analyse(&when_variant(TWO, "true"));
+        let tcl = cell_arcs_tcl(
+            &cell,
+            ArcsTclOptions {
+                emit_internal: false,
+                emit_leakage: false,
+            },
+        );
+        assert_eq!(tcl.matches("-type hidden").count(), 0);
+        assert!(
+            !blocks(&tcl).is_empty(),
+            "the transition blocks are still emitted"
+        );
+    }
+
+    /// SINGLE INPUT: an arc whose related pin is the cell's only input renders NO condition
+    /// (`when_str` is `None`), so where it is also the general pass's representative the conditioned
+    /// pass skips it — the block it would add is the one already emitted. Every INV arc is its own
+    /// transition's representative, so selecting every class changes nothing.
+    #[test]
+    fn when_skips_a_conditionless_general_representative() {
+        const INV: &str = r#"
+[[cell]]
+name = "INV"
+inputs = ["A"]
+[cell.outputs]
+Y = "!A"
+"#;
+        let cell = analyse(&when_variant(INV, "true"));
+        let (cond_t, cond_h) = conditioned_counts(&cell);
+        assert_eq!(
+            (cond_t, cond_h),
+            (0, 0),
+            "premise: no INV arc renders a condition"
+        );
+        // PREMISE: nothing collides, so every arc IS its transition's representative — the case the skip
+        // is for. A colliding fixture would exercise the other branch instead.
+        let keys: HashSet<_> = cell
+            .arcs
+            .iter()
+            .map(|a| ArcIdentity::of(&cell, a))
+            .collect();
+        assert_eq!(
+            keys.len(),
+            cell.arcs.len(),
+            "premise: no INV arc shares a transition with another"
+        );
+        let default = cell_arcs_tcl(&analyse(INV), NO_LEAKAGE);
+        let enabled = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{enabled}");
+        assert_eq!(
+            sorted_blocks(&enabled),
+            sorted_blocks(&default),
+            "an unconditional arc is emitted once, by the general pass alone"
+        );
+        let emitted = blocks(&default);
+        assert!(!emitted.is_empty(), "INV emits arcs");
+        let unique: BTreeSet<&String> = emitted.iter().collect();
+        assert_eq!(unique.len(), emitted.len(), "no block is emitted twice");
     }
 
     #[test]
@@ -1363,7 +2341,9 @@ Q = "CLKB*M + !CLKB*Q"
 
     #[test]
     fn mcdff_two_clock_releases_are_edge_type_with_conditions_preserved() {
-        let (default, forced) = analyse_both(MCDFF);
+        // `when = "transition"`, so the conditioned release is emitted with its `-when` alongside the
+        // general block — the condition is what this test is about.
+        let (default, forced) = analyse_both(&when_variant(MCDFF, "\"transition\""));
         let tcl = cell_arcs_tcl(&default, ArcsTclOptions::default());
         eprintln!("{tcl}");
         assert!(default.edge.captures.is_empty(), "neither clock captures Q");
@@ -1389,12 +2369,15 @@ Q = "CLKB*M + !CLKB*Q"
             if frag.contains("-related_pin CLKA") {
                 assert_eq!(field_of(frag, 0).as_deref(), Some("F"), "{frag}");
                 assert!(frag.contains("-type edge \\"), "CLKA release: {frag}");
-                // The condition (CLKB open) rides in `-when`; it does not reclassify the arc.
-                assert!(
-                    frag.contains("-when \"CLKB"),
-                    "conditioned release keeps its -when: {frag}"
-                );
-                saw_conditioned_a_release = true;
+                // The condition (CLKB open) rides in `-when` on the conditioned block; it does not
+                // reclassify the arc, which is `-type edge` in both passes.
+                if has_when(frag) {
+                    assert!(
+                        frag.contains("-when \"CLKB"),
+                        "conditioned release keeps its -when: {frag}"
+                    );
+                    saw_conditioned_a_release = true;
+                }
             }
         }
         assert!(saw_b_release, "CLKB rising release Q arc is -type edge");
@@ -1433,14 +2416,14 @@ Q = "CLK*M + !CLK*Q"
     #[test]
     fn non_collapsible_suite_tcl_matches_the_no_edge_collapse_flag() {
         // Zero `-type edge` blocks, whether the flag is left off (default classification, a no-op on
-        // these shapes) or forced on -- and the two runs emit byte-identical Tcl.
+        // these shapes) or forced on -- and the two runs emit the same arcs.
         for src in NON_COLLAPSIBLE {
             let (default, forced) = analyse_both(src);
             let tcl_default = cell_arcs_tcl(&default, ArcsTclOptions::default());
             let tcl_forced = cell_arcs_tcl(&forced, ArcsTclOptions::default());
             assert_eq!(tcl_default.matches("-type edge").count(), 0);
             assert_eq!(tcl_forced.matches("-type edge").count(), 0);
-            assert_eq!(tcl_default, tcl_forced);
+            assert_eq!(sorted_blocks(&tcl_default), sorted_blocks(&tcl_forced));
         }
     }
 
@@ -1577,7 +2560,7 @@ GCLK = "CLK*EL"
     fn dff_opt_out_restores_combinational_type_via_either_switch() {
         // The two-latch DFF, opted out directly (`no_edge_collapse = true` in the TOML) versus opted
         // out via the CLI-flag-equivalent blanket mutation over the whole spec: both switches restore
-        // the SAME Tcl -- zero `-type edge` blocks.
+        // the SAME arcs -- zero `-type edge` blocks.
         const DFF: &str = r#"
 [[cell]]
 name = "DFF"
@@ -1608,6 +2591,6 @@ Q = "CLK*M + !CLK*Q"
             assert_eq!(tcl.matches("-type edge").count(), 0);
             assert!(tcl.contains("-pin Q"));
         }
-        assert_eq!(tcl_direct, tcl_via_flag);
+        assert_eq!(sorted_blocks(&tcl_direct), sorted_blocks(&tcl_via_flag));
     }
 }
