@@ -11,7 +11,8 @@
 //! its level rather than being held — stays `-type combinational`, and a declared-async related pin
 //! takes precedence with `-type async`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::hash::Hash;
 
 use espresso_logic::Symbol;
 
@@ -65,7 +66,7 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     // the conditioned pass emits it whether or not it carries a condition.
     let general = generalised(
         &cell.arcs,
-        |arc| transition_key(cell, arc),
+        |arc| ArcIdentity::of(cell, arc),
         |arc| arc.prevector.len(),
     );
     for &i in &general {
@@ -80,7 +81,9 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
         }
     }
     if opts.emit_internal {
-        for i in generalised(&cell.hidden_arcs, hidden_arc_key, |h| h.prevector.len()) {
+        for i in generalised(&cell.hidden_arcs, ArcIdentity::of_hidden, |h| {
+            h.prevector.len()
+        }) {
             out.push_str(&format_hidden_arc(cell, &cell.hidden_arcs[i], false));
         }
         if cell.when.contains(ArcClass::Hidden) {
@@ -110,28 +113,20 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     out
 }
 
-/// The general arcs of one class, as their indices into `items`: one representative per transition.
-/// `key` is the transition's own identity — the pins and edges of the event, plus the arc's `-type`
-/// kind — so every firing of one transition falls in a single group and exactly one block comes out of
-/// it, generalising over the contexts the firings differed in. The kept member is the one with the
-/// SHORTEST prevector; ties keep the first in `items` order. Ascending index order is `items` order,
-/// and membership is what the conditioned pass tests to recognise a block it would otherwise duplicate
-/// (see [`cell_arcs_tcl`]).
-///
-/// DETERMINISM IS A HARD REQUIREMENT: the collapse threads through `BTreeMap`/`BTreeSet`, never a
-/// randomly-seeded hash map — a per-process random hash seed would reorder the emitted `.tcl` across
-/// separate runs on the identical spec. `cell.arcs` / `cell.hidden_arcs` arrive in
-/// `BTreeMap::into_values()` order (src/logic/arcs.rs) and `render`'s
-/// `par_iter().map().collect::<Vec<_>>().concat()` (src/main.rs) preserves index order, so first-wins
-/// over that order is reproducible run to run.
-fn generalised<T, K: Ord>(
+/// The general arcs of one class, as their indices into `items`: one representative per identity. `key`
+/// groups the firings — every firing carrying one [`ArcIdentity`] falls in a single group and exactly
+/// one block comes out of it, generalising over the contexts the firings differed in. The kept member is
+/// one with the SHORTEST prevector: only a strictly shorter prevector displaces the incumbent, so where
+/// several firings tie at the minimum any one of them may be kept — each is an equally valid
+/// representative of the group at this grain. Membership of the returned set is what the conditioned
+/// pass tests to recognise a block it would otherwise duplicate (see [`cell_arcs_tcl`]).
+fn generalised<T, K: Hash + Eq>(
     items: &[T],
     key: impl Fn(&T) -> K,
     prevector_len: impl Fn(&T) -> usize,
-) -> BTreeSet<usize> {
-    // Winning index per key: the earliest STRICTLY-shortest prevector. Replace only on a strictly shorter
-    // prevector, so a length tie keeps the earlier index.
-    let mut winner: BTreeMap<K, (usize /* len */, usize /* index */)> = BTreeMap::new();
+) -> HashSet<usize> {
+    // Winning index per key: a STRICTLY-shortest prevector. Replace only on a strictly shorter prevector.
+    let mut winner: HashMap<K, (usize /* len */, usize /* index */)> = HashMap::new();
     for (i, item) in items.iter().enumerate() {
         let len = prevector_len(item);
         winner
@@ -146,31 +141,83 @@ fn generalised<T, K: Ord>(
     winner.into_values().map(|(_, i)| i).collect()
 }
 
-/// A transition's identity: the measured output and the edge it makes, the related pin and the edge IT
-/// makes, and the arc's `-type` kind. The side inputs' held levels, the held outputs and the internal
-/// state are the firing's CONDITION rather than part of the event, so they are absent — one transition
-/// yields ONE general block however many contexts it was measured from, and every one of those contexts
-/// returns as its own conditioned block under `--when`.
-///
-/// `arc_type_token` belongs in the key: `-type` declares the arc's KIND to Liberate — edge,
-/// combinational or async — and it is sourced per full machine start state (see [`arc_type_token`]), so
-/// a transition that types differently from different start states is two arc kinds, and collapsing
-/// across it would delete one of them from the output.
-fn transition_key(cell: &AnalysedCell, arc: &Arc) -> (Symbol, Edge, Symbol, Edge, &'static str) {
-    (
-        arc.output.clone(),
-        arc.edge,
-        arc.related.clone(),
-        related_edge(arc),
-        arc_type_token(cell, arc),
-    )
+/// The event a transition arc measures: the output pin and the edge it makes, the related pin and the
+/// edge IT makes. The side inputs' held levels, the held outputs and the internal state are the firing's
+/// CONDITION rather than part of the event, so they are absent — one transition yields ONE general block
+/// however many contexts it was measured from, and every one of those contexts returns as its own
+/// conditioned block under `--when`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct Transition {
+    output: Symbol,
+    edge: Edge,
+    related: Symbol,
+    related_edge: Edge,
 }
 
-/// A hidden arc's identity: the toggled pin and the edge it makes. That pair IS the event; the other
-/// inputs' held levels and the held outputs are its condition and ride in [`hidden_when_str`], so they
-/// are absent here for the same reason as in [`transition_key`].
-fn hidden_arc_key(h: &HiddenArc) -> (Symbol, Edge) {
-    (h.pin.clone(), h.edge)
+/// An emitted arc's identity. The variant IS Liberate's `-type` taxonomy: the three transition kinds
+/// carry the [`Transition`] event they measure, while a hidden arc — an input toggle no output follows —
+/// carries the toggled pin and its edge and structurally holds no related pin.
+///
+/// The kind is part of the identity because `-type` declares the arc's nature to Liberate and is decided
+/// per firing, from the full machine start state (see [`ArcIdentity::of`]): a transition that classifies
+/// differently from different start states is two arc kinds, and collapsing across it would delete one
+/// of them from the output.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ArcIdentity {
+    Async(Transition),
+    Edge(Transition),
+    Combinational(Transition),
+    Hidden { pin: Symbol, edge: Edge },
+}
+
+impl ArcIdentity {
+    /// A transition arc's identity: [`ArcIdentity::Async`] for a declared-async related pin, else
+    /// [`ArcIdentity::Edge`] when the arc's FULL context `(output, related, direction, machine start)` is
+    /// labelled a clock-edge timing arc in [`crate::logic::edge::EdgeArcs::labels`], else
+    /// [`ArcIdentity::Combinational`]. There is ONE edge category, so two firings that differ only in
+    /// internal state can classify differently.
+    fn of(cell: &AnalysedCell, arc: &Arc) -> Self {
+        let related_edge = related_edge(arc);
+        let transition = Transition {
+            output: arc.output.clone(),
+            edge: arc.edge,
+            related: arc.related.clone(),
+            related_edge,
+        };
+        if arc.is_async {
+            ArcIdentity::Async(transition)
+        } else if cell.edge.labels.contains(&(
+            arc.output.clone(),
+            arc.related.clone(),
+            related_edge,
+            arc.start.clone(),
+        )) {
+            ArcIdentity::Edge(transition)
+        } else {
+            ArcIdentity::Combinational(transition)
+        }
+    }
+
+    /// A hidden arc's identity: the toggled pin and the edge it makes. That pair IS the event; the other
+    /// inputs' held levels and the held outputs are its condition and ride in [`hidden_when_str`], so
+    /// they are absent here for the same reason as in [`Transition`].
+    fn of_hidden(h: &HiddenArc) -> Self {
+        ArcIdentity::Hidden {
+            pin: h.pin.clone(),
+            edge: h.edge,
+        }
+    }
+
+    /// The `-type` word Liberate reads, and the ONE source of it: every `define_arc` block the emitter
+    /// renders takes its type line from here.
+    fn type_token(&self) -> &'static str {
+        match self {
+            ArcIdentity::Async(_) => "async",
+            ArcIdentity::Edge(_) => "edge",
+            ArcIdentity::Combinational(_) => "combinational",
+            ArcIdentity::Hidden { .. } => "hidden",
+        }
+    }
 }
 
 /// The cell's name(s), braced as a Tcl list: `{ C2 }` for a single name, `{ C2A C2B }` for several.
@@ -277,35 +324,13 @@ fn related_edge(arc: &Arc) -> Edge {
     }
 }
 
-/// The `-type` token for a transition arc: `async` for a declared-async related pin, else `edge` when the
-/// arc's FULL identity `(output, related, direction, machine start)` is labelled a clock-edge timing arc
-/// in [`crate::logic::edge::EdgeArcs::labels`], else `combinational`. There is ONE edge category, so two
-/// firings that differ only in internal state can type differently. [`transition_key`] and
-/// `format_arc`'s `-type` line share this ONE source.
-fn arc_type_token(cell: &AnalysedCell, arc: &Arc) -> &'static str {
-    let is_edge = !arc.is_async
-        && cell.edge.labels.contains(&(
-            arc.output.clone(),
-            arc.related.clone(),
-            related_edge(arc),
-            arc.start.clone(),
-        ));
-    if arc.is_async {
-        "async"
-    } else if is_edge {
-        "edge"
-    } else {
-        "combinational"
-    }
-}
-
 /// One transition `define_arc`. `with_when` selects which of the two passes in [`cell_arcs_tcl`] the
 /// block belongs to: the conditioned one, carrying the arc's `-when`, or the general one. Either way the
 /// block renders THIS arc's own concrete `-prevector` and `-vector`: `-vector` is the stimulus Liberate
 /// drives and `X` is legal only in the unmonitored-output columns (see [`vector_str`]), so a general
 /// block's generality lives in the ABSENCE of the `-when` line, not in a relaxed vector.
 fn format_arc(cell: &AnalysedCell, arc: &Arc, with_when: bool) -> String {
-    let type_line = format!("\t-type {} \\\n", arc_type_token(cell, arc));
+    let type_line = format!("\t-type {} \\\n", ArcIdentity::of(cell, arc).type_token());
     let prevector_pinlist = format!("\t-prevector_pinlist {{{}}} \\\n", cell.inputs.join(" "));
     let prevector = format!(
         "\t-prevector {{{}}} \\\n",
@@ -391,7 +416,10 @@ fn format_hidden_arc(cell: &AnalysedCell, h: &HiddenArc, with_when: bool) -> Str
     let vec = hidden_vector_str(cell, h);
 
     let mut s = String::from("define_arc \\\n");
-    s.push_str("\t-type hidden \\\n");
+    s.push_str(&format!(
+        "\t-type {} \\\n",
+        ArcIdentity::of_hidden(h).type_token()
+    ));
     s.push_str(&format!(
         "\t-prevector_pinlist {{{}}} \\\n",
         cell.inputs.join(" ")
@@ -540,6 +568,8 @@ fn format_leakage(cell: &AnalysedCell, l: &LeakageState) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     use crate::model::analyse_one as analyse;
 
@@ -696,8 +726,11 @@ Y = "A*B"
         let default = cell_arcs_tcl(&cell, NO_LEAKAGE);
         eprintln!("{default}");
         assert!(!default.lines().any(|l| l.trim_start().starts_with("-when")));
-        let events: BTreeSet<(Symbol, Edge)> =
-            cell.hidden_arcs.iter().map(hidden_arc_key).collect();
+        let events: HashSet<ArcIdentity> = cell
+            .hidden_arcs
+            .iter()
+            .map(ArcIdentity::of_hidden)
+            .collect();
         assert!(!events.is_empty(), "AND2 emits hidden arcs");
         let hidden = blocks(&default)
             .iter()
@@ -755,8 +788,16 @@ Q = "A*B + Q*(A+B)"
         let on = cell_arcs_tcl(&selected, NO_LEAKAGE);
         eprintln!("{default}");
 
-        let transitions: BTreeSet<_> = cell.arcs.iter().map(|a| transition_key(&cell, a)).collect();
-        let events: BTreeSet<_> = cell.hidden_arcs.iter().map(hidden_arc_key).collect();
+        let transitions: HashSet<_> = cell
+            .arcs
+            .iter()
+            .map(|a| ArcIdentity::of(&cell, a))
+            .collect();
+        let events: HashSet<_> = cell
+            .hidden_arcs
+            .iter()
+            .map(ArcIdentity::of_hidden)
+            .collect();
         let firings = cell.arcs.len() + cell.hidden_arcs.len();
         assert_eq!(
             blocks(&default).len(),
@@ -831,12 +872,18 @@ Y = "(A+B)*(C+D)"
         emit_leakage: false,
     };
 
-    /// The emitted `define_arc` blocks, in emission order: the text following each `define_arc`, trimmed.
-    /// Block identity is the whole text, so the same arc emitted twice — once as its transition's general
-    /// representative, once carrying its `-when` — yields two blocks differing by that one line.
+    /// The emitted `define_arc` blocks: the text following each `define_arc`, truncated at its trailing
+    /// blank line (the block separator) so the `define_leakage` section that follows the last arc block
+    /// stays out of it, and trimmed. Block identity is the whole text, so the same arc emitted twice —
+    /// once as its transition's general representative, once carrying its `-when` — yields two blocks
+    /// differing by that one line.
     fn blocks(tcl: &str) -> Vec<String> {
         tcl.split("define_arc")
             .skip(1)
+            .map(|b| match b.find("\n\n") {
+                Some(off) => &b[..off],
+                None => b,
+            })
             .map(str::trim)
             .map(String::from)
             .collect()
@@ -877,7 +924,7 @@ Y = "(A+B)*(C+D)"
     fn conditioned_counts(cell: &AnalysedCell) -> (usize, usize) {
         let general = generalised(
             &cell.arcs,
-            |a| transition_key(cell, a),
+            |a| ArcIdentity::of(cell, a),
             |a| a.prevector.len(),
         );
         (
@@ -893,18 +940,16 @@ Y = "(A+B)*(C+D)"
         )
     }
 
-    /// The A→Y arcs of `cell`, grouped by [`transition_key`] — the source the general pass groups, so a
+    /// The A→Y arcs of `cell`, grouped by [`ArcIdentity`] — the source the general pass groups, so a
     /// premise read from it fails loudly on a fixture where nothing collides.
-    fn ay_groups(
-        cell: &AnalysedCell,
-    ) -> BTreeMap<(Symbol, Edge, Symbol, Edge, &'static str), Vec<&Arc>> {
-        let mut groups: BTreeMap<_, Vec<&Arc>> = BTreeMap::new();
+    fn ay_groups(cell: &AnalysedCell) -> HashMap<ArcIdentity, Vec<&Arc>> {
+        let mut groups: HashMap<_, Vec<&Arc>> = HashMap::new();
         for a in cell
             .arcs
             .iter()
             .filter(|a| a.output == "Y" && a.related == "A")
         {
-            groups.entry(transition_key(cell, a)).or_default().push(a);
+            groups.entry(ArcIdentity::of(cell, a)).or_default().push(a);
         }
         groups
     }
@@ -976,8 +1021,11 @@ Y = "(A+B)*(C+D)"
                 .skip(1)
                 .filter(|b| !b.contains("-type hidden"))
                 .count();
-            let transitions: BTreeSet<_> =
-                cell.arcs.iter().map(|a| transition_key(&cell, a)).collect();
+            let transitions: HashSet<_> = cell
+                .arcs
+                .iter()
+                .map(|a| ArcIdentity::of(&cell, a))
+                .collect();
             assert_eq!(
                 non_hidden,
                 transitions.len(),
@@ -986,7 +1034,11 @@ Y = "(A+B)*(C+D)"
 
             // Hidden side: one block per distinct (pin, edge) toggle event.
             let hidden = tcl.matches("-type hidden").count();
-            let events: BTreeSet<_> = cell.hidden_arcs.iter().map(hidden_arc_key).collect();
+            let events: HashSet<_> = cell
+                .hidden_arcs
+                .iter()
+                .map(ArcIdentity::of_hidden)
+                .collect();
             assert_eq!(
                 hidden,
                 events.len(),
@@ -1011,13 +1063,13 @@ Q = "E*D + !E*Q"
         let cell = analyse(DLAT);
         // PREMISE: a D toggle is measured from several held-Q contexts, each of which renders a
         // condition.
-        let mut contexts: BTreeMap<(Symbol, Edge), usize> = BTreeMap::new();
+        let mut contexts: HashMap<ArcIdentity, usize> = HashMap::new();
         for h in cell.hidden_arcs.iter().filter(|h| h.pin == "D") {
             assert!(
                 hidden_when_str(h).is_some(),
                 "premise: every D hidden arc renders a condition"
             );
-            *contexts.entry(hidden_arc_key(h)).or_default() += 1;
+            *contexts.entry(ArcIdentity::of_hidden(h)).or_default() += 1;
         }
         assert!(
             contexts.values().any(|n| *n >= 2),
@@ -1060,7 +1112,10 @@ Q = "E*D + !E*Q"
                 .trim()
                 .to_string()
         };
-        for ((_, edge), n) in &contexts {
+        for (event, n) in &contexts {
+            let ArcIdentity::Hidden { edge, .. } = event else {
+                panic!("a hidden arc's identity is ArcIdentity::Hidden: {event:?}");
+            };
             let rf = edge.rf().to_string();
             let conditioned: Vec<String> = d_hidden(&selected)
                 .into_iter()
@@ -1134,9 +1189,16 @@ Q = "E*D + !E*Q"
     fn general_arcs_are_one_per_transition() {
         for src in GENERALISED_FIXTURES {
             let cell = analyse(src);
-            let transitions: BTreeSet<_> =
-                cell.arcs.iter().map(|a| transition_key(&cell, a)).collect();
-            let events: BTreeSet<_> = cell.hidden_arcs.iter().map(hidden_arc_key).collect();
+            let transitions: HashSet<_> = cell
+                .arcs
+                .iter()
+                .map(|a| ArcIdentity::of(&cell, a))
+                .collect();
+            let events: HashSet<_> = cell
+                .hidden_arcs
+                .iter()
+                .map(ArcIdentity::of_hidden)
+                .collect();
             // PREMISE: the fixture fires some transition or toggle from several contexts, so there is
             // something to generalise over.
             assert!(
@@ -1146,30 +1208,30 @@ Q = "E*D + !E*Q"
             );
 
             let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
-            let mut emitted: BTreeMap<_, usize> = BTreeMap::new();
+            let mut emitted: HashMap<_, usize> = HashMap::new();
             for a in general_transition_arcs(&cell, &tcl) {
-                *emitted.entry(transition_key(&cell, a)).or_default() += 1;
+                *emitted.entry(ArcIdentity::of(&cell, a)).or_default() += 1;
             }
             assert!(
                 emitted.values().all(|n| *n == 1),
                 "no transition emits two general blocks"
             );
             assert_eq!(
-                emitted.into_keys().collect::<BTreeSet<_>>(),
+                emitted.into_keys().collect::<HashSet<_>>(),
                 transitions,
                 "one general block per transition"
             );
 
-            let mut emitted_h: BTreeMap<_, usize> = BTreeMap::new();
+            let mut emitted_h: HashMap<_, usize> = HashMap::new();
             for h in general_hidden_arcs(&cell, &tcl) {
-                *emitted_h.entry(hidden_arc_key(h)).or_default() += 1;
+                *emitted_h.entry(ArcIdentity::of_hidden(h)).or_default() += 1;
             }
             assert!(
                 emitted_h.values().all(|n| *n == 1),
                 "no hidden event emits two general blocks"
             );
             assert_eq!(
-                emitted_h.into_keys().collect::<BTreeSet<_>>(),
+                emitted_h.into_keys().collect::<HashSet<_>>(),
                 events,
                 "one general block per hidden toggle event"
             );
@@ -1207,16 +1269,18 @@ Q = "E*D + !E*Q"
     fn general_arcs_keep_the_shortest_prevector_per_transition() {
         for src in GENERALISED_FIXTURES {
             let cell = analyse(src);
-            let mut shortest: BTreeMap<_, usize> = BTreeMap::new();
+            let mut shortest: HashMap<_, usize> = HashMap::new();
             for a in &cell.arcs {
                 let best = shortest
-                    .entry(transition_key(&cell, a))
+                    .entry(ArcIdentity::of(&cell, a))
                     .or_insert(usize::MAX);
                 *best = (*best).min(a.prevector.len());
             }
-            let mut shortest_h: BTreeMap<_, usize> = BTreeMap::new();
+            let mut shortest_h: HashMap<_, usize> = HashMap::new();
             for h in &cell.hidden_arcs {
-                let best = shortest_h.entry(hidden_arc_key(h)).or_insert(usize::MAX);
+                let best = shortest_h
+                    .entry(ArcIdentity::of_hidden(h))
+                    .or_insert(usize::MAX);
                 *best = (*best).min(h.prevector.len());
             }
             // PREMISE: some group holds several firings, so its minimum is a real choice between them.
@@ -1230,14 +1294,14 @@ Q = "E*D + !E*Q"
             for a in general_transition_arcs(&cell, &tcl) {
                 assert_eq!(
                     a.prevector.len(),
-                    shortest[&transition_key(&cell, a)],
+                    shortest[&ArcIdentity::of(&cell, a)],
                     "the representative carries its transition group's shortest prevector"
                 );
             }
             for h in general_hidden_arcs(&cell, &tcl) {
                 assert_eq!(
                     h.prevector.len(),
-                    shortest_h[&hidden_arc_key(h)],
+                    shortest_h[&ArcIdentity::of_hidden(h)],
                     "the representative carries its toggle event's shortest prevector"
                 );
             }
@@ -1330,14 +1394,14 @@ Q = "E*D + !E*Q"
         let cell = analyse(TWO);
         // PREMISE: two A→Y firings share a transition AND a rendered vector — every input agrees and `Z`
         // is `X` — and differ only in the internal state they were measured from.
-        let mut contexts: BTreeMap<_, Vec<&Arc>> = BTreeMap::new();
+        let mut contexts: HashMap<_, Vec<&Arc>> = HashMap::new();
         for a in cell
             .arcs
             .iter()
             .filter(|a| a.output == "Y" && a.related == "A")
         {
             contexts
-                .entry((transition_key(&cell, a), vector_str(&cell, a)))
+                .entry((ArcIdentity::of(&cell, a), vector_str(&cell, a)))
                 .or_default()
                 .push(a);
         }
@@ -1537,7 +1601,11 @@ Y = "!A"
         );
         // PREMISE: nothing collides, so every arc IS its transition's representative — the case the skip
         // is for. A colliding fixture would exercise the other branch instead.
-        let keys: BTreeSet<_> = cell.arcs.iter().map(|a| transition_key(&cell, a)).collect();
+        let keys: HashSet<_> = cell
+            .arcs
+            .iter()
+            .map(|a| ArcIdentity::of(&cell, a))
+            .collect();
         assert_eq!(
             keys.len(),
             cell.arcs.len(),
