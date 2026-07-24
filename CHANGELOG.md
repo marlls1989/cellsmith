@@ -9,17 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`--no-when` takes an optional per-class value.** `--no-when=hidden` / `--no-when=transition`
-  select one arc class to suppress `-when` on; the flag is repeatable to select several, and bare
-  `--no-when` selects every class.
-- **Per-cell `no_when` key.** A cell can select its own arc classes with `no_when = true` /
-  `"hidden"` / `["hidden", "transition"]`, unioned with whatever classes are selected on the command
-  line — a cell can add classes but never opt back out of one the CLI selected.
-- **`--no-when` deduplicates again.** A selected class no longer just drops the `-when` line: arcs
-  that become indistinguishable once `-when` is gone are collapsed to one arc per emitted vector,
-  keeping the shortest prevector, while arcs whose `-vector` still differs are unaffected. This
-  supersedes the 0.2.0 "suppression only" note; with no `--no-when` on the command line and no
-  `no_when` key in the spec, output is unchanged from before this rework.
+- **`--no-when` and the per-cell `no_when` key are removed, with no alias.** `--when` and the
+  per-cell `when` key take their place. This is a breaking CLI change against the released 0.2.1: a
+  spec that still carries `no_when` fails to parse.
+- **The deduplicated arcs without `-when` — one per emitted vector, keeping the shortest prevector —
+  are the default output** for every cell; arcs whose `-vector` still differs are unaffected. The
+  generated `.tcl` changes for every existing spec.
+- **`--when` and the per-cell `when` key add the selected class's `-when`-conditioned arcs on top of
+  the catch-all**, so an arc can appear both with and without its condition. Bare `--when` selects
+  every class; `--when=hidden` / `--when=transition` select one; repeat the flag to select several. A
+  cell can select classes itself with `when = ...`, unioned with whatever the command line selects.
 
 ## [0.2.1] - 2026-07-22
 
