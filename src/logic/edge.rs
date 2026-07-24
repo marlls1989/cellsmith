@@ -1006,7 +1006,6 @@ fn reaches_self(succ: &BTreeMap<Symbol, BTreeSet<Symbol>>, w: &Symbol) -> bool {
 /// node, not a disqualifier, so iterating to a fixpoint lets one seam's removal cascade to another
 /// (`MCDFF` loses `(CLKB, Rise)` on live D, then `(CLKA, Fall)` because the in-phase CLKB rise is gone).
 /// Only ELIGIBLE states, at both ends of a transition, take part.
-#[allow(clippy::too_many_arguments)]
 fn seam_fixpoint<B: Brand, C: ManagerCell>(
     m: &Machine<'_, B, C>,
     tr: &Transitions<'_>,
@@ -1228,7 +1227,6 @@ fn drop_loop_columns(
 /// variable, so equal projections are the same machine minterm and `settle` is deterministic; a conflict
 /// cannot occur (asserted, never retried). The off-edge is synthesised JOINTLY over the node's whole
 /// clock set.
-#[allow(clippy::too_many_arguments)]
 fn synth_node_captures<B: Brand, C: ManagerCell>(
     builder: &BddBuilder<B, C>,
     candidates: &[Symbol],

@@ -421,7 +421,6 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
 /// `None` placeholder and the renderer prints the edge token there; an off-edge forcing cover MAY pin the
 /// clock (a phase-conditioned `CLK*R` clear), and that level lands in `inputs` so the renderer prints the
 /// clock literal instead. Only the register's own next slot carries `action`.
-#[allow(clippy::too_many_arguments)]
 fn edge_row(
     clock: &Symbol,
     token: EdgeTok,

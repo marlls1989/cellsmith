@@ -86,7 +86,6 @@ pub struct HiddenArc {
 }
 
 /// Identity of a transition arc: (output, related, edge-direction, full machine start state).
-#[allow(clippy::type_complexity)]
 type ArcKey = (Symbol, Symbol, bool, Minterm<Symbol>);
 /// Identity of a hidden arc: (toggled pin, edge-direction, full machine start state).
 type HiddenKey = (Symbol, bool, Minterm<Symbol>);

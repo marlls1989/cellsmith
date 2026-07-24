@@ -280,7 +280,6 @@ fn read_spec(spec: &str) -> io::Result<String> {
 /// Concatenate one artifact across every cell.
 // `one` is only `Sync` (not `Send`); passing it by value into `par_iter().map()` would additionally
 // require `Send`, so it is called through a closure that captures it by reference instead.
-#[allow(clippy::redundant_closure)]
 fn render(cells: &[AnalysedCell], one: impl (Fn(&AnalysedCell) -> String) + Sync) -> String {
     cells
         .par_iter()
