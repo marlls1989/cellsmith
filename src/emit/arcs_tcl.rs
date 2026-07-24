@@ -831,7 +831,7 @@ Q = "A*B + Q*(A+B)"
         }
     }
 
-    // ---- General-arc contract: shortest prevector, class selectivity, determinism ----
+    // ---- General-arc contract: shortest prevector, class selectivity ----
 
     /// A two-output cell that exhibits a transition-arc collision: `Y = A` is a plain rise/fall, and `Z`
     /// is a C-element whose held value renders as `X` in `Y`'s vector. With `B = 1` both `Z = 0` and

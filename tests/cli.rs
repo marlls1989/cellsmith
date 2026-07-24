@@ -434,7 +434,7 @@ fn default_run_emits_no_arc_when_lines() {
         !has_arc_when(arcs_section(&out)),
         "default output carries no arc -when lines"
     );
-    // The `-when` arcs are added ON TOP of the always-emitted catch-alls, so the default run emits
+    // The `-when` arcs are added ON TOP of the always-emitted general arcs, so the default run emits
     // strictly fewer `define_arc` blocks than bare `--when`.
     let when_out = run_spec("two_when_more", TWO, &["--when"]);
     let define_arcs = |s: &str| arcs_section(s).matches("define_arc").count();
@@ -454,12 +454,12 @@ fn bare_when_emits_arc_when_lines() {
         has_arc_when(arcs_section(&out)),
         "bare --when carries arc -when lines"
     );
-    // The catch-alls stay put and the `-when` blocks are added on top, so bare --when emits strictly
+    // The general arcs stay put and the `-when` blocks are added on top, so bare --when emits strictly
     // more `define_arc` blocks than the default run.
     let define_arcs = |s: &str| arcs_section(s).matches("define_arc").count();
     assert!(
         define_arcs(&out) > define_arcs(&default),
-        "bare --when adds -when blocks on top of the catch-alls: {} not > {}",
+        "bare --when adds -when blocks on top of the general arcs: {} not > {}",
         define_arcs(&out),
         define_arcs(&default),
     );
@@ -475,8 +475,8 @@ fn when_hidden_emits_only_hidden_when_lines() {
         hidden_when_count(arcs) >= 1,
         "hidden arc -when lines are present"
     );
-    // The hidden catch-all blocks are unconditionally emitted, so selecting the class adds -when
-    // blocks on top without dropping any catch-all.
+    // The hidden general blocks are unconditionally emitted, so selecting the class adds -when
+    // blocks on top without dropping any general block.
     let hidden_catchall_count = |arcs: &str| {
         arcs.split("define_arc")
             .skip(1)
@@ -486,7 +486,7 @@ fn when_hidden_emits_only_hidden_when_lines() {
     assert_eq!(
         hidden_catchall_count(arcs),
         hidden_catchall_count(default),
-        "hidden catch-all blocks are still present"
+        "hidden general blocks are still present"
     );
     assert_eq!(
         transition_when_count(arcs),
@@ -505,8 +505,8 @@ fn when_transition_emits_only_transition_when_lines() {
         transition_when_count(arcs) >= 1,
         "transition arc -when lines are present"
     );
-    // The transition catch-all blocks are unconditionally emitted, so selecting the class adds -when
-    // blocks on top without dropping any catch-all.
+    // The transition general blocks are unconditionally emitted, so selecting the class adds -when
+    // blocks on top without dropping any general block.
     let transition_catchall_count = |arcs: &str| {
         arcs.split("define_arc")
             .skip(1)
@@ -516,7 +516,7 @@ fn when_transition_emits_only_transition_when_lines() {
     assert_eq!(
         transition_catchall_count(arcs),
         transition_catchall_count(default),
-        "transition catch-all blocks are still present"
+        "transition general blocks are still present"
     );
     assert_eq!(
         hidden_when_count(arcs),
@@ -575,9 +575,9 @@ fn cli_class_unions_with_cell_when() {
     );
 }
 
-/// With `--when=transition` on the `TWO` fixture, the transition arc that becomes the deduplicated
-/// catch-all also carries a rendered `-when` condition (its related pin is not `TWO`'s only input), so
-/// its `-vector` value appears in two distinct blocks: the catch-all without `-when`, and the `-when`
+/// With `--when=transition` on the `TWO` fixture, the transition arc that becomes the general
+/// representative also carries a rendered `-when` condition (its related pin is not `TWO`'s only input), so
+/// its `-vector` value appears in two distinct blocks: the general one without `-when`, and the `-when`
 /// pass's own block for that same arc.
 #[test]
 fn when_transition_duplicates_a_vector_with_and_without_when() {
@@ -619,7 +619,7 @@ fn when_hidden_duplicates_a_vector_with_and_without_when() {
 }
 
 /// Bare `--when`'s arcs section is a superset of the default run's: every default `define_arc` block
-/// (the always-emitted catch-alls) still appears verbatim once the `-when` blocks are added on top.
+/// (the always-emitted general arcs) still appears verbatim once the `-when` blocks are added on top.
 #[test]
 fn when_output_contains_every_default_arc_block() {
     let default = run_spec("two_when_subset_default", TWO, &[]);
