@@ -278,12 +278,12 @@ fn read_spec(spec: &str) -> io::Result<String> {
 }
 
 /// Concatenate one artifact across every cell.
-// `one` is only `Sync` (not `Send`); passing it by value into `par_iter().map()` would additionally
-// require `Send`, so it is called through a closure that captures it by reference instead.
+// `one` has trait bound `Sync` (not `Send`). Rayon's `par_iter().map()` requires `F: Send`,
+// but a reference `&F` is `Fn` with `&F: Send` whenever `F: Sync`. Pass `&one` to satisfy this.
 fn render(cells: &[AnalysedCell], one: impl (Fn(&AnalysedCell) -> String) + Sync) -> String {
     cells
         .par_iter()
-        .map(|c| one(c))
+        .map(&one)
         .collect::<Vec<String>>()
         .concat()
 }
