@@ -34,15 +34,14 @@ struct Cli {
     #[arg(short, long)]
     name: Option<String>,
 
-    /// Suppress the `-when` conditions on arcs, per arc class (emitted by default). Bare `--no-when`
-    /// selects every class; `--no-when=hidden` / `--no-when=transition` select one; repeat the flag to
-    /// select several. A value must be attached with `=` (the space form is not accepted). A selected
-    /// class also collapses arcs that become indistinguishable once `-when` is gone, keeping one arc
-    /// per emitted vector with the shortest prevector; arcs whose `-vector` still differs are
-    /// unaffected. A cell can select classes itself with `no_when = ...`, and the two selections are
-    /// unioned.
+    /// Also emit the `-when`-conditioned arcs, per arc class (off by default). The deduplicated arcs
+    /// without `-when` — one per emitted vector, keeping the shortest prevector — are always emitted; a
+    /// selected class adds its `-when` arcs on top, so an arc can appear both with and without its
+    /// condition. Bare `--when` selects every class; `--when=hidden` / `--when=transition` select one;
+    /// repeat the flag to select several. A value must be attached with `=` (the space form is not
+    /// accepted). A cell can select classes itself with `when = ...`, and the two selections are unioned.
     #[arg(long, value_name = "CLASS", value_enum, num_args = 0..=1, require_equals = true)]
-    no_when: Option<Vec<ArcClass>>,
+    when: Option<Vec<ArcClass>>,
 
     /// Suppress hidden (internal-power) arcs — input toggles where no output changes (emitted by default).
     #[arg(long)]
@@ -97,15 +96,15 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             c.no_edge_collapse = true;
         }
     }
-    // `--no-when` is a blanket UNION: every class selected on the command line is added to each cell's
-    // own `no_when` set, so a cell can select more classes but never opt back out of a CLI-selected one.
-    let cli_no_when = match cli.no_when.as_deref() {
+    // `--when` is a blanket UNION: every class selected on the command line is added to each cell's
+    // own `when` set, so a cell can select more classes but never opt back out of a CLI-selected one.
+    let cli_when = match cli.when.as_deref() {
         None => ArcClasses::default(),
-        Some([]) => ArcClasses::ALL, // bare `--no-when`: every class
+        Some([]) => ArcClasses::ALL, // bare `--when`: every class
         Some(classes) => classes.iter().copied().collect(),
     };
     for c in &mut spec.cells {
-        c.no_when = c.no_when.union(cli_no_when);
+        c.when = c.when.union(cli_when);
     }
     let cells: Vec<AnalysedCell> = spec.analyse()?;
 
@@ -278,44 +277,44 @@ mod tests {
     use clap::Parser;
 
     #[test]
-    fn no_when_bare_flag_selects_all_and_keeps_positional() {
-        let cli = Cli::try_parse_from(["cellsmith", "--no-when", "s.toml"]).unwrap();
+    fn when_bare_flag_selects_all_and_keeps_positional() {
+        let cli = Cli::try_parse_from(["cellsmith", "--when", "s.toml"]).unwrap();
         // A bare occurrence records the id with zero values: `Some(vec![])`, distinct from an absent flag.
-        assert_eq!(cli.no_when, Some(vec![]));
+        assert_eq!(cli.when, Some(vec![]));
         // `require_equals` keeps the positional `<SPEC>` from being swallowed as the class value.
         assert_eq!(cli.spec, "s.toml");
     }
 
     #[test]
-    fn no_when_equals_selects_one_class() {
-        let cli = Cli::try_parse_from(["cellsmith", "--no-when=hidden", "s.toml"]).unwrap();
-        assert_eq!(cli.no_when, Some(vec![ArcClass::Hidden]));
+    fn when_equals_selects_one_class() {
+        let cli = Cli::try_parse_from(["cellsmith", "--when=hidden", "s.toml"]).unwrap();
+        assert_eq!(cli.when, Some(vec![ArcClass::Hidden]));
     }
 
     #[test]
-    fn no_when_repeats_accumulate_in_order() {
-        let cli = Cli::try_parse_from([
-            "cellsmith",
-            "--no-when=hidden",
-            "--no-when=transition",
-            "s.toml",
-        ])
-        .unwrap();
-        assert_eq!(
-            cli.no_when,
-            Some(vec![ArcClass::Hidden, ArcClass::Transition])
-        );
+    fn when_repeats_accumulate_in_order() {
+        let cli =
+            Cli::try_parse_from(["cellsmith", "--when=hidden", "--when=transition", "s.toml"])
+                .unwrap();
+        assert_eq!(cli.when, Some(vec![ArcClass::Hidden, ArcClass::Transition]));
     }
 
     #[test]
-    fn no_when_absent_is_none() {
+    fn when_absent_is_none() {
         let cli = Cli::try_parse_from(["cellsmith", "s.toml"]).unwrap();
-        assert_eq!(cli.no_when, None);
+        assert_eq!(cli.when, None);
     }
 
     #[test]
-    fn no_when_rejects_an_unknown_class() {
-        assert!(Cli::try_parse_from(["cellsmith", "--no-when=bogus", "s.toml"]).is_err());
+    fn when_rejects_an_unknown_class() {
+        assert!(Cli::try_parse_from(["cellsmith", "--when=bogus", "s.toml"]).is_err());
+    }
+
+    #[test]
+    fn the_removed_no_when_flag_is_rejected() {
+        // `--no-when` is gone, with no alias: the old flag is an unknown argument, so a stale script
+        // fails loudly instead of silently getting the (now default) unconditional arcs.
+        assert!(Cli::try_parse_from(["cellsmith", "--no-when", "s.toml"]).is_err());
     }
 
     #[test]

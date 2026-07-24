@@ -269,85 +269,110 @@ Y = "A"
 Z = "A*B + Z*(A+B)"
 "#;
 
-/// The `TWO` cell with `no_when = "transition"` declared, for the CLI+TOML union check.
+/// The `TWO` cell with `when = "transition"` declared, for the CLI+TOML union check.
 const TWO_UNION: &str = r#"
 [[cell]]
 name = "TWO"
 inputs = ["A", "B"]
-no_when = "transition"
+when = "transition"
 [cell.outputs]
 Y = "A"
 Z = "A*B + Z*(A+B)"
 "#;
 
+/// The `-vector { ... }` value of a `define_arc` block (the text between `-vector {` and its closing
+/// `}`).
+fn vector_of(block: &str) -> &str {
+    let after = block
+        .split("-vector {")
+        .nth(1)
+        .expect("block carries a -vector line");
+    &after[..after.find('}').expect("-vector value is brace-closed")]
+}
+
+/// Every `define_arc` block in `arcs`, each truncated at its trailing blank line (the block separator),
+/// so trailing `define_leakage`/constraint text attached to the final split segment does not leak into
+/// the last block.
+fn arc_blocks(arcs: &str) -> Vec<&str> {
+    arcs.split("define_arc")
+        .skip(1)
+        .map(|b| match b.find("\n\n") {
+            Some(off) => &b[..off],
+            None => b,
+        })
+        .collect()
+}
+
 #[test]
-fn default_run_emits_arc_when_lines() {
+fn default_run_emits_no_arc_when_lines() {
     let out = run_spec("two_default", TWO, &[]);
     assert!(
-        has_arc_when(arcs_section(&out)),
-        "default output carries arc -when lines"
+        !has_arc_when(arcs_section(&out)),
+        "default output carries no arc -when lines"
+    );
+    // The `-when` arcs are added ON TOP of the always-emitted catch-alls, so the default run emits
+    // strictly fewer `define_arc` blocks than bare `--when`.
+    let when_out = run_spec("two_when_more", TWO, &["--when"]);
+    let define_arcs = |s: &str| arcs_section(s).matches("define_arc").count();
+    assert!(
+        define_arcs(&out) < define_arcs(&when_out),
+        "default emits strictly fewer define_arc blocks than --when: {} not < {}",
+        define_arcs(&out),
+        define_arcs(&when_out),
     );
 }
 
 #[test]
-fn bare_no_when_suppresses_every_arc_when_line() {
+fn bare_when_emits_arc_when_lines() {
     let default = run_spec("two_default_for_bare", TWO, &[]);
-    let out = run_spec("two_none", TWO, &["--no-when"]);
+    let out = run_spec("two_when", TWO, &["--when"]);
     assert!(
-        !has_arc_when(arcs_section(&out)),
-        "bare --no-when leaves no arc -when line anywhere"
+        has_arc_when(arcs_section(&out)),
+        "bare --when carries arc -when lines"
     );
-    // Dedup fires: with `-when` gone, `TWO`'s colliding arcs collapse, so bare --no-when emits strictly
-    // fewer `define_arc` blocks than the default run.
+    // The catch-alls stay put and the `-when` blocks are added on top, so bare --when emits strictly
+    // more `define_arc` blocks than the default run.
     let define_arcs = |s: &str| arcs_section(s).matches("define_arc").count();
     assert!(
-        define_arcs(&out) < define_arcs(&default),
-        "bare --no-when collapses colliding arcs: {} not < {}",
+        define_arcs(&out) > define_arcs(&default),
+        "bare --when adds -when blocks on top of the catch-alls: {} not > {}",
         define_arcs(&out),
         define_arcs(&default),
     );
 }
 
-/// Bare `--no-when` output is byte-identical run to run on the same multi-cell spec: the cross-PROCESS
+/// Default output (no flag) is byte-identical run to run on the same multi-cell spec: the cross-PROCESS
 /// guard against a future `HashMap` regression reordering the deduplicated `.tcl` under a per-process
 /// random hash seed.
 #[test]
-fn bare_no_when_output_is_deterministic_across_runs() {
-    let a = run_spec("multi_det_a", MULTI, &["--no-when"]);
-    let b = run_spec("multi_det_b", MULTI, &["--no-when"]);
-    assert_eq!(a, b, "bare --no-when output is byte-identical run to run");
+fn default_output_is_deterministic_across_runs() {
+    let a = run_spec("multi_det_a", MULTI, &[]);
+    let b = run_spec("multi_det_b", MULTI, &[]);
+    assert_eq!(a, b, "default output is byte-identical run to run");
 }
 
 #[test]
-fn no_when_hidden_suppresses_only_hidden_when_lines() {
-    let out = run_spec("two_hidden", TWO, &["--no-when=hidden"]);
-    let arcs = arcs_section(&out);
-    assert!(
-        transition_when_count(arcs) >= 1,
-        "transition arc -when lines remain"
-    );
-    assert_eq!(
-        hidden_when_count(arcs),
-        0,
-        "no -type hidden block carries a -when"
-    );
-}
-
-#[test]
-fn no_when_transition_suppresses_only_transition_when_lines() {
-    let default_out = run_spec("two_t_default", TWO, &[]);
+fn when_hidden_emits_only_hidden_when_lines() {
+    let default_out = run_spec("two_hidden_default", TWO, &[]);
     let default = arcs_section(&default_out);
-    let out = run_spec("two_transition", TWO, &["--no-when=transition"]);
+    let out = run_spec("two_hidden", TWO, &["--when=hidden"]);
     let arcs = arcs_section(&out);
-    // Every hidden block that had a -when still has one; no non-hidden block carries one.
-    assert_eq!(
-        hidden_when_count(arcs),
-        hidden_when_count(default),
-        "hidden -when lines are untouched by --no-when=transition"
-    );
     assert!(
         hidden_when_count(arcs) >= 1,
-        "the hidden -when lines are actually present to be preserved"
+        "hidden arc -when lines are present"
+    );
+    // The hidden catch-all blocks are unconditionally emitted, so selecting the class adds -when
+    // blocks on top without dropping any catch-all.
+    let hidden_catchall_count = |arcs: &str| {
+        arcs.split("define_arc")
+            .skip(1)
+            .filter(|b| b.contains("-type hidden") && !has_arc_when(b))
+            .count()
+    };
+    assert_eq!(
+        hidden_catchall_count(arcs),
+        hidden_catchall_count(default),
+        "hidden catch-all blocks are still present"
     );
     assert_eq!(
         transition_when_count(arcs),
@@ -357,24 +382,154 @@ fn no_when_transition_suppresses_only_transition_when_lines() {
 }
 
 #[test]
-fn no_when_hidden_and_transition_equals_bare_no_when() {
-    let both = run_spec(
-        "two_both",
-        TWO,
-        &["--no-when=hidden", "--no-when=transition"],
+fn when_transition_emits_only_transition_when_lines() {
+    let default_out = run_spec("two_t_default", TWO, &[]);
+    let default = arcs_section(&default_out);
+    let out = run_spec("two_transition", TWO, &["--when=transition"]);
+    let arcs = arcs_section(&out);
+    assert!(
+        transition_when_count(arcs) >= 1,
+        "transition arc -when lines are present"
     );
-    let bare = run_spec("two_bare_eq", TWO, &["--no-when"]);
+    // The transition catch-all blocks are unconditionally emitted, so selecting the class adds -when
+    // blocks on top without dropping any catch-all.
+    let transition_catchall_count = |arcs: &str| {
+        arcs.split("define_arc")
+            .skip(1)
+            .filter(|b| !b.contains("-type hidden") && !has_arc_when(b))
+            .count()
+    };
+    assert_eq!(
+        transition_catchall_count(arcs),
+        transition_catchall_count(default),
+        "transition catch-all blocks are still present"
+    );
+    assert_eq!(
+        hidden_when_count(arcs),
+        0,
+        "no hidden block carries a -when"
+    );
+}
+
+#[test]
+fn when_hidden_and_transition_equals_bare_when() {
+    let both = run_spec("two_both", TWO, &["--when=hidden", "--when=transition"]);
+    let bare = run_spec("two_bare_eq", TWO, &["--when"]);
     assert_eq!(both, bare, "selecting both classes equals the bare flag");
 }
 
 #[test]
-fn cli_class_unions_with_cell_no_when() {
-    // The cell selects `transition`; the CLI adds `hidden`; the union suppresses every arc -when.
-    let out = run_spec("two_union", TWO_UNION, &["--no-when=hidden"]);
-    assert!(
-        !has_arc_when(arcs_section(&out)),
-        "the CLI class unions with the cell's own, leaving no arc -when line"
+fn cli_class_unions_with_cell_when() {
+    // The cell selects `transition`; the CLI adds `hidden`; the union equals bare `--when`.
+    let out = run_spec("two_union", TWO_UNION, &["--when=hidden"]);
+    let bare = run_spec("two_union_bare_eq", TWO, &["--when"]);
+    assert_eq!(
+        out, bare,
+        "the CLI class unions with the cell's own, matching bare --when"
     );
+}
+
+/// With `--when=transition` on the `TWO` fixture, the transition arc that becomes the deduplicated
+/// catch-all also carries a rendered `-when` condition (its related pin is not `TWO`'s only input), so
+/// its `-vector` value appears in two distinct blocks: the catch-all without `-when`, and the `-when`
+/// pass's own block for that same arc.
+#[test]
+fn when_transition_duplicates_a_vector_with_and_without_when() {
+    let out = run_spec("two_dup_transition", TWO, &["--when=transition"]);
+    let arcs = arcs_section(&out);
+    let (with_when, without_when): (Vec<&str>, Vec<&str>) = arcs
+        .split("define_arc")
+        .skip(1)
+        .filter(|b| !b.contains("-type hidden"))
+        .partition(|b| has_arc_when(b));
+    let with_when_vectors: Vec<&str> = with_when.iter().map(|b| vector_of(b)).collect();
+    let without_when_vectors: Vec<&str> = without_when.iter().map(|b| vector_of(b)).collect();
+    assert!(
+        with_when_vectors
+            .iter()
+            .any(|v| without_when_vectors.contains(v)),
+        "a transition -vector value appears both with and without -when"
+    );
+}
+
+/// Analogous to [`when_transition_duplicates_a_vector_with_and_without_when`], for the hidden class.
+#[test]
+fn when_hidden_duplicates_a_vector_with_and_without_when() {
+    let out = run_spec("two_dup_hidden", TWO, &["--when=hidden"]);
+    let arcs = arcs_section(&out);
+    let (with_when, without_when): (Vec<&str>, Vec<&str>) = arcs
+        .split("define_arc")
+        .skip(1)
+        .filter(|b| b.contains("-type hidden"))
+        .partition(|b| has_arc_when(b));
+    let with_when_vectors: Vec<&str> = with_when.iter().map(|b| vector_of(b)).collect();
+    let without_when_vectors: Vec<&str> = without_when.iter().map(|b| vector_of(b)).collect();
+    assert!(
+        with_when_vectors
+            .iter()
+            .any(|v| without_when_vectors.contains(v)),
+        "a hidden -vector value appears both with and without -when"
+    );
+}
+
+/// Bare `--when`'s arcs section is a superset of the default run's: every default `define_arc` block
+/// (the always-emitted catch-alls) still appears verbatim once the `-when` blocks are added on top.
+#[test]
+fn when_output_contains_every_default_arc_block() {
+    let default = run_spec("two_when_subset_default", TWO, &[]);
+    let when_out = run_spec("two_when_subset_when", TWO, &["--when"]);
+    let default_arcs = arcs_section(&default);
+    let when_arcs = arcs_section(&when_out);
+    for block in arc_blocks(default_arcs) {
+        assert!(
+            when_arcs.contains(&format!("define_arc{block}")),
+            "the --when output should contain every default define_arc block:\n{block}"
+        );
+    }
+}
+
+#[test]
+fn no_when_flag_exits_non_zero() {
+    let dir = scratch_dir("no_when_flag");
+    let spec = dir.join("cells.toml");
+    std::fs::write(&spec, TWO).unwrap();
+
+    let status = Command::new(BIN)
+        .arg("--stdout")
+        .arg("--no-when")
+        .arg(&spec)
+        .status()
+        .expect("run cellsmith");
+    assert!(
+        !status.success(),
+        "--no-when is a removed flag, unknown to clap"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn no_when_spec_key_exits_non_zero() {
+    let dir = scratch_dir("no_when_key");
+    let spec = dir.join("bad.toml");
+    // `no_when` is a removed field name; `deny_unknown_fields` rejects it.
+    std::fs::write(
+        &spec,
+        "[[cell]]\nname = \"X\"\ninputs = [\"A\"]\nno_when = true\n[cell.outputs]\nY = \"A\"\n",
+    )
+    .unwrap();
+
+    let status = Command::new(BIN)
+        .arg("--stdout")
+        .arg(&spec)
+        .status()
+        .expect("run cellsmith");
+    assert!(
+        !status.success(),
+        "no_when is a removed spec field, unknown to serde"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
