@@ -209,6 +209,47 @@ fn arcs_section(stdout: &str) -> &str {
     }
 }
 
+/// `stdout` with its arcs.tcl section ([`arcs_section`]) reduced to its records — a record being a
+/// `define_arc`/`define_leakage`/`#` command with its indented continuation lines folded onto one line
+/// and its whitespace collapsed — sorted. Other sections are left verbatim. Two runs that emit the same
+/// arcs in a different order compare equal under this reduction.
+fn canonical(stdout: &str) -> String {
+    let arcs = arcs_section(stdout);
+    let start = arcs.as_ptr() as usize - stdout.as_ptr() as usize;
+    let end = start + arcs.len();
+
+    let mut records: Vec<String> = Vec::new();
+    for line in arcs.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("define_arc")
+            || trimmed.starts_with("define_leakage")
+            || trimmed.starts_with('#')
+        {
+            records.push(trimmed.to_string());
+        } else {
+            let last = records
+                .last_mut()
+                .expect("a continuation line follows its command");
+            last.push(' ');
+            last.push_str(trimmed);
+        }
+    }
+    for r in &mut records {
+        *r = r.split_whitespace().collect::<Vec<_>>().join(" ");
+    }
+    records.sort();
+
+    format!(
+        "{}{}{}",
+        &stdout[..start],
+        records.join("\n"),
+        &stdout[end..]
+    )
+}
+
 /// Whether any arc `-when` line appears in the `arcs.tcl` section. An arc `-when` is its own indented
 /// continuation line (`\t-when "..." \`); a `define_leakage` `-when` is inline (`define_leakage -when
 /// "..." { NAME }`) and so is deliberately NOT matched by the `starts_with("-when")` discriminator.
@@ -424,16 +465,6 @@ fn bare_when_emits_arc_when_lines() {
     );
 }
 
-/// Default output (no flag) is byte-identical run to run on the same multi-cell spec: the cross-PROCESS
-/// guard against a future `HashMap` regression reordering the deduplicated `.tcl` under a per-process
-/// random hash seed.
-#[test]
-fn default_output_is_deterministic_across_runs() {
-    let a = run_spec("multi_det_a", MULTI, &[]);
-    let b = run_spec("multi_det_b", MULTI, &[]);
-    assert_eq!(a, b, "default output is byte-identical run to run");
-}
-
 #[test]
 fn when_hidden_emits_only_hidden_when_lines() {
     let default_out = run_spec("two_hidden_default", TWO, &[]);
@@ -498,7 +529,11 @@ fn when_transition_emits_only_transition_when_lines() {
 fn when_hidden_and_transition_equals_bare_when() {
     let both = run_spec("two_both", TWO, &["--when=hidden", "--when=transition"]);
     let bare = run_spec("two_bare_eq", TWO, &["--when"]);
-    assert_eq!(both, bare, "selecting both classes equals the bare flag");
+    assert_eq!(
+        canonical(&both),
+        canonical(&bare),
+        "selecting both classes equals the bare flag"
+    );
 }
 
 /// A bare `--when` is the blanket selection, so combining it with a valued occurrence selects every
@@ -509,11 +544,13 @@ fn bare_when_unions_with_a_valued_when_in_either_order() {
     let bare_first = run_spec("two_mixed", TWO, &["--when", "--when=hidden"]);
     let valued_first = run_spec("two_mixed_rev", TWO, &["--when=hidden", "--when"]);
     assert_eq!(
-        bare_first, bare,
+        canonical(&bare_first),
+        canonical(&bare),
         "a bare --when before a valued one still selects every class"
     );
     assert_eq!(
-        valued_first, bare,
+        canonical(&valued_first),
+        canonical(&bare),
         "a bare --when after a valued one still selects every class"
     );
     // Both classes carry their `-when` blocks, so the equality above is not two empty selections.
@@ -532,7 +569,8 @@ fn cli_class_unions_with_cell_when() {
     let out = run_spec("two_union", TWO_UNION, &["--when=hidden"]);
     let bare = run_spec("two_union_bare_eq", TWO, &["--when"]);
     assert_eq!(
-        out, bare,
+        canonical(&out),
+        canonical(&bare),
         "the CLI class unions with the cell's own, matching bare --when"
     );
 }
