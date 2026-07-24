@@ -65,6 +65,14 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     // context is already what the general block stands for), or the representative renders no `-when` (so
     // the two blocks would be identical). Any non-representative firing renders its own prevector and is
     // emitted whether or not it carries a condition.
+    //
+    // Two redundancies survive here BY DESIGN — do not "optimise" either away. On a transition with more
+    // than one context, the representative's OWN conditioned block restates the context its general block
+    // already pins, yet it is emitted: the conditioned pass names every context of a multi-context
+    // transition explicitly and symmetrically, the representative's included. And two firings that agree
+    // on vector and `-when` but reach it from different internal states both emit identical conditioned
+    // blocks — the emitted form cannot express the internal state that makes them distinct arcs. Neither
+    // repeat drops an arc or misstates timing; the duplication is harmless.
     let general = generalised(
         &cell.arcs,
         |arc| ArcIdentity::of(cell, arc),
