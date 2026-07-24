@@ -1,6 +1,6 @@
 [package]
 name = "cellsmith"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 authors = ["Marcos Sartori <code@msartori.uk>"]
 description = "Generate Cadence Liberate transition arcs (with prevectors) for logic cells, including state-holding/hysteretic cells"
