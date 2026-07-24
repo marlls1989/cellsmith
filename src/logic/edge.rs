@@ -77,7 +77,7 @@
 //!
 //! See `docs/edge-collapse.md` for the concept-first walkthrough.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
 use espresso_logic::{Anonymous, Cover, CoverType, CubeType, Minimizable, Minterm, Symbol};
@@ -144,8 +144,9 @@ pub struct EdgeArcs {
     /// nodes carrying no delay arc are never labelled). An arc whose identity is ABSENT stays
     /// `-type combinational`: it acts by the clock's LEVEL, or propagates data through an
     /// already-transparent latch. Membership is PER FIRING, so two firings of one
-    /// `(output, clock, direction)` that differ only in internal state can type differently.
-    pub labels: BTreeSet<(Symbol, Symbol, Edge, Minterm<Symbol>)>,
+    /// `(output, clock, direction)` that differ only in internal state can type differently. Every reader
+    /// asks the set whether an identity is a member, so it is a [`HashSet`].
+    pub labels: HashSet<(Symbol, Symbol, Edge, Minterm<Symbol>)>,
     /// The read-gate factorisations recognised across the cell's outputs (see [`DerivedRegister`]). Empty
     /// for every cell that carries no read-gated register output. Each entry names a state-holding register
     /// the emitters render as a first-class internal node, and carries the combinational read function(s)
@@ -248,9 +249,9 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     let deltas = &m.deltas;
     let ex = &m.explored;
 
-    // The declared clocks. Every declared clock is a candidate edge key; whether a clock keeps edge arcs
-    // on a given node is decided behaviourally, not by input-class routing.
-    let clock_set: BTreeSet<&str> = cell.clock_pins.iter().map(Symbol::as_str).collect();
+    // The scan context: the transition table, the per-state arc eligibility and the declared clock set,
+    // all node-independent, built once and indexed into by every scan below.
+    let scan = Scan::new(m);
 
     // Candidates: every output (value read via `Machine::output_value`, so combinational outputs are
     // included) plus every internal state variable (the state-machine coordinates that are not outputs).
@@ -262,25 +263,6 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         }
     }
 
-    // ELIGIBILITY (aligned with `ex.order`): a reachable stable state is arc-eligible iff every STATE
-    // column is determinate — no don't-care. A don't-care is a MISSING variable, never coerced to 0/1, so
-    // an ineligible start would read an uninitialised latch as though it held a value. Traversal is
-    // untouched — a partial state stays a seed in `ex.order` — but no measurement quantifies over one.
-    let eligible: Vec<bool> = ex
-        .order
-        .iter()
-        .map(|s| {
-            m.state_vars
-                .iter()
-                .all(|w| s.value_of(w.as_str()).is_some())
-        })
-        .collect();
-    let is_eligible = |s: &Minterm<Symbol>| {
-        m.state_vars
-            .iter()
-            .all(|w| s.value_of(w.as_str()).is_some())
-    };
-
     let value = |name: &Symbol, node: &Minterm<Symbol>| m.output_value(name.as_str(), node);
 
     // The observation walk over the ELIGIBLE reachable stable states, mirroring `arcs::derive`'s per-node
@@ -288,7 +270,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // The walk produces plain data (minterms); no BDD is built here.
     let per_node = |node: &Minterm<Symbol>| -> Vec<CandAgg> {
         let mut out: Vec<CandAgg> = vec![CandAgg::default(); candidates.len()];
-        if !is_eligible(node) {
+        if !scan.is_eligible(node) {
             return out; // an uninitialised start is not measured from
         }
         let v0: Vec<Option<bool>> = candidates.iter().map(|c| value(c, node)).collect();
@@ -302,7 +284,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
             let Some(np) = machine::settle(deltas, &toggled) else {
                 continue;
             };
-            let is_clock = clock_set.contains(related.as_str());
+            let is_clock = scan.clock_set.contains(related.as_str());
             let rose = np.value_of(related.as_str()) == Some(true);
             for (i, c) in candidates.iter().enumerate() {
                 let (Some(b0), Some(b1)) = (v0[i], value(c, &np)) else {
@@ -340,17 +322,13 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         },
     );
 
-    // The single-input transition table is node-independent, so it is built once and shared by every
-    // seam and phase scan rather than re-settling.
-    let trans = Transitions::build(m);
-
     // Each candidate's forcing pins. Computed BEFORE any synthesis, so the seam set — which decides the
     // fold-eligible internals the drop-loop prefers to shed — is settled first. Forcing plays no part in
     // typing; it is consumed only by off-edge synthesis and the seam fixpoint's forcing exemption.
     let forcing_of: Vec<BTreeMap<Symbol, (bool, bool)>> = candidates
         .iter()
         .zip(&aggs)
-        .map(|(name, agg)| forcing_pins(m, &trans, name, &agg.moves))
+        .map(|(name, agg)| scan.forcing_pins(name, &agg.moves))
         .collect();
 
     // Every candidate's raw function δ (state δ then combinational-output δ), for the output CONE
@@ -370,15 +348,15 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // every `(state variable, clock, level)` — the memoisation the generation test reads back.
     let clocks: Vec<&Symbol> = inputs
         .iter()
-        .filter(|p| clock_set.contains(p.as_str()))
+        .filter(|p| scan.clock_set.contains(p.as_str()))
         .collect();
-    let live_succ = live_successors(m, &trans, &eligible);
+    let live_succ = scan.live_successors();
     let mut opaque_of: HashMap<(Symbol, Symbol, bool), bool> = HashMap::new();
     for w in &m.state_vars {
         for clock in &clocks {
             for level in [false, true] {
-                let v = trans.order.iter().enumerate().any(|(i, s)| {
-                    eligible[i]
+                let v = scan.order.iter().enumerate().any(|(i, s)| {
+                    scan.eligible[i]
                         && s.value_of(clock.as_str()) == Some(level)
                         && reaches_self(&live_succ[i], w)
                 });
@@ -399,8 +377,8 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
             return false;
         }
         let mut seen: Option<bool> = None;
-        for (i, s) in trans.order.iter().enumerate() {
-            if !eligible[i] || s.value_of(clock.as_str()) != Some(level) {
+        for (i, s) in scan.order.iter().enumerate() {
+            if !scan.eligible[i] || s.value_of(clock.as_str()) != Some(level) {
                 continue;
             }
             let Some(v) = s.value_of(w.as_str()) else {
@@ -515,9 +493,9 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // TYPES EDGE at its own firing's post-arc stable state. Membership is the identity itself, so two
     // firings of one `(output, clock, direction)` can type differently, and an unobserved edge — masked in
     // `arcs::derive`, or from an ineligible start — has no identity to add.
-    let mut labels: BTreeSet<(Symbol, Symbol, Edge, Minterm<Symbol>)> = BTreeSet::new();
+    let mut labels: HashSet<(Symbol, Symbol, Edge, Minterm<Symbol>)> = HashSet::new();
     for a in delay_arcs {
-        if !clock_set.contains(a.related.as_str()) || !is_eligible(&a.start) {
+        if !scan.clock_set.contains(a.related.as_str()) || !scan.is_eligible(&a.start) {
             continue;
         }
         let is_rise = a.end.value_of(a.related.as_str()) == Some(true);
@@ -546,8 +524,8 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                     continue; // vacuity gate: some eligible firing must change the node
                 }
                 let edge = cap.firings.iter().any(|(pre, np, post)| {
-                    is_eligible(pre)
-                        && is_eligible(np)
+                    scan.is_eligible(pre)
+                        && scan.is_eligible(np)
                         && m.output_value(name.as_str(), pre) != Some(*post)
                         && types_edge(name, clock, *is_rise, np)
                 });
@@ -555,16 +533,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                     s.insert((clock.clone(), *is_rise));
                 }
             }
-            seam_fixpoint(
-                m,
-                &trans,
-                &eligible,
-                inputs,
-                &clock_set,
-                name.as_str(),
-                node_forcing,
-                &mut s,
-            );
+            scan.seam_fixpoint(name.as_str(), node_forcing, &mut s);
             s
         })
         .collect();
@@ -713,7 +682,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
             let gate_cols: Vec<Symbol> = inputs
                 .iter()
                 .filter(|p| {
-                    !clock_set.contains(p.as_str())
+                    !scan.clock_set.contains(p.as_str())
                         && dy.variables().any(|v| v.as_str() == p.as_str())
                 })
                 .cloned()
@@ -753,7 +722,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                 .order
                 .iter()
                 .filter_map(|s| {
-                    if !is_eligible(s) {
+                    if !scan.is_eligible(s) {
                         return None;
                     }
                     // The register node's value at this state: a reused declared register resolves through
@@ -902,18 +871,28 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     }
 }
 
-/// The single-input transition table over the reachable stable states: `next[s][x]` is the index of the
-/// stable state reached by toggling input `x` in `order[s]` and settling (`None` when that toggle
-/// oscillates, or lands outside the explored set). The table is NODE-INDEPENDENT — it describes the cell's
-/// state machine, not any one candidate — so it is built once per cell and every candidate's phase scan
-/// indexes into it rather than re-settling.
-struct Transitions<'a> {
+/// The classifier's scan context over one machine: the single-input transition table across the reachable
+/// stable states, those states' ARC ELIGIBILITY, and the declared clock set. All three are
+/// NODE-INDEPENDENT — they describe the cell's state machine, not any one candidate — so they are read
+/// once per cell and every seam, phase and forcing scan indexes into them rather than re-settling.
+struct Scan<'a, B: Brand, C: ManagerCell> {
+    /// The machine every scan reads.
+    m: &'a Machine<'a, B, C>,
+    /// The reachable stable states: the index space `next` and `eligible` are aligned with.
     order: &'a [Minterm<Symbol>],
+    /// `next[s][x]` is the index of the stable state reached by toggling input `x` — the machine's own
+    /// input order — in `order[s]` and settling. `None` when that toggle oscillates, or lands outside the
+    /// explored set.
     next: Vec<Vec<Option<usize>>>,
+    /// Each state's arc eligibility ([`arc_eligible`]).
+    eligible: Vec<bool>,
+    /// The declared clocks, for membership tests. Every declared clock is a candidate edge key; whether a
+    /// clock keeps edge arcs on a given node is decided behaviourally, not by input-class routing.
+    clock_set: HashSet<&'a str>,
 }
 
-impl<'a> Transitions<'a> {
-    fn build<B: Brand, C: ManagerCell + Send + Sync>(m: &'a Machine<'_, B, C>) -> Self {
+impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
+    fn new(m: &'a Machine<'a, B, C>) -> Self {
         let order = &m.explored.order[..];
         let index: HashMap<&Minterm<Symbol>, usize> =
             order.iter().enumerate().map(|(i, s)| (s, i)).collect();
@@ -930,8 +909,228 @@ impl<'a> Transitions<'a> {
                     .collect()
             })
             .collect();
-        Transitions { order, next }
+        Scan {
+            m,
+            order,
+            next,
+            eligible: order.iter().map(|s| arc_eligible(m, s)).collect(),
+            clock_set: m.cell.clock_pins.iter().map(Symbol::as_str).collect(),
+        }
     }
+
+    /// Is `s` arc-eligible (see [`arc_eligible`])? The measurement gate for a state reached during a walk;
+    /// `eligible` answers the same question for a state already in `order`.
+    fn is_eligible(&self, s: &Minterm<Symbol>) -> bool {
+        arc_eligible(self.m, s)
+    }
+
+    /// The LIVE dependency graph among the state variables at every reachable stable state. `live_succ[i]`
+    /// maps each state variable `n` to the state variables whose δ, restricted to all of its support EXCEPT
+    /// `n` at state `i`'s values, still depends on `n` — `n`'s successors in state `i`'s live-dependency
+    /// graph. A cycle through a latch in this graph is the memory signature: the latch is bistable (opaque)
+    /// there. Only ELIGIBLE states carry a graph; an ineligible state's entry is empty and is never measured
+    /// from. No machine state is constructed — every edge is decided by restriction of the existing δ at the
+    /// state.
+    fn live_successors(&self) -> Vec<BTreeMap<Symbol, BTreeSet<Symbol>>> {
+        self.order
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let mut succ: BTreeMap<Symbol, BTreeSet<Symbol>> = BTreeMap::new();
+                if !self.eligible[i] {
+                    return succ;
+                }
+                for (target, delta) in &self.m.deltas {
+                    for n in delta.variables() {
+                        if self.m.state_set.contains(&n) && residual_depends(delta, s, n.as_str()) {
+                            succ.entry(n).or_default().insert(target.clone());
+                        }
+                    }
+                }
+                succ
+            })
+            .collect()
+    }
+
+    /// The greatest-fixpoint filter that keeps `s` to the `(clock, direction)` toggles whose DELIVERED VALUE
+    /// HOLDS through the phase. A `(k, d)` is removed when some NON-FORCING change of `node` inside its
+    /// delivered phase (`clock == d`) happens at a toggle that is NOT itself an edge of `s` — live data (a
+    /// non-clock input) or a non-seam clock. A co-resident clock's edge that IS in `s` is another seam of the
+    /// node, not a disqualifier, so iterating to a fixpoint lets one seam's removal cascade to another
+    /// (`MCDFF` loses `(CLKB, Rise)` on live D, then `(CLKA, Fall)` because the in-phase CLKB rise is gone).
+    /// Only ELIGIBLE states, at both ends of a transition, take part.
+    fn seam_fixpoint(
+        &self,
+        node: &str,
+        node_forcing: &BTreeMap<Symbol, (bool, bool)>,
+        s: &mut BTreeSet<Arc>,
+    ) {
+        let is_forced = |st: &Minterm<Symbol>| {
+            node_forcing
+                .iter()
+                .any(|(p, (a, _))| st.value_of(p.as_str()) == Some(*a))
+        };
+        loop {
+            let mut to_remove: Option<Arc> = None;
+            'search: for (k, is_rise) in s.iter() {
+                for (si, st) in self.order.iter().enumerate() {
+                    if !self.eligible[si]
+                        || st.value_of(k.as_str()) != Some(*is_rise)
+                        || is_forced(st)
+                    {
+                        continue;
+                    }
+                    let Some(v) = self.m.output_value(node, st) else {
+                        continue;
+                    };
+                    // The machine's own input order — the order `next`'s columns are built from.
+                    for (xi, x) in self.m.cell.inputs.iter().enumerate() {
+                        if x == k {
+                            continue;
+                        }
+                        let Some(ni) = self.next[si][xi] else {
+                            continue;
+                        };
+                        if !self.eligible[ni] {
+                            continue;
+                        }
+                        let dest = &self.order[ni];
+                        if is_forced(dest) {
+                            continue;
+                        }
+                        match self.m.output_value(node, dest) {
+                            Some(dv) if dv != v => {}
+                            _ => continue, // the node did not move (or is undefined) here
+                        }
+                        if node_forcing.contains_key(x) {
+                            continue; // a forcing pin's assertion is a coexisting combinational arc
+                        }
+                        // Is the toggle of `x` itself an edge of the node's current seam set?
+                        let x_is_seam = self.clock_set.contains(x.as_str()) && {
+                            let xdir = dest.value_of(x.as_str()) == Some(true);
+                            s.contains(&(x.clone(), xdir))
+                        };
+                        if !x_is_seam {
+                            to_remove = Some((k.clone(), *is_rise));
+                            break 'search;
+                        }
+                    }
+                }
+            }
+            match to_remove {
+                Some(r) => {
+                    s.remove(&r);
+                }
+                None => break,
+            }
+        }
+    }
+
+    /// The node's FORCING PINS, classified behaviourally from its own observed moves: a pin is forcing
+    /// iff every (undiscounted) move it causes lands the node on ONE constant value with one uniform
+    /// destination level of the pin — a set or clear, whatever the pin's declared class. Stratified:
+    /// moves whose source or destination lie under an already-established forcing pin's asserted level
+    /// are discounted before re-classifying (a clear pulsing the node inside a preset's region is still
+    /// a clear). A pin dragging the node BOTH ways (a tracked data pin) never classifies. Returns
+    /// `pin -> (asserted level, forced node value)`.
+    fn forcing_pins(
+        &self,
+        node: &Symbol,
+        moves: &[(Symbol, Minterm<Symbol>, Minterm<Symbol>, bool)],
+    ) -> BTreeMap<Symbol, (bool, bool)> {
+        let inputs = &self.m.cell.inputs;
+        // Clause 2 - GLOBAL CONSTANT-PINNING: exactly one level of the pin holds the node at one constant
+        // across ALL reachable stable states (an async override whose release re-acquires, like a toggle
+        // flop's reset). No tracked data pin satisfies this: its tracking is confined to a clock-phase
+        // region, and elsewhere the node varies under the same pin level. A REAL capture clock never pins
+        // the node to a constant either (the node carries content in both phases), so declaration plays no
+        // part — a level-forcing reset is a forcing pin whether or not it was declared a clock, which is how
+        // `RDFF`'s clock-declared `R` is handled here.
+        let mut pinning: BTreeMap<Symbol, (bool, bool)> = BTreeMap::new();
+        for x in inputs {
+            let pinned_value = |level: bool| -> Option<bool> {
+                let mut seen: Option<bool> = None;
+                for s in self.order {
+                    if s.value_of(x.as_str()) != Some(level) {
+                        continue;
+                    }
+                    let Some(v) = self.m.output_value(node.as_str(), s) else {
+                        continue;
+                    };
+                    match seen {
+                        None => seen = Some(v),
+                        Some(p) if p == v => {}
+                        _ => return None,
+                    }
+                }
+                seen
+            };
+            match (pinned_value(false), pinned_value(true)) {
+                (Some(_), Some(_)) | (None, None) => {} // both levels pin to a constant (degenerate) or neither
+                (Some(v), None) => {
+                    pinning.insert(x.clone(), (false, v));
+                }
+                (None, Some(v)) => {
+                    pinning.insert(x.clone(), (true, v));
+                }
+            }
+        }
+        // Monotone accumulation: established forcing pins are never re-litigated, so each round can only
+        // ADD pins and the loop terminates within `inputs.len()` rounds.
+        let mut forcing: BTreeMap<Symbol, (bool, bool)> = pinning;
+        loop {
+            let mut added = false;
+            for x in inputs {
+                if forcing.contains_key(x) {
+                    continue;
+                }
+                let mut dest_levels: BTreeSet<bool> = BTreeSet::new();
+                let mut posts: BTreeSet<bool> = BTreeSet::new();
+                let mut any = false;
+                for (pin, src, dest, post) in moves {
+                    if pin != x {
+                        continue;
+                    }
+                    any = true;
+                    let discounted = forcing.iter().any(|(p, (a, _))| {
+                        p != x
+                            && (src.value_of(p.as_str()) == Some(*a)
+                                || dest.value_of(p.as_str()) == Some(*a))
+                    });
+                    if discounted {
+                        continue;
+                    }
+                    if let Some(l) = dest.value_of(x.as_str()) {
+                        dest_levels.insert(l);
+                    }
+                    posts.insert(*post);
+                }
+                if any && dest_levels.len() == 1 && posts.len() == 1 {
+                    forcing.insert(
+                        x.clone(),
+                        (
+                            dest_levels.into_iter().next().unwrap(),
+                            posts.into_iter().next().unwrap(),
+                        ),
+                    );
+                    added = true;
+                }
+            }
+            if !added {
+                return forcing;
+            }
+        }
+    }
+}
+
+/// ARC ELIGIBILITY: a reachable stable state is arc-eligible iff every STATE column is determinate — no
+/// don't-care. A don't-care is a MISSING variable, never coerced to 0/1, so an ineligible start would read
+/// an uninitialised latch as though it held a value. Traversal is untouched — a partial state stays a seed
+/// in the explored order — but no measurement quantifies over one.
+fn arc_eligible<B: Brand, C: ManagerCell>(m: &Machine<'_, B, C>, s: &Minterm<Symbol>) -> bool {
+    m.state_vars
+        .iter()
+        .all(|w| s.value_of(w.as_str()).is_some())
 }
 
 /// Does `f`, once every variable of its support EXCEPT `freed` is fixed to `state`'s values, still depend
@@ -947,37 +1146,6 @@ fn residual_depends<B: Brand, C: ManagerCell>(
     let fixed: Vec<Symbol> = f.variables().filter(|v| v.as_str() != freed).collect();
     let residual = f.restrict_to(&state.project_to(fixed.iter().map(Symbol::as_str)));
     residual.variables().any(|v| v.as_str() == freed)
-}
-
-/// The LIVE dependency graph among the state variables at every reachable stable state. `live_succ[i]` maps
-/// each state variable `n` to the state variables whose δ, restricted to all of its support EXCEPT `n` at
-/// state `i`'s values, still depends on `n` — `n`'s successors in state `i`'s live-dependency graph. A
-/// cycle through a latch in this graph is the memory signature: the latch is bistable (opaque) there. Only
-/// ELIGIBLE states carry a graph; an ineligible state's entry is empty and is never measured from. No
-/// machine state is constructed — every edge is decided by restriction of the existing δ at the state.
-fn live_successors<B: Brand, C: ManagerCell>(
-    m: &Machine<'_, B, C>,
-    tr: &Transitions<'_>,
-    eligible: &[bool],
-) -> Vec<BTreeMap<Symbol, BTreeSet<Symbol>>> {
-    tr.order
-        .iter()
-        .enumerate()
-        .map(|(i, s)| {
-            let mut succ: BTreeMap<Symbol, BTreeSet<Symbol>> = BTreeMap::new();
-            if !eligible[i] {
-                return succ;
-            }
-            for (target, delta) in &m.deltas {
-                for n in delta.variables() {
-                    if m.state_set.contains(&n) && residual_depends(delta, s, n.as_str()) {
-                        succ.entry(n).or_default().insert(target.clone());
-                    }
-                }
-            }
-            succ
-        })
-        .collect()
 }
 
 /// Does state variable `w` lie on a directed cycle of live dependency edges — is `w` reachable from itself
@@ -997,175 +1165,6 @@ fn reaches_self(succ: &BTreeMap<Symbol, BTreeSet<Symbol>>, w: &Symbol) -> bool {
         }
     }
     false
-}
-
-/// The greatest-fixpoint filter that keeps `s` to the `(clock, direction)` toggles whose DELIVERED VALUE
-/// HOLDS through the phase. A `(k, d)` is removed when some NON-FORCING change of `node` inside its
-/// delivered phase (`clock == d`) happens at a toggle that is NOT itself an edge of `s` — live data (a
-/// non-clock input) or a non-seam clock. A co-resident clock's edge that IS in `s` is another seam of the
-/// node, not a disqualifier, so iterating to a fixpoint lets one seam's removal cascade to another
-/// (`MCDFF` loses `(CLKB, Rise)` on live D, then `(CLKA, Fall)` because the in-phase CLKB rise is gone).
-/// Only ELIGIBLE states, at both ends of a transition, take part.
-fn seam_fixpoint<B: Brand, C: ManagerCell>(
-    m: &Machine<'_, B, C>,
-    tr: &Transitions<'_>,
-    eligible: &[bool],
-    inputs: &[Symbol],
-    clock_set: &BTreeSet<&str>,
-    node: &str,
-    node_forcing: &BTreeMap<Symbol, (bool, bool)>,
-    s: &mut BTreeSet<Arc>,
-) {
-    let is_forced = |st: &Minterm<Symbol>| {
-        node_forcing
-            .iter()
-            .any(|(p, (a, _))| st.value_of(p.as_str()) == Some(*a))
-    };
-    loop {
-        let mut to_remove: Option<Arc> = None;
-        'search: for (k, is_rise) in s.iter() {
-            for (si, st) in tr.order.iter().enumerate() {
-                if !eligible[si] || st.value_of(k.as_str()) != Some(*is_rise) || is_forced(st) {
-                    continue;
-                }
-                let Some(v) = m.output_value(node, st) else {
-                    continue;
-                };
-                for (xi, x) in inputs.iter().enumerate() {
-                    if x == k {
-                        continue;
-                    }
-                    let Some(ni) = tr.next[si][xi] else { continue };
-                    if !eligible[ni] {
-                        continue;
-                    }
-                    let dest = &tr.order[ni];
-                    if is_forced(dest) {
-                        continue;
-                    }
-                    match m.output_value(node, dest) {
-                        Some(dv) if dv != v => {}
-                        _ => continue, // the node did not move (or is undefined) here
-                    }
-                    if node_forcing.contains_key(x) {
-                        continue; // a forcing pin's assertion is a coexisting combinational arc
-                    }
-                    // Is the toggle of `x` itself an edge of the node's current seam set?
-                    let x_is_seam = clock_set.contains(x.as_str()) && {
-                        let xdir = dest.value_of(x.as_str()) == Some(true);
-                        s.contains(&(x.clone(), xdir))
-                    };
-                    if !x_is_seam {
-                        to_remove = Some((k.clone(), *is_rise));
-                        break 'search;
-                    }
-                }
-            }
-        }
-        match to_remove {
-            Some(r) => {
-                s.remove(&r);
-            }
-            None => break,
-        }
-    }
-}
-
-/// The node's FORCING PINS, classified behaviourally from its own observed moves: a pin is forcing
-/// iff every (undiscounted) move it causes lands the node on ONE constant value with one uniform
-/// destination level of the pin — a set or clear, whatever the pin's declared class. Stratified:
-/// moves whose source or destination lie under an already-established forcing pin's asserted level
-/// are discounted before re-classifying (a clear pulsing the node inside a preset's region is still
-/// a clear). A pin dragging the node BOTH ways (a tracked data pin) never classifies. Returns
-/// `pin -> (asserted level, forced node value)`.
-fn forcing_pins<B: Brand, C: ManagerCell>(
-    m: &Machine<'_, B, C>,
-    tr: &Transitions<'_>,
-    node: &Symbol,
-    moves: &[(Symbol, Minterm<Symbol>, Minterm<Symbol>, bool)],
-) -> BTreeMap<Symbol, (bool, bool)> {
-    let inputs = &m.cell.inputs;
-    // Clause 2 - GLOBAL CONSTANT-PINNING: exactly one level of the pin holds the node at one constant across
-    // ALL reachable stable states (an async override whose release re-acquires, like a toggle flop's reset).
-    // No tracked data pin satisfies this: its tracking is confined to a clock-phase region, and elsewhere
-    // the node varies under the same pin level. A REAL capture clock never pins the node to a constant
-    // either (the node carries content in both phases), so declaration plays no part — a level-forcing
-    // reset is a forcing pin whether or not it was declared a clock, which is how `RDFF`'s clock-declared
-    // `R` is handled here.
-    let mut pinning: BTreeMap<Symbol, (bool, bool)> = BTreeMap::new();
-    for x in inputs {
-        let pinned_value = |level: bool| -> Option<bool> {
-            let mut seen: Option<bool> = None;
-            for s in tr.order {
-                if s.value_of(x.as_str()) != Some(level) {
-                    continue;
-                }
-                let Some(v) = m.output_value(node.as_str(), s) else {
-                    continue;
-                };
-                match seen {
-                    None => seen = Some(v),
-                    Some(p) if p == v => {}
-                    _ => return None,
-                }
-            }
-            seen
-        };
-        match (pinned_value(false), pinned_value(true)) {
-            (Some(_), Some(_)) | (None, None) => {} // both levels pin to a constant (degenerate) or neither
-            (Some(v), None) => {
-                pinning.insert(x.clone(), (false, v));
-            }
-            (None, Some(v)) => {
-                pinning.insert(x.clone(), (true, v));
-            }
-        }
-    }
-    // Monotone accumulation: established forcing pins are never re-litigated, so each round can only
-    // ADD pins and the loop terminates within `inputs.len()` rounds.
-    let mut forcing: BTreeMap<Symbol, (bool, bool)> = pinning;
-    loop {
-        let mut added = false;
-        for x in inputs {
-            if forcing.contains_key(x) {
-                continue;
-            }
-            let mut dest_levels: BTreeSet<bool> = BTreeSet::new();
-            let mut posts: BTreeSet<bool> = BTreeSet::new();
-            let mut any = false;
-            for (pin, src, dest, post) in moves {
-                if pin != x {
-                    continue;
-                }
-                any = true;
-                let discounted = forcing.iter().any(|(p, (a, _))| {
-                    p != x
-                        && (src.value_of(p.as_str()) == Some(*a)
-                            || dest.value_of(p.as_str()) == Some(*a))
-                });
-                if discounted {
-                    continue;
-                }
-                if let Some(l) = dest.value_of(x.as_str()) {
-                    dest_levels.insert(l);
-                }
-                posts.insert(*post);
-            }
-            if any && dest_levels.len() == 1 && posts.len() == 1 {
-                forcing.insert(
-                    x.clone(),
-                    (
-                        dest_levels.into_iter().next().unwrap(),
-                        posts.into_iter().next().unwrap(),
-                    ),
-                );
-                added = true;
-            }
-        }
-        if !added {
-            return forcing;
-        }
-    }
 }
 
 /// Are the `(pre-projection, post-value)` samples CONFLICT-FREE over `cols` — no two samples whose
@@ -1649,30 +1648,22 @@ mod tests {
             return; // no state variables ⇒ nothing carries a capture
         };
         let builder = any_delta.builder();
-        let tr = Transitions::build(m);
         let inputs = &m.cell.inputs;
 
-        // The ELIGIBLE stable states — measured only where every state column is determinate (a don't-care
-        // is a missing variable, never coerced), and the live dependency graph at each. Both feed the
-        // restriction-survival transparency test the harness reads open phases with.
-        let eligible: Vec<bool> = tr
-            .order
-            .iter()
-            .map(|s| {
-                m.state_vars
-                    .iter()
-                    .all(|w| s.value_of(w.as_str()).is_some())
-            })
-            .collect();
-        let live_succ = super::live_successors(m, &tr, &eligible);
+        // The classifier's own scan context — the transition table and the ELIGIBLE stable states, measured
+        // only where every state column is determinate (a don't-care is a missing variable, never coerced) —
+        // and the live dependency graph at each. Both feed the restriction-survival transparency test the
+        // harness reads open phases with.
+        let scan = Scan::new(m);
+        let live_succ = scan.live_successors();
         // A node is TRANSPARENT in `clock`'s `level` phase iff it carries NO live dependency cycle at any
         // eligible stable state of the phase (not opaque) AND its value VARIES across those states — the
         // same restriction-survival form the classifier types generation on. A phase pinned to one constant
         // everywhere is a forcing, not an opening, so it is not transparent.
         let phase_transparent = |node: &Symbol, clock: &Symbol, level: bool| -> bool {
             let opaque = m.state_set.contains(node.as_str())
-                && tr.order.iter().enumerate().any(|(i, s)| {
-                    eligible[i]
+                && scan.order.iter().enumerate().any(|(i, s)| {
+                    scan.eligible[i]
                         && s.value_of(clock.as_str()) == Some(level)
                         && super::reaches_self(&live_succ[i], node)
                 });
@@ -1680,8 +1671,8 @@ mod tests {
                 return false;
             }
             let mut seen: Option<bool> = None;
-            for (i, s) in tr.order.iter().enumerate() {
-                if !eligible[i] || s.value_of(clock.as_str()) != Some(level) {
+            for (i, s) in scan.order.iter().enumerate() {
+                if !scan.eligible[i] || s.value_of(clock.as_str()) != Some(level) {
                     continue;
                 }
                 let Some(v) = m.output_value(node.as_str(), s) else {
@@ -1748,9 +1739,9 @@ mod tests {
             // delivered value through the open phase) and an edge that moves the node.
             let changes = |(clock, is_rise): &Arc| -> bool {
                 let xi = inputs.iter().position(|p| p == clock).unwrap();
-                tr.order.iter().enumerate().any(|(si, s)| {
+                scan.order.iter().enumerate().any(|(si, s)| {
                     s.value_of(clock.as_str()) == Some(!*is_rise)
-                        && tr.next[si][xi].is_some_and(|ni| value(&tr.order[ni]) != value(s))
+                        && scan.next[si][xi].is_some_and(|ni| value(&scan.order[ni]) != value(s))
                 })
             };
             let is_transparent =
@@ -1770,7 +1761,7 @@ mod tests {
             };
 
             // (1) TRANSPARENCY.
-            for s in tr.order {
+            for s in scan.order {
                 // An unsettled coordinate leaves the node's value undetermined there: nothing to prove.
                 if forced(s).is_some() || value(s).is_none() {
                     continue;
@@ -1792,10 +1783,12 @@ mod tests {
             // (2)-(4) the replay. Release outcomes are collected and checked for agreement, never
             // exempted by a declared pin class.
             let mut releases: BTreeMap<(Symbol, Minterm<Symbol>), Option<bool>> = BTreeMap::new();
-            for (si, s) in tr.order.iter().enumerate() {
+            for (si, s) in scan.order.iter().enumerate() {
                 for (xi, x) in inputs.iter().enumerate() {
-                    let Some(ni) = tr.next[si][xi] else { continue };
-                    let dest = &tr.order[ni];
+                    let Some(ni) = scan.next[si][xi] else {
+                        continue;
+                    };
+                    let dest = &scan.order[ni];
                     let (Some(_), Some(_)) = (value(s), value(dest)) else {
                         continue; // an undetermined coordinate at either end: nothing to prove
                     };
@@ -3403,7 +3396,8 @@ Q = "!( !(M2*!CLKB) * Qn )"
         m: &Machine<B, C>,
     ) -> Bdd<B, C> {
         let mut reach = builder.constant(false);
-        for state in Transitions::build(m)
+        for state in m
+            .explored
             .order
             .iter()
             .filter(|s| s.vars().iter().all(|v| s.value_of(v.as_str()).is_some()))

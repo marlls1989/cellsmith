@@ -28,7 +28,7 @@ use crate::logic::analysis::Machine;
 use crate::logic::machine;
 use crate::model::AnalysedOutput;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Edge {
     Rise,
     Fall,
