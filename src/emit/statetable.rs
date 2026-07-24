@@ -42,7 +42,7 @@
 //! register node is a state-table node even when its region is non-hysteretic (a combinational output
 //! made sequential — the dual-edge mux-DET Q).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use espresso_logic::{Anonymous, Cover, Minimizable, Minterm, Symbol};
 
@@ -254,10 +254,9 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
         .cloned()
         .chain(state_orig.iter().cloned())
         .collect();
-    // ORIGINAL signal name -> its slot index in node order, for stamping outputs BY NAME.
-    let index_of: BTreeMap<&Symbol, usize> =
-        state_orig.iter().enumerate().map(|(i, n)| (n, i)).collect();
-    let k = state_orig.len();
+    // Column layout: original node name -> slot index in node order, built once and shared by the level
+    // pass (BY NAME output stamping) and the edge-row pass (input/current column splitting).
+    let cols_layout = ColumnLayout::new(&input_nodes, &state_orig);
 
     // Each pass stacks every level node's minimised region cover for one action into a single multi-output
     // F cover over the shared header, joint-minimises it, and folds each cube into `row_map`. A zero-cube
@@ -306,12 +305,12 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
         for cube in minimised.cubes() {
             let slots = row_map
                 .entry(cube.inputs().clone())
-                .or_insert_with(|| vec![None; k]);
+                .or_insert_with(|| vec![None; cols_layout.n_nodes]);
             for (out, asserted) in cube.outputs().vars().iter().zip(cube.outputs().iter()) {
                 if !asserted {
                     continue;
                 }
-                let i = index_of[out];
+                let i = cols_layout.node_index[out];
                 // Accepted disjointness guarantee: on/off/hold are pairwise disjoint PER NODE, so a
                 // slot is never stamped two DIFFERENT definite actions; overlapping cubes across passes
                 // only ever re-stamp the same tag into a slot.
@@ -344,29 +343,13 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     // first-match priority keeps the captures winning at the edges. Its on/off cubes are the async
     // set/clear, its hold cube the quiescent no-change. Every next slot other than the register's own
     // stays `-`; a capture cube that references the register's own node stamps that node's current column.
-    let input_index: BTreeMap<&Symbol, usize> = input_nodes
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n, i))
-        .collect();
     let mut edge_rows: Vec<EdgeRow> = Vec::new();
     for er in edge_regs {
-        let reg = index_of[&er.node];
+        let reg = cols_layout.node_index[&er.node];
         let single = er.captures.len() == 1;
         let mut push =
             |clock: &Symbol, token: EdgeTok, action: Next, cube: &StateCube, cols: &[Symbol]| {
-                edge_rows.push(edge_row(
-                    clock,
-                    token,
-                    reg,
-                    action,
-                    cube,
-                    cols,
-                    &input_index,
-                    &index_of,
-                    input_nodes.len(),
-                    k,
-                ));
+                edge_rows.push(cols_layout.edge_row(clock, token, reg, action, cube, cols));
             };
         for (clock, edge, capture) in &er.captures {
             let active = match edge {
@@ -415,44 +398,70 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     })
 }
 
-/// Assemble one [`EdgeRow`] from a region cube, splitting each set literal by name into an input column
-/// (aligned to `input_nodes` via `input_index`) or a current-state column (aligned to `internal_nodes`
-/// via `node_index`). A capture cofactor never references the register's clock, so that column keeps its
-/// `None` placeholder and the renderer prints the edge token there; an off-edge forcing cover MAY pin the
-/// clock (a phase-conditioned `CLK*R` clear), and that level lands in `inputs` so the renderer prints the
-/// clock literal instead. Only the register's own next slot carries `action`.
-fn edge_row(
-    clock: &Symbol,
-    token: EdgeTok,
-    reg: usize,
-    action: Next,
-    cube: &StateCube,
-    cols: &[Symbol],
-    input_index: &BTreeMap<&Symbol, usize>,
-    node_index: &BTreeMap<&Symbol, usize>,
+/// Column layout shared by every [`EdgeRow`] built for one cell: each input/state node's original name
+/// mapped to its slot index in the row vectors, plus the two widths, so `edge_row` doesn't rebuild these
+/// loop-invariant maps per row.
+struct ColumnLayout<'a> {
+    input_index: HashMap<&'a Symbol, usize>,
+    node_index: HashMap<&'a Symbol, usize>,
     n_inputs: usize,
     n_nodes: usize,
-) -> EdgeRow {
-    let mut inputs = vec![None; n_inputs];
-    let mut current = vec![None; n_nodes];
-    for (col, val) in cols.iter().zip(cube.iter()) {
-        if val.is_none() {
-            continue;
-        }
-        if let Some(&i) = input_index.get(&col) {
-            inputs[i] = *val;
-        } else if let Some(&i) = node_index.get(&col) {
-            current[i] = *val;
+}
+
+impl<'a> ColumnLayout<'a> {
+    /// Index `inputs` and `nodes` by name into their slot positions.
+    fn new(inputs: &'a [Symbol], nodes: &'a [Symbol]) -> Self {
+        let input_index: HashMap<&'a Symbol, usize> =
+            inputs.iter().enumerate().map(|(i, n)| (n, i)).collect();
+        let node_index: HashMap<&'a Symbol, usize> =
+            nodes.iter().enumerate().map(|(i, n)| (n, i)).collect();
+        debug_assert_eq!(input_index.len(), inputs.len());
+        debug_assert_eq!(node_index.len(), nodes.len());
+        ColumnLayout {
+            n_inputs: inputs.len(),
+            n_nodes: nodes.len(),
+            input_index,
+            node_index,
         }
     }
-    let mut next = vec![None; n_nodes];
-    next[reg] = Some(action);
-    EdgeRow {
-        clock: clock.clone(),
-        token,
-        inputs,
-        current,
-        next,
+
+    /// Assemble one [`EdgeRow`] from a region cube, splitting each set literal by name into an input
+    /// column (aligned to `input_nodes` via `input_index`) or a current-state column (aligned to
+    /// `internal_nodes` via `node_index`). A capture cofactor never references the register's clock, so
+    /// that column keeps its `None` placeholder and the renderer prints the edge token there; an off-edge
+    /// forcing cover MAY pin the clock (a phase-conditioned `CLK*R` clear), and that level lands in
+    /// `inputs` so the renderer prints the clock literal instead. Only the register's own next slot
+    /// carries `action`.
+    fn edge_row(
+        &self,
+        clock: &Symbol,
+        token: EdgeTok,
+        reg: usize,
+        action: Next,
+        cube: &StateCube,
+        cols: &[Symbol],
+    ) -> EdgeRow {
+        let mut inputs = vec![None; self.n_inputs];
+        let mut current = vec![None; self.n_nodes];
+        for (col, val) in cols.iter().zip(cube.iter()) {
+            if val.is_none() {
+                continue;
+            }
+            if let Some(&i) = self.input_index.get(&col) {
+                inputs[i] = *val;
+            } else if let Some(&i) = self.node_index.get(&col) {
+                current[i] = *val;
+            }
+        }
+        let mut next = vec![None; self.n_nodes];
+        next[reg] = Some(action);
+        EdgeRow {
+            clock: clock.clone(),
+            token,
+            inputs,
+            current,
+            next,
+        }
     }
 }
 
