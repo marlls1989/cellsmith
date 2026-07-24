@@ -70,11 +70,11 @@ pub struct Cell {
     #[serde(default)]
     pub no_edge_collapse: bool,
     /// Optional: the per-cell mirror of `--when` — the arc classes whose `-when`-conditioned arcs are
-    /// also emitted, unioned with the global flag. The deduplicated arcs without `-when` — one per
-    /// emitted vector, keeping the shortest prevector — are always emitted regardless of this set; a
-    /// selected class ADDS that class's `-when` arcs on top, so an arc can appear both with and without
+    /// also emitted, unioned with the global flag. One general arc per transition — a related pin's edge
+    /// driving an output pin's edge — is always emitted, without a `-when` line, regardless of this set;
+    /// a selected class ADDS that class's `-when` arcs on top, so an arc can appear both with and without
     /// its condition. Accepts a bool (`true` = every class, `false` = none), a scalar class name, or a
-    /// list of them. Absent = the empty set = only the deduplicated catch-all arcs, no `-when`.
+    /// list of them. Absent = the empty set = only the general arcs, no `-when`.
     #[serde(default, deserialize_with = "de_when")]
     pub when: ArcClasses,
     /// Optional: the cell-wide characterisation-template references for the `define_cell` emitter
@@ -114,8 +114,8 @@ pub enum ArcClass {
     Hidden,
 }
 
-/// The set of arc classes whose `-when` arcs are also emitted, on top of the always-emitted
-/// deduplicated catch-all arcs. `Default` is the EMPTY set — only the catch-all arcs, no `-when`.
+/// The set of arc classes whose `-when` arcs are also emitted, on top of the always-emitted general
+/// arcs. `Default` is the EMPTY set — only the general arcs, no `-when`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ArcClasses {
     transition: bool,
@@ -369,10 +369,10 @@ pub struct AnalysedCell {
     /// Whether the cell opted in to constraint-arc emission (`constraint_arcs = true`).
     pub constraint_arcs_declared: bool,
     /// The arc classes whose `-when` arcs are also emitted (per-cell `when` unioned with the global
-    /// `--when`), read by the arcs emitter. The deduplicated arcs without `-when` — one per emitted
-    /// vector, keeping the shortest prevector — are always emitted regardless of this set; a selected
-    /// class adds that class's `-when` arcs on top, so an arc can appear both with and without its
-    /// condition. Raw carry — analysis never reads it.
+    /// `--when`), read by the arcs emitter. One general arc per transition — a related pin's edge driving
+    /// an output pin's edge — is always emitted, without a `-when` line, regardless of this set; a
+    /// selected class adds that class's `-when` arcs on top, so an arc can appear both with and without
+    /// its condition. Raw carry — analysis never reads it.
     pub when: ArcClasses,
     /// Each signal's state-table regions, precomputed once and cached in `signals()` order (outputs
     /// then internals), so emitters don't rebuild the BDDs per call site.

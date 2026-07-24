@@ -151,8 +151,9 @@ constraint_arcs = true         # optional: opt this cell in to emitting the deri
                                #   (equivalent to the global --no-edge-collapse flag, per cell)
 # when = true                  # optional: also emit the `-when`-conditioned arcs, per arc class —
                                #   true/"hidden"/["hidden", "transition"]; unioned with the CLI's --when
-                               #   selection. The deduplicated arcs without `-when` are always emitted
-                               #   regardless; a selected class adds its `-when` arcs on top
+                               #   selection. One general arc per transition — a related pin's edge
+                               #   driving an output pin's edge — is always emitted, without a `-when`
+                               #   line; a selected class adds its `-when` arcs on top
 [cell.internal]                # internal state node: referenceable, but emits no external pin
 M = "!CLK*D + CLK*M"           #   the master latch (transparent low)
 [cell.outputs]
@@ -232,6 +233,10 @@ here.
 
 ## Usage
 
+The `Options:` block below is a hand-maintained, condensed rendering of `cellsmith --help`. The
+standard it is held to is **content** parity, not byte parity: clap lays its columns out against the
+terminal width, so wrapping and column positions legitimately differ from any given run.
+
 ```
 cellsmith [OPTIONS] <SPEC>
 
@@ -241,14 +246,14 @@ Arguments:
 Options:
   -o, --outdir <OUTDIR>   Directory for the generated files [default: .]
   -n, --name <NAME>       Base name for the output files (defaults to the spec file stem, or "cells" for stdin)
-      --when[=<CLASS>]    Also emit the `-when`-conditioned arcs, per arc class (off by default). The
-                          deduplicated arcs without `-when` — one per output/related-pin/arc-type/vector
-                          combination, keeping the shortest prevector — are always emitted; a selected
-                          class adds its `-when` arcs on top, so an arc can appear both with and without
-                          its condition. Bare `--when` selects every class; `--when=hidden` /
-                          `--when=transition` select one; repeat the flag to select several. A value
-                          must be attached with `=` (the space form is not accepted). A cell can select
-                          classes itself with `when = ...`, and the two selections are unioned
+      --when[=<CLASS>]    Also emit the `-when`-conditioned arcs, per arc class (off by default). One
+                          general arc per transition — a related pin's edge driving an output pin's edge
+                          — is always emitted, without a `-when` line; a selected class adds its `-when`
+                          arcs on top, so an arc can appear both with and without its condition. Bare
+                          `--when` selects every class; `--when=hidden` / `--when=transition` select one;
+                          repeat the flag to select several. A value must be attached with `=` (the space
+                          form is not accepted). A cell can select classes itself with `when = ...`, and
+                          the two selections are unioned
 
                           Possible values:
                           - transition: The `define_arc` delay/transition arcs: an input edge on a

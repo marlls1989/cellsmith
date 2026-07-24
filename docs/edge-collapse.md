@@ -32,8 +32,8 @@ arc.
 A **conditioned** edge arc — a clock edge reaching an output only through a second,
 currently-open latch — is an edge arc like any other: conditioning never reclassifies an arc. Its
 condition is not carried in the arc's own block by default; only `--when=transition` (or the
-per-cell `when` selection) adds a `-when`-conditioned block for it, on top of the always-emitted,
-unconditional catch-all.
+per-cell `when` selection) adds a `-when`-conditioned block for it, on top of the always-emitted
+general arc for its transition.
 
 ## 2. Where it runs
 

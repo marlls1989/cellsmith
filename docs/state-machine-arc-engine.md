@@ -291,12 +291,37 @@ Arc emission re-walks the discovery order only and emits arcs:
   projecting each step onto the input names. Since the path drives every state variable — internal ones
   included — into the measured start state, it establishes hidden state such as a flop's master before
   the clock edge.
-- **Dedup.** The same arc can be reached from several start candidates; the one with the **shortest
-  prevector** is kept.
+
+Every context a firing can happen in yields its own arc: an arc's identity here is its output, its
+related pin, the direction, and the **full machine start state**, so two firings that agree on the
+inputs but differ in internal state are two arcs, each with its own prevector, and both are derived.
 
 Because arcs are found by *reaching* states and *settling*, the correctness properties are structural:
 related pins are inputs, impossible arcs are never reached (they oscillate), and input-forced transitions
 cascade naturally through the multi-round settle.
+
+### The general pass
+
+Derivation hands the emitter (`src/emit/arcs_tcl.rs`) every firing it found; the emitter is where the
+grain of the generated `.tcl` is decided. Each arc class is emitted in two passes.
+
+The **general pass** always runs. It groups the class's derived arcs by **transition** — the output pin
+and the edge it makes, the related pin and the edge IT makes — together with the `-type` the arc
+classifies as, and emits **one representative** per group, with no `-when` line. The block so emitted
+generalises over what the group's members differ in: the side inputs' held levels, the held outputs, and
+the internal state the firing was measured from. The representative is a member with the **strictly
+shortest prevector** — where several tie at the minimum, any one of them is an equally valid
+representative of the group at this grain — and it renders its own concrete `-prevector` and `-vector`,
+those of one real firing rather than a synthesised context.
+
+Selecting the class (`--when`, or the per-cell `when` key) adds a **conditioned pass** on top: every
+derived arc of that class comes back as its own block carrying its own condition, so a firing can appear
+twice — once as its transition's general representative, once with its `-when` line.
+
+Because `-type` is part of the grouping, a transition that classifies **`edge` from one machine start
+state and `combinational` from another** falls in two groups and emits **both** blocks unconditionally.
+That is the intended output: `-type` declares the arc's nature to Liberate and is decided per firing, so
+collapsing across it would drop one of the two kinds from the generated library.
 
 ### The shared machine pass
 

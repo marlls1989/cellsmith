@@ -88,9 +88,9 @@ fn when_arg() -> Arg {
         .require_equals(true)
         .action(ArgAction::Append)
         .help(
-            "Also emit the `-when`-conditioned arcs, per arc class (off by default). The \
-             deduplicated arcs without `-when` — one per emitted vector, keeping the shortest \
-             prevector — are always emitted; a selected class adds its `-when` arcs on top, so an \
+            "Also emit the `-when`-conditioned arcs, per arc class (off by default). One general \
+             arc per transition — a related pin's edge driving an output pin's edge — is always \
+             emitted, without a `-when` line; a selected class adds its `-when` arcs on top, so an \
              arc can appear both with and without its condition. Bare `--when` selects every class; \
              `--when=hidden` / `--when=transition` select one; repeat the flag to select several. A \
              value must be attached with `=` (the space form is not accepted). A cell can select \

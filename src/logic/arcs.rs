@@ -19,6 +19,7 @@
 //!      state variable (internal ones included) into the measured edge's start state.
 
 use std::collections::HashSet;
+use std::hash::Hash;
 
 use espresso_logic::bdd::{Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
@@ -109,8 +110,10 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
     //
     // The identities are unique by construction: each reachable stable state appears once in
     // `ex.order` and contributes at most one toggle per input, hence at most one arc per output, so
-    // two firings never share an identity.
-    ex.order
+    // two firings never share an identity. The `debug_assert!`s below read that back off the
+    // assembled arcs.
+    let (arcs, hidden) = ex
+        .order
         .par_iter()
         .fold(
             || (Vec::new(), Vec::new()),
@@ -201,7 +204,24 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
                 h.extend(hb);
                 (a, h)
             },
-        )
+        );
+    debug_assert!(
+        all_distinct(&arcs, |a| (&a.output, &a.related, a.edge, &a.start)),
+        "arc identities are unique per firing"
+    );
+    debug_assert!(
+        all_distinct(&hidden, |h| (&h.pin, h.edge, &h.start)),
+        "hidden arc identities are unique per firing"
+    );
+    (arcs, hidden)
+}
+
+/// Whether every item carries a distinct identity under `key`, which may borrow from the item it keys.
+/// The sole caller is a [`debug_assert!`] in [`derive`], so the set is built only where debug
+/// assertions are enabled.
+fn all_distinct<'a, T, K: Eq + Hash>(items: &'a [T], key: impl Fn(&'a T) -> K) -> bool {
+    let mut seen = HashSet::with_capacity(items.len());
+    items.iter().all(|item| seen.insert(key(item)))
 }
 
 #[cfg(test)]

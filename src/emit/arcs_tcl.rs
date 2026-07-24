@@ -69,8 +69,13 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
         |arc| ArcIdentity::of(cell, arc),
         |arc| arc.prevector.len(),
     );
-    for &i in &general {
-        out.push_str(&format_arc(cell, &cell.arcs[i], false));
+    for (_, arc) in cell
+        .arcs
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| general.contains(i))
+    {
+        out.push_str(&format_arc(cell, arc, false));
     }
     if cell.when.contains(ArcClass::Transition) {
         for (i, arc) in cell.arcs.iter().enumerate() {
@@ -81,20 +86,26 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
         }
     }
     if opts.emit_internal {
-        for i in generalised(&cell.hidden_arcs, ArcIdentity::of_hidden, |h| {
+        let general_hidden = generalised(&cell.hidden_arcs, ArcIdentity::of_hidden, |h| {
             h.prevector.len()
-        }) {
-            out.push_str(&format_hidden_arc(cell, &cell.hidden_arcs[i], false));
+        });
+        for (_, h) in cell
+            .hidden_arcs
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| general_hidden.contains(i))
+        {
+            out.push_str(&format_hidden_arc(cell, h, false));
         }
         if cell.when.contains(ArcClass::Hidden) {
-            // A hidden arc's condition carries every held output on top of the other inputs, so a cell with
-            // outputs conditions every one of its hidden arcs: each conditioned block differs from its
-            // pin's general block by that `-when` line, and by its own prevector and vector.
-            for h in cell
-                .hidden_arcs
-                .iter()
-                .filter(|h| hidden_when_str(h).is_some())
-            {
+            // The same skip rule as the transition pass, over the hidden class's own condition: a hidden
+            // arc's `-when` carries every held output on top of the other inputs, so a cell with outputs
+            // conditions every one of its hidden arcs and each conditioned block differs from its pin's
+            // general block by that `-when` line, and by its own prevector and vector.
+            for (i, h) in cell.hidden_arcs.iter().enumerate() {
+                if general_hidden.contains(&i) && hidden_when_str(h).is_none() {
+                    continue;
+                }
                 out.push_str(&format_hidden_arc(cell, h, true));
             }
         }
@@ -927,6 +938,9 @@ Y = "(A+B)*(C+D)"
             |a| ArcIdentity::of(cell, a),
             |a| a.prevector.len(),
         );
+        let general_hidden = generalised(&cell.hidden_arcs, ArcIdentity::of_hidden, |h| {
+            h.prevector.len()
+        });
         (
             cell.arcs
                 .iter()
@@ -935,7 +949,8 @@ Y = "(A+B)*(C+D)"
                 .count(),
             cell.hidden_arcs
                 .iter()
-                .filter(|h| hidden_when_str(h).is_some())
+                .enumerate()
+                .filter(|(i, h)| !(general_hidden.contains(i) && hidden_when_str(h).is_none()))
                 .count(),
         )
     }
