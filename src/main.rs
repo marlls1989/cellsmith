@@ -281,11 +281,7 @@ fn read_spec(spec: &str) -> io::Result<String> {
 // `one` has trait bound `Sync` (not `Send`). Rayon's `par_iter().map()` requires `F: Send`,
 // but a reference `&F` is `Fn` with `&F: Send` whenever `F: Sync`. Pass `&one` to satisfy this.
 fn render(cells: &[AnalysedCell], one: impl (Fn(&AnalysedCell) -> String) + Sync) -> String {
-    cells
-        .par_iter()
-        .map(&one)
-        .collect::<Vec<String>>()
-        .concat()
+    cells.par_iter().map(&one).collect::<Vec<String>>().concat()
 }
 
 /// A stdout section banner for one artifact.
