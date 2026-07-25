@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-25
+
+### Changed
+
+- **Under `--when`, an arc whose transition — or hidden-pin toggle — fires from a single context no
+  longer emits a conditioned copy.** That context's general block already pins its input levels and
+  held outputs in its `-vector`, so a `-when` block on top adds nothing. An arc measured from several
+  contexts still emits every discovered firing with its own `-when`. The default output — one general
+  arc per transition — is unchanged, so the committed `examples/*_arcs.tcl` are byte-identical.
+
 ## [0.3.0] - 2026-07-24
 
 ### Changed
@@ -137,7 +147,8 @@ Initial release.
 - Emit Liberty, Verilog, and Tcl (arc) artefacts from a TOML cell specification.
 - Multi-threaded analysis with rayon.
 
-[Unreleased]: https://github.com/marlls1989/cellsmith/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/marlls1989/cellsmith/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/marlls1989/cellsmith/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/marlls1989/cellsmith/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/marlls1989/cellsmith/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/marlls1989/cellsmith/compare/v0.1.2...v0.2.0
