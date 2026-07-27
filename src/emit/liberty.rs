@@ -15,7 +15,8 @@
 //! 'Sequential' is a property of an OUTPUT, not of the cell: each output pin is classified per output
 //! (Liberty UG Vol.1 pp.5-31..5-33):
 //! - (A) an output that IS a state variable binds `internal_node : "<own name>"` — the node carries
-//!   the output's own name, so no alias is minted;
+//!   the output's own name, so no alias is minted — and states its output logic as that same node
+//!   with `state_function : "<own name>"`;
 //! - (B) an output whose regions reference a state node carries `state_function : "<sop>"`, which names
 //!   PIN ports (inputs, internal pins, or output pins carrying an `internal_node`) — including a former
 //!   feedthrough or inverter of a single state node, rendered by the ordinary SOP renderer as a plain
@@ -201,7 +202,8 @@ fn function_pin(name: &str, func: &str) -> Group {
 
 /// An output pin of a cell that has a joint statetable, classified per output (Liberty UG Vol.1
 /// pp.5-31..5-33):
-/// - (A) an output that IS a state variable (a table node) reads its own node via `internal_node`;
+/// - (A) an output that IS a state variable (a table node) binds its own node via `internal_node` and
+///   reads it back through `state_function`;
 /// - (B) an output that references a state node names PIN ports through `state_function`;
 /// - (C) an output over primary inputs only carries a plain `function`.
 fn output_pin(name: &Symbol, sr: &StateRegions, model: &StateModel) -> Group {
@@ -213,11 +215,18 @@ fn output_pin(name: &Symbol, sr: &StateRegions, model: &StateModel) -> Group {
     );
 
     if let Some(node) = model.node_of.get(name) {
-        // (A) This output IS a state variable — read its own node. (Its cols may reference other
-        // nodes, so this must be checked before the state-dependence predicate below.)
+        // (A) This output IS a state variable: `internal_node` anchors the table node to the port, and
+        // `state_function` states the pin's output logic — the bare node, since the pin is that node.
+        // (Its cols may reference other nodes, so this must be checked before the state-dependence
+        // predicate below.)
         set_attr(
             &mut pin,
             "internal_node",
+            Value::String(node.as_str().to_owned()),
+        );
+        set_attr(
+            &mut pin,
+            "state_function",
             Value::String(node.as_str().to_owned()),
         );
     } else if sr.cols.iter().any(|c| model.node_of.contains_key(c)) {
@@ -480,11 +489,14 @@ Q = "A*B + Q*(A+B)"
         assert!(lib.contains("L L : - : L")); // off
         assert!(lib.contains("H L : - : N")); // hold
         assert!(lib.contains("L H : - : N")); // hold
-                                              // The output pin binds to its own node; no combinational `function`.
+                                              // The output pin binds to its own node and reads it back.
         assert!(lib.contains("pin (Q)"));
         assert!(lib.contains("internal_node : \"Q\";"));
-        assert!(!lib.contains("function : "));
-        parse_frag(&lib);
+        assert!(lib.contains("state_function : \"Q\";"));
+        // ...and carries no combinational `function`.
+        let parsed = parse_frag(&lib);
+        let q = find_pin(find_cell(&parsed, "C2"), "Q");
+        assert!(!q.attributes.contains_key("function"));
     }
 
     #[test]
@@ -521,7 +533,6 @@ Q = "CLK*M + !CLK*Q"
         assert!(frag.contains("pin (M)"));
         assert!(frag.contains("direction : internal;"));
         assert!(frag.contains("internal_node : \"M\";"));
-        assert!(!frag.contains("function : "));
         // The fragment still round-trips through liberty-parse.
         let lib = parse_frag(&frag);
         let cellg = lib
@@ -533,6 +544,11 @@ Q = "CLK*M + !CLK*Q"
             .subgroups
             .iter()
             .any(|g| g.type_ == "pin" && g.name == "M"));
+        // The slave output binds its own node and reads it back — no combinational `function`.
+        let q = find_pin(cellg, "Q");
+        assert_eq!(attr_string(q, "internal_node").as_deref(), Some("Q"));
+        assert_eq!(attr_string(q, "state_function").as_deref(), Some("Q"));
+        assert!(!q.attributes.contains_key("function"));
     }
 
     #[test]
@@ -562,16 +578,18 @@ Q = "CLK*M + !CLK*Q"
         // The folded master M keeps no pin group and no node column in the statetable header.
         assert!(!frag.contains("pin (M)"));
         assert!(!frag.contains("\"Q M\""));
-        assert!(!frag.contains("function : "));
         let lib = parse_frag(&frag);
         let cellg = find_cell(&lib, "DFF");
         assert!(!cellg
             .subgroups
             .iter()
             .any(|g| g.type_ == "pin" && g.name == "M"));
-        // Q binds its own node exactly as an uncollapsed state output would.
+        // Q binds and reads its own node exactly as an uncollapsed state output would, with no
+        // combinational `function`.
         let q = find_pin(cellg, "Q");
         assert_eq!(attr_string(q, "internal_node").as_deref(), Some("Q"));
+        assert_eq!(attr_string(q, "state_function").as_deref(), Some("Q"));
+        assert!(!q.attributes.contains_key("function"));
     }
 
     #[test]
@@ -600,7 +618,6 @@ Q = "!( !(M*CLK) * Qn )"
         // The folded master pair keeps no pin group and no node column in the statetable header.
         assert!(!frag.contains("pin (M)"));
         assert!(!frag.contains("pin (Mn)"));
-        assert!(!frag.contains("function : "));
         let lib = parse_frag(&frag);
         let cellg = find_cell(&lib, "NDFF");
         for gone in ["M", "Mn"] {
@@ -612,11 +629,14 @@ Q = "!( !(M*CLK) * Qn )"
                 "folded master {gone} must not emit a pin"
             );
         }
-        // Q and Qn bind their own nodes as the two surviving edge registers.
-        let q = find_pin(cellg, "Q");
-        assert_eq!(attr_string(q, "internal_node").as_deref(), Some("Q"));
-        let qn = find_pin(cellg, "Qn");
-        assert_eq!(attr_string(qn, "internal_node").as_deref(), Some("Qn"));
+        // Q and Qn bind and read their own nodes as the two surviving edge registers, neither carrying
+        // a combinational `function`.
+        for name in ["Q", "Qn"] {
+            let pin = find_pin(cellg, name);
+            assert_eq!(attr_string(pin, "internal_node").as_deref(), Some(name));
+            assert_eq!(attr_string(pin, "state_function").as_deref(), Some(name));
+            assert!(!pin.attributes.contains_key("function"));
+        }
     }
 
     #[test]
@@ -862,9 +882,15 @@ Qb = "!Qa * B"
         assert!(!frag.contains("H H : L L : H H"));
         assert!(frag.contains("H - : - L : H -"));
         assert!(frag.contains("- H : L - : - H"));
-        // Both outputs bind to their own nodes — no `function` (nor `state_function`) token anywhere.
-        assert!(!frag.contains("function : "));
-        parse_frag(&frag);
+        // Both grants bind and read their own nodes — neither is a combinational `function`.
+        let lib = parse_frag(&frag);
+        let cellg = find_cell(&lib, "MUT");
+        for name in ["Qa", "Qb"] {
+            let pin = find_pin(cellg, name);
+            assert_eq!(attr_string(pin, "internal_node").as_deref(), Some(name));
+            assert_eq!(attr_string(pin, "state_function").as_deref(), Some(name));
+            assert!(!pin.attributes.contains_key("function"));
+        }
     }
 
     #[test]
@@ -1051,11 +1077,12 @@ Qn = "!Q"
         let lib = parse_frag(&frag);
         let cellg = find_cell(&lib, "C2P");
 
-        // Q IS a state variable — output_pin branch A binds its own node, no function/state_function.
+        // Q IS a state variable — output_pin branch A binds its own node and reads it back, no
+        // combinational `function`.
         let q = find_pin(cellg, "Q");
         assert_eq!(attr_string(q, "internal_node").as_deref(), Some("Q"));
+        assert_eq!(attr_string(q, "state_function").as_deref(), Some("Q"));
         assert!(!q.attributes.contains_key("function"));
-        assert!(!q.attributes.contains_key("state_function"));
 
         // Qc is a bare feedthrough of the state node: state_function exactly `Q`.
         let qc = find_pin(cellg, "Qc");
@@ -1215,11 +1242,12 @@ M = "!CLK*D + CLK*M"
         assert!(frag.contains("L L : - - : L -"));
         let lib = parse_frag(&frag);
         let cellg = find_cell(&lib, "EMDFF");
-        // M is a surviving output binding its own node.
-        let m = find_pin(cellg, "M");
-        assert_eq!(attr_string(m, "internal_node").as_deref(), Some("M"));
-        let q = find_pin(cellg, "Q");
-        assert_eq!(attr_string(q, "internal_node").as_deref(), Some("Q"));
+        // M is a surviving output binding and reading its own node, as is the register Q.
+        for name in ["M", "Q"] {
+            let pin = find_pin(cellg, name);
+            assert_eq!(attr_string(pin, "internal_node").as_deref(), Some(name));
+            assert_eq!(attr_string(pin, "state_function").as_deref(), Some(name));
+        }
     }
 
     #[test]

@@ -142,7 +142,10 @@ deferral). The construction is sound only because, per node, its `on`, `off`,
 and `hold` regions are mutually disjoint: a row can therefore never need to stamp the same node with two
 different definite actions, however many passes contribute cubes to it.
 
-Every state output gets an emission-minted `_st` alias standing in for it as a node in the joint
-table, so the table's node set is genuine internals plus these minted aliases — never the output pins
-themselves. Each output pin is instead re-expressed as a spec-legal projection onto the joint table
-(`internal_node` + `inverted_output`, or `state_function`).
+The joint table's node set is every state variable of the cell — state outputs and genuine internals
+alike — each column carrying the signal's own name. Each output pin is then expressed against that
+table: an output that **is** a node carries `internal_node` binding the node to the port plus a
+`state_function` naming it, an output that **depends on** nodes carries a `state_function` over them,
+and an output over primary inputs alone carries a plain `function` even inside a cell that has a
+statetable. A genuine internal node has no output pin; it is anchored by a `direction : internal` pin
+carrying its `internal_node`.

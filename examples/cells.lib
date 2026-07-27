@@ -54,6 +54,7 @@ library (cells) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (RCELEM2) {
@@ -76,6 +77,7 @@ library (cells) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (RACELEM21) {
@@ -109,6 +111,7 @@ library (cells) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   /* oscillation: !S*!R risks metastability in Q, Qn, settling to one of {Q=0, Qn=1} | {Q=1, Qn=0} */
@@ -130,10 +133,12 @@ library (cells) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
     pin (Qn) {
       direction : output;
       internal_node : "Qn";
+      state_function : "Qn";
     }
   }
   /* oscillation: A*B risks metastability in Qa, Qb, settling to one of {Qa=0, Qb=1} | {Qa=1, Qb=0} */
@@ -155,10 +160,12 @@ library (cells) {
     pin (Qa) {
       direction : output;
       internal_node : "Qa";
+      state_function : "Qa";
     }
     pin (Qb) {
       direction : output;
       internal_node : "Qb";
+      state_function : "Qb";
     }
   }
   cell (DFF) {
@@ -176,6 +183,7 @@ library (cells) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (DLH) {
@@ -193,6 +201,7 @@ library (cells) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (ICM) {
@@ -270,6 +279,7 @@ library (cells) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
 }

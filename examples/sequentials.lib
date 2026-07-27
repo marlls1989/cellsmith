@@ -14,6 +14,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (DFF_NOCOLLAPSE) {
@@ -34,6 +35,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
     pin (M) {
       direction : internal;
@@ -58,6 +60,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
     pin (M) {
       direction : internal;
@@ -82,10 +85,12 @@ library (sequentials) {
     pin (M) {
       direction : output;
       internal_node : "M";
+      state_function : "M";
     }
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (TAPDFF) {
@@ -106,10 +111,12 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
     pin (T) {
       direction : output;
       internal_node : "T";
+      state_function : "T";
     }
   }
   cell (IDFF) {
@@ -127,6 +134,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (XN) {
@@ -147,10 +155,12 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
     pin (Qn) {
       direction : output;
       internal_node : "Qn";
+      state_function : "Qn";
     }
   }
   cell (TFF) {
@@ -175,6 +185,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
     pin (M) {
       direction : internal;
@@ -198,6 +209,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (MOR) {
@@ -221,6 +233,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (MORA) {
@@ -244,6 +257,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (BR) {
@@ -266,6 +280,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (SYNCR) {
@@ -288,6 +303,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (SYNCRG) {
@@ -315,6 +331,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (GATEDR) {
@@ -342,6 +359,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (AGATEDR) {
@@ -369,6 +387,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (RDFF) {
@@ -391,6 +410,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (COEX) {
@@ -418,6 +438,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (CAFF) {
@@ -445,6 +466,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (DLAT) {
@@ -462,6 +484,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (DLAT_EN) {
@@ -479,6 +502,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (DLAT_E) {
@@ -496,6 +520,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (GLAT) {
@@ -513,6 +538,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (MUXLAT) {
@@ -535,6 +561,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (MCDFF) {
@@ -558,6 +585,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
     pin (M) {
       direction : internal;
@@ -581,6 +609,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
     pin (M) {
       direction : internal;
@@ -640,6 +669,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
     pin (M2) {
       direction : internal;
@@ -676,6 +706,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
     pin (MA) {
       direction : internal;
@@ -858,6 +889,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
   cell (C2P) {
@@ -876,6 +908,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
     pin (Qc) {
       direction : output;
@@ -906,6 +939,7 @@ library (sequentials) {
     pin (Q) {
       direction : output;
       internal_node : "Q";
+      state_function : "Q";
     }
   }
 }
