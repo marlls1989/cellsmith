@@ -13,7 +13,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }
@@ -34,7 +33,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
     pin (M) {
@@ -59,7 +57,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
     pin (M) {
@@ -84,12 +81,10 @@ library (sequentials) {
     }
     pin (M) {
       direction : output;
-      internal_node : "M";
       state_function : "M";
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }
@@ -110,12 +105,10 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
     pin (T) {
       direction : output;
-      internal_node : "T";
       state_function : "T";
     }
   }
@@ -133,7 +126,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }
@@ -154,12 +146,10 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
     pin (Qn) {
       direction : output;
-      internal_node : "Qn";
       state_function : "Qn";
     }
   }
@@ -184,7 +174,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
     pin (M) {
@@ -208,7 +197,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }
@@ -232,7 +220,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }
@@ -256,7 +243,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }
@@ -279,7 +265,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }
@@ -302,7 +287,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }
@@ -330,7 +314,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }
@@ -358,7 +341,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }
@@ -386,7 +368,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }
@@ -409,7 +390,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }
@@ -437,7 +417,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }
@@ -465,7 +444,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }
@@ -483,7 +461,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }
@@ -501,7 +478,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }
@@ -519,7 +495,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }
@@ -537,7 +512,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }
@@ -560,7 +534,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }
@@ -584,7 +557,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
     pin (M) {
@@ -608,7 +580,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
     pin (M) {
@@ -668,7 +639,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
     pin (M2) {
@@ -705,7 +675,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
     pin (MA) {
@@ -888,7 +857,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }
@@ -907,7 +875,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
     pin (Qc) {
@@ -938,7 +905,6 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
       state_function : "Q";
     }
   }

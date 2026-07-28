@@ -28,8 +28,9 @@
 //! - Within each table field, node values are **space-separated**; whole rows are **comma-separated**.
 //!   Master-slave example:
 //!   `statetable ("D CP CPN", "MQ SQ") { table : "H/L R ~F : - - : H/L N,\ ..." }`
-//! - The statetable node namespace is resolved to a port through a pin's `internal_node` attribute;
-//!   node names now equal the signal names, so an output pin's `internal_node` reads its own name.
+//! - A genuine internal node is resolved to a port through a `direction : internal` pin's
+//!   `internal_node` attribute; node names equal the signal names, so an output that is itself a node
+//!   reads it through a `state_function` naming that node.
 //!
 //! EDGE REGISTERS. When [`crate::logic::edge`] has recognised a node as an edge-triggered register, that
 //! register's node keeps its column but its rows come from the annotation ([`EdgeRow`]) rather than the

@@ -14,11 +14,10 @@
 //!
 //! 'Sequential' is a property of an OUTPUT, not of the cell: each output pin is classified per output
 //! (Liberty UG Vol.1 pp.5-31..5-33):
-//! - (A) an output that IS a state variable binds `internal_node : "<own name>"` — the node carries
-//!   the output's own name, so no alias is minted — and states its output logic as that same node
-//!   with `state_function : "<own name>"`;
+//! - (A) an output that IS a state variable states its output logic as its own table node with
+//!   `state_function : "<own name>"` — the node carries the output's own name, so no alias is minted;
 //! - (B) an output whose regions reference a state node carries `state_function : "<sop>"`, which names
-//!   PIN ports (inputs, internal pins, or output pins carrying an `internal_node`) — including a former
+//!   input pins and table nodes — including a former
 //!   feedthrough or inverter of a single state node, rendered by the ordinary SOP renderer as a plain
 //!   or negated literal (e.g. `!Q`) (Liberty UG Vol.1 p.5-31, and the `pin(QNZ){state_function:"QN"}`
 //!   / feedthrough `pin(Y){state_function:"A"}` examples on p.5-33);
@@ -102,7 +101,7 @@ pub fn cell_liberty(cell: &AnalysedCell) -> String {
 
 /// Build the `cell` group: one input `pin` per primary input, then — for a sequential cell — the single
 /// joint `statetable`, its output pins (in declaration order), and its genuine-internal pins. Output
-/// pins are classified per output (see [`output_pin`]): a state variable, a state-dependent function,
+/// pins are classified per output (see [`classify_output`]): a state variable, a state-dependent function,
 /// or a plain combinational `function` even alongside a statetable. A cell with no state model — purely
 /// combinational, or one the fold emptied — emits each output as a plain `function` pin and no internal
 /// pin at all. `name` is the cell name this group is emitted under; a cell with several declared names
@@ -130,9 +129,10 @@ fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
             );
             let n_out = cell.outputs.len();
             for (sig, sr) in cell.signal_regions().take(n_out) {
-                group
-                    .subgroups
-                    .push(function_pin(&sig.name, &function_sop(sr)));
+                group.subgroups.push(logic_pin(
+                    sig.name.as_str(),
+                    PinLogic::Function(function_sop(sr)),
+                ));
             }
         }
         // Sequential: one joint statetable, then output pins bound to it, then internal-node pins.
@@ -151,17 +151,24 @@ fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
             let n_out = cell.outputs.len();
             for (i, (sig, sr)) in cell.signal_regions().enumerate() {
                 if i < n_out {
-                    match read_of.get(sig.name.as_str()) {
-                        Some(reads) => group.subgroups.push(state_function_pin(&sig.name, reads)),
-                        None => group.subgroups.push(output_pin(&sig.name, sr, &model)),
-                    }
+                    let logic = match read_of.get(sig.name.as_str()) {
+                        // A read-gated output reads its factored register combinationally, so it names
+                        // PIN ports — the register's internal pin and the gate pins — never a folded
+                        // master.
+                        Some(reads) => PinLogic::StateFunction(function_sop(reads)),
+                        None => classify_output(&sig.name, sr, &model),
+                    };
+                    group.subgroups.push(logic_pin(sig.name.as_str(), logic));
                 }
             }
             for (i, (sig, _)) in cell.signal_regions().enumerate() {
                 // A folded master carries no node in the collapsed model — skip its internal pin so only
                 // surviving state nodes (`node_of` members) get a pin group.
                 if i >= n_out && model.node_of.contains_key(&sig.name) {
-                    group.subgroups.push(internal_pin(&sig.name));
+                    group.subgroups.push(logic_pin(
+                        sig.name.as_str(),
+                        PinLogic::InternalNode(sig.name.clone()),
+                    ));
                 }
             }
             // The minted derived registers (factored out of read-gated outputs, not declared signals) get
@@ -172,7 +179,10 @@ fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
                 .collect();
             for d in &cell.edge.derived {
                 if !signal_names.contains(d.name.as_str()) {
-                    group.subgroups.push(internal_pin(&d.name));
+                    group.subgroups.push(logic_pin(
+                        d.name.as_str(),
+                        PinLogic::InternalNode(d.name.clone()),
+                    ));
                 }
             }
         }
@@ -188,92 +198,57 @@ fn input_pin(name: &str) -> Group {
     pin
 }
 
-/// `pin (<name>) { direction : output; function : "<func>"; }` — a combinational output.
-fn function_pin(name: &str, func: &str) -> Group {
+/// The single logic attribute a `pin` group carries, and with it the pin's direction. Every pin
+/// cellsmith emits for a signal is exactly one of these three statements; an input pin, which carries
+/// no logic attribute at all, is built by [`input_pin`] instead.
+///
+/// Pairing the direction with the attribute here is what keeps the two from drifting apart: a state
+/// node cannot be emitted as an output's function, nor an output's logic on an internal pin.
+enum PinLogic {
+    /// `direction : output; function : "<sop>"` — a combinational output over primary inputs.
+    Function(String),
+    /// `direction : output; state_function : "<expr>"` — an output whose value IS a state node, or an
+    /// expression over state nodes and input pins.
+    StateFunction(String),
+    /// `direction : internal; internal_node : "<node>"` — a genuine internal state node, anchoring the
+    /// same-named table column to a port (Liberty UG Vol.1 `pin(n1)` example).
+    InternalNode(Symbol),
+}
+
+/// `pin (<name>) { direction : <dir>; <attr> : "<value>"; }` — the one constructor for every pin that
+/// carries logic, with [`PinLogic`] fixing `<dir>` and `<attr>` together.
+fn logic_pin(name: &str, logic: PinLogic) -> Group {
+    let (dir, attr, value) = match logic {
+        PinLogic::Function(sop) => ("output", "function", sop),
+        PinLogic::StateFunction(expr) => ("output", "state_function", expr),
+        PinLogic::InternalNode(node) => ("internal", "internal_node", node.as_str().to_owned()),
+    };
     let mut pin = Group::new("pin", name);
-    set_attr(
-        &mut pin,
-        "direction",
-        Value::Expression("output".to_owned()),
-    );
-    set_attr(&mut pin, "function", Value::String(func.to_owned()));
+    set_attr(&mut pin, "direction", Value::Expression(dir.to_owned()));
+    set_attr(&mut pin, attr, Value::String(value));
     pin
 }
 
-/// An output pin of a cell that has a joint statetable, classified per output (Liberty UG Vol.1
+/// Classify an output of a cell that has a joint statetable, per output (Liberty UG Vol.1
 /// pp.5-31..5-33):
-/// - (A) an output that IS a state variable (a table node) binds its own node via `internal_node` and
-///   reads it back through `state_function`;
-/// - (B) an output that references a state node names PIN ports through `state_function`;
+/// - (A) an output that IS a state variable (a table node) reads its own node through `state_function`;
+/// - (B) an output that references a state node names those nodes through `state_function`;
 /// - (C) an output over primary inputs only carries a plain `function`.
-fn output_pin(name: &Symbol, sr: &StateRegions, model: &StateModel) -> Group {
-    let mut pin = Group::new("pin", name);
-    set_attr(
-        &mut pin,
-        "direction",
-        Value::Expression("output".to_owned()),
-    );
-
+fn classify_output(name: &Symbol, sr: &StateRegions, model: &StateModel) -> PinLogic {
     if let Some(node) = model.node_of.get(name) {
-        // (A) This output IS a state variable: `internal_node` anchors the table node to the port, and
-        // `state_function` states the pin's output logic — the bare node, since the pin is that node.
-        // (Its cols may reference other nodes, so this must be checked before the state-dependence
-        // predicate below.)
-        set_attr(
-            &mut pin,
-            "internal_node",
-            Value::String(node.as_str().to_owned()),
-        );
-        set_attr(
-            &mut pin,
-            "state_function",
-            Value::String(node.as_str().to_owned()),
-        );
+        // (A) This output IS a state variable: `state_function` states the pin's output logic — the
+        // bare node, since the pin is that node. (Its cols may reference other nodes, so this must be
+        // checked before the state-dependence predicate below.)
+        PinLogic::StateFunction(node.as_str().to_owned())
     } else if sr.cols.iter().any(|c| model.node_of.contains_key(c)) {
         // (B) This output DEPENDS on a state node — a state_function over PIN ports.
-        set_attr(&mut pin, "state_function", Value::String(function_sop(sr)));
+        PinLogic::StateFunction(function_sop(sr))
     } else {
         // (C) Combinational output over primary inputs only — a plain `function`. By minimise
         // invariant I3 a surviving combinational output's support is inputs + state nodes only, so
         // 'no node_of column' == 'no transitive state dependence' (ref statetable.rs:112-122).
-        set_attr(&mut pin, "function", Value::String(function_sop(sr)));
+        PinLogic::Function(function_sop(sr))
     }
-    pin
-}
-
-/// `pin (<name>) { direction : output; state_function : "<sop>"; }` — a read-gated output. It reads a
-/// factored register (the read-gate factorisation) combinationally, so it names PIN ports — the register's
-/// internal pin and the gate pins — through `state_function`, never a folded master.
-fn state_function_pin(name: &Symbol, reads: &StateRegions) -> Group {
-    let mut pin = Group::new("pin", name);
-    set_attr(
-        &mut pin,
-        "direction",
-        Value::Expression("output".to_owned()),
-    );
-    set_attr(
-        &mut pin,
-        "state_function",
-        Value::String(function_sop(reads)),
-    );
-    pin
-}
-
-/// `pin (<name>) { direction : internal; internal_node : "<name>"; }` — a genuine internal state node,
-/// anchoring the same-named table column to a port (Liberty UG Vol.1 `pin(n1)` example).
-fn internal_pin(name: &Symbol) -> Group {
-    let mut pin = Group::new("pin", name);
-    set_attr(
-        &mut pin,
-        "direction",
-        Value::Expression("internal".to_owned()),
-    );
-    set_attr(
-        &mut pin,
-        "internal_node",
-        Value::String(name.as_str().to_owned()),
-    );
-    pin
 }
 
 /// `statetable ("<inputs>", "<nodes>") { table : "<rows>"; }` — the cell's single joint next-state
@@ -489,14 +464,14 @@ Q = "A*B + Q*(A+B)"
         assert!(lib.contains("L L : - : L")); // off
         assert!(lib.contains("H L : - : N")); // hold
         assert!(lib.contains("L H : - : N")); // hold
-                                              // The output pin binds to its own node and reads it back.
+                                              // The output pin reads its own node.
         assert!(lib.contains("pin (Q)"));
-        assert!(lib.contains("internal_node : \"Q\";"));
         assert!(lib.contains("state_function : \"Q\";"));
-        // ...and carries no combinational `function`.
+        // ...and carries neither a combinational `function` nor an `internal_node`.
         let parsed = parse_frag(&lib);
         let q = find_pin(find_cell(&parsed, "C2"), "Q");
         assert!(!q.attributes.contains_key("function"));
+        assert!(!q.attributes.contains_key("internal_node"));
     }
 
     #[test]
@@ -544,11 +519,11 @@ Q = "CLK*M + !CLK*Q"
             .subgroups
             .iter()
             .any(|g| g.type_ == "pin" && g.name == "M"));
-        // The slave output binds its own node and reads it back — no combinational `function`.
+        // The slave output reads its own node — no combinational `function`, no `internal_node`.
         let q = find_pin(cellg, "Q");
-        assert_eq!(attr_string(q, "internal_node").as_deref(), Some("Q"));
         assert_eq!(attr_string(q, "state_function").as_deref(), Some("Q"));
         assert!(!q.attributes.contains_key("function"));
+        assert!(!q.attributes.contains_key("internal_node"));
     }
 
     #[test]
@@ -584,12 +559,12 @@ Q = "CLK*M + !CLK*Q"
             .subgroups
             .iter()
             .any(|g| g.type_ == "pin" && g.name == "M"));
-        // Q binds and reads its own node exactly as an uncollapsed state output would, with no
-        // combinational `function`.
+        // Q reads its own node exactly as an uncollapsed state output would, with no combinational
+        // `function` and no `internal_node`.
         let q = find_pin(cellg, "Q");
-        assert_eq!(attr_string(q, "internal_node").as_deref(), Some("Q"));
         assert_eq!(attr_string(q, "state_function").as_deref(), Some("Q"));
         assert!(!q.attributes.contains_key("function"));
+        assert!(!q.attributes.contains_key("internal_node"));
     }
 
     #[test]
@@ -629,13 +604,13 @@ Q = "!( !(M*CLK) * Qn )"
                 "folded master {gone} must not emit a pin"
             );
         }
-        // Q and Qn bind and read their own nodes as the two surviving edge registers, neither carrying
-        // a combinational `function`.
+        // Q and Qn read their own nodes as the two surviving edge registers, neither carrying a
+        // combinational `function` nor an `internal_node`.
         for name in ["Q", "Qn"] {
             let pin = find_pin(cellg, name);
-            assert_eq!(attr_string(pin, "internal_node").as_deref(), Some(name));
             assert_eq!(attr_string(pin, "state_function").as_deref(), Some(name));
             assert!(!pin.attributes.contains_key("function"));
+            assert!(!pin.attributes.contains_key("internal_node"));
         }
     }
 
@@ -882,14 +857,14 @@ Qb = "!Qa * B"
         assert!(!frag.contains("H H : L L : H H"));
         assert!(frag.contains("H - : - L : H -"));
         assert!(frag.contains("- H : L - : - H"));
-        // Both grants bind and read their own nodes — neither is a combinational `function`.
+        // Both grants read their own nodes — neither is a combinational `function`.
         let lib = parse_frag(&frag);
         let cellg = find_cell(&lib, "MUT");
         for name in ["Qa", "Qb"] {
             let pin = find_pin(cellg, name);
-            assert_eq!(attr_string(pin, "internal_node").as_deref(), Some(name));
             assert_eq!(attr_string(pin, "state_function").as_deref(), Some(name));
             assert!(!pin.attributes.contains_key("function"));
+            assert!(!pin.attributes.contains_key("internal_node"));
         }
     }
 
@@ -1077,12 +1052,12 @@ Qn = "!Q"
         let lib = parse_frag(&frag);
         let cellg = find_cell(&lib, "C2P");
 
-        // Q IS a state variable — output_pin branch A binds its own node and reads it back, no
-        // combinational `function`.
+        // Q IS a state variable — classify_output branch A reads its own node, no combinational `function`
+        // and no `internal_node`.
         let q = find_pin(cellg, "Q");
-        assert_eq!(attr_string(q, "internal_node").as_deref(), Some("Q"));
         assert_eq!(attr_string(q, "state_function").as_deref(), Some("Q"));
         assert!(!q.attributes.contains_key("function"));
+        assert!(!q.attributes.contains_key("internal_node"));
 
         // Qc is a bare feedthrough of the state node: state_function exactly `Q`.
         let qc = find_pin(cellg, "Qc");
@@ -1242,11 +1217,11 @@ M = "!CLK*D + CLK*M"
         assert!(frag.contains("L L : - - : L -"));
         let lib = parse_frag(&frag);
         let cellg = find_cell(&lib, "EMDFF");
-        // M is a surviving output binding and reading its own node, as is the register Q.
+        // M is a surviving output reading its own node, as is the register Q.
         for name in ["M", "Q"] {
             let pin = find_pin(cellg, name);
-            assert_eq!(attr_string(pin, "internal_node").as_deref(), Some(name));
             assert_eq!(attr_string(pin, "state_function").as_deref(), Some(name));
+            assert!(!pin.attributes.contains_key("internal_node"));
         }
     }
 

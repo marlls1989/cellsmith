@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A Liberty output pin that is a state variable now carries only a `state_function` naming its
+  state-table node, no longer also an `internal_node`.** `state_function` states the pin's output logic
+  in full; the node needs no separate binding to the port. A genuine internal node is still anchored by
+  a `direction : internal` pin carrying its `internal_node`. An output that depends on state nodes, and
+  one combinational over primary inputs, are unaffected.
+
 ## [0.3.2] - 2026-07-27
 
 ### Fixed
