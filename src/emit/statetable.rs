@@ -28,8 +28,10 @@
 //! - Within each table field, node values are **space-separated**; whole rows are **comma-separated**.
 //!   Master-slave example:
 //!   `statetable ("D CP CPN", "MQ SQ") { table : "H/L R ~F : - - : H/L N,\ ..." }`
-//! - The statetable node namespace is resolved to a port through a pin's `internal_node` attribute;
-//!   node names now equal the signal names, so an output pin's `internal_node` reads its own name.
+//! - Every node is resolved to a port through a `direction : internal` pin's `internal_node` attribute.
+//!   A state OUTPUT cannot share its name with its node (the port already holds it), so it mints one —
+//!   `Q` -> `Q_st` — and reads it through a `state_function`; a genuine internal node and a derived
+//!   register keep their own names.
 //!
 //! EDGE REGISTERS. When [`crate::logic::edge`] has recognised a node as an edge-triggered register, that
 //! register's node keeps its column but its rows come from the annotation ([`EdgeRow`]) rather than the
@@ -112,10 +114,15 @@ pub struct EdgeRow {
 pub struct StateModel {
     /// Primary-input columns, ordered by the cell's input-pin order.
     pub input_nodes: Vec<Symbol>,
-    /// State-node columns (`current`/`next` order): the state signals in `signals()` order, each mapped
-    /// to its own name as its node name. Folded masters are excluded; recognised edge-register nodes keep
-    /// their column.
+    /// State-node columns (`current`/`next` order) under their TABLE-NODE names — what the statetable
+    /// header prints. A state output's node is minted (`Q` -> `Q_st`); an internal state node and a
+    /// derived register keep their own name. Folded masters are excluded; recognised edge-register nodes
+    /// keep their column.
     pub internal_nodes: Vec<Symbol>,
+    /// The same columns in the same order under their SIGNAL names — what the covers, the minterm keys
+    /// and the machine are written in. `internal_nodes[i]` is the table node of `state_signals[i]`;
+    /// anything querying the machine or a region by column must read this list, not `internal_nodes`.
+    pub state_signals: Vec<Symbol>,
     /// Each state signal's ORIGINAL name → its state-table node name.
     pub node_of: BTreeMap<Symbol, Symbol>,
     /// The joint level (level-sensitive) next-state rows, deduplicated and sorted.
@@ -173,22 +180,49 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
         return None;
     }
 
-    // (b) node_of: every SURVIVING state node keeps its own name as its state-table node, whether output,
-    // genuine internal state node, or an edge register whose region is non-hysteretic. Folded masters are
+    // (b) node_of: every SURVIVING state node's state-table node name. A state OUTPUT cannot lend its own
+    // name to the node — the output pin holds that name and reads the node through a `state_function`, so
+    // node and pin must be distinguishable — and mints one instead (`Q` -> `Q_st`, escalating past any
+    // real signal of that name; see [`crate::logic::mint_state_node`]). A genuine internal state node and
+    // a derived register have no competing output pin, so each keeps its own name. Folded masters are
     // excluded.
+    let output_names: BTreeSet<Symbol> = cell.outputs.iter().map(|o| o.name.clone()).collect();
+    let mut taken: BTreeSet<String> = cell
+        .inputs
+        .iter()
+        .map(|s| s.to_string())
+        .chain(cell.outputs.iter().map(|o| o.name.to_string()))
+        .chain(cell.internals.iter().map(|o| o.name.to_string()))
+        .chain(derived_nodes.iter().map(|n| n.to_string()))
+        .collect();
+    // `internal_nodes` and `state_orig` run in lockstep, one entry per surviving state node: the former
+    // carries the TABLE-NODE name (what the statetable header prints), the latter the SIGNAL name the
+    // cover algebra and the edge annotations key by. The two coincide for everything but a state output,
+    // which is exactly why they must be tracked separately.
     let mut node_of: BTreeMap<Symbol, Symbol> = BTreeMap::new();
     let mut internal_nodes: Vec<Symbol> = Vec::new();
+    let mut state_orig: Vec<Symbol> = Vec::new();
     for (sig, sr) in cell.signal_regions() {
         if !is_node(&sig.name, sr) {
             continue;
         }
-        node_of.insert(sig.name.clone(), sig.name.clone());
-        internal_nodes.push(sig.name.clone());
+        let node = if output_names.contains(&sig.name) {
+            let minted = crate::logic::mint_state_node(sig.name.as_str(), |n| taken.contains(n));
+            taken.insert(minted.clone());
+            Symbol::from(minted.as_str())
+        } else {
+            sig.name.clone()
+        };
+        node_of.insert(sig.name.clone(), node.clone());
+        internal_nodes.push(node);
+        state_orig.push(sig.name.clone());
     }
-    // The minted derived registers, appended in `edge.derived` order: each keeps its own name as its node.
+    // The minted derived registers, appended in `edge.derived` order: each keeps its own name as its node,
+    // having no output pin to compete with.
     for n in &derived_nodes {
         node_of.insert(n.clone(), n.clone());
         internal_nodes.push(n.clone());
+        state_orig.push(n.clone());
     }
 
     // (c) Column partition: a state-signal-named col is a current-value column (middle field); every
@@ -241,8 +275,8 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     // signals that are neither folded masters nor edge-register nodes. Shared header = the input nodes
     // followed by the surviving nodes' ORIGINAL names in node order; edge-register nodes keep their header
     // column (a level signal may reference one) even though they contribute no level row. `state_orig`
-    // doubles as the node-order name list for `current`/`next`.
-    let state_orig: Vec<Symbol> = internal_nodes.clone();
+    // (built alongside `internal_nodes` above) doubles as the node-order name list for `current`/`next` —
+    // it must be the SIGNAL names, since the covers and the minterm keys are written in those terms.
     let level: Vec<(Symbol, &StateRegions)> = cell
         .signal_regions()
         .filter(|(_, sr)| sr.hysteretic)
@@ -392,6 +426,7 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     Some(StateModel {
         input_nodes,
         internal_nodes,
+        state_signals: state_orig,
         node_of,
         rows,
         edge_rows,
@@ -508,7 +543,7 @@ Q = "A*B + Q*(A+B)"
         );
         let m = build_state_model(&cell).expect("C2 is sequential");
         assert_eq!(names(&m.input_nodes), ["A", "B"]);
-        assert_eq!(names(&m.internal_nodes), ["Q"]);
+        assert_eq!(names(&m.internal_nodes), ["Q_st"]);
         // One node, so every row carries a definite action (no deferral). On A*B, off !A*!B, hold A^B.
         assert_eq!(m.rows.len(), 4);
         assert!(m.rows.contains(&row(&[T, T], &[X], &[HI])));
@@ -535,10 +570,12 @@ Q = "CLK*M + !CLK*Q"
 "#,
         );
         let m = build_state_model(&cell).expect("DFF is sequential");
-        // Both the output Q and the internal master M keep their own names as their nodes.
-        assert_eq!(names(&m.internal_nodes), ["Q", "M"]);
+        // The output Q mints its node; the internal master M, having no output pin to compete with,
+        // keeps its own name.
+        assert_eq!(names(&m.internal_nodes), ["Q_st", "M"]);
+        assert_eq!(names(&m.state_signals), ["Q", "M"]);
         assert_eq!(m.node_of[&Symbol::from("M")], "M");
-        assert_eq!(m.node_of[&Symbol::from("Q")], "Q");
+        assert_eq!(m.node_of[&Symbol::from("Q")], "Q_st");
         assert!(m.edge_rows.is_empty());
         // Per-output rows: Q rows are keyed by CLK/M (M slot deferred `-`); M rows keyed by CLK/D
         // (Q slot deferred `-`). Six rows in all.
@@ -571,7 +608,7 @@ Q = "CLK*M + !CLK*Q"
         );
         let m = build_state_model(&cell).expect("DFF is sequential");
         assert_eq!(names(&m.input_nodes), ["CLK", "D"]);
-        assert_eq!(names(&m.internal_nodes), ["Q"]);
+        assert_eq!(names(&m.internal_nodes), ["Q_st"]);
         assert!(!m.node_of.contains_key(&Symbol::from("M")));
         // No level rows survive; the behaviour is entirely edge rows.
         assert!(m.rows.is_empty());
@@ -623,7 +660,7 @@ Y = "!((CLK*L1 + !CLK*L2)*A)"
         );
         let m = build_state_model(&cell).expect("BDET is sequential");
         // Yst is the sole state node; the masters folded; Y is not a table node; A is not a table column.
-        assert_eq!(names(&m.internal_nodes), ["Yst"]);
+        assert_eq!(names(&m.internal_nodes), ["Y_st"]);
         assert_eq!(names(&m.input_nodes), ["CLK", "D"]);
         assert!(!m.node_of.contains_key(&Symbol::from("L1")));
         assert!(!m.node_of.contains_key(&Symbol::from("Y")));
@@ -710,7 +747,7 @@ Qb = "!Qa * B"
 "#,
         );
         let m = build_state_model(&cell).expect("MUT is sequential");
-        assert_eq!(names(&m.internal_nodes), ["Qa", "Qb"]);
+        assert_eq!(names(&m.internal_nodes), ["Qa_st", "Qb_st"]);
         // The joint race resolves into two per-output rows: each grant drives high off its own request
         // and the other grant being currently low, the other slot deferred `-`.
         assert!(m.rows.contains(&row(&[T, X], &[X, F], &[HI, DC])));
@@ -731,12 +768,13 @@ Qn = "!(S + Q)"
         );
         let m = build_state_model(&cell).expect("SR is sequential");
         assert_eq!(names(&m.input_nodes), ["S", "R"]);
-        assert_eq!(names(&m.internal_nodes), ["Q", "Qn"]);
+        assert_eq!(names(&m.internal_nodes), ["Q_st", "Qn_st"]);
     }
 
     #[test]
-    fn output_keeps_own_name_despite_similar_input() {
-        // Output Q with an unrelated input named Q_st still yields node Q, no mangling.
+    fn minted_node_escalates_past_a_real_signal_of_that_name() {
+        // Output Q would mint `Q_st`, but the cell already declares an input by that name. The mint
+        // escalates to `Q_st2` rather than colliding with the input, and the input keeps its own column.
         let cell = analyse(
             r#"
 [[cell]]
@@ -747,8 +785,12 @@ Q = "A*Q_st + Q*(A+Q_st)"
 "#,
         );
         let m = build_state_model(&cell).expect("COLL is sequential");
-        assert_eq!(names(&m.internal_nodes), ["Q"]);
-        assert_eq!(m.node_of[&Symbol::from("Q")], "Q");
+        assert_eq!(names(&m.internal_nodes), ["Q_st2"]);
+        assert_eq!(m.node_of[&Symbol::from("Q")], "Q_st2");
+        // The colliding input is untouched: still a plain input column under its own name.
+        assert!(names(&m.input_nodes).contains(&"Q_st"));
+        // The signal side of the column is the OUTPUT, not the like-named input.
+        assert_eq!(names(&m.state_signals), ["Q"]);
     }
 
     #[test]
@@ -1048,7 +1090,7 @@ Q = "CLK*M + !CLK*Q"
                 m.edge_rows.is_empty(),
                 "level rows must return, not edge rows"
             );
-            assert_eq!(names(&m.internal_nodes), ["Q", "M"]);
+            assert_eq!(names(&m.internal_nodes), ["Q_st", "M"]);
             assert_eq!(m.rows.len(), 6);
         }
         // Both switches produce byte-identical joint models.
@@ -1100,7 +1142,7 @@ M = "!CLK*D + CLK*M"
             m.node_of.contains_key(&Symbol::from("M")),
             "M is a surviving level column"
         );
-        assert!(names(&m.internal_nodes).contains(&"M"));
+        assert!(names(&m.internal_nodes).contains(&"M_st"));
         assert!(!m.edge_rows.is_empty(), "Q contributes edge rows");
         assert!(!m.rows.is_empty(), "M contributes level rows");
     }
@@ -1134,7 +1176,7 @@ Q = "CLKB*M + !CLKB*Q"
         let m = build_state_model(&cell).expect("sequential");
         assert!(m.edge_rows.is_empty(), "no edge rows: stays level");
         // Both latches keep their own level columns.
-        assert_eq!(names(&m.internal_nodes), ["Q", "M"]);
+        assert_eq!(names(&m.internal_nodes), ["Q_st", "M"]);
     }
 
     // Dual-edge mux-DET: two transparent-opposite latches feed a mux; Q captures D on BOTH clock edges and
@@ -1156,7 +1198,7 @@ Q = "CLK*L1 + !CLK*L2"
         let cell = analyse(DET);
         let m = build_state_model(&cell).expect("DET is sequential");
         // Q is a state-table node despite its non-hysteretic (combinational-output) region; L1/L2 fold.
-        assert_eq!(names(&m.internal_nodes), ["Q"]);
+        assert_eq!(names(&m.internal_nodes), ["Q_st"]);
         assert!(
             m.rows.is_empty(),
             "no level rows: L1/L2 folded, Q is the register"
@@ -1209,7 +1251,7 @@ Q = "CLK*!M + !CLK*Q"
     fn inverting_dff_emits_not_d_capture_rows() {
         let cell = analyse(INVERTING_DFF);
         let m = build_state_model(&cell).expect("IDFF is sequential");
-        assert_eq!(names(&m.internal_nodes), ["Q"]);
+        assert_eq!(names(&m.internal_nodes), ["Q_st"]);
         assert!(m.rows.is_empty());
         // Rising capture is !D: D low drives Q high, D high drives Q low.
         let rise = |d, next| EdgeRow {
@@ -1252,7 +1294,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
         let cell = analyse(TOGGLE_FLOP);
         let m = build_state_model(&cell).expect("TFF is sequential");
         // Two edge registers survive; the ring does NOT fold the self-fed master.
-        assert_eq!(names(&m.internal_nodes), ["Q", "M"]);
+        assert_eq!(names(&m.internal_nodes), ["Q_st", "M"]);
         let qi = index_of_node(&m, "Q");
         let mi = index_of_node(&m, "M");
         // Both captures are the toggle ring `!R*!Q` over cols [R, Q]: they drive their node's next off Q's
@@ -1338,9 +1380,10 @@ Q = "!CLKB*M2 + CLKB*Q"
         );
     }
 
-    /// The node-order slot of a state node's own name in the joint model (`current`/`next` index).
+    /// The node-order slot of a state SIGNAL in the joint model (`current`/`next` index). Keyed by signal
+    /// name, not table node, since callers name the cell's signals.
     fn index_of_node(m: &StateModel, name: &str) -> usize {
-        m.internal_nodes
+        m.state_signals
             .iter()
             .position(|n| n == name)
             .unwrap_or_else(|| panic!("{name} is a state node"))
@@ -1580,6 +1623,9 @@ Q = "!R*(CLK*M + !CLK*Q)"
             state_names.iter().map(String::as_str).collect::<Vec<_>>(),
             names(&model.internal_nodes),
         );
+        // The rendered header carries TABLE-NODE names; the machine below answers only to SIGNAL names,
+        // and the two differ for every state output. Column i of the rendered rows is `state_sigs[i]`.
+        let state_sigs = names(&model.state_signals);
 
         // Rebuild the machine from the folded cell to read its settled reference values. `build_signal_bdds`
         // is pure over the folded `expr`s, so this reproduces the machine `analyse` explored.
@@ -1640,7 +1686,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
                 if !eligible(&dest) {
                     continue;
                 }
-                let cur0: Vec<bool> = state_names
+                let cur0: Vec<bool> = state_sigs
                     .iter()
                     .map(|n| {
                         machine
@@ -1649,7 +1695,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
                     })
                     .collect();
                 let got = settle_rendered(&input_names, &rows, cur0, x.as_str(), &dest);
-                for (i, node) in state_names.iter().enumerate() {
+                for (i, node) in state_sigs.iter().enumerate() {
                     // When the async set/clear forcing `node` at the start state stops forcing it by the
                     // destination, the node re-acquires its value through level transparency the edge model
                     // abstracts away (TFF's master re-tracking `!Q` when R de-asserts at CLK=0). The

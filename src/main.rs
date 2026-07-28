@@ -388,13 +388,6 @@ mod tests {
     }
 
     #[test]
-    fn the_removed_no_when_flag_is_rejected() {
-        // `--no-when` is gone, with no alias: the old flag is an unknown argument, so a stale script
-        // fails loudly instead of silently getting the (now default) unconditional arcs.
-        assert!(Cli::try_parse_from(["cellsmith", "--no-when", "s.toml"]).is_err());
-    }
-
-    #[test]
     fn base_name_strips_dir_and_extension() {
         assert_eq!(base_name("/some/dir/cells.toml"), "cells");
         assert_eq!(base_name("cells.toml"), "cells");

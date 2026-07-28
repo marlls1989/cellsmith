@@ -143,9 +143,16 @@ and `hold` regions are mutually disjoint: a row can therefore never need to stam
 different definite actions, however many passes contribute cubes to it.
 
 The joint table's node set is every state variable of the cell — state outputs and genuine internals
-alike — each column carrying the signal's own name. Each output pin is then expressed against that
-table: an output that **is** a node carries `internal_node` binding the node to the port plus a
-`state_function` naming it, an output that **depends on** nodes carries a `state_function` over them,
-and an output over primary inputs alone carries a plain `function` even inside a cell that has a
-statetable. A genuine internal node has no output pin; it is anchored by a `direction : internal` pin
-carrying its `internal_node`.
+alike — but the columns live in a namespace of their own, disjoint from the cell's ports. A state
+output holds its name as a port, so its column is **minted**: `Q` becomes node `Q_st`, escalating to
+`Q_st2` and beyond should the cell already declare a signal of that name. A genuine internal state
+node and a register factored out of a read-gated output have no competing port and keep their own
+names.
+
+Every node is then anchored to a port by a `direction : internal` pin carrying its `internal_node`.
+Against that table each output pin is expressed in NODE terms: an output that **is** a node carries a
+`state_function` naming its minted node, an output that **depends on** nodes carries a
+`state_function` over them, and an output over primary inputs alone carries a plain `function` even
+inside a cell that has a statetable. The first two emit identically — an output that is a node and a
+bare alias of that node are the same statement — which is why the classification is a projection onto
+the table rather than a property of the pin.

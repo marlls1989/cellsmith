@@ -6,15 +6,18 @@ library (sequentials) {
     pin (D) {
       direction : input;
     }
-    statetable ("CLK D", "Q") {
+    statetable ("CLK D", "Q_st") {
       table : "R H : - : H , \
                R L : - : L , \
                ~R - : - : N";
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
   cell (DFF_NOCOLLAPSE) {
@@ -24,7 +27,7 @@ library (sequentials) {
     pin (D) {
       direction : input;
     }
-    statetable ("CLK D", "Q M") {
+    statetable ("CLK D", "Q_st M") {
       table : "L - : - - : N - , \
                L L : - - : - L , \
                L H : - - : - H , \
@@ -34,8 +37,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
     pin (M) {
       direction : internal;
@@ -49,7 +55,7 @@ library (sequentials) {
     pin (D) {
       direction : input;
     }
-    statetable ("CLK D", "Q M") {
+    statetable ("CLK D", "Q_st M") {
       table : "L - : - - : N - , \
                L L : - - : - L , \
                L H : - - : - H , \
@@ -59,8 +65,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
     pin (M) {
       direction : internal;
@@ -74,7 +83,7 @@ library (sequentials) {
     pin (D) {
       direction : input;
     }
-    statetable ("CLK D", "M Q") {
+    statetable ("CLK D", "M_st Q_st") {
       table : "L L : - - : L - , \
                L H : - - : H - , \
                H - : - - : N - , \
@@ -84,13 +93,19 @@ library (sequentials) {
     }
     pin (M) {
       direction : output;
-      internal_node : "M";
-      state_function : "M";
+      state_function : "M_st";
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (M_st) {
+      direction : internal;
+      internal_node : "M_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
   cell (TAPDFF) {
@@ -100,7 +115,7 @@ library (sequentials) {
     pin (D) {
       direction : input;
     }
-    statetable ("CLK D", "Q T") {
+    statetable ("CLK D", "Q_st T_st") {
       table : "L L : - - : - L , \
                L H : - - : - H , \
                H - : - - : - N , \
@@ -110,13 +125,19 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
     }
     pin (T) {
       direction : output;
-      internal_node : "T";
-      state_function : "T";
+      state_function : "T_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
+    }
+    pin (T_st) {
+      direction : internal;
+      internal_node : "T_st";
     }
   }
   cell (IDFF) {
@@ -126,15 +147,18 @@ library (sequentials) {
     pin (D) {
       direction : input;
     }
-    statetable ("CLK D", "Q") {
+    statetable ("CLK D", "Q_st") {
       table : "R L : - : H , \
                R H : - : L , \
                ~R - : - : N";
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
   cell (XN) {
@@ -144,7 +168,7 @@ library (sequentials) {
     pin (D) {
       direction : input;
     }
-    statetable ("CLK D", "Q Qn") {
+    statetable ("CLK D", "Q_st Qn_st") {
       table : "R H : - - : H - , \
                R L : - - : L - , \
                ~R - : - - : N - , \
@@ -154,13 +178,19 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
     }
     pin (Qn) {
       direction : output;
-      internal_node : "Qn";
-      state_function : "Qn";
+      state_function : "Qn_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
+    }
+    pin (Qn_st) {
+      direction : internal;
+      internal_node : "Qn_st";
     }
   }
   cell (TFF) {
@@ -170,7 +200,7 @@ library (sequentials) {
     pin (R) {
       direction : input;
     }
-    statetable ("CLK R", "Q M") {
+    statetable ("CLK R", "Q_st M") {
       table : "R L : L - : H - , \
                R - : H - : L - , \
                R H : - - : L - , \
@@ -184,8 +214,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
     pin (M) {
       direction : internal;
@@ -199,7 +232,7 @@ library (sequentials) {
     pin (D) {
       direction : input;
     }
-    statetable ("CLK D", "Q") {
+    statetable ("CLK D", "Q_st") {
       table : "R H : - : H , \
                R L : - : L , \
                F H : - : H , \
@@ -208,8 +241,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
   cell (MOR) {
@@ -222,7 +258,7 @@ library (sequentials) {
     pin (R) {
       direction : input;
     }
-    statetable ("CLK D R", "Q") {
+    statetable ("CLK D R", "Q_st") {
       table : "R H L : - : H , \
                R L - : - : L , \
                R - H : - : L , \
@@ -232,8 +268,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
   cell (MORA) {
@@ -246,7 +285,7 @@ library (sequentials) {
     pin (R) {
       direction : input;
     }
-    statetable ("CLK D R", "Q") {
+    statetable ("CLK D R", "Q_st") {
       table : "R H L : - : H , \
                R L - : - : L , \
                R - H : - : L , \
@@ -256,8 +295,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
   cell (BR) {
@@ -270,7 +312,7 @@ library (sequentials) {
     pin (R) {
       direction : input;
     }
-    statetable ("CLK D R", "Q") {
+    statetable ("CLK D R", "Q_st") {
       table : "R H L : - : H , \
                R L - : - : L , \
                R - H : - : L , \
@@ -279,8 +321,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
   cell (SYNCR) {
@@ -293,7 +338,7 @@ library (sequentials) {
     pin (R) {
       direction : input;
     }
-    statetable ("CLK D R", "Q") {
+    statetable ("CLK D R", "Q_st") {
       table : "R H L : - : H , \
                R L - : - : L , \
                R - H : - : L , \
@@ -302,8 +347,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
   cell (SYNCRG) {
@@ -319,7 +367,7 @@ library (sequentials) {
     pin (G) {
       direction : input;
     }
-    statetable ("CLK D R G", "Q") {
+    statetable ("CLK D R G", "Q_st") {
       table : "R H L L : - : H , \
                R L - - : - : L , \
                R - - H : - : L , \
@@ -330,8 +378,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
   cell (GATEDR) {
@@ -347,7 +398,7 @@ library (sequentials) {
     pin (G) {
       direction : input;
     }
-    statetable ("CLK D R G", "Q") {
+    statetable ("CLK D R G", "Q_st") {
       table : "R H - L : - : H , \
                R H L - : - : H , \
                R L - - : - : L , \
@@ -358,8 +409,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
   cell (AGATEDR) {
@@ -375,7 +429,7 @@ library (sequentials) {
     pin (G) {
       direction : input;
     }
-    statetable ("CLK D R G", "Q") {
+    statetable ("CLK D R G", "Q_st") {
       table : "R H - L : - : H , \
                R H L - : - : H , \
                R L - - : - : L , \
@@ -386,8 +440,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
   cell (RDFF) {
@@ -400,7 +457,7 @@ library (sequentials) {
     pin (R) {
       direction : input;
     }
-    statetable ("CLK D R", "Q") {
+    statetable ("CLK D R", "Q_st") {
       table : "R H L : - : H , \
                R L - : - : L , \
                R - H : - : L , \
@@ -409,8 +466,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
   cell (COEX) {
@@ -426,7 +486,7 @@ library (sequentials) {
     pin (R) {
       direction : input;
     }
-    statetable ("CLK D B R", "Q") {
+    statetable ("CLK D B R", "Q_st") {
       table : "R H - L : - : H , \
                R - H L : - : H , \
                R L L - : - : L , \
@@ -437,8 +497,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
   cell (CAFF) {
@@ -454,7 +517,7 @@ library (sequentials) {
     pin (CLR) {
       direction : input;
     }
-    statetable ("CLK D PRE CLR", "Q") {
+    statetable ("CLK D PRE CLR", "Q_st") {
       table : "R H - L : - : H , \
                R - H L : - : H , \
                R L L - : - : L , \
@@ -465,8 +528,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
   cell (DLAT) {
@@ -476,15 +542,18 @@ library (sequentials) {
     pin (D) {
       direction : input;
     }
-    statetable ("CLK D", "Q") {
+    statetable ("CLK D", "Q_st") {
       table : "L - : - : N , \
                H L : - : L , \
                H H : - : H";
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
   cell (DLAT_EN) {
@@ -494,15 +563,18 @@ library (sequentials) {
     pin (D) {
       direction : input;
     }
-    statetable ("EN D", "Q") {
+    statetable ("EN D", "Q_st") {
       table : "L - : - : N , \
                H L : - : L , \
                H H : - : H";
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
   cell (DLAT_E) {
@@ -512,15 +584,18 @@ library (sequentials) {
     pin (D) {
       direction : input;
     }
-    statetable ("E D", "Q") {
+    statetable ("E D", "Q_st") {
       table : "L - : - : N , \
                H L : - : L , \
                H H : - : H";
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
   cell (GLAT) {
@@ -530,15 +605,18 @@ library (sequentials) {
     pin (D) {
       direction : input;
     }
-    statetable ("CLK D", "Q") {
+    statetable ("CLK D", "Q_st") {
       table : "- L : - : N , \
                L - : - : N , \
                H H : - : H";
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
   cell (MUXLAT) {
@@ -551,7 +629,7 @@ library (sequentials) {
     pin (D) {
       direction : input;
     }
-    statetable ("CLKA CLKB D", "Q") {
+    statetable ("CLKA CLKB D", "Q_st") {
       table : "- H L : - : L , \
                - H H : - : H , \
                L L - : - : N , \
@@ -560,8 +638,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
   cell (MCDFF) {
@@ -574,7 +655,7 @@ library (sequentials) {
     pin (D) {
       direction : input;
     }
-    statetable ("CLKA CLKB D", "Q M") {
+    statetable ("CLKA CLKB D", "Q_st M") {
       table : "- L - : - - : N - , \
                - H - : - L : L - , \
                - H - : - H : H - , \
@@ -584,8 +665,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
     pin (M) {
       direction : internal;
@@ -599,7 +683,7 @@ library (sequentials) {
     pin (D) {
       direction : input;
     }
-    statetable ("CLK D", "Q M") {
+    statetable ("CLK D", "Q_st M") {
       table : "L - : - L : L - , \
                L - : - H : H - , \
                L L : - - : - L , \
@@ -608,8 +692,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
     pin (M) {
       direction : internal;
@@ -654,7 +741,7 @@ library (sequentials) {
     pin (D) {
       direction : input;
     }
-    statetable ("CLKA CLKB D", "Q M2") {
+    statetable ("CLKA CLKB D", "Q_st M2") {
       table : "R H - : H - : H - , \
                R L H : - - : H - , \
                R H - : L - : L - , \
@@ -668,8 +755,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
     pin (M2) {
       direction : internal;
@@ -689,7 +779,7 @@ library (sequentials) {
     pin (DB) {
       direction : input;
     }
-    statetable ("CLKA CLKB DA DB", "Q MA MB") {
+    statetable ("CLKA CLKB DA DB", "Q_st MA MB") {
       table : "- L - L : - - - : - - L , \
                - L - H : - - - : - - H , \
                - H - - : - - - : - - N , \
@@ -705,8 +795,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
     pin (MA) {
       direction : internal;
@@ -880,7 +973,7 @@ library (sequentials) {
     pin (Q_st) {
       direction : input;
     }
-    statetable ("A Q_st", "Q") {
+    statetable ("A Q_st", "Q_st2") {
       table : "L L : - : L , \
                L H : - : N , \
                H L : - : N , \
@@ -888,8 +981,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st2";
+    }
+    pin (Q_st2) {
+      direction : internal;
+      internal_node : "Q_st2";
     }
   }
   cell (C2P) {
@@ -899,7 +995,7 @@ library (sequentials) {
     pin (B) {
       direction : input;
     }
-    statetable ("A B", "Q") {
+    statetable ("A B", "Q_st") {
       table : "L L : - : L , \
                L H : - : N , \
                H L : - : N , \
@@ -907,16 +1003,19 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
     }
     pin (Qc) {
       direction : output;
-      state_function : "Q";
+      state_function : "Q_st";
     }
     pin (Qn) {
       direction : output;
-      state_function : "!Q";
+      state_function : "!Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
   cell (RC2) {
@@ -929,7 +1028,7 @@ library (sequentials) {
     pin (R) {
       direction : input;
     }
-    statetable ("A B R", "Q") {
+    statetable ("A B R", "Q_st") {
       table : "- - H : - : L , \
                L L - : - : L , \
                L H L : - : N , \
@@ -938,8 +1037,11 @@ library (sequentials) {
     }
     pin (Q) {
       direction : output;
-      internal_node : "Q";
-      state_function : "Q";
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
     }
   }
 }
