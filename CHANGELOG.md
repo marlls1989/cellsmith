@@ -7,13 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A state output's statetable column is now a minted node with its own internal pin.** The table's
+  columns and the cell's pins are separate namespaces; a state output holds its name as a port, so its
+  column is minted — `Q` becomes node `Q_st`, escalating to `Q_st2` if the cell already declares a
+  signal of that name — and the node gets its own `direction : internal` pin. The output pin then reads
+  it with `state_function : "Q_st"`. A genuine internal state node keeps its own name, having no
+  competing port. An output that depends on state nodes names those nodes in its `state_function` too,
+  so a bare alias of `Q` prints `"Q_st"` and an inverting one `"!Q_st"`.
+- **The register factored out of a read-gated output is renamed `Y_st`** (from `Yst`), so both
+  node-minting sites share one convention. This changes the node, its internal pin, and the generated
+  Verilog UDP/wire names for the affected cells.
+
 ### Fixed
 
-- **A Liberty output pin that is a state variable now carries only a `state_function` naming its
-  state-table node, no longer also an `internal_node`.** `state_function` states the pin's output logic
-  in full; the node needs no separate binding to the port. A genuine internal node is still anchored by
-  a `direction : internal` pin carrying its `internal_node`. An output that depends on state nodes, and
-  one combinational over primary inputs, are unaffected.
+- **A Liberty output pin that is a state variable no longer carries an `internal_node`.** Its logic is
+  stated in full by `state_function`; the node is anchored by its own internal pin instead.
 
 ## [0.3.2] - 2026-07-27
 

@@ -629,7 +629,7 @@ Q = "CLK*M + !CLK*Q"
 
     #[test]
     fn bdet_read_gate_factorisation_verilog() {
-        // BDET: the factored register `Yst` emits an edge UDP; the read-gated output `Y` a continuous
+        // BDET: the factored register `Y_st` emits an edge UDP; the read-gated output `Y` a continuous
         // assign. The DET masters `L1/L2` fold entirely.
         let cell = analyse(
             r#"
@@ -647,18 +647,18 @@ Y = "!((CLK*L1 + !CLK*L2)*A)"
         let v = cell_verilog(&cell);
         eprintln!("{v}");
         // The factored register is a dual-edge UDP capturing !D (D=0 -> 1, D=1 -> 0 on both edges).
-        assert!(v.contains("primitive BDET_Yst(Yst, D, CLK);"));
+        assert!(v.contains("primitive BDET_Y_st(Y_st, D, CLK);"));
         assert!(v.contains("0 (01) : ? : 1;") && v.contains("1 (01) : ? : 0;"));
         assert!(v.contains("0 (10) : ? : 1;") && v.contains("1 (10) : ? : 0;"));
-        // The read-gated output is a continuous assign over Yst and A — never a UDP of its own.
+        // The read-gated output is a continuous assign over Y_st and A — never a UDP of its own.
         assert!(v.contains("assign Y = "));
         assert!(
             !v.contains("primitive BDET_Y("),
             "Y is an assign, not a primitive"
         );
-        // Yst is an internal wire, instantiated; Y is the module output. Folded masters leave no trace.
-        assert!(v.contains("wire   Yst;"));
-        assert!(v.contains("BDET_Yst u_BDET_Yst (Yst, D, CLK);"));
+        // Y_st is an internal wire, instantiated; Y is the module output. Folded masters leave no trace.
+        assert!(v.contains("wire   Y_st;"));
+        assert!(v.contains("BDET_Y_st u_BDET_Y_st (Y_st, D, CLK);"));
         assert!(v.contains("module BDET(Y, CLK, D, A);"));
         assert!(!v.contains("BDET_L1") && !v.contains("BDET_L2"));
     }

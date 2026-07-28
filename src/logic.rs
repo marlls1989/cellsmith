@@ -57,6 +57,24 @@ pub(crate) fn fixed_pairs(m: &Minterm<Symbol>, skip: &[&str]) -> Vec<String> {
         .collect()
 }
 
+/// Mint a state-node name for `base`: `<base>_st`, escalating to `<base>_st2`, `<base>_st3`, … until
+/// `taken` no longer reports it. `taken` answers for every name already in use in the cell — its pins
+/// and its previously minted nodes alike — so a spec that legitimately declares a signal called
+/// `Q_st` simply pushes the minted node to `Q_st2` rather than colliding with it.
+///
+/// The single minting convention for both node-minting sites: a state OUTPUT's table node
+/// ([`crate::emit::statetable::build_state_model`]) and a register factored out of a read-gated output
+/// ([`edge`]).
+pub(crate) fn mint_state_node(base: &str, taken: impl Fn(&str) -> bool) -> String {
+    let mut name = format!("{base}_st");
+    let mut k = 2;
+    while taken(&name) {
+        name = format!("{base}_st{k}");
+        k += 1;
+    }
+    name
+}
+
 /// A product of literals `k`/`!k` joined by `*` (no tautology fallback, no sorting — the caller decides).
 pub(crate) fn literal_product(lits: &[(Symbol, bool)]) -> String {
     lits.iter()

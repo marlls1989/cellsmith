@@ -284,12 +284,12 @@ fn no_edge_collapse_flag_flips_dff_liberty_between_edge_and_level_forms() {
     let uncollapsed = run_multi(true);
 
     let collapsed_dff = dff_liberty_fragment(&collapsed);
-    assert!(collapsed_dff.contains("statetable (\"CLK D\", \"Q\")"));
+    assert!(collapsed_dff.contains("statetable (\"CLK D\", \"Q_st\")"));
     assert!(collapsed_dff.split_whitespace().any(|t| t == "R"));
     assert!(!collapsed_dff.contains("pin (M)"));
 
     let uncollapsed_dff = dff_liberty_fragment(&uncollapsed);
-    assert!(uncollapsed_dff.contains("statetable (\"CLK D\", \"Q M\")"));
+    assert!(uncollapsed_dff.contains("statetable (\"CLK D\", \"Q_st M\")"));
     assert!(uncollapsed_dff.contains("pin (M)"));
     assert!(uncollapsed_dff.contains("internal_node : \"M\";"));
     assert!(!uncollapsed_dff.split_whitespace().any(|t| t == "R"));

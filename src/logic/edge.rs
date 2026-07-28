@@ -159,7 +159,7 @@ pub struct EdgeArcs {
 /// for a READ-GATED register output — one whose forcing pin READS the held state without changing it
 /// (`BDET`'s output-enable `A`), as opposed to one that CHANGES the state (`RDFF`'s reset `R`). Folding
 /// such an output's master into the output would destroy the content the output re-acquires when the gate
-/// releases; instead the state-holding register is factored out as its own node (`Yst`) with native edge
+/// releases; instead the state-holding register is factored out as its own node (`Y_st`) with native edge
 /// capture, and the output becomes a combinational [`state_function`](crate::emit::liberty) over it.
 ///
 /// The register additionally carries an ordinary [`EdgeCaptures`] entry on [`EdgeArcs::captures`] (its
@@ -702,12 +702,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
             let reg_name = match &matched {
                 Some(reg) => reg.clone(),
                 None => {
-                    let mut nm = format!("{y}st");
-                    let mut k = 2;
-                    while taken.contains(&nm) {
-                        nm = format!("{y}st{k}");
-                        k += 1;
-                    }
+                    let nm = crate::logic::mint_state_node(y.as_ref(), |n| taken.contains(n));
                     taken.insert(nm.clone());
                     Symbol::from(nm.as_str())
                 }
@@ -2565,7 +2560,7 @@ Y = "!(T*A)"
     fn edge_bdet_read_gate_factorisation() {
         // BDET: a dual-edge flop read through an output-enable `A` (`Y = !(M*A)`, `M = CLK*L1+!CLK*L2`). `A`
         // is a READ-GATE — toggling it never moves the DET latches `L1/L2` in `Y`'s cone — so the register
-        // is factored out as `Yst` with native dual-edge capture and `Y` becomes a combinational read over
+        // is factored out as `Y_st` with native dual-edge capture and `Y` becomes a combinational read over
         // it, freeing the masters to fold.
         with_machine!(BDET_TOML, |builder, _a, _m2, m| {
             let es = classify(&m);
@@ -2577,11 +2572,11 @@ Y = "!(T*A)"
             let mut folded = folded_list(&es);
             folded.sort();
             assert_eq!(folded, ["L1", "L2"]);
-            assert_eq!(node_list(&es), ["Yst"], "Y is factored out, Yst minted");
+            assert_eq!(node_list(&es), ["Y_st"], "Y is factored out, Y_st minted");
 
-            // `Yst` is a dual-edge register; its native captures deliver `!D` on both edges (the NAND read
+            // `Y_st` is a dual-edge register; its native captures deliver `!D` on both edges (the NAND read
             // inverts the held content — inversion is not special-cased).
-            let yst = reg(&es, "Yst");
+            let yst = reg(&es, "Y_st");
             assert_eq!(yst.captures.len(), 2, "dual edge");
             let nd = !&builder.var("D");
             for (_, _, cap) in &yst.captures {
@@ -2591,10 +2586,10 @@ Y = "!(T*A)"
                 );
             }
 
-            // One derived register `Yst`, read by `Y`; nothing else minted. The read function's
+            // One derived register `Y_st`, read by `Y`; nothing else minted. The read function's
             // machine-faithfulness (equivalent to `Y = !(M*A)`) is proven by assert_reads_faithful.
             assert_eq!(es.derived.len(), 1);
-            assert_eq!(es.derived[0].name, "Yst");
+            assert_eq!(es.derived[0].name, "Y_st");
             let reads: Vec<&str> = es.derived[0]
                 .reads
                 .iter()
