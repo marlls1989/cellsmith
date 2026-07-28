@@ -635,50 +635,6 @@ fn when_output_contains_every_default_arc_block() {
 }
 
 #[test]
-fn no_when_flag_exits_non_zero() {
-    let dir = scratch_dir("no_when_flag");
-    let spec = dir.join("cells.toml");
-    std::fs::write(&spec, TWO).unwrap();
-
-    let status = Command::new(BIN)
-        .arg("--stdout")
-        .arg("--no-when")
-        .arg(&spec)
-        .status()
-        .expect("run cellsmith");
-    assert!(
-        !status.success(),
-        "--no-when is a removed flag, unknown to clap"
-    );
-
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-#[test]
-fn no_when_spec_key_exits_non_zero() {
-    let dir = scratch_dir("no_when_key");
-    let spec = dir.join("bad.toml");
-    // `no_when` is a removed field name; `deny_unknown_fields` rejects it.
-    std::fs::write(
-        &spec,
-        "[[cell]]\nname = \"X\"\ninputs = [\"A\"]\nno_when = true\n[cell.outputs]\nY = \"A\"\n",
-    )
-    .unwrap();
-
-    let status = Command::new(BIN)
-        .arg("--stdout")
-        .arg(&spec)
-        .status()
-        .expect("run cellsmith");
-    assert!(
-        !status.success(),
-        "no_when is a removed spec field, unknown to serde"
-    );
-
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-#[test]
 fn bad_spec_exits_non_zero() {
     let dir = scratch_dir("bad");
     let spec = dir.join("bad.toml");

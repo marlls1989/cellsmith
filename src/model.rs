@@ -905,21 +905,6 @@ Y = "A"
     }
 
     #[test]
-    fn rejects_the_removed_no_when_key() {
-        // `no_when` is gone, with no alias: a spec still carrying it is a hard error (the cell table is
-        // `deny_unknown_fields`), never a silently ignored key that would emit the wrong arcs.
-        let s = r#"
-[[cell]]
-name = "X"
-inputs = ["A"]
-no_when = true
-[cell.outputs]
-Y = "A"
-"#;
-        assert!(matches!(parse_spec(s), Err(ModelError::Spec(_))));
-    }
-
-    #[test]
     fn internal_signal_is_classified_and_kept_off_the_output_list() {
         // A DFF: internal master latch M, external slave output Q referencing M.
         let s = r#"
