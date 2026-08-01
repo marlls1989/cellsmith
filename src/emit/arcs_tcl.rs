@@ -2137,6 +2137,19 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 "#;
 
+    /// An AND term exposed on its way to an inverter — `W = A*B`, `Y = !W` — holding no state, so `W`
+    /// is evaluated fresh on every arc rather than read off a state column.
+    const AN2_EXPOSED: &str = r#"
+[[cell]]
+name = "AN2"
+inputs = ["A", "B"]
+expose = ["W"]
+[cell.internal]
+W = "A*B"
+[cell.outputs]
+Y = "!W"
+"#;
+
     /// The column `pin` occupies in the block's `-pinlist` — the shared position `-vector` and `-ic` are
     /// read at, all three lines being one walk over the same order.
     fn column_of(block: &str, pin: &str) -> usize {
@@ -2177,6 +2190,31 @@ Q = "CLK*M + !CLK*Q"
             ["$VDD", "0", "$VDD", "0"],
         );
         assert!(block.contains("-prevector {00 10}"));
+    }
+
+    #[test]
+    fn a_combinational_exposed_node_renders_its_pinlist_column_with_no_ic() {
+        // AN2 holds no state, so its exposed AND term is evaluated fresh on every arc rather than read
+        // off a state column — the machinery a state-variable exposed node never exercises. Held at
+        // A=1, B rising drives the AND term up with it and the inverted output down.
+        let cell = analyse(AN2_EXPOSED);
+        assert!(!cell.state_holding, "AN2 is plain combinational logic");
+        let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{tcl}");
+        let block = blocks(&tcl)
+            .into_iter()
+            .find(|b| {
+                b.contains("-related_pin B")
+                    && b.contains("-pin Y")
+                    && vector_values(b)[column_of(b, "B")] == "R"
+            })
+            .expect("the B-rise → Y-fall block");
+        assert_eq!(pinlist_of(&block), ["A", "B", "W", "Y"]);
+        assert_eq!(vector_values(&block), ["1", "R", "R", "F"]);
+        assert!(
+            ic_values(&block).is_none(),
+            "a cell holding no state renders no -ic:\n{block}"
+        );
     }
 
     #[test]
