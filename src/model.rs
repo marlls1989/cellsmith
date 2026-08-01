@@ -11,11 +11,12 @@ use rayon::prelude::*;
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::logic::analysis::Exploration;
 use crate::logic::arcs::{Arc, HiddenArc};
 use crate::logic::confluence::Constraint;
 use crate::logic::hazard::{OrderDependence, Oscillation};
 use crate::logic::leakage::LeakageState;
-use crate::logic::machine::ExplorationBudget;
+use crate::logic::machine::{ExplorationBudget, Explored};
 
 /// The whole input file: a list of `[[cell]]` tables.
 #[derive(Debug, Deserialize)]
@@ -484,15 +485,16 @@ pub struct AnalysedCell {
     /// exposes. Only the Liberate arc emitter reads the view here, through
     /// [`AnalysedCell::arc_view`].
     ///
-    /// The two views cannot share one machine exploration, because their machines have different
-    /// coordinates: an exposed node is a state variable of the arc view's machine and not of the model
-    /// view's. So the arc view's `arcs`, `hidden_arcs` and `edge.labels` are keyed on ITS `arc.start`
-    /// minterms — carrying a column per exposed node, which is what the arcs emitter's arc identity
-    /// reads — while the model view's own machine derivations feed [`crate::emit::liberty`],
-    /// [`crate::emit::statetable`] and [`crate::emit::verilog`] over the minimised coordinates. Each
-    /// view therefore runs its own pass. The model view's machine sees only the exposed nodes that
-    /// survived its own minimisation ([`AnalysedCell::exposed_signals`], empty in the usual case where
-    /// the release folds them away), which costs it nothing: it never emits an exposure.
+    /// The cell explores once, in the arc view; the model view's machine is that same exploration
+    /// projected onto the coordinates surviving the outputs-only minimisation
+    /// ([`crate::logic::analysis::Exploration`]). The two views' derivations then differ because their
+    /// machines carry different coordinates: the arc view's `arcs`, `hidden_arcs` and `edge.labels` are
+    /// keyed on ITS `arc.start` minterms — carrying a column per exposed node, which is what the arcs
+    /// emitter's arc identity reads — while the model view's own derivations feed
+    /// [`crate::emit::liberty`], [`crate::emit::statetable`] and [`crate::emit::verilog`] over the
+    /// minimised coordinates. The model view's machine sees only the exposed nodes that survived its own
+    /// minimisation ([`AnalysedCell::exposed_signals`], empty in the usual case where the release retires
+    /// them), which costs it nothing: it never emits an exposure.
     pub exposed_view: Option<Box<AnalysedCell>>,
 }
 
@@ -602,13 +604,17 @@ impl Cell {
 
         // Nothing exposed: the minimised map already IS the model, and the cell carries a single view.
         if self.expose.is_empty() {
-            return Ok(self.finish_view(analysed, &bdds, &min, budget));
+            return Ok(self
+                .finish_view(analysed, &bdds, &min, Exploration::Fresh(budget))
+                .0);
         }
 
         // The exposed nodes survived the run above, so this view carries them as machine coordinates:
-        // the arc view (see `AnalysedCell::exposed_view`). Only plain data — arcs, hazards, regions —
-        // comes back out of the map, so the map is free to be minimised further beneath it.
-        let arc_view = self.finish_view(analysed, &bdds, &min, budget);
+        // the arc view (see `AnalysedCell::exposed_view`). Only plain data — arcs, hazards, regions,
+        // the explored states — comes back out of the map, so the map is free to be minimised further
+        // beneath it. This is the cell's one exploration; the model view below reads it.
+        let (arc_view, explored) =
+            self.finish_view(analysed, &bdds, &min, Exploration::Fresh(budget));
 
         // Release the exposure and carry the SAME map on to the outputs-only fixpoint, which is where a
         // single outputs-only run would have landed it (the differential gate in
@@ -620,8 +626,17 @@ impl Cell {
             &order,
             &crate::logic::minimise::Preserved::outputs(outputs),
         );
-        let mut model =
-            self.finish_view(self.analyse_signals()?, &bdds, &min.then(released), budget);
+        // The model view reads the arc view's exploration, carried onto its own coordinates rather than
+        // discovered again. A ceiling that stopped that one exploration is mirrored here, so the stopped
+        // verdict reaches both views.
+        let reused = Exploration::Reused(match &explored {
+            Some(e) => Ok(e),
+            None => Err(arc_view.unexplored.expect(
+                "a view that explored and handed nothing back was stopped by a budget ceiling",
+            )),
+        });
+        let (mut model, _) =
+            self.finish_view(self.analyse_signals()?, &bdds, &min.then(released), reused);
         debug_assert!(
             arc_view.exposed_view.is_none(),
             "the arc view is analysed with the exposure already applied and never carries a view of its own"
@@ -631,20 +646,23 @@ impl Cell {
     }
 
     /// Complete one view of the cell over `bdds` — the minimised map `min` reports the rewrite of, back
-    /// to `view`'s parse-time functions. Recomputes each surviving signal's metadata, explores the
-    /// machine once and copies its derivations in, then caches the region view and the state-holding
-    /// verdict.
+    /// to `view`'s parse-time functions. Recomputes each surviving signal's metadata, builds the machine
+    /// over `exploration` and copies its derivations in, then caches the region view and the
+    /// state-holding verdict.
     ///
     /// This is everything downstream of the minimisation, and it runs once PER VIEW over that view's own
     /// signals: a cell that exposes internal nodes carries two of them (see
-    /// [`AnalysedCell::exposed_view`]), whose machines differ in their coordinates.
+    /// [`AnalysedCell::exposed_view`]), whose machines differ in their coordinates. The exploration
+    /// itself is per CELL — the second element of the result is the states this view explored, for the
+    /// other view to project onto its own coordinates, and is `None` when this view reused an
+    /// exploration or a budget ceiling stopped one.
     fn finish_view<B: Brand, C: ManagerCell + Send + Sync>(
         &self,
         mut view: AnalysedCell,
         bdds: &BTreeMap<Symbol, Bdd<B, C>>,
         min: &crate::logic::minimise::Minimised,
-        budget: &ExplorationBudget,
-    ) -> AnalysedCell {
+        exploration: Exploration<'_>,
+    ) -> (AnalysedCell, Option<Explored>) {
         recompute_signal_metadata(&mut view, bdds, min);
 
         // Build the cell's state machine once and derive both its transition arcs and its hazards from
@@ -653,8 +671,12 @@ impl Cell {
         // suppression and emission gating are applied downstream.
         // The opt-out (`no_edge_collapse`, also set for every cell by the global `--no-edge-collapse`)
         // gates the classify() call itself, not just its result — no wasted work when collapse is off.
-        let analysis =
-            crate::logic::analysis::analyse_machine(&view, bdds, !self.no_edge_collapse, budget);
+        let analysis = crate::logic::analysis::analyse_machine(
+            &view,
+            bdds,
+            !self.no_edge_collapse,
+            exploration,
+        );
         view.arcs = analysis.arcs;
         view.hidden_arcs = analysis.hidden_arcs;
         view.leakage = analysis.leakage;
@@ -663,6 +685,7 @@ impl Cell {
         view.oscillation = analysis.oscillation;
         view.edge = analysis.edge;
         view.unexplored = analysis.unexplored;
+        let explored = analysis.explored;
 
         // Cache each signal's state-table regions once, in `signals()` order, from the shared folded
         // BDDs, so downstream emitters don't rebuild the BDDs per call site, and record whether the
@@ -670,7 +693,7 @@ impl Cell {
         view.regions = derive_regions(&view, bdds);
         view.state_holding = holds_state(&view);
 
-        view
+        (view, explored)
     }
 
     /// Validate the cell and parse its functions into the pre-minimise [`AnalysedCell`]: every signal's

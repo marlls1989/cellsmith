@@ -8,9 +8,12 @@
 //! shared map. After the fold every coordinate's next-state δ **is** its entry in the map — a direct
 //! lookup, no per-signal composition. Only the one
 //! [`machine::explore`] BFS is set up here, and it is the same setup for both derivations, so it is done
-//! **once** and shared through [`Machine`]. Only plain data ([`Arc`]; the detected [`OrderDependence`]
-//! and [`Oscillation`] hazards; the generated [`Constraint`]s) escapes into [`MachineAnalysis`]; the live
-//! BDD handles never leave this pass.
+//! **once** and shared through [`Machine`]. It is done once per CELL rather than once per view: a cell
+//! that exposes internal nodes is analysed as two views, and the second one takes the first's explored
+//! states projected onto its own coordinates ([`Exploration`]) instead of exploring again. Only plain
+//! data ([`Arc`]; the detected [`OrderDependence`] and [`Oscillation`] hazards; the generated
+//! [`Constraint`]s; the explored states themselves, which are minterms and carry no BDD handle) escapes
+//! into [`MachineAnalysis`]; the live BDD handles never leave this pass.
 //!
 //! The BDD brand is a **generic type parameter** `<B, C>` carried by [`Machine`]: the builder is minted
 //! once per cell in [`crate::model::Cell::analyse`] (a fresh brand each cell, so handles from two cells
@@ -49,7 +52,28 @@ pub struct MachineAnalysis {
     pub edge: crate::logic::edge::EdgeArcs,
     /// The budget counter that stopped the exploration, or `None` when the machine was explored in
     /// full. Set ⇒ every field above is empty, because nothing was derived.
+    ///
+    /// A [`Exploration::Reused`] view cannot itself be stopped — the exploration it reads already ran
+    /// to completion in the view that performed it — so this is set only for a view that explored
+    /// ([`Exploration::Fresh`]) or for one mirroring the ceiling that stopped the exploration it would
+    /// have reused.
     pub unexplored: Option<machine::ExplorationLimit>,
+    /// The exploration this pass performed, handed back so a second view of the same cell projects it
+    /// onto its own coordinates instead of repeating it. `None` when the pass reused an exploration, and
+    /// when a budget ceiling stopped one.
+    pub explored: Option<machine::Explored>,
+}
+
+/// Where a view's explored states come from.
+///
+/// A cell explores once. The view that owns the exploration is `Fresh` and performs it under the
+/// budget; a second view of the same cell is `Reused` and carries that exploration's outcome — the
+/// explored states themselves, or the ceiling that stopped them.
+pub enum Exploration<'e> {
+    /// This view performs the exploration, bounded by this budget.
+    Fresh(&'e machine::ExplorationBudget),
+    /// This view reuses the outcome the cell's other view already reached.
+    Reused(Result<&'e machine::Explored, machine::ExplorationLimit>),
 }
 
 /// A cell's asynchronous state machine, built once and shared by the arc and confluence derivations. The
@@ -75,19 +99,22 @@ pub struct Machine<'c, B: Brand, C: ManagerCell> {
     /// `seed_funcs` below, so exposing a node cannot change which states are reached. That is what makes
     /// the change an arcs-only one — the machine explores the same state space either way.
     pub(crate) exposed: Vec<Symbol>,
-    /// The reachable stable states, discovered by one [`machine::explore`] BFS.
+    /// The reachable stable states over THIS view's coordinates, from the cell's one
+    /// [`machine::explore`] BFS — run here, or carried onto these coordinates from the view that ran it
+    /// (see [`Exploration`]).
     pub(crate) explored: machine::Explored,
 }
 
 impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
     /// Build the shared machine for `cell` from the minimised `bdds` map (built once in
-    /// [`crate::model::Cell::analyse`]), exploring it under `budget`. The exploration is the only
-    /// fallible step: it stops, leaving the cell unexplored, when one of the budget's two counters
-    /// passes its ceiling, and that counter comes back as the error.
+    /// [`crate::model::Cell::analyse`]), taking its explored states from `exploration` — discovered here
+    /// under a budget, or carried over from the cell's other view. That is the only fallible step: the
+    /// exploration stops, leaving the cell unexplored, when one of the budget's two counters passes its
+    /// ceiling, and that counter comes back as the error whichever view it stopped.
     pub fn build(
         cell: &'c AnalysedCell,
         bdds: &BTreeMap<Symbol, Bdd<B, C>>,
-        budget: &machine::ExplorationBudget,
+        exploration: Exploration<'_>,
     ) -> Result<Machine<'c, B, C>, machine::ExplorationLimit>
     where
         C: Send + Sync,
@@ -136,29 +163,42 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
         // above; a state-variable exposure is one of the state columns.
         let exposed: Vec<Symbol> = cell.exposed_signals().cloned().collect();
 
-        // Explore the reachable stable states once. Candidates are seeded from the on/off covers of every
-        // signal function (state δ plus the combinational OUTPUTS, so combinational cells seed too, while
-        // an exposed internal stays out of the pool and cannot move the exploration);
-        // [`machine::explore`] records the visitation order and predecessors, shared by both derivations.
-        let output_names: BTreeSet<&Symbol> = cell.outputs.iter().map(|o| &o.name).collect();
-        let seed_funcs: Vec<_> = deltas
-            .iter()
-            .chain(
-                combinational
+        let coords = machine::Coordinates {
+            state: &deltas,
+            combinational: &combinational,
+        };
+        let explored = match exploration {
+            // Explore the reachable stable states. Candidates are seeded from the on/off covers of every
+            // signal function (state δ plus the combinational OUTPUTS, so combinational cells seed too,
+            // while an exposed internal stays out of the pool and cannot move the exploration);
+            // [`machine::explore`] records the visitation order and predecessors, shared by both
+            // derivations.
+            Exploration::Fresh(budget) => {
+                let output_names: BTreeSet<&Symbol> =
+                    cell.outputs.iter().map(|o| &o.name).collect();
+                let seed_funcs: Vec<_> = deltas
                     .iter()
-                    .filter(|(n, _)| output_names.contains(n)),
-            )
-            .map(|(_, d)| d.clone())
-            .collect();
-        let explored = machine::explore(
-            machine::Coordinates {
-                state: &deltas,
-                combinational: &combinational,
-            },
-            &seed_funcs,
-            inputs,
-            budget,
-        )?;
+                    .chain(
+                        combinational
+                            .iter()
+                            .filter(|(n, _)| output_names.contains(n)),
+                    )
+                    .map(|(_, d)| d.clone())
+                    .collect();
+                machine::explore(coords, &seed_funcs, inputs, budget)?
+            }
+            // The cell's other view already explored these states, so they are carried onto THIS view's
+            // node columns — the inputs followed by this view's coordinates, in `machine::explore`'s own
+            // column order. The target names are computed here and never passed in, so a projection onto
+            // the wrong view's coordinates cannot be written.
+            Exploration::Reused(Ok(e)) => {
+                let full_names: Vec<Symbol> =
+                    inputs.iter().cloned().chain(coords.names()).collect();
+                e.project_to(&full_names)
+            }
+            // One exploration, one verdict: the ceiling that stopped it stops this view too.
+            Exploration::Reused(Err(limit)) => return Err(limit),
+        };
 
         Ok(Machine {
             cell,
@@ -227,7 +267,7 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
 }
 
 /// Build the cell's state machine from the minimised `bdds` map and derive its arcs and hazards from the
-/// shared exploration, bounded by `budget`. The builder was minted once in
+/// shared exploration, which `exploration` either budgets or supplies. The builder was minted once in
 /// [`crate::model::Cell::analyse`]; this pass only reads the shared map. An exploration stopped by one of
 /// the budget's counters yields an otherwise-empty [`MachineAnalysis`] carrying that counter in
 /// `unexplored`: nothing was derived, and the caller reports it.
@@ -235,9 +275,10 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     cell: &AnalysedCell,
     bdds: &BTreeMap<Symbol, Bdd<B, C>>,
     collapse: bool,
-    budget: &machine::ExplorationBudget,
+    exploration: Exploration<'_>,
 ) -> MachineAnalysis {
-    let m = match Machine::build(cell, bdds, budget) {
+    let reused = matches!(exploration, Exploration::Reused(_));
+    let m = match Machine::build(cell, bdds, exploration) {
         Ok(m) => m,
         Err(limit) => {
             return MachineAnalysis {
@@ -268,15 +309,19 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     } else {
         crate::logic::edge::EdgeArcs::default()
     };
+    let leakage = leakage::derive(&m);
     MachineAnalysis {
         arcs,
         hidden_arcs,
         constraints,
         order_dependence: detected.order_dependence,
         oscillation: detected.oscillation,
-        leakage: leakage::derive(&m),
+        leakage,
         edge,
         unexplored: None,
+        // Handed back only by the view that performed the exploration: the derivations above are the
+        // whole of what a reusing view owes its caller.
+        explored: (!reused).then_some(m.explored),
     }
 }
 
@@ -328,6 +373,71 @@ mod tests {
             cell.leakage.is_empty(),
             "an unexplored cell has no leakage states"
         );
+        // Emission still succeeds (no panic); the artifacts are simply arc-free.
+        let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        let _ = cell_verilog(&cell);
+        let _ = cell_liberty(&cell);
+    }
+
+    #[test]
+    fn an_exposing_cell_over_budget_reports_one_verdict_on_both_views() {
+        // The same over-budget shape, exposing an internal node so the cell carries two views. The cell
+        // explores once, in the arc view, and the ceiling that stopped it reaches the model view too:
+        // both views carry the verdict and neither derives anything. That is what lets `main`'s
+        // `c.unexplored.or(c.arc_view().unexplored)` name an offending cell exactly once, whichever view
+        // the exploration belonged to.
+        let n = 24;
+        let list = (0..n)
+            .map(|i| format!("\"I{i}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        // Y is the only seed function (an exposed internal stays out of the pool), and each cube of its
+        // forced cover carries 23 don't-care input columns, so the first cube alone is charged at 2^23 —
+        // past the ceiling. That keeps the fixture cheap as well as over budget: a cube charged past the
+        // ceiling is never expanded.
+        let src = format!(
+            "[[cell]]\nname = \"WIDEX\"\nconstraint_arcs = true\nexpose = [\"M\"]\ninputs = [{list}]\n[cell.internal]\nM = \"I0\"\n[cell.outputs]\nY = \"M\"\n"
+        );
+        let cell = analyse_one(&src);
+        assert!(
+            cell.exposed_view.is_some(),
+            "the exposure gives the cell an arc view beside the model view",
+        );
+        for (which, view) in [("model view", &cell), ("arc view", cell.arc_view())] {
+            assert!(
+                matches!(view.unexplored, Some(ExplorationLimit::Candidates(_))),
+                "the {which} carries the candidate counter that stopped the cell, got {:?}",
+                view.unexplored,
+            );
+            assert!(view.arcs.is_empty(), "the unexplored {which} has no arcs");
+            assert!(
+                view.hidden_arcs.is_empty(),
+                "the unexplored {which} has no hidden arcs"
+            );
+            assert!(
+                view.constraints.is_empty(),
+                "the unexplored {which} has no constraints"
+            );
+            assert!(
+                view.oscillation.is_empty(),
+                "the unexplored {which} has no oscillation"
+            );
+            assert!(
+                view.order_dependence.is_empty(),
+                "the unexplored {which} has no order-dependent hazards"
+            );
+            assert!(
+                view.leakage.is_empty(),
+                "the unexplored {which} has no leakage states"
+            );
+            assert!(
+                view.edge.labels.is_empty()
+                    && view.edge.captures.is_empty()
+                    && view.edge.folded.is_empty()
+                    && view.edge.derived.is_empty(),
+                "the unexplored {which} carries the default edge classification"
+            );
+        }
         // Emission still succeeds (no panic); the artifacts are simply arc-free.
         let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         let _ = cell_verilog(&cell);
@@ -467,13 +577,14 @@ Q = "CLK*M + !CLK*Q"
         let plain = analyse_one(&dff(""));
         let plain_builder = espresso_logic::sync_bdd_builder!();
         let plain_bdds = crate::model::build_signal_bdds(&plain, &plain_builder);
-        let mp = super::Machine::build(&plain, &plain_bdds, &budget).expect("fixture is explored");
+        let mp = super::Machine::build(&plain, &plain_bdds, super::Exploration::Fresh(&budget))
+            .expect("fixture is explored");
 
         let exposed = analyse_one(&dff("expose = [\"M\"]\n"));
         let exposed_builder = espresso_logic::sync_bdd_builder!();
         let exposed_bdds = crate::model::build_signal_bdds(&exposed, &exposed_builder);
-        let me =
-            super::Machine::build(&exposed, &exposed_bdds, &budget).expect("fixture is explored");
+        let me = super::Machine::build(&exposed, &exposed_bdds, super::Exploration::Fresh(&budget))
+            .expect("fixture is explored");
 
         assert!(mp.exposed.is_empty(), "nothing is exposed");
         assert_eq!(me.exposed, ["M"]);
@@ -538,7 +649,7 @@ Q = "W + Q*(A+B)"
         let m = super::Machine::build(
             &cell,
             &bdds,
-            &crate::logic::machine::ExplorationBudget::default(),
+            super::Exploration::Fresh(&crate::logic::machine::ExplorationBudget::default()),
         )
         .expect("fixture is explored");
 
@@ -582,7 +693,7 @@ Q = "W + Q*(A+B)"
         let m = super::Machine::build(
             &cell,
             &bdds,
-            &crate::logic::machine::ExplorationBudget::default(),
+            super::Exploration::Fresh(&crate::logic::machine::ExplorationBudget::default()),
         )
         .expect("fixture is explored");
 

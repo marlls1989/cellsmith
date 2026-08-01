@@ -224,6 +224,7 @@ pub fn settle_or_cycle<B: Brand, C: ManagerCell>(
 
 /// The reachable **stable** states of a cell's state machine, in the order [`explore`] discovered them,
 /// with a predecessor map for prevector reconstruction.
+#[derive(Debug)]
 pub struct Explored {
     /// Reachable stable nodes in BFS dequeue order (each appears once).
     pub order: Vec<Minterm<Symbol>>,
@@ -253,6 +254,46 @@ impl Explored {
         }
         chain.reverse();
         chain.iter().map(|m| m.project_to(input_names)).collect()
+    }
+
+    /// This exploration carried onto the coordinates of another view of the same cell.
+    ///
+    /// Every node — each entry of `order`, and both ends of every `prev` edge — is re-homed onto `names`
+    /// by [`Minterm::project_to`]: a coordinate `names` does not carry is dropped, a coordinate it names
+    /// that this exploration lacks arrives don't-know, and a shared one keeps the value it holds here.
+    /// Nothing is re-evaluated, so a don't-know projects to a don't-know.
+    ///
+    /// The predecessor chain keeps its shape — a projected node's predecessor is the projection of its
+    /// own predecessor here, never re-derived — so [`Self::seeds`], [`Self::path_to`] and every
+    /// prevector, its length included, read the same on the projection as on this exploration.
+    pub fn project_to(&self, names: &[Symbol]) -> Explored {
+        // `order` holds each node once, and it still does after the projection: two stable nodes
+        // differing only in a released column cannot both be stable, because stability forces that
+        // column to equal its δ, which the surviving columns determine. So no two entries meet.
+        let order: Vec<Minterm<Symbol>> = self.order.iter().map(|n| n.project_to(names)).collect();
+        let prev: HashMap<Minterm<Symbol>, Option<Minterm<Symbol>>> = self
+            .prev
+            .iter()
+            .map(|(node, p)| {
+                (
+                    node.project_to(names),
+                    p.as_ref().map(|p| p.project_to(names)),
+                )
+            })
+            .collect();
+        // The container invariant above, checked rather than assumed: a collision would drop a node
+        // from `order` or a predecessor chain from `prev` without a word.
+        debug_assert_eq!(
+            order.iter().collect::<BTreeSet<_>>().len(),
+            order.len(),
+            "Explored::project_to: the projection put two explored states on one node",
+        );
+        debug_assert_eq!(
+            prev.len(),
+            self.prev.len(),
+            "Explored::project_to: the projection put two predecessor keys on one node",
+        );
+        Explored { order, prev }
     }
 }
 
