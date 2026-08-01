@@ -331,7 +331,11 @@ fn constraint_block(cell: &AnalysedCell, c: &Constraint, arc_type: &str) -> Stri
 /// leaves the internals unstated too. The node's start level still reaches Liberate — the `-ic` line
 /// below carries it, as it does for the outputs.
 fn constraint_vector_str(cell: &AnalysedCell, c: &Constraint) -> String {
-    let held = c.prevector.last().map(assignment).unwrap_or_default();
+    let held = assignment(
+        c.prevector
+            .last()
+            .expect("path_to seeds its chain with the probed node itself"),
+    );
     vector(
         cell,
         |input| {
