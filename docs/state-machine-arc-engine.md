@@ -288,9 +288,9 @@ Arc emission re-walks the discovery order only and emits arcs:
   `related` pin — so a related pin is **always a primary input**; outputs and internal signals never are.
 - **Prevector.** The arc's prevector is the BFS path from a start state to the source state, each state
   projected onto the inputs. It is reconstructed by walking predecessors back to a start, reversing, and
-  projecting each step onto the input names. Since the path drives every state variable — internal ones
-  included — into the measured start state, it establishes hidden state such as a flop's master before
-  the clock edge.
+  projecting each step onto the input names. The path reaches the measured start state in cellsmith's own
+  model; the start condition reaches Liberate through `-ic`, which names the level of every `-pinlist`
+  entry — including any node listed in `expose`, such as a flop's master.
 
 Every context a firing can happen in yields its own arc: an arc's identity here is its output, its
 related pin, the direction, and the **full machine start state**, so two firings that agree on the

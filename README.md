@@ -299,10 +299,12 @@ Options:
                           opt in with `constraint_arcs = true`)
       --no-edge-collapse  Suppress the behavioural edge-register annotation (on by default); a cell can
                           opt out individually with `no_edge_collapse = true`
-      --logic-low <VOLTAGE>   Override the low-logic-level (`0`) voltage expression an exposed node's
-                          `-ic` renders, applied to every cell that doesn't declare its own `logic_low`
-                          (default: `0`). Written into the emitted Tcl verbatim, so a Tcl variable works
-                          as well as a literal
+      --logic-low <VOLTAGE>   Override the low-logic-level (`0`) voltage expression a state-holding
+                          cell's `-ic` renders — every entry on its transition, hidden and
+                          constraint blocks, whether an input, an exposed internal node or an
+                          output — applied to every cell that doesn't declare its own `logic_low`
+                          (default: `0`). Written into the emitted Tcl verbatim, so a Tcl variable
+                          works as well as a literal
       --logic-high <VOLTAGE>  Override the high-logic-level (`1`) voltage expression, mirroring
                           `--logic-low` (default: `$VDD`)
       --stdout            Write all four artifacts to stdout (with banners) instead of writing files
