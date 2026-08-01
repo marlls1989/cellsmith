@@ -463,8 +463,9 @@ Q = "CLK*M + !CLK*Q"
 
     #[test]
     fn combinational_exposure_is_sampled_through_its_delta() {
-        // An exposed node that is NOT a state variable — the combinational internal W = A*B — has its
-        // level read from its δ, as a combinational output does. The minimisation runs here with W
+        // An exposed node that is NOT a state variable — the combinational internal W = A*B — is a
+        // coordinate like any other, its level read from its own column as a combinational output's is.
+        // The minimisation runs here with W
         // preserved (`Preserved::with_exposed`), which is what keeps a combinational exposure in the
         // model at all; the fold composes it into Y regardless, so W keeps a δ over the inputs alone.
         let mut cell = crate::model::parse_spec(
@@ -501,8 +502,9 @@ Y = "!(W + C)"
         .expect("fixture is explored");
         assert_eq!(m.exposed, ["W"]);
         assert!(
-            !m.state_set.contains(&Symbol::from("W")) && m.exposed_deltas.contains_key("W"),
-            "a combinational exposure is read from a δ, not from a state column",
+            !m.state_set.contains(&Symbol::from("W"))
+                && m.combinational.iter().any(|(n, _)| n.as_str() == "W"),
+            "a combinational exposure is a combinational coordinate, not a state one",
         );
 
         // At each explored state the sampled level is A*B there, and a single-state sample leaves the

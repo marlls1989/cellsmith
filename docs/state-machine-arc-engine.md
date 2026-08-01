@@ -22,7 +22,8 @@ some **internal** functions. Two rules make state work with no special ceremony:
   **no external pin** — it models hidden state such as a flip-flop's master latch.
 
 From these functions the cell is treated as an **asynchronous state machine** over
-`inputs × state-variables`. The rest of this document makes that machine precise: §2 gives the whole
+`inputs × coordinates`, the coordinates being the signals that survive the minimisation (§2.1). The rest
+of this document makes that machine precise: §2 gives the whole
 picture and defines the vocabulary; §3–§5 detail how the machine is built and run; §6–§7 derive the arcs.
 
 ## 2. The machine at a glance
@@ -31,10 +32,10 @@ Before any construction detail, the whole pipeline in one view. For a cell, cell
 
 1. **minimises** the cell's signal model once — collapsing alias/complement chains and folding guarded
    combinational relays — so only genuine memory coordinates remain (§3, §3.1);
-2. classifies each surviving signal as a **state variable** (it holds state) or **combinational** (it does
-   not);
+2. takes every surviving signal as a **coordinate** of the machine, classifying each as a **state
+   variable** (it holds state) or **combinational** (it does not);
 3. reads, directly from the minimised model, a fixed **transition function** δ — one component δ_v per
-   state variable;
+   coordinate;
 4. **settles** a state by repeatedly *evaluating* δ until the state stops changing (a fixpoint);
 5. **explores** the reachable settled states, toggling one input at a time;
 6. **derives arcs** by re-walking that exploration and watching which input toggles flip an output.
@@ -54,18 +55,25 @@ Every term the later sections lean on, pinned here before first use.
   relay into its consumers — refusing only a fold that would *fabricate* a register (an emergent-memory
   2-cycle) — so self-reachability afterwards counts only genuine memory, never a spent wire or relay.
   The state variables are then found structurally over that minimised map: take the reference graph's
-  transitive closure, and a signal `s` is a state variable iff **`s` reaches itself**. The state
-  variables — and only they — become the coordinates of the machine's state.
+  transitive closure, and a signal `s` is a state variable iff **`s` reaches itself**.
 - **Combinational signal** — a signal on **no** feedback cycle. Its value is fixed by the inputs and the
-  current state, so it need not be held as a coordinate; it is eliminated (composed away, §3) and
-  reconstructed on demand. **"Combinational" means "off every cycle," not "a function of inputs only"**:
-  a combinational signal may reference state variables and so depend on the current state — it simply is
-  not itself a piece of held state (see the ICM cell's `GCLK` output in §3).
+  state variables, so the minimisation composes it away (§3) unless something downstream addresses it by
+  name — an external output pin, or an internal node the spec lists in `expose`. **"Combinational" means
+  "off every cycle," not "a function of inputs only"**: a combinational signal may reference state
+  variables and so depend on the current state — it simply is not itself a piece of held state (see the
+  ICM cell's `GCLK` output in §3).
+- **Coordinate** — a signal surviving the minimisation, hence a column of the machine's state: the state
+  variables together with the combinational signals kept beside them. Both kinds are stepped by the same
+  round (§5) and read the same way — a signal's value at a state is that state's column. They part
+  company only in what *holds*: a state variable is memory and may be **uninitialised**, while a
+  combinational coordinate is in lockstep with the state variables, taking whatever value they force. So
+  only the state variables are counted where the question is how much of the cell's memory a candidate
+  start state resolves (§6).
 - **State (of the machine)** — an assignment of a concrete `0`/`1` to every input and a concrete
-  `0`/`1`-or-**absent** to every state variable, represented as a minterm over the columns
-  `[inputs…, state-vars…]` (§4).
-- **Transition function δ** — the machine's next-state map, given as one **component δ_v per state
-  variable**: a fixed Boolean function of `inputs ∪ state-variables` yielding v's next value (§3). δ is
+  `0`/`1`-or-**absent** to every coordinate, represented as a minterm over the columns
+  `[inputs…, coordinates…]` (§4).
+- **Transition function δ** — the machine's next-state map, given as one **component δ_v per
+  coordinate**: a fixed Boolean function of `inputs ∪ state-variables` yielding v's next value (§3). δ is
   the standard automata-theory transition function, not a difference/delta of states.
 - The verbs, in increasing scope:
   - **substitute** — the atomic step: replace one referenced signal name by its definition, **at most
@@ -133,9 +141,9 @@ Nothing references `GCLK`, so it is on no cycle → **combinational**. Yet it re
 - **δ_GCLK = enA·CLKA + enB·CLKB**  (`enA`, `enB` kept as state coordinates; `CLKA`, `CLKB` are inputs)
 
 This is the concrete proof that "combinational" ≠ "function of inputs only": δ_GCLK genuinely depends on
-the current state. A combinational output is resolved the same way as any folded-away signal — it just
-never carries the result as a coordinate. Arc derivation reads a combinational output's value by
-*evaluating* its δ at a state; a state output instead reads its own state coordinate.
+the current state. `GCLK` carries an output pin, so it survives the minimisation and is a coordinate of
+the machine: its column is stepped by δ_GCLK alongside `enA` and `enB`, and arc derivation reads its
+value from that column exactly as it reads a state output's.
 
 ### 3.1 The safety guard: why folding must not fabricate a register
 
@@ -163,10 +171,10 @@ neither is repeated here.
 
 ## 4. The machine's state as a minterm
 
-A machine state assigns a concrete `0`/`1` to every input and, to every state variable, either a concrete
+A machine state assigns a concrete `0`/`1` to every input and, to every coordinate, either a concrete
 `0`/`1` or **absent** — the don't-care `-`, an as-yet-undetermined coordinate. It is a minterm over the
-columns `[inputs…, state-vars…]`. The power-on state fixes the inputs and leaves every state variable
-absent.
+columns `[inputs…, coordinates…]`, the state variables first and the combinational survivors after them.
+The power-on state fixes the inputs and leaves every coordinate absent.
 
 A state's successor is derived on demand by evaluating the fixed δ_v (§3) against it (§5).
 
@@ -180,20 +188,21 @@ Call that round *step*.
 
 ### One round: *step*
 
-One round computes, for each state variable v, the value
+One round computes, for each coordinate v — state variable and combinational survivor alike — the value
 
 - v′ = δ_v evaluated at the current state — a definite `0` or `1` when the state's fixed columns force
   δ_v, otherwise undetermined
 
-and returns a new state with the inputs unchanged and each state field replaced by its v′.
+and returns a new state with the inputs unchanged and each coordinate field replaced by its v′.
 
 Two properties make this well-defined:
 
 1. **Evaluation yields a definite value only when the state's fixed columns force δ_v; otherwise the
    value is undetermined, and that undetermined case is expected, not an error.** A state need not fix
    all of δ_v's support: an absent state variable leaves the value undetermined, so the round writes that
-   column **absent**. Leaving a column undetermined is not an error path — it is how a state variable
-   that the inputs (and the resolved state so far) do not yet determine stays absent.
+   column **absent**. Leaving a column undetermined is not an error path — it is how a coordinate
+   that the inputs (and the resolved state so far) do not yet determine stays absent. A combinational
+   coordinate lands there whenever the state variables its δ reads are themselves still absent.
 2. All v′ are read from the **same** current state before the new one is built, so the round is a genuine
    parallel update, not order-dependent.
 
@@ -267,9 +276,11 @@ The exploration both discovers the start states and runs the BFS:
 1. **Start candidates — never an assumed all-zero state.** For each seed function (each state variable's
    δ plus the combinational outputs' δ) it takes the forced on/off cover over the inputs: input
    assignments that force the signal *regardless of* the undefined power-on state. These input minterms
-   are pooled, then **ranked by how many state variables they settle** (ties broken toward state nearest
-   the inputs). Each candidate input is widened onto the full `[inputs…, state-vars…]` columns — the
-   state columns arrive **absent** — and settled. A state-holding cell whose reset is an input *sequence*
+   are pooled, then **ranked by how many state variables they settle** — the state variables alone, since
+   what the ranking measures is how much of the cell's memory a candidate resolves (ties broken toward
+   state nearest the inputs). Each candidate input is widened onto the full `[inputs…, coordinates…]`
+   columns — every coordinate column arrives **absent**, and settling is what first gives a combinational
+   one its value — and settled. A state-holding cell whose reset is an input *sequence*
    rather than a level is therefore initialised by the sequence that actually resolves it, not by an
    arbitrary held combination.
 2. **BFS.** From each stable state, toggle **one input at a time**, hold the state, and settle. An
@@ -283,8 +294,8 @@ hazard detection.
 
 Arc emission re-walks the discovery order only and emits arcs:
 
-- **Emit an arc** wherever a single input toggle flips an **output**'s value (a state output reads its
-  own coordinate; a combinational output is its δ evaluated at the state). The toggled input is the
+- **Emit an arc** wherever a single input toggle flips an **output**'s value (every output is a
+  coordinate, so its value at a state is that state's column). The toggled input is the
   `related` pin — so a related pin is **always a primary input**; outputs and internal signals never are.
 - **Prevector.** The arc's prevector is the BFS path from a start state to the source state, each state
   projected onto the inputs. It is reconstructed by walking predecessors back to a start, reversing, and

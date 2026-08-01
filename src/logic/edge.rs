@@ -341,7 +341,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     for (n, d) in deltas {
         fn_of.insert(n.as_str(), d);
     }
-    for (n, d) in &m.out_deltas {
+    for (n, d) in m.combinational_outputs() {
         fn_of.insert(n.as_str(), d);
     }
 
@@ -1916,7 +1916,7 @@ mod tests {
         for (n, d) in &m.deltas {
             fn_of.insert(n.as_str(), d);
         }
-        for (n, d) in &m.out_deltas {
+        for (n, d) in m.combinational_outputs() {
             fn_of.insert(n.as_str(), d);
         }
         let candidates = output_names
@@ -2507,14 +2507,11 @@ L3 = "!K3*L2 + K3*L3"
             // along the dependency chain, hop by hop from `L2` up to `L3`.
             let direct = |n: &str| -> Vec<String> {
                 let f = m
-                    .out_deltas
-                    .get(&Symbol::from(n))
-                    .or_else(|| {
-                        m.deltas
-                            .iter()
-                            .find(|(s, _)| s.as_str() == n)
-                            .map(|(_, d)| d)
-                    })
+                    .combinational
+                    .iter()
+                    .chain(&m.deltas)
+                    .find(|(s, _)| s.as_str() == n)
+                    .map(|(_, d)| d)
                     .expect("a delta for the queried node");
                 f.variables()
                     .filter(|v| m.state_set.contains(v))

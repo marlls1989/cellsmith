@@ -2,10 +2,11 @@
 //! its transition arcs ([`super::arcs`]) and its confluence hazards ([`super::confluence`]) from the
 //! same exploration.
 //!
-//! A cell is a state machine over `inputs × state-variables` (see [`machine`] and [`resolve`]). The
+//! A cell is a state machine over `inputs × coordinates` — every signal surviving the minimisation, the
+//! state variables and the combinational survivors alike (see [`machine`] and [`resolve`]). The
 //! signals' BDDs are built and minimised once in [`crate::model::Cell::analyse`]; this pass reads that
-//! shared map. After the fold every state variable's next-state δ **is** its entry in the map — a direct
-//! lookup, no per-signal composition — and the combinational outputs' δ likewise. Only the one
+//! shared map. After the fold every coordinate's next-state δ **is** its entry in the map — a direct
+//! lookup, no per-signal composition. Only the one
 //! [`machine::explore`] BFS is set up here, and it is the same setup for both derivations, so it is done
 //! **once** and shared through [`Machine`]. Only plain data ([`Arc`]; the detected [`OrderDependence`]
 //! and [`Oscillation`] hazards; the generated [`Constraint`]s) escapes into [`MachineAnalysis`]; the live
@@ -62,9 +63,11 @@ pub struct Machine<'c, B: Brand, C: ManagerCell> {
     /// Each state variable's next-state function δ (over inputs + state variables), read directly from
     /// the minimised model: after the fold a state variable's map entry **is** its δ.
     pub(crate) deltas: Vec<machine::Delta<B, C>>,
-    /// The combinational outputs' δ, read directly from the minimised map (an output's value at a node is
-    /// read from its δ; a state output instead reads its own state field).
-    pub(crate) out_deltas: BTreeMap<Symbol, Bdd<B, C>>,
+    /// The δ of every signal surviving the minimisation that is *not* a state variable — the
+    /// combinational half of the machine's [`machine::Coordinates`], in signal order (outputs first, then
+    /// internals). These are the outputs and exposed internals the minimisation kept because something
+    /// addresses them by name; each is a node column of its own, stepped with the state variables.
+    pub(crate) combinational: Vec<machine::Delta<B, C>>,
     /// The cell's exposed internal nodes — the internals the spec lists in `expose`, in declared order,
     /// which is the order [`super::arcs::ArcLevels`] fills its exposed levels in.
     ///
@@ -72,10 +75,6 @@ pub struct Machine<'c, B: Brand, C: ManagerCell> {
     /// `seed_funcs` below, so exposing a node cannot change which states are reached. That is what makes
     /// the change an arcs-only one — the machine explores the same state space either way.
     pub(crate) exposed: Vec<Symbol>,
-    /// The δ of every exposed node that is not a state variable, read directly from the minimised map —
-    /// the counterpart of `out_deltas` for exposed internals (a state-variable exposure reads its own
-    /// state field instead).
-    pub(crate) exposed_deltas: BTreeMap<Symbol, Bdd<B, C>>,
     /// The reachable stable states, discovered by one [`machine::explore`] BFS.
     pub(crate) explored: machine::Explored,
 }
@@ -118,47 +117,56 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             "analyse_machine: a signal's support escapes the state set — minimise invariant I3 broken"
         );
 
-        // δ of each state variable (the machine's transition functions) and of each *combinational*
-        // output are read directly from the minimised map — the arc derivation reads an output's value
-        // from its δ, and both derivations seed exploration from them.
+        // The machine's coordinates, both halves read directly from the minimised map: the state
+        // variables' δ (the transition functions), and the δ of every other surviving signal. I3 leaves
+        // a surviving signal either self-reaching or preserved with no consumers, so the second half is
+        // exactly the cell's combinational outputs plus its surviving combinational exposures — every
+        // other internal was folded away and is not in `signals()` at all.
         let deltas: Vec<machine::Delta<B, C>> = state_vars
             .iter()
             .map(|v| (v.clone(), bdds[v].clone()))
             .collect();
-        let out_deltas: BTreeMap<Symbol, Bdd<B, C>> = cell
-            .outputs
+        let combinational: Vec<machine::Delta<B, C>> = signals
             .iter()
-            .filter(|o| !state_set.contains(&o.name))
-            .map(|o| (o.name.clone(), bdds[&o.name].clone()))
+            .map(|s| &s.name)
+            .filter(|nm| !state_set.contains(*nm))
+            .map(|nm| (nm.clone(), bdds[nm].clone()))
             .collect();
-        // The exposed nodes surviving in this view, and — for those that are not state variables — their
-        // δ, read from the same map: a combinational exposure's level at a node is its δ evaluated there,
-        // exactly as a combinational output's is.
+        // The exposed nodes surviving in this view. A combinational exposure is one of the coordinates
+        // above; a state-variable exposure is one of the state columns.
         let exposed: Vec<Symbol> = cell.exposed_signals().cloned().collect();
-        let exposed_deltas: BTreeMap<Symbol, Bdd<B, C>> = exposed
-            .iter()
-            .filter(|e| !state_set.contains(*e))
-            .map(|e| (e.clone(), bdds[e].clone()))
-            .collect();
 
         // Explore the reachable stable states once. Candidates are seeded from the on/off covers of every
-        // signal function (state δ plus the combinational outputs, so combinational cells seed too);
+        // signal function (state δ plus the combinational OUTPUTS, so combinational cells seed too, while
+        // an exposed internal stays out of the pool and cannot move the exploration);
         // [`machine::explore`] records the visitation order and predecessors, shared by both derivations.
+        let output_names: BTreeSet<&Symbol> = cell.outputs.iter().map(|o| &o.name).collect();
         let seed_funcs: Vec<_> = deltas
             .iter()
+            .chain(
+                combinational
+                    .iter()
+                    .filter(|(n, _)| output_names.contains(n)),
+            )
             .map(|(_, d)| d.clone())
-            .chain(out_deltas.values().cloned())
             .collect();
-        let explored = machine::explore(&deltas, &seed_funcs, inputs, &state_vars, budget)?;
+        let explored = machine::explore(
+            machine::Coordinates {
+                state: &deltas,
+                combinational: &combinational,
+            },
+            &seed_funcs,
+            inputs,
+            budget,
+        )?;
 
         Ok(Machine {
             cell,
             state_vars,
             state_set,
             deltas,
-            out_deltas,
+            combinational,
             exposed,
-            exposed_deltas,
             explored,
         })
     }
@@ -175,45 +183,33 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             .all(|w| s.value_of(w.as_str()).is_some())
     }
 
-    /// The value of `name` at a node, or `None` when the node does not define it: a state output reads
-    /// its state field (absent ⇒ undefined); a combinational output is its δ evaluated at the node
-    /// (`Err` ⇒ still depends on absent state ⇒ undefined). An arc is only measured where the output is
-    /// defined at both ends. The `Option` survives because [`leakage::derive`] reads the exploration's
-    /// seeds, which are not eligibility-gated: a seed's unforced state columns stay absent, and an output
-    /// that does not resolve there is dropped from that leakage state by design.
-    pub(crate) fn output_value(&self, name: &str, node: &Minterm<Symbol>) -> Option<bool> {
-        if self.state_set.contains(name) {
-            node.value_of(name)
-        } else {
-            // Every non-state output has a δ in `out_deltas` (one is computed for each of `cell.outputs`
-            // when the machine is built), so this lookup cannot miss.
-            debug_assert!(
-                self.out_deltas.contains_key(name),
-                "output_value: output {name:?} has no entry in out_deltas"
-            );
-            self.out_deltas[name].evaluate_fast(node)
-        }
+    /// The combinational coordinates that carry an external output pin, in signal order — the half of
+    /// [`machine::Coordinates::combinational`] the exploration seeds from and the edge classification
+    /// takes its candidate functions from. The rest are exposed internals, which no such quantity reads.
+    pub(crate) fn combinational_outputs(&self) -> impl Iterator<Item = &machine::Delta<B, C>> {
+        self.combinational
+            .iter()
+            .filter(|(n, _)| self.cell.outputs.iter().any(|o| o.name == *n))
     }
 
-    /// The value an exposed node holds at a node, read the same two ways as [`Self::output_value`]: a
-    /// state-variable exposure reads its state field (absent ⇒ undefined), a combinational one is its δ
-    /// in `exposed_deltas` evaluated at the node (unresolved ⇒ still depends on an absent state column ⇒
-    /// undefined).
+    /// The value of `name` at a node, or `None` when the node does not define it. Every output is a
+    /// coordinate of the machine — a state variable or a combinational survivor — so the value is that
+    /// node column, absent where the node leaves it undetermined. An arc is only measured where the
+    /// output is defined at both ends. The `Option` survives because [`leakage::derive`] reads the
+    /// exploration's seeds, which are not eligibility-gated: a seed's unforced columns stay absent, and
+    /// an output that does not resolve there is dropped from that leakage state by design.
+    pub(crate) fn output_value(&self, name: &str, node: &Minterm<Symbol>) -> Option<bool> {
+        node.value_of(name)
+    }
+
+    /// The value an exposed node holds at a node, read as [`Self::output_value`] is: an exposure is a
+    /// coordinate either way — a state variable or a combinational survivor — so its level is that node
+    /// column, absent where the node leaves it undetermined.
     ///
     /// This `Option` is the RAW read. Every SAMPLING site instead wraps it in `.expect()` on the
     /// determinacy invariant, which holds there: see [`super::arcs::ArcLevels::at`].
     pub(crate) fn exposed_value(&self, name: &str, node: &Minterm<Symbol>) -> Option<bool> {
-        if self.state_set.contains(name) {
-            node.value_of(name)
-        } else {
-            // Every exposed node that is not a state variable has a δ in `exposed_deltas` (one is
-            // computed for each when the machine is built), so this lookup cannot miss.
-            debug_assert!(
-                self.exposed_deltas.contains_key(name),
-                "exposed_value: exposed node {name:?} has no entry in exposed_deltas"
-            );
-            self.exposed_deltas[name].evaluate_fast(node)
-        }
+        node.value_of(name)
     }
 }
 
@@ -467,15 +463,146 @@ Q = "CLK*M + !CLK*Q"
             super::Machine::build(&exposed, &exposed_bdds, &budget).expect("fixture is explored");
 
         assert!(mp.exposed.is_empty(), "nothing is exposed");
-        assert!(mp.exposed_deltas.is_empty(), "so no δ is built for one");
         assert_eq!(me.exposed, ["M"]);
         assert!(
-            me.exposed_deltas.is_empty(),
-            "the master is a state variable — its level is its own state column, not a δ",
+            me.state_set.contains("M"),
+            "the master holds memory, so exposing it names a state coordinate",
+        );
+        assert!(
+            mp.combinational.is_empty() && me.combinational.is_empty(),
+            "both of this cell's signals hold memory, so neither view has a combinational coordinate",
         );
         assert_eq!(
             mp.explored.order, me.explored.order,
             "exposing a node does not change which states are reached, nor in which order",
+        );
+    }
+
+    /// The wave-1 coordinate fixture, built once per test: the keeper `Q` — a state variable — beside
+    /// the exposed combinational node `W`, so one cell carries both kinds of coordinate. The
+    /// minimisation runs with `W` preserved (`Preserved::with_exposed`), which is what keeps a
+    /// combinational exposure in the model at all.
+    const COORDINATE_FIXTURE: &str = r#"
+[[cell]]
+name = "C2X"
+inputs = ["A", "B"]
+expose = ["W"]
+[cell.internal]
+W = "A*B"
+[cell.outputs]
+Q = "W + Q*(A+B)"
+"#;
+
+    /// `COORDINATE_FIXTURE` minimised with its exposure preserved, ready for [`super::Machine::build`].
+    fn coordinate_fixture() -> crate::model::AnalysedCell {
+        let mut cell = crate::model::parse_spec(COORDINATE_FIXTURE)
+            .unwrap()
+            .cells
+            .remove(0)
+            .analyse_signals()
+            .unwrap();
+        let builder = espresso_logic::sync_bdd_builder!();
+        let mut bdds = crate::model::build_signal_bdds(&cell, &builder);
+        let order: Vec<espresso_logic::Symbol> = cell.signals().map(|s| s.name.clone()).collect();
+        let preserved = crate::logic::minimise::Preserved::with_exposed(
+            cell.outputs.iter().map(|o| o.name.clone()).collect(),
+            cell.exposed.iter().cloned().collect(),
+        );
+        let min = crate::logic::minimise::minimise_state_space(&mut bdds, &order, &preserved);
+        crate::model::recompute_signal_metadata(&mut cell, &bdds, &min);
+        cell
+    }
+
+    #[test]
+    fn every_explored_node_carries_a_column_per_coordinate() {
+        // What promoting the combinational survivors to coordinates establishes: each one is a column
+        // of every explored node, carrying exactly what its δ evaluates to there — the same relation a
+        // state variable's column already stood in. Read over both halves at once, so a coordinate that
+        // was left out of the node's columns, or left holding a value its δ contradicts, fails here.
+        let cell = coordinate_fixture();
+        let builder = espresso_logic::sync_bdd_builder!();
+        let bdds = crate::model::build_signal_bdds(&cell, &builder);
+        let m = super::Machine::build(
+            &cell,
+            &bdds,
+            &crate::logic::machine::ExplorationBudget::default(),
+        )
+        .expect("fixture is explored");
+
+        assert_eq!(m.state_vars, ["Q"], "the keeper is the state coordinate");
+        assert_eq!(
+            m.combinational
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>(),
+            ["W"],
+            "the exposed combinational node is the other coordinate",
+        );
+        assert!(
+            !m.explored.order.is_empty(),
+            "the fixture explores at least one state"
+        );
+        for node in &m.explored.order {
+            for (name, delta) in m.deltas.iter().chain(&m.combinational) {
+                assert!(
+                    node.vars().iter().any(|v| v == name),
+                    "coordinate {name} has no column at {node:?}",
+                );
+                assert_eq!(
+                    node.value_of(name.as_str()),
+                    delta.evaluate_fast(node),
+                    "coordinate {name}'s column disagrees with its δ at {node:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_field_readers_return_the_coordinate_columns() {
+        // `output_value` and `exposed_value` read a coordinate's column whichever half it belongs to.
+        // Pinned over the fixture's whole explored set as `(A, B, Q, W)`: the keeper holds through the
+        // two single-input vectors — hence each of them twice, once per held value — is set at `A·B`
+        // and cleared at neither input, while the exposure tracks `A·B`.
+        let cell = coordinate_fixture();
+        let builder = espresso_logic::sync_bdd_builder!();
+        let bdds = crate::model::build_signal_bdds(&cell, &builder);
+        let m = super::Machine::build(
+            &cell,
+            &bdds,
+            &crate::logic::machine::ExplorationBudget::default(),
+        )
+        .expect("fixture is explored");
+
+        let mut read: Vec<(bool, bool, bool, bool)> = m
+            .explored
+            .order
+            .iter()
+            .map(|node| {
+                let of = |pin: &str| {
+                    node.value_of(pin)
+                        .expect("every input is fixed in an explored state")
+                };
+                (
+                    of("A"),
+                    of("B"),
+                    m.output_value("Q", node)
+                        .expect("the keeper resolves at every explored state"),
+                    m.exposed_value("W", node)
+                        .expect("the exposure resolves at every explored state"),
+                )
+            })
+            .collect();
+        read.sort();
+        assert_eq!(
+            read,
+            [
+                (false, false, false, false),
+                (false, true, false, false),
+                (false, true, true, false),
+                (true, false, false, false),
+                (true, false, true, false),
+                (true, true, true, true),
+            ],
         );
     }
 }
