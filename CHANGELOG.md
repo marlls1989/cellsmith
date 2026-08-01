@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   work actually performed, not the cell's declared width. Exceeding either is a hard error naming every
   offending cell; no arcs, hazards, leakage states or constraints are written for it.
 
+### Changed
+
+- **A cell exposing internal nodes now explores its state machine once.** The arc view performs the
+  exploration; the model view obtains its own by projecting that exploration onto the coordinates that
+  survive the outputs-only minimisation, keyed by label. Both minimisation passes still run — the second
+  produces the model view's surviving coordinates and its recomputed state functions — only the second
+  exploration is gone. The emitted arcs, hazards, constraints and leakage states are unchanged; the
+  difference is in analysis time.
+
 ### Fixed
 
 - **Hazards and constraints are now detected only from fully-initialised states.** A probe drawn from a
