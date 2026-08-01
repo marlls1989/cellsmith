@@ -213,11 +213,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
 
     // Both coordinate halves, stepped together, exactly as the original exploration stepped them: a
     // combinational survivor is not excluded from settling just because nothing below reads its column.
-    let deltas: Vec<machine::Delta<B, C>> = machine::Coordinates {
-        state: &m.deltas,
-        combinational: &m.combinational,
-    }
-    .stepped();
+    let deltas: Vec<machine::Delta<B, C>> = m.coordinate_deltas();
     // The direct support of every coordinate's δ — precomputed once, used by the
     // combinational-neighbourhood divergence filter below (see the module doc). Left over the merged
     // set rather than filtered down to the state variables: `support` is only ever INDEXED at a state

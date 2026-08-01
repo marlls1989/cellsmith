@@ -888,8 +888,8 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
 struct Scan<'a, B: Brand, C: ManagerCell> {
     /// The machine every scan reads.
     m: &'a Machine<'a, B, C>,
-    /// The machine's coordinate δ set ([`coordinate_deltas`]), which every settle in this module — this
-    /// context's own `next` table included — steps over.
+    /// The machine's coordinate δ set ([`Machine::coordinate_deltas`]), which every settle in this
+    /// module — this context's own `next` table included — steps over.
     stepped: Vec<machine::Delta<B, C>>,
     /// The reachable stable states: the index space `next` and `eligible` are aligned with.
     order: &'a [Minterm<Symbol>],
@@ -907,7 +907,7 @@ struct Scan<'a, B: Brand, C: ManagerCell> {
 impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
     fn new(m: &'a Machine<'a, B, C>) -> Self {
         let order = &m.explored.order[..];
-        let stepped = coordinate_deltas(m);
+        let stepped = m.coordinate_deltas();
         let index: HashMap<&Minterm<Symbol>, usize> =
             order.iter().enumerate().map(|(i, s)| (s, i)).collect();
         let next: Vec<Vec<Option<usize>>> = order
@@ -1136,19 +1136,6 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
             }
         }
     }
-}
-
-/// Every coordinate's δ in [`machine::Coordinates`] order — the state variables followed by the
-/// combinational survivors — which is the set one [`machine::step`] writes and the set
-/// [`machine::explore`] settled the reachable states over. Every re-walk in this module settles over all
-/// of them: a narrower set leaves a combinational coordinate's column holding its pre-toggle value, so the
-/// node would read back stale and would not match the explored state it belongs to.
-fn coordinate_deltas<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> Vec<machine::Delta<B, C>> {
-    machine::Coordinates {
-        state: &m.deltas,
-        combinational: &m.combinational,
-    }
-    .stepped()
 }
 
 /// Does `f`, once every variable of its support EXCEPT `freed` is fixed to `state`'s values, still depend
@@ -2797,7 +2784,7 @@ T = "M*!M2 + !M*M2"
             // D is preserved as a live data dependency: some reachable state where toggling D moves T.
             // Typing T as a register keyed off CLK would drop D while the run still emits D→T data arcs, so
             // T correctly stays level and D survives in T's function.
-            let stepped = coordinate_deltas(&m);
+            let stepped = m.coordinate_deltas();
             let d_drives_t = m.explored.order.iter().any(|node| {
                 let before = m.output_value("T", node);
                 let Some(np) = machine::settle(&stepped, &machine::toggle(node, &["D"])) else {

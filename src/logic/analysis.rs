@@ -192,6 +192,19 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             .filter(|(n, _)| self.cell.outputs.iter().any(|o| o.name == *n))
     }
 
+    /// The machine's coordinate δ set, in [`machine::Coordinates`] order — the state variables followed
+    /// by the combinational survivors — which is the set one [`machine::step`] writes and the set
+    /// [`machine::explore`] settled the reachable states over. Every re-walk settles over all of them: a
+    /// narrower set leaves a combinational coordinate's column holding its pre-toggle value, so the node
+    /// would read back stale and would not match the explored state it belongs to.
+    pub(crate) fn coordinate_deltas(&self) -> Vec<machine::Delta<B, C>> {
+        machine::Coordinates {
+            state: &self.deltas,
+            combinational: &self.combinational,
+        }
+        .stepped()
+    }
+
     /// The value of `name` at a node, or `None` when the node does not define it. Every output is a
     /// coordinate of the machine — a state variable or a combinational survivor — so the value is that
     /// node column, absent where the node leaves it undetermined. An arc is only measured where the

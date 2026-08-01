@@ -204,11 +204,7 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
     // survivor's column fresh, exactly as the original exploration did — settling on the state
     // variables alone would leave a combinational output's or exposure's column at its stale pre-toggle
     // value, which `output_value`/`exposed_value` would then read as though it were current.
-    let deltas: Vec<machine::Delta<B, C>> = machine::Coordinates {
-        state: &m.deltas,
-        combinational: &m.combinational,
-    }
-    .stepped();
+    let deltas: Vec<machine::Delta<B, C>> = m.coordinate_deltas();
     let ex = &m.explored;
 
     let async_set: HashSet<&str> = cell.async_pins.iter().map(|s| s.as_str()).collect();
