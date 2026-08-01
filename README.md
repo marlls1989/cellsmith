@@ -217,6 +217,16 @@ levels, defaulting to `0` and `$VDD`. Either is written into the emitted Tcl ver
 works as well as a literal; a cell's own key wins over the `--logic-low`/`--logic-high` command-line
 value.
 
+`-ic` lists one voltage per `-pinlist` entry and Liberate reads it by position, so each expression has
+to reach Liberate as a single column — one that splits shifts every column after it. An expression is
+accepted when it stays unsplit through Tcl's substitutions: a literal (`0`, `0.99`), a variable
+(`$VDD`), or a bracketed command substitution, whose result is resolved into the quoted word before the
+columns are read and which may therefore contain spaces (`[expr $VDD*0.9]`, `[expr {$VDD * 0.9}]`).
+Anything else is rejected, naming the cell and quoting the expression: whitespace outside brackets
+(`$VDD * 0.9` — three columns, not one), a double quote or a backslash (both alter the emitted word),
+and an unbalanced bracket or brace. Braces do not group inside the emitted word, so `{$VDD * 0.9}` is
+rejected as well.
+
 ### Characterisation templates
 
 `[cell.template]` names the characterisation templates the `<name>_cells.tcl` artifact's
