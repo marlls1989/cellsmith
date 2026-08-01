@@ -200,7 +200,15 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
 ) -> (Vec<Arc>, Vec<HiddenArc>) {
     let cell = m.cell;
     let inputs = &cell.inputs;
-    let deltas = &m.deltas;
+    // Both coordinate halves, stepped together: a re-walk toggle must recompute a combinational
+    // survivor's column fresh, exactly as the original exploration did — settling on the state
+    // variables alone would leave a combinational output's or exposure's column at its stale pre-toggle
+    // value, which `output_value`/`exposed_value` would then read as though it were current.
+    let deltas: Vec<machine::Delta<B, C>> = machine::Coordinates {
+        state: &m.deltas,
+        combinational: &m.combinational,
+    }
+    .stepped();
     let ex = &m.explored;
 
     let async_set: HashSet<&str> = cell.async_pins.iter().map(|s| s.as_str()).collect();
@@ -234,7 +242,7 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
                 for related in inputs {
                     // Toggle one input, hold the (partial) state, and let the state settle.
                     let toggled = machine::toggle(node, &[related.as_str()]);
-                    let Some(np) = machine::settle(deltas, &toggled) else {
+                    let Some(np) = machine::settle(&deltas, &toggled) else {
                         continue;
                     };
                     // The start levels completed with where this toggle leaves the exposed nodes — the one

@@ -211,9 +211,18 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
         return DetectedHazards::default(); // no state to latch ⇒ always confluent
     }
 
-    let deltas = &m.deltas;
-    // The direct support of every state variable's δ — precomputed once, used by the
-    // combinational-neighbourhood divergence filter below (see the module doc).
+    // Both coordinate halves, stepped together, exactly as the original exploration stepped them: a
+    // combinational survivor is not excluded from settling just because nothing below reads its column.
+    let deltas: Vec<machine::Delta<B, C>> = machine::Coordinates {
+        state: &m.deltas,
+        combinational: &m.combinational,
+    }
+    .stepped();
+    // The direct support of every coordinate's δ — precomputed once, used by the
+    // combinational-neighbourhood divergence filter below (see the module doc). Left over the merged
+    // set rather than filtered down to the state variables: `support` is only ever INDEXED at a state
+    // key (`support[w]` for a diverging state variable `w`), so a combinational entry sits unread —
+    // harmless, and no guard is added to carve it back out.
     let support: BTreeMap<Symbol, BTreeSet<Symbol>> = deltas
         .iter()
         .map(|(n, d)| (n.clone(), d.variables().collect()))
@@ -224,7 +233,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
     let settle_toggle =
         |node: &Minterm<Symbol>, names: &[&str]| -> Result<Minterm<Symbol>, Vec<Minterm<Symbol>>> {
             let toggled = machine::toggle(node, names);
-            machine::settle_or_cycle(deltas, &toggled)
+            machine::settle_or_cycle(&deltas, &toggled)
         };
 
     // The per-state probe body: for one reachable state `s` (its BFS index `discovered`), settle every
