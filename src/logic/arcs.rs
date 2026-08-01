@@ -53,24 +53,54 @@ impl Edge {
     }
 }
 
-/// What the cell's non-input pins hold at an arc's start state: each output pin's level there, in
-/// `cell.outputs` order. Liberate reads these as the arc's `-ic` initial condition — the voltage each
-/// pin starts the measured vector at.
+/// One exposed internal node across a measured arc: the level it holds before the measured edge and the
+/// level it holds after. Equal levels render the held `0`/`1`; a change renders `R`/`F`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExposedLevel {
+    pub node: Symbol,
+    pub start: bool,
+    pub end: bool,
+}
+
+/// What the cell's non-input columns hold across a measured arc: each output pin's level at the arc's
+/// start state, in `cell.outputs` order, and each exposed internal node's levels at both ends of the
+/// measurement, in the machine's exposure order. Liberate reads the start levels as the arc's `-ic`
+/// initial condition — the voltage each column starts the measured vector at — while an exposed node,
+/// which the measurement observes as well as initialises, needs its end level too: it can move across an
+/// arc whose outputs all hold.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ArcLevels {
     pub outputs: Vec<(Symbol, bool)>,
+    pub exposed: Vec<ExposedLevel>,
 }
 
 impl ArcLevels {
-    /// The levels every output of `m`'s cell holds at `node`, in `cell.outputs` order.
+    /// The levels every output and exposed node of `m`'s cell holds at `node`. A single-state sample, so
+    /// every exposed level has `start == end`: the hazard probes in [`super::confluence::detect`]
+    /// characterise one state, not a transition out of it.
+    pub fn at<B: Brand, C: ManagerCell>(m: &Machine<B, C>, node: &Minterm<Symbol>) -> ArcLevels {
+        Self::across(m, node, node)
+    }
+
+    /// The levels across a measured transition: every output at `start_node`, the state the measurement
+    /// begins in, and every exposed node at both `start_node` and `settled`, the state the toggle settles
+    /// into. An exposed internal genuinely transitions during an arc that leaves every output alone — a
+    /// DFF's master follows D while Q holds — so its two ends are sampled separately.
     ///
     /// TOTAL, never partial: a level is read at a measurement site, and every measurement starts from a
     /// state `Machine::arc_eligible` admits — [`derive`] measures only eligible starts and
     /// [`super::confluence::detect`] probes only eligible states. At such a node every state column is
-    /// determinate, and a combinational output's δ is bounded by the inputs plus the state variables
-    /// (minimise invariant I3, asserted in `Machine::build` at `analysis.rs`), so `output_value` resolves
-    /// for every output.
-    pub fn at<B: Brand, C: ManagerCell>(m: &Machine<B, C>, node: &Minterm<Symbol>) -> ArcLevels {
+    /// determinate, and settling from it leaves every state column determinate, so both ends are total.
+    /// A combinational output's or exposed node's δ is in turn bounded by the inputs plus the state
+    /// variables (minimise invariant I3, asserted in `Machine::build` at `analysis.rs`). An exposed node
+    /// is therefore either a state variable, which `arc_eligible` requires to be defined, or a
+    /// combinational signal whose support lies within the inputs plus the state variables — resolved
+    /// either way, as is every output.
+    pub fn across<B: Brand, C: ManagerCell>(
+        m: &Machine<B, C>,
+        start_node: &Minterm<Symbol>,
+        settled: &Minterm<Symbol>,
+    ) -> ArcLevels {
         ArcLevels {
             outputs: m
                 .cell
@@ -78,9 +108,25 @@ impl ArcLevels {
                 .iter()
                 .map(|o| {
                     let v = m
-                        .output_value(&o.name, node)
+                        .output_value(&o.name, start_node)
                         .expect("every output is defined at a fully-initialised probed state");
                     (o.name.clone(), v)
+                })
+                .collect(),
+            exposed: m
+                .exposed
+                .iter()
+                .map(|node| {
+                    let level = |n: &Minterm<Symbol>| {
+                        m.exposed_value(node.as_str(), n).expect(
+                            "every exposed node is defined at a fully-initialised probed state",
+                        )
+                    };
+                    ExposedLevel {
+                        node: node.clone(),
+                        start: level(start_node),
+                        end: level(settled),
+                    }
                 })
                 .collect(),
         }
@@ -163,14 +209,16 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
                 if !m.arc_eligible(node) {
                     return acc;
                 }
-                // The start levels depend only on `node`, so sample them once and clone per arc.
-                let levels = ArcLevels::at(m, node);
                 for related in inputs {
                     // Toggle one input, hold the (partial) state, and let the state settle.
                     let toggled = machine::toggle(node, &[related.as_str()]);
                     let Some(np) = machine::settle(deltas, &toggled) else {
                         continue;
                     };
+                    // The levels of this toggle — the outputs at the start, the exposed nodes at both
+                    // ends — sampled once and cloned per arc derived from it. Both paths below take the
+                    // same sample: an exposed node can move across a toggle every output holds through.
+                    let levels = ArcLevels::across(m, node, &np);
                     // An arc for every output that is defined at both ends and flips across this input toggle.
                     // The end is projected onto the inputs — it is what the `-vector` and `-when` render from —
                     // while the start keeps the full machine node, the arc's context.
@@ -345,6 +393,118 @@ QN = "!Q"
             eligible += 1;
         }
         assert!(eligible > 0, "the fixture has measurement-eligible states");
+    }
+
+    #[test]
+    fn exposed_master_moves_across_a_hidden_arc() {
+        // Master-slave DFF with the master M exposed. With the clock low the master is transparent, so a
+        // D toggle moves M while Q holds — a hidden (internal-power) arc, which by construction is one
+        // where every output is unchanged — and the exposed levels must record that move at both ends.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+expose = ["M"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#,
+        );
+        assert_eq!(
+            cell.exposed_signals().collect::<Vec<_>>(),
+            [&Symbol::from("M")],
+            "the master survives the minimisation as an exposed node",
+        );
+        // Every measured arc, transition or hidden, carries one level per exposed node.
+        for levels in cell
+            .arcs
+            .iter()
+            .map(|a| &a.levels)
+            .chain(cell.hidden_arcs.iter().map(|h| &h.levels))
+        {
+            assert_eq!(levels.exposed.len(), 1);
+            assert_eq!(levels.exposed[0].node, "M");
+        }
+        let moved: Vec<&HiddenArc> = cell
+            .hidden_arcs
+            .iter()
+            .filter(|h| h.levels.exposed.iter().any(|e| e.start != e.end))
+            .collect();
+        assert!(
+            moved.iter().any(|h| h.pin == "D"),
+            "a D toggle with the clock low moves the exposed master while Q holds",
+        );
+    }
+
+    #[test]
+    fn combinational_exposure_is_sampled_through_its_delta() {
+        // An exposed node that is NOT a state variable — the combinational internal W = A*B — has its
+        // level read from its δ, as a combinational output does. The minimisation runs here with W
+        // preserved (`Preserved::with_exposed`), which is what keeps a combinational exposure in the
+        // model at all; the fold composes it into Y regardless, so W keeps a δ over the inputs alone.
+        let mut cell = crate::model::parse_spec(
+            r#"
+[[cell]]
+name = "AOI21"
+inputs = ["A", "B", "C"]
+expose = ["W"]
+[cell.internal]
+W = "A*B"
+[cell.outputs]
+Y = "!(W + C)"
+"#,
+        )
+        .unwrap()
+        .cells
+        .remove(0)
+        .analyse_signals()
+        .unwrap();
+        let builder = espresso_logic::sync_bdd_builder!();
+        let mut bdds = crate::model::build_signal_bdds(&cell, &builder);
+        let order: Vec<Symbol> = cell.signals().map(|s| s.name.clone()).collect();
+        let preserved = crate::logic::minimise::Preserved::with_exposed(
+            cell.outputs.iter().map(|o| o.name.clone()).collect(),
+            cell.exposed.iter().cloned().collect(),
+        );
+        let min = crate::logic::minimise::minimise_state_space(&mut bdds, &order, &preserved);
+        crate::model::recompute_signal_metadata(&mut cell, &bdds, &min);
+        let m = crate::logic::analysis::Machine::build(
+            &cell,
+            &bdds,
+            &crate::logic::machine::ExplorationBudget::default(),
+        )
+        .expect("fixture is explored");
+        assert_eq!(m.exposed, ["W"]);
+        assert!(
+            !m.state_set.contains(&Symbol::from("W")) && m.exposed_deltas.contains_key("W"),
+            "a combinational exposure is read from a δ, not from a state column",
+        );
+
+        // At each explored state the sampled level is A*B there, and a single-state sample leaves the
+        // two ends equal — the shape the constraint sampling site reads.
+        let mut sampled = 0;
+        for node in &m.explored.order {
+            let levels = ArcLevels::at(&m, node);
+            let of = |pin: &str| {
+                node.value_of(pin)
+                    .expect("every input is fixed in an explored state")
+            };
+            assert_eq!(levels.exposed[0].start, of("A") && of("B"));
+            assert_eq!(levels.exposed[0].start, levels.exposed[0].end);
+            sampled += 1;
+        }
+        assert!(sampled > 0, "the fixture explores at least one state");
+
+        // Across a measured arc the two ends differ wherever the toggled input moves W.
+        let (arcs, _) = derive(&m);
+        assert!(
+            arcs.iter()
+                .any(|a| a.levels.exposed[0].start != a.levels.exposed[0].end),
+            "an A or B edge that flips Y moves the exposed W with it",
+        );
     }
 
     #[test]

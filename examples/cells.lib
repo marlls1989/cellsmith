@@ -312,4 +312,26 @@ library (cells) {
       internal_node : "Q_st";
     }
   }
+  cell (C2EXP) {
+    pin (A) {
+      direction : input;
+    }
+    pin (B) {
+      direction : input;
+    }
+    statetable ("A B", "Q_st") {
+      table : "L L : - : L , \
+               L H : - : N , \
+               H L : - : N , \
+               H H : - : H";
+    }
+    pin (Q) {
+      direction : output;
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
+    }
+  }
 }

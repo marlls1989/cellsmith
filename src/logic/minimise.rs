@@ -187,6 +187,24 @@ pub struct Minimised {
     pub changed: BTreeSet<Symbol>,
 }
 
+impl Minimised {
+    /// The composition of two successive minimisations of the same map: `self`, then `next` run over the
+    /// map `self` left behind. The result reports the pair as one rewrite of the map they started from,
+    /// which is what [`crate::model::recompute_signal_metadata`] needs to recover a signal's metadata
+    /// from the original parse.
+    ///
+    /// Both fields union, then the closing rule [`minimise_state_space`] applies at its own end applies
+    /// again: a signal the first run rewrote and the second purged is gone, so `changed` keeps only the
+    /// survivors.
+    pub fn then(mut self, next: Minimised) -> Minimised {
+        self.purged.extend(next.purged);
+        self.changed.extend(next.changed);
+        let purged = &self.purged;
+        self.changed.retain(|n| !purged.contains(n));
+        self
+    }
+}
+
 /// The names [`minimise_state_space`] may not remove, in the two roles its passes read apart.
 ///
 /// `outputs` are the cell's external pins. `preserved` is the wider set no pass may purge: the outputs
@@ -615,6 +633,36 @@ mod tests {
         p: &Preserved,
     ) -> Minimised {
         minimise_state_space(bdds, order, p)
+    }
+
+    #[test]
+    fn composing_two_runs_reports_the_pair_as_one_rewrite() {
+        // The exposed run followed by the run that releases the exposure is ONE rewrite of the map they
+        // started from — the very rewrite a single outputs-only run performs. QN is rewritten by the
+        // first and purged by the second, and the closing rule drops it from `changed`, so the caller
+        // never asks a purged signal for a regenerated expression.
+        let (_b, mut staged, order, exposed) = system! {
+            outputs: ["Q"], exposed: ["QN"],
+            "Q" = "!QN",
+            "QN" = "!(A*B + Q*(A+B))",
+        };
+        let first = minimise(&mut staged, &order, &exposed);
+        assert!(first.purged.is_empty(), "an exposed node is never purged");
+        assert_eq!(first.changed, [Symbol::from("QN")].into_iter().collect());
+
+        let released = Preserved::outputs([Symbol::from("Q")].into_iter().collect());
+        let composed = first.then(minimise(&mut staged, &order, &released));
+
+        let (_b2, mut direct, direct_order, p) = system! {
+            outputs: ["Q"],
+            "Q" = "!QN",
+            "QN" = "!(A*B + Q*(A+B))",
+        };
+        assert_eq!(composed, minimise(&mut direct, &direct_order, &p));
+        assert!(
+            !composed.changed.contains("QN"),
+            "a purged signal is no survivor"
+        );
     }
 
     #[test]

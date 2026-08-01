@@ -65,6 +65,17 @@ pub struct Machine<'c, B: Brand, C: ManagerCell> {
     /// The combinational outputs' δ, read directly from the minimised map (an output's value at a node is
     /// read from its δ; a state output instead reads its own state field).
     pub(crate) out_deltas: BTreeMap<Symbol, Bdd<B, C>>,
+    /// The cell's exposed internal nodes — the internals the spec lists in `expose`, in declared order,
+    /// which is the order [`super::arcs::ArcLevels`] fills its exposed levels in.
+    ///
+    /// Exposure is read only to SAMPLE levels: these names are absent from the exploration's
+    /// `seed_funcs` below, so exposing a node cannot change which states are reached. That is what makes
+    /// the change an arcs-only one — the machine explores the same state space either way.
+    pub(crate) exposed: Vec<Symbol>,
+    /// The δ of every exposed node that is not a state variable, read directly from the minimised map —
+    /// the counterpart of `out_deltas` for exposed internals (a state-variable exposure reads its own
+    /// state field instead).
+    pub(crate) exposed_deltas: BTreeMap<Symbol, Bdd<B, C>>,
     /// The reachable stable states, discovered by one [`machine::explore`] BFS.
     pub(crate) explored: machine::Explored,
 }
@@ -120,6 +131,15 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             .filter(|o| !state_set.contains(&o.name))
             .map(|o| (o.name.clone(), bdds[&o.name].clone()))
             .collect();
+        // The exposed nodes surviving in this view, and — for those that are not state variables — their
+        // δ, read from the same map: a combinational exposure's level at a node is its δ evaluated there,
+        // exactly as a combinational output's is.
+        let exposed: Vec<Symbol> = cell.exposed_signals().cloned().collect();
+        let exposed_deltas: BTreeMap<Symbol, Bdd<B, C>> = exposed
+            .iter()
+            .filter(|e| !state_set.contains(*e))
+            .map(|e| (e.clone(), bdds[e].clone()))
+            .collect();
 
         // Explore the reachable stable states once. Candidates are seeded from the on/off covers of every
         // signal function (state δ plus the combinational outputs, so combinational cells seed too);
@@ -137,6 +157,8 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             state_set,
             deltas,
             out_deltas,
+            exposed,
+            exposed_deltas,
             explored,
         })
     }
@@ -170,6 +192,27 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
                 "output_value: output {name:?} has no entry in out_deltas"
             );
             self.out_deltas[name].evaluate_fast(node)
+        }
+    }
+
+    /// The value an exposed node holds at a node, read the same two ways as [`Self::output_value`]: a
+    /// state-variable exposure reads its state field (absent ⇒ undefined), a combinational one is its δ
+    /// in `exposed_deltas` evaluated at the node (unresolved ⇒ still depends on an absent state column ⇒
+    /// undefined).
+    ///
+    /// This `Option` is the RAW read. Every SAMPLING site instead wraps it in `.expect()` on the
+    /// determinacy invariant, which holds there: see [`super::arcs::ArcLevels::across`].
+    pub(crate) fn exposed_value(&self, name: &str, node: &Minterm<Symbol>) -> Option<bool> {
+        if self.state_set.contains(name) {
+            node.value_of(name)
+        } else {
+            // Every exposed node that is not a state variable has a δ in `exposed_deltas` (one is
+            // computed for each when the machine is built), so this lookup cannot miss.
+            debug_assert!(
+                self.exposed_deltas.contains_key(name),
+                "exposed_value: exposed node {name:?} has no entry in exposed_deltas"
+            );
+            self.exposed_deltas[name].evaluate_fast(node)
         }
     }
 }
@@ -390,5 +433,49 @@ Q = "!R*(CLK*M + !CLK*Q)"
         );
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         assert!(tcl.contains("define_arc"));
+    }
+
+    #[test]
+    fn exposure_leaves_the_exploration_untouched() {
+        // Exposed nodes are read to sample levels and never seed the exploration, so the same cell
+        // explores the same states in the same order whether or not it exposes its master — and an
+        // exposure-free cell carries no exposed nodes and no δ for them at all.
+        let dff = |expose: &str| {
+            format!(
+                r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+{expose}[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#
+            )
+        };
+        let budget = crate::logic::machine::ExplorationBudget::default();
+        let plain = analyse_one(&dff(""));
+        let plain_builder = espresso_logic::sync_bdd_builder!();
+        let plain_bdds = crate::model::build_signal_bdds(&plain, &plain_builder);
+        let mp = super::Machine::build(&plain, &plain_bdds, &budget).expect("fixture is explored");
+
+        let exposed = analyse_one(&dff("expose = [\"M\"]\n"));
+        let exposed_builder = espresso_logic::sync_bdd_builder!();
+        let exposed_bdds = crate::model::build_signal_bdds(&exposed, &exposed_builder);
+        let me =
+            super::Machine::build(&exposed, &exposed_bdds, &budget).expect("fixture is explored");
+
+        assert!(mp.exposed.is_empty(), "nothing is exposed");
+        assert!(mp.exposed_deltas.is_empty(), "so no δ is built for one");
+        assert_eq!(me.exposed, ["M"]);
+        assert!(
+            me.exposed_deltas.is_empty(),
+            "the master is a state variable — its level is its own state column, not a δ",
+        );
+        assert_eq!(
+            mp.explored.order, me.explored.order,
+            "exposing a node does not change which states are reached, nor in which order",
+        );
     }
 }

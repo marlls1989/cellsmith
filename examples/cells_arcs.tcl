@@ -1260,3 +1260,89 @@ define_arc \
 
 define_leakage -when "!A*!B*!Q" { C2GATE }
 define_leakage -when "A*B*Q" { C2GATE }
+define_arc \
+	-type combinational \
+	-prevector_pinlist {A B} \
+	-prevector {00 10} \
+	-pinlist {A B QN Q} \
+	-ic "$VDD 0 $VDD 0" \
+	-vector {1 R F R} \
+	-related_pin B \
+	-pin Q \
+	{ C2EXP }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {A B} \
+	-prevector {00 01} \
+	-pinlist {A B QN Q} \
+	-ic "0 $VDD $VDD 0" \
+	-vector {R 1 F R} \
+	-related_pin A \
+	-pin Q \
+	{ C2EXP }
+
+define_arc \
+	-prevector_pinlist {A B} \
+	-prevector {11 01} \
+	-type combinational \
+	-pinlist {A B QN Q} \
+	-ic "0 $VDD 0 $VDD" \
+	-vector {0 F R F} \
+	-related_pin B \
+	-pin Q \
+	{ C2EXP }
+
+define_arc \
+	-prevector_pinlist {A B} \
+	-prevector {11 10} \
+	-type combinational \
+	-pinlist {A B QN Q} \
+	-ic "$VDD 0 0 $VDD" \
+	-vector {F 0 R F} \
+	-related_pin A \
+	-pin Q \
+	{ C2EXP }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {A B} \
+	-prevector {00} \
+	-pinlist {A B QN Q} \
+	-ic "0 0 $VDD 0" \
+	-vector {R 0 1 0} \
+	-pin A \
+	{ C2EXP }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {A B} \
+	-prevector {00} \
+	-pinlist {A B QN Q} \
+	-ic "0 0 $VDD 0" \
+	-vector {0 R 1 0} \
+	-pin B \
+	{ C2EXP }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {A B} \
+	-prevector {11} \
+	-pinlist {A B QN Q} \
+	-ic "$VDD $VDD 0 $VDD" \
+	-vector {F 1 0 1} \
+	-pin A \
+	{ C2EXP }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {A B} \
+	-prevector {11} \
+	-pinlist {A B QN Q} \
+	-ic "$VDD $VDD 0 $VDD" \
+	-vector {1 F 0 1} \
+	-pin B \
+	{ C2EXP }
+
+define_leakage -when "!A*!B*!Q" { C2EXP }
+define_leakage -when "A*B*Q" { C2EXP }

@@ -236,9 +236,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     // expressed as deterministic timing.
     // Each warning is one contiguous block of lines (a header plus its indented detail fields);
     // distinct warnings are separated by a single blank line when printed, so a block reads as a unit.
+    // Both hazard loops read the ARC VIEW, the same analysis `cell_arcs_tcl` renders: a cell that exposes
+    // internal nodes is explored twice, and it is that view's hazards the emitted constraint arcs come
+    // from, so reporting the other view's would describe arcs the run never wrote.
     let mut warnings: Vec<String> = Vec::new();
     for c in &cells {
-        for a in &c.oscillation {
+        for a in &c.arc_view().oscillation {
             // The condition leads the sub-block as `when` (as in the race warning). How the machine
             // reached it — path into the pre-hazard state and the simultaneous toggle that triggers the
             // oscillation — comes from the representative pair-probe race (min by `(prevector.len,
@@ -274,7 +277,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     type RacePairs<'a> = BTreeMap<(&'a str, &'a str), Vec<Vec<String>>>;
     for c in &cells {
         let mut pairs: RacePairs = BTreeMap::new();
-        for od in &c.order_dependence {
+        for od in &c.arc_view().order_dependence {
             let (x, y) = (od.x.as_str(), od.y.as_str());
             let key = if x <= y { (x, y) } else { (y, x) };
             pairs.entry(key).or_default().push(subblock(&[

@@ -366,23 +366,52 @@ fn tag_of(block: &str, tag: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The block's `-vector` column for `pin`, indexed through its own `-pinlist` line.
-fn vector_column(block: &str, pin: &str) -> String {
-    let pinlist = block
+/// The block's `-pinlist` columns, in order.
+fn pinlist_of(block: &str) -> Vec<&str> {
+    block
         .lines()
         .map(str::trim)
         .find(|l| l.starts_with("-pinlist {"))
         .and_then(|l| l.split('{').nth(1))
         .and_then(|l| l.split('}').next())
-        .expect("a block renders a -pinlist");
-    let idx = pinlist
+        .expect("a block renders a -pinlist")
         .split_whitespace()
-        .position(|p| p == pin)
-        .expect("the pin appears in the block's -pinlist");
+        .collect()
+}
+
+/// The column `pin` occupies in the block's `-pinlist` — the position both `-vector` and `-ic` are read
+/// at, the three lines sharing one order.
+fn pinlist_index(block: &str, pin: &str) -> usize {
+    pinlist_of(block)
+        .iter()
+        .position(|p| *p == pin)
+        .expect("the pin appears in the block's -pinlist")
+}
+
+/// The block's `-vector` column for `pin`, indexed through its own `-pinlist` line.
+fn vector_column(block: &str, pin: &str) -> String {
     vector_of(block)
         .split_whitespace()
-        .nth(idx)
+        .nth(pinlist_index(block, pin))
         .expect("the -vector has a column per pin")
+        .to_string()
+}
+
+/// The block's `-ic` column for `pin`, indexed through its own `-pinlist` line. The `-ic` values are
+/// double-quoted rather than braced, so Tcl substitutes a `$VDD`-style expression before Liberate sees
+/// it.
+fn ic_column(block: &str, pin: &str) -> String {
+    let line = block
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("-ic "))
+        .expect("a state-holding cell's block renders an -ic");
+    line.split('"')
+        .nth(1)
+        .expect("-ic values are double-quoted")
+        .split_whitespace()
+        .nth(pinlist_index(block, pin))
+        .expect("the -ic has a column per pin")
         .to_string()
 }
 
@@ -480,6 +509,67 @@ fn logic_level_overrides_reach_the_ic_lines() {
             );
         }
     }
+}
+
+/// The worked C-element written around its internal node, with that node exposed: `QN` is no pin of the
+/// cell, so the arcs are the only place its behaviour can be stated — a `-pinlist` column of its own,
+/// the voltage it starts the measured vector at in `-ic`, and the edge it makes in `-vector`.
+const EXPOSED: &str = r#"
+[[cell]]
+name = "C2EXP"
+inputs = ["A", "B"]
+expose = ["QN"]
+[cell.internal]
+QN = "!(A*B + Q*(A+B))"
+[cell.outputs]
+Q = "!QN"
+"#;
+
+#[test]
+fn an_exposed_internal_node_reaches_the_pinlist_vector_and_ic() {
+    let out = run_spec("c2_exposed", EXPOSED, &[]);
+    let arcs = arcs_section(&out);
+    let blocks = arc_blocks(arcs);
+    assert!(!blocks.is_empty(), "the spec emits arcs:\n{arcs}");
+    for b in &blocks {
+        assert_eq!(
+            pinlist_of(b),
+            ["A", "B", "QN", "Q"],
+            "the exposed node takes a column between the inputs and the outputs:\n{b}"
+        );
+    }
+
+    // `B` rising out of `{A=1, B=0}` drives `Q` up and takes `QN` down with it, from a start condition
+    // that gives the internal node its own voltage.
+    let rise = blocks
+        .iter()
+        .find(|b| {
+            tag_of(b, "-related_pin").as_deref() == Some("B")
+                && tag_of(b, "-pin").as_deref() == Some("Q")
+                && vector_column(b, "B") == "R"
+        })
+        .unwrap_or_else(|| panic!("the B-rise → Q-rise block:\n{arcs}"));
+    assert_eq!(vector_column(rise, "QN"), "F");
+    assert_eq!(vector_column(rise, "Q"), "R");
+    assert_eq!(ic_column(rise, "QN"), "$VDD");
+
+    // `--logic-high` renames the high level, and the exposed column's start condition is written in the
+    // new name like every other column's.
+    let overridden = run_spec("c2_exposed_high", EXPOSED, &["--logic-high=$VDDH"]);
+    let high = arcs_section(&overridden);
+    let rise = arc_blocks(high)
+        .into_iter()
+        .find(|b| {
+            tag_of(b, "-related_pin").as_deref() == Some("B")
+                && tag_of(b, "-pin").as_deref() == Some("Q")
+                && vector_column(b, "B") == "R"
+        })
+        .unwrap_or_else(|| panic!("the B-rise → Q-rise block:\n{high}"));
+    assert_eq!(ic_column(rise, "QN"), "$VDDH");
+    assert!(
+        !high.contains("$VDD "),
+        "the override is the only high level in the emitted arcs:\n{high}"
+    );
 }
 
 #[test]

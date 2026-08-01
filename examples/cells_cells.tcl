@@ -79,3 +79,9 @@ define_cell \
 	-pinlist { A B Q } \
 	{ C2GATE }
 
+define_cell \
+	-input { A B } \
+	-output { Q } \
+	-pinlist { A B Q } \
+	{ C2EXP }
+

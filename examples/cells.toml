@@ -101,3 +101,15 @@ IQ = "!QN"
 QN = "!(A*B + IQ*(A+B))"
 [cell.outputs]
 Q = "!QN"                      # must minimise to the single coordinate Q, delta_Q = A*B + Q*(A+B)
+
+[[cell]]
+name = "C2EXP"                 # the same C-element with its internal node exposed to the arcs
+inputs = ["A", "B"]
+expose = ["QN"]                # QN is no pin, so it gets a -pinlist column of its own: the arcs state
+                               #   the voltage it starts at (-ic) and the edge it makes (-vector).
+                               #   Exposure is arcs-only — the Liberty, Verilog and cells.tcl artifacts
+                               #   are those of the same cell without the key.
+[cell.internal]
+QN = "!(A*B + Q*(A+B))"
+[cell.outputs]
+Q = "!QN"

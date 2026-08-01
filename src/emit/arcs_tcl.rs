@@ -15,13 +15,20 @@
 //! `-ic` line giving each `-pinlist` pin the voltage it starts the measured vector at (see [`ic_str`]).
 //! Liberate discards the `-prevector` simulation instead of carrying its settled values into the
 //! vector, so a cell with memory would otherwise begin measuring from state nothing established.
+//!
+//! A cell that exposes internal nodes (`expose = [...]`) is rendered from its ARC VIEW
+//! ([`crate::model::AnalysedCell::arc_view`]), the analysis that keeps those nodes as model coordinates.
+//! An exposed node is not a pin, so it earns a `-pinlist` column of its own (see [`arc_pinlist_str`])
+//! between the inputs and the outputs, which `-vector` and `-ic` line up with. Only the arc emitter
+//! reads that view — the `define_cell` pinlist ([`pinlist_str`]) and every other artifact keep to the
+//! cell's actual pins.
 
 use std::collections::{BTreeMap, HashMap};
 use std::hash::Hash;
 
 use espresso_logic::Symbol;
 
-use crate::logic::arcs::{Arc, ArcLevels, Edge, HiddenArc};
+use crate::logic::arcs::{Arc, ArcLevels, Edge, ExposedLevel, HiddenArc};
 use crate::logic::assignment;
 use crate::logic::confluence::{Constraint, ConstraintKind};
 use crate::logic::hazard::Oscillation;
@@ -57,6 +64,10 @@ impl Default for ArcsTclOptions {
 /// constraint arcs (setup/hold, non_seq) the cell opted into — its `constraint_arcs` was set, so
 /// generation populated `cell.constraints` — follow the delay arcs.
 pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
+    // Everything below renders the arc view: for a cell that exposes internal nodes that is the analysis
+    // carrying them as model coordinates, so its arcs, hazards and leakage states are the ones an
+    // exposed column can be read off; for every other cell it IS the cell.
+    let cell = cell.arc_view();
     let mut out = oscillation_comment(cell);
     // Each arc class is emitted in two passes. The GENERAL pass comes out ALWAYS: one representative per
     // transition — a related pin's edge driving an output pin's edge — rendered with no `-when` line, so
@@ -294,7 +305,7 @@ fn constraint_block(cell: &AnalysedCell, c: &Constraint, arc_type: &str) -> Stri
         "\t-prevector {{{}}} \\\n",
         prevector_str(cell, &c.prevector)
     ));
-    s.push_str(&format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell)));
+    s.push_str(&format!("\t-pinlist {{{}}} \\\n", arc_pinlist_str(cell)));
     if cell.state_holding {
         s.push_str(&format!(
             "\t-ic \"{}\" \\\n",
@@ -312,9 +323,13 @@ fn constraint_block(cell: &AnalysedCell, c: &Constraint, arc_type: &str) -> Stri
     s
 }
 
-/// The full constraint vector over `pinlist_str` order (inputs then outputs): the related and pin pins
-/// as their `R`/`F` edges, every other input at its held value in the pre-toggle state (the prevector's
-/// last step), and every output as `X` (a constraint arc measures no output transition).
+/// The full constraint vector over [`arc_pinlist_str`] order: the related and pin pins as their `R`/`F`
+/// edges, every other input at its held value in the pre-toggle state (the prevector's last step), and
+/// every output as `X` (a constraint arc measures no output transition). An exposed node reads `X`
+/// alongside them: the block constrains WHEN the two input edges may land relative to each other and
+/// measures nothing the cell does in response, so the same column that leaves the outputs unstated
+/// leaves the internals unstated too. The node's start level still reaches Liberate — the `-ic` line
+/// below carries it, as it does for the outputs.
 fn constraint_vector_str(cell: &AnalysedCell, c: &Constraint) -> String {
     let held = c.prevector.last().map(assignment).unwrap_or_default();
     vector(
@@ -336,6 +351,7 @@ fn constraint_vector_str(cell: &AnalysedCell, c: &Constraint) -> String {
                 .to_string()
             }
         },
+        |_| "X".to_string(),
         |_| "X".to_string(),
     )
 }
@@ -383,7 +399,7 @@ fn format_arc(cell: &AnalysedCell, arc: &Arc, with_when: bool) -> String {
         "\t-prevector {{{}}} \\\n",
         prevector_str(cell, &arc.prevector)
     );
-    let pinlist = format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell));
+    let pinlist = format!("\t-pinlist {{{}}} \\\n", arc_pinlist_str(cell));
     // The `-ic` VALUES are double-quoted, never braced: Tcl substitutes no variable inside braces, so a
     // braced `$VDD` would reach Liberate as that literal text instead of the supply voltage.
     let ic = if cell.state_holding {
@@ -430,8 +446,10 @@ fn format_arc(cell: &AnalysedCell, arc: &Arc, with_when: bool) -> String {
 
 /// The measured hidden-arc vector: the toggled `pin` as its `R`/`F` edge, every other input at its held
 /// `1`/`0` value in the end state, and every output pinned at its held `1`/`0` value (never `X` — a hidden
-/// arc measures no output transition). Mirrors [`vector_str`] for [`Arc`], and is the ONE source of
-/// `format_hidden_arc`'s `-vector` line.
+/// arc measures no output transition). An exposed node is the one column that CAN move here: no output
+/// changes across a hidden toggle, but an internal one does — a DFF's master follows D while Q holds —
+/// so it renders its edge or its held level like any measured arc (see [`exposed_vector_sym`]). Mirrors
+/// [`vector_str`] for [`Arc`], and is the ONE source of `format_hidden_arc`'s `-vector` line.
 fn hidden_vector_str(cell: &AnalysedCell, h: &HiddenArc) -> String {
     let held: BTreeMap<&str, bool> = h
         .levels
@@ -439,6 +457,7 @@ fn hidden_vector_str(cell: &AnalysedCell, h: &HiddenArc) -> String {
         .iter()
         .map(|(s, b)| (s.as_str(), *b))
         .collect();
+    let exposed = exposed_levels(&h.levels);
     let end = assignment(&h.end);
     vector(
         cell,
@@ -456,6 +475,13 @@ fn hidden_vector_str(cell: &AnalysedCell, h: &HiddenArc) -> String {
                 }
                 .to_string()
             }
+        },
+        |node| {
+            exposed_vector_sym(
+                exposed
+                    .get(node)
+                    .expect("the hidden arc's levels define every exposed node"),
+            )
         },
         |name| {
             if *held.get(name).expect("hidden arc defines every output") {
@@ -491,7 +517,7 @@ fn format_hidden_arc(cell: &AnalysedCell, h: &HiddenArc, with_when: bool) -> Str
         "\t-prevector {{{}}} \\\n",
         prevector_str(cell, &h.prevector)
     ));
-    s.push_str(&format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell)));
+    s.push_str(&format!("\t-pinlist {{{}}} \\\n", arc_pinlist_str(cell)));
     if cell.state_holding {
         s.push_str(&format!(
             "\t-ic \"{}\" \\\n",
@@ -508,8 +534,21 @@ fn format_hidden_arc(cell: &AnalysedCell, h: &HiddenArc, with_when: bool) -> Str
     s
 }
 
+/// The cell's pins: inputs then outputs, in declaration order. This is what `define_cell` declares the
+/// cell by, so it names PINS only — an exposed internal node has no pin and never appears here.
 pub(crate) fn pinlist_str(cell: &AnalysedCell) -> String {
     let mut pins = cell.inputs.clone();
+    pins.extend(cell.outputs.iter().map(|o| o.name.clone()));
+    pins.join(" ")
+}
+
+/// The `-pinlist` of a measured block: the inputs, then the exposed internal nodes in declared order,
+/// then the outputs. A `-vector` cannot address a node with no column and an `-ic` cannot initialise
+/// one, which is what an exposed internal needs a column FOR; it is still no pin of the cell, so it
+/// stays out of [`pinlist_str`] and hence out of `define_cell`.
+fn arc_pinlist_str(cell: &AnalysedCell) -> String {
+    let mut pins = cell.inputs.clone();
+    pins.extend(cell.exposed.iter().cloned());
     pins.extend(cell.outputs.iter().map(|o| o.name.clone()));
     pins.join(" ")
 }
@@ -541,15 +580,22 @@ fn prevector_str(
         .join(" ")
 }
 
-/// One symbol per input (cell.inputs order), then one per output (cell.outputs order), joined by " ".
+/// One symbol per input (cell.inputs order), then one per exposed internal node (declared order), then
+/// one per output (cell.outputs order), joined by " ". This walk is [`arc_pinlist_str`]'s order, and
+/// every line whose columns Liberate reads against the pinlist — `-vector` and `-ic` — comes through it,
+/// so the three agree by construction rather than by three renderers happening to walk alike.
 fn vector(
     cell: &AnalysedCell,
     input_sym: impl Fn(&str) -> String,
+    exposed_sym: impl Fn(&str) -> String,
     output_sym: impl Fn(&str) -> String,
 ) -> String {
-    let mut parts = Vec::with_capacity(cell.inputs.len() + cell.outputs.len());
+    let mut parts = Vec::with_capacity(cell.inputs.len() + cell.exposed.len() + cell.outputs.len());
     for input in &cell.inputs {
         parts.push(input_sym(input));
+    }
+    for node in &cell.exposed {
+        parts.push(exposed_sym(node));
     }
     for output in &cell.outputs {
         parts.push(output_sym(&output.name));
@@ -557,13 +603,38 @@ fn vector(
     parts.join(" ")
 }
 
-/// The `-ic` initial condition over `pinlist_str` order (inputs then outputs): each pin's starting
-/// voltage, written as the cell's `logic_low`/`logic_high` expression for the level it starts at.
-/// Inputs start where the prevector leaves them (its last step); outputs start at the levels measured
-/// at the arc's start state. Liberate discards the `-prevector` simulation rather than carrying its
-/// settled values forward, so this is what actually establishes a state-holding cell's start condition.
-/// Rendered through the same [`vector`] helper as `-pinlist` and `-vector`, so the three lines' columns
-/// line up by construction.
+/// The exposed levels of one measured block, by node name — the lookup the `-vector` and `-ic`
+/// renderers index as [`vector`] walks `cell.exposed`.
+fn exposed_levels(levels: &ArcLevels) -> BTreeMap<&str, &ExposedLevel> {
+    levels
+        .exposed
+        .iter()
+        .map(|e| (e.node.as_str(), e))
+        .collect()
+}
+
+/// An exposed node's `-vector` column: `R`/`F` where the node moves across the measured arc, else the
+/// `0`/`1` it holds through it. Never `X` — stating the node's behaviour is what exposing it is for.
+fn exposed_vector_sym(level: &ExposedLevel) -> String {
+    if level.start == level.end {
+        if level.end { "1" } else { "0" }.to_string()
+    } else {
+        if level.end { Edge::Rise } else { Edge::Fall }
+            .rf()
+            .to_string()
+    }
+}
+
+/// The `-ic` initial condition over [`arc_pinlist_str`] order: each column's starting voltage, written
+/// as the cell's `logic_low`/`logic_high` expression for the level it starts at. Inputs start where the
+/// prevector leaves them (its last step); outputs and exposed nodes start at the levels measured at the
+/// arc's start state. Liberate discards the `-prevector` simulation rather than carrying its settled
+/// values forward, so this is what actually establishes a state-holding cell's start condition — and
+/// the exposed columns are the reason it can establish an internal one at all, an internal node having
+/// no pin to drive it through. Every block kind renders every column, the constraint block included,
+/// where `-vector` states no behaviour but the start level is real all the same. Rendered through the
+/// same [`vector`] helper as `-pinlist` and `-vector`, so the three lines' columns line up by
+/// construction.
 fn ic_str(
     cell: &AnalysedCell,
     prevector: &[espresso_logic::Minterm<espresso_logic::Symbol>],
@@ -575,12 +646,20 @@ fn ic_str(
         .iter()
         .map(|(s, b)| (s.as_str(), *b))
         .collect();
+    let exposed = exposed_levels(levels);
     vector(
         cell,
         |input| {
             let level = *held
                 .get(input)
                 .expect("every input has a held value in the arc's prevector");
+            cell.voltages.of(level).to_owned()
+        },
+        |node| {
+            let level = exposed
+                .get(node)
+                .expect("the arc's levels define every exposed node")
+                .start;
             cell.voltages.of(level).to_owned()
         },
         |name| {
@@ -593,9 +672,11 @@ fn ic_str(
 }
 
 /// The measured vector: the related input pin and the measured output as `R`/`F`, the other inputs
-/// as their `1`/`0` value in the end state, and the other outputs as `X`.
+/// as their `1`/`0` value in the end state, each exposed node as the edge it makes or the level it
+/// holds (see [`exposed_vector_sym`]), and the other outputs as `X`.
 fn vector_str(cell: &AnalysedCell, arc: &Arc) -> String {
     let end = assignment(&arc.end);
+    let exposed = exposed_levels(&arc.levels);
     vector(
         cell,
         |input| {
@@ -609,6 +690,13 @@ fn vector_str(cell: &AnalysedCell, arc: &Arc) -> String {
             } else {
                 if value { "1" } else { "0" }.to_string()
             }
+        },
+        |node| {
+            exposed_vector_sym(
+                exposed
+                    .get(node)
+                    .expect("the arc's levels define every exposed node"),
+            )
         },
         |name| {
             if name == arc.output {
@@ -2014,6 +2102,264 @@ Y = "!A"
             entries,
             BTreeSet::from(["GND".to_owned(), "$VDDH".to_owned()])
         );
+    }
+
+    // ---- Exposed internal nodes: their own pinlist column, and what each block kind puts in it ----
+
+    /// The worked C-element written around its internal node — `QN = !(A*B + Q*(A+B))`, `Q = !QN` — with
+    /// `QN` exposed and constraint arcs opted into, so one fixture emits all three block kinds. The
+    /// output inverts the exposed node, so every measured arc moves it.
+    const C2_EXPOSED: &str = r#"
+[[cell]]
+name = "C2EXP"
+inputs = ["A", "B"]
+expose = ["QN"]
+constraint_arcs = true
+[cell.internal]
+QN = "!(A*B + Q*(A+B))"
+[cell.outputs]
+Q = "!QN"
+"#;
+
+    /// A master-slave DFF exposing its master latch `M`, with constraint arcs opted into. `M` is the
+    /// case an output column cannot stand in for: with the clock low the master is transparent, so a `D`
+    /// toggle moves it while `Q` holds.
+    const DFF_EXPOSED_MASTER: &str = r#"
+[[cell]]
+name = "DFFM"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+constraint_arcs = true
+expose = ["M"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+
+    /// The column `pin` occupies in the block's `-pinlist` — the shared position `-vector` and `-ic` are
+    /// read at, all three lines being one walk over the same order.
+    fn column_of(block: &str, pin: &str) -> usize {
+        pinlist_of(block)
+            .iter()
+            .position(|p| *p == pin)
+            .unwrap_or_else(|| panic!("{pin} appears in the block's -pinlist:\n{block}"))
+    }
+
+    /// The block's `-vector` symbols, in column order.
+    fn vector_values(block: &str) -> Vec<&str> {
+        braced(block, "-vector")
+            .expect("every block renders a -vector")
+            .split_whitespace()
+            .collect()
+    }
+
+    #[test]
+    fn an_exposed_node_renders_its_own_pinlist_vector_and_ic_columns() {
+        // The authoritative form: `B` rising out of `{A=1, B=0}` drives `Q` up, `QN` falls with it, and
+        // the four columns state where each of them starts.
+        let cell = analyse(C2_EXPOSED);
+        let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{tcl}");
+        let block = blocks(&tcl)
+            .into_iter()
+            .find(|b| {
+                !b.contains("-type hidden")
+                    && b.contains("-related_pin B")
+                    && b.contains("-pin Q")
+                    && vector_values(b)[column_of(b, "B")] == "R"
+            })
+            .expect("the B-rise → Q-rise block");
+        assert_eq!(pinlist_of(&block), ["A", "B", "QN", "Q"]);
+        assert_eq!(vector_values(&block), ["1", "R", "F", "R"]);
+        assert_eq!(
+            ic_values(&block).expect("a state-holding cell's block carries an -ic"),
+            ["$VDD", "0", "$VDD", "0"],
+        );
+        assert!(block.contains("-prevector {00 10}"));
+    }
+
+    #[test]
+    fn an_exposed_master_moves_across_a_hidden_arc_while_the_outputs_hold() {
+        // A hidden arc is one no output follows, so the exposed column is the only one that can move in
+        // it — and the transparent master does, tracking `D` while the clock is low. The general pass
+        // keeps one representative per toggle event, whichever context it was measured from, so the
+        // hidden class is selected to bring every measured firing out.
+        let cell = analyse(&when_variant(DFF_EXPOSED_MASTER, "\"hidden\""));
+        let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{tcl}");
+        let moving: Vec<String> = blocks(&tcl)
+            .into_iter()
+            .filter(|b| {
+                b.contains("-type hidden")
+                    && ["R", "F"].contains(&vector_values(b)[column_of(b, "M")])
+            })
+            .collect();
+        assert!(
+            !moving.is_empty(),
+            "a D toggle with the clock low moves the exposed master:\n{tcl}"
+        );
+        for block in &moving {
+            assert!(
+                ["0", "1"].contains(&vector_values(block)[column_of(block, "Q")]),
+                "every output stays pinned at its held level across a hidden arc:\n{block}"
+            );
+            // The moving column's own `-ic` is the level it starts at, so it is the end of the edge that
+            // differs from it.
+            let i = column_of(block, "M");
+            let start = ic_values(block).expect("a state-holding cell's block carries an -ic")[i];
+            let rf = if start == cell.voltages.of(false) {
+                "R"
+            } else {
+                "F"
+            };
+            assert_eq!(
+                vector_values(block)[i],
+                rf,
+                "the exposed edge leaves the level -ic starts it at:\n{block}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_constraint_block_leaves_the_exposed_column_unstated_and_still_initialises_it() {
+        // A constraint block measures nothing the cell does in response to its two edges, so it renders
+        // the exposed column the same `X` it renders every output — while `-ic` carries the level the
+        // node actually starts at, which is what Liberate needs to prepare the cell either way.
+        let cell = analyse(C2_EXPOSED);
+        let arc = cell.arc_view();
+        assert!(
+            !arc.constraints.is_empty(),
+            "premise: the C-element's racing inputs are constrained"
+        );
+        let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{tcl}");
+        for c in &arc.constraints {
+            let rendered = format_constraint(arc, c);
+            assert!(
+                tcl.contains(&rendered),
+                "the emitted Tcl carries this constraint's blocks:\n{rendered}"
+            );
+            let level = c
+                .levels
+                .exposed
+                .iter()
+                .find(|e| e.node == "QN")
+                .expect("the constraint's levels define the exposed node");
+            for block in blocks(&rendered) {
+                let i = column_of(&block, "QN");
+                assert_eq!(
+                    vector_values(&block)[i],
+                    "X",
+                    "the exposed column is unstated:\n{block}"
+                );
+                assert_eq!(
+                    ic_values(&block).expect("a state-holding cell's block carries an -ic")[i],
+                    cell.voltages.of(level.start),
+                    "the exposed column starts at its measured level:\n{block}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_block_kind_aligns_its_vector_and_ic_with_the_exposed_pinlist() {
+        // `-pinlist`, `-vector` and `-ic` are one walk over one order, so each block of each kind renders
+        // exactly as many symbols and voltages as it lists columns, the exposed ones included.
+        for src in [C2_EXPOSED, DFF_EXPOSED_MASTER] {
+            let cell = analyse(src);
+            assert!(
+                cell.state_holding,
+                "the fixture holds state, so it emits -ic"
+            );
+            let exposed: Vec<&str> = cell.exposed.iter().map(Symbol::as_str).collect();
+            let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+            eprintln!("{tcl}");
+            let (mut transitions, mut hidden, mut constraints) = (0, 0, 0);
+            for block in blocks(&tcl) {
+                let pins = pinlist_of(&block);
+                assert_eq!(
+                    pins.len(),
+                    cell.inputs.len() + exposed.len() + cell.outputs.len(),
+                    "the pinlist is inputs, exposed nodes and outputs:\n{block}"
+                );
+                for node in &exposed {
+                    assert!(pins.contains(node), "{node} has a column:\n{block}");
+                }
+                assert_eq!(
+                    vector_values(&block).len(),
+                    pins.len(),
+                    "one -vector symbol per column:\n{block}"
+                );
+                assert_eq!(
+                    ic_values(&block)
+                        .unwrap_or_else(|| panic!("every block carries an -ic:\n{block}"))
+                        .len(),
+                    pins.len(),
+                    "one -ic voltage per column:\n{block}"
+                );
+                if block.contains("-type hidden") {
+                    hidden += 1;
+                } else if ["setup", "hold"]
+                    .iter()
+                    .any(|k| block.contains(&format!("-type {k} ")))
+                    || block.contains("non_seq")
+                {
+                    constraints += 1;
+                } else {
+                    transitions += 1;
+                }
+            }
+            assert!(
+                transitions > 0 && hidden > 0 && constraints > 0,
+                "the fixture covers all three block kinds, got {transitions}/{hidden}/{constraints}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cell_exposing_nothing_keeps_a_pin_only_pinlist() {
+        // Nothing exposed, nothing added: the arc pinlist is the cell's pins, so every rendered block
+        // keeps the shape it had before exposed columns existed.
+        for src in [AND2, MAJ3, TWO, OA22, IC_DFF] {
+            let cell = analyse(src);
+            assert!(cell.exposed.is_empty());
+            assert_eq!(arc_pinlist_str(&cell), pinlist_str(&cell));
+            let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+            for block in blocks(&tcl) {
+                assert_eq!(
+                    pinlist_of(&block).len(),
+                    cell.inputs.len() + cell.outputs.len(),
+                    "an exposure-free block lists the cell's pins and nothing else:\n{block}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_exposed_node_is_never_an_arc_source_or_target() {
+        // `-related_pin` and `-pin` are drawn from the primary inputs and the output pins alone, so an
+        // exposed internal cannot appear in either however many columns it earns.
+        for src in [C2_EXPOSED, DFF_EXPOSED_MASTER] {
+            let cell = analyse(src);
+            let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+            for line in tcl.lines().map(str::trim) {
+                let Some(rest) = line
+                    .strip_prefix("-related_pin ")
+                    .or_else(|| line.strip_prefix("-pin "))
+                else {
+                    continue;
+                };
+                let name = rest
+                    .split_whitespace()
+                    .next()
+                    .expect("the field names a pin");
+                assert!(
+                    !cell.exposed.iter().any(|e| e == name),
+                    "an exposed node reached {line:?}"
+                );
+            }
+        }
     }
 
     /// The same two-latch DFF, with edge collapse explicitly suppressed (`no_edge_collapse = true`) —

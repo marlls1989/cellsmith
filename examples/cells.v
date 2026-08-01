@@ -356,3 +356,25 @@ endspecify
 C2GATE_Q u_C2GATE_Q (Q, A, B);
 endmodule
 `endcelldefine
+primitive C2EXP_Q(Q, A, B);
+output Q;
+input  A, B;
+reg    Q;
+table
+	0 0 : ? : 0;
+	0 1 : ? : -;
+	1 0 : ? : -;
+	1 1 : ? : 1;
+endtable
+endprimitive
+`celldefine
+module C2EXP(Q, A, B);
+output Q;
+input  A, B;
+specify
+	(A => Q) = (0.1, 0.1);
+	(B => Q) = (0.1, 0.1);
+endspecify
+C2EXP_Q u_C2EXP_Q (Q, A, B);
+endmodule
+`endcelldefine
