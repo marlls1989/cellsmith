@@ -787,7 +787,7 @@ define_leakage -when "!CLK*D" { DFF }
 define_arc \
 	-type setup \
 	-prevector_pinlist {CLK D} \
-	-prevector {01} \
+	-prevector {01 11 01} \
 	-pinlist {CLK D Q} \
 	-vector {R F X} \
 	-related_pin CLK \
@@ -797,7 +797,7 @@ define_arc \
 define_arc \
 	-type hold \
 	-prevector_pinlist {CLK D} \
-	-prevector {01} \
+	-prevector {01 11 01} \
 	-pinlist {CLK D Q} \
 	-vector {R F X} \
 	-related_pin CLK \
@@ -807,7 +807,7 @@ define_arc \
 define_arc \
 	-type setup \
 	-prevector_pinlist {CLK D} \
-	-prevector {00} \
+	-prevector {00 10 00} \
 	-pinlist {CLK D Q} \
 	-vector {R R X} \
 	-related_pin CLK \
@@ -817,7 +817,7 @@ define_arc \
 define_arc \
 	-type hold \
 	-prevector_pinlist {CLK D} \
-	-prevector {00} \
+	-prevector {00 10 00} \
 	-pinlist {CLK D Q} \
 	-vector {R R X} \
 	-related_pin CLK \

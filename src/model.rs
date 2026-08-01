@@ -15,6 +15,7 @@ use crate::logic::arcs::{Arc, HiddenArc};
 use crate::logic::confluence::Constraint;
 use crate::logic::hazard::{OrderDependence, Oscillation};
 use crate::logic::leakage::LeakageState;
+use crate::logic::machine::ExplorationBudget;
 
 /// The whole input file: a list of `[[cell]]` tables.
 #[derive(Debug, Deserialize)]
@@ -385,6 +386,11 @@ pub struct AnalysedCell {
     /// internal node. Default (empty) when the cell opted out (`no_edge_collapse`). Computed purely from
     /// the already-explored machine — it never alters the exploration.
     pub edge: crate::logic::edge::EdgeArcs,
+    /// The exploration budget counter that stopped the machine pass, or `None` when the machine was
+    /// explored in full. Set ⇒ nothing was derived from the machine: `arcs`, `hidden_arcs`, `leakage`,
+    /// `order_dependence`, `oscillation` and `constraints` are all empty and `edge` is the default, so
+    /// the CLI reports the cell instead of emitting arc-free artifacts for it.
+    pub unexplored: Option<crate::logic::machine::ExplorationLimit>,
     /// The cell-wide characterisation-template references (delay/power/constrain) carried verbatim from
     /// the spec for the `define_cell` emitter. `None` when the cell declares no `template`. Raw carry —
     /// analysis never reads or synthesises it.
@@ -425,6 +431,15 @@ impl Spec {
     /// collisions (an alias colliding with another cell's name included). The per-cell analyses then run
     /// in parallel, matching the single machine pass minted per cell in [`Cell::analyse`].
     pub fn analyse(&self) -> Result<Vec<AnalysedCell>, ModelError> {
+        self.analyse_with(&ExplorationBudget::default())
+    }
+
+    /// [`Spec::analyse`] with an explicit exploration budget for every cell — the CLI's entry point,
+    /// carrying the `--max-candidates` / `--max-states` ceilings.
+    pub fn analyse_with(
+        &self,
+        budget: &ExplorationBudget,
+    ) -> Result<Vec<AnalysedCell>, ModelError> {
         let mut seen: BTreeSet<Symbol> = BTreeSet::new();
         for cell in &self.cells {
             for name in &cell.name {
@@ -433,14 +448,25 @@ impl Spec {
                 }
             }
         }
-        self.cells.par_iter().map(|c| c.analyse()).collect()
+        self.cells
+            .par_iter()
+            .map(|c| c.analyse_with(budget))
+            .collect()
     }
 }
 
 impl Cell {
     /// Validate the cell and parse its functions, classifying each referenced variable as a primary
-    /// input, an output, or an internal signal (feedback/state = a signal-name reference).
+    /// input, an output, or an internal signal (feedback/state = a signal-name reference). The machine
+    /// is explored under the default [`ExplorationBudget`].
     pub fn analyse(&self) -> Result<AnalysedCell, ModelError> {
+        self.analyse_with(&ExplorationBudget::default())
+    }
+
+    /// [`Cell::analyse`] with an explicit exploration budget: the ceilings bound the machine pass, and
+    /// an exploration stopped by one of them leaves every machine-derived field empty with the counter
+    /// recorded in [`AnalysedCell::unexplored`].
+    pub fn analyse_with(&self, budget: &ExplorationBudget) -> Result<AnalysedCell, ModelError> {
         let mut analysed = self.analyse_signals()?;
 
         // One-shot state-space rewrite: mint the cell's single builder, build every signal's BDD once,
@@ -463,8 +489,12 @@ impl Cell {
         // suppression and emission gating are applied downstream.
         // The opt-out (`no_edge_collapse`, also set for every cell by the global `--no-edge-collapse`)
         // gates the classify() call itself, not just its result — no wasted work when collapse is off.
-        let analysis =
-            crate::logic::analysis::analyse_machine(&analysed, &bdds, !self.no_edge_collapse);
+        let analysis = crate::logic::analysis::analyse_machine(
+            &analysed,
+            &bdds,
+            !self.no_edge_collapse,
+            budget,
+        );
         analysed.arcs = analysis.arcs;
         analysed.hidden_arcs = analysis.hidden_arcs;
         analysed.leakage = analysis.leakage;
@@ -472,6 +502,7 @@ impl Cell {
         analysed.order_dependence = analysis.order_dependence;
         analysed.oscillation = analysis.oscillation;
         analysed.edge = analysis.edge;
+        analysed.unexplored = analysis.unexplored;
 
         // Cache each signal's state-table regions once, in `signals()` order, from the shared folded
         // BDDs, so downstream emitters don't rebuild the BDDs per call site.
@@ -607,6 +638,7 @@ impl Cell {
             when: self.when,
             regions: Vec::new(),
             edge: Default::default(),
+            unexplored: None,
             template: self.template.clone(),
             template_overrides: self.template_overrides.clone(),
         };

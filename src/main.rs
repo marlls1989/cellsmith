@@ -16,6 +16,7 @@ use cellsmith::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
 use cellsmith::emit::define_cell::cell_define_cell;
 use cellsmith::emit::liberty::library_liberty;
 use cellsmith::emit::verilog::cell_verilog;
+use cellsmith::logic::machine::{ExplorationBudget, ExplorationLimit};
 use cellsmith::model::{parse_spec, AnalysedCell, ArcClass, ArcClasses};
 
 /// Generate Cadence Liberate transition arcs (with prevectors), a behavioural Verilog model and a
@@ -65,6 +66,16 @@ struct Cli {
     /// Write all four artifacts to stdout (with banners) instead of writing files.
     #[arg(long)]
     stdout: bool,
+
+    /// Ceiling on the seed minterms a cell's exploration may pool as initialisation candidates: a
+    /// forced cover cube expands to 2^d of them for its d unconstrained input columns.
+    #[arg(long, value_name = "N", default_value_t = ExplorationBudget::default().candidates)]
+    max_candidates: usize,
+
+    /// Ceiling on the reachable stable states a cell's exploration may record; every one of them is
+    /// re-walked by the arc derivation and the hazard probes.
+    #[arg(long, value_name = "N", default_value_t = ExplorationBudget::default().states)]
+    max_states: usize,
 }
 
 /// The `--when` flag, resolved to the set of arc classes it selects. Every occurrence of the flag is
@@ -162,7 +173,41 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     for c in &mut spec.cells {
         c.when = c.when.union(cli.when.classes);
     }
-    let cells: Vec<AnalysedCell> = spec.analyse()?;
+    let budget = ExplorationBudget {
+        candidates: cli.max_candidates,
+        states: cli.max_states,
+    };
+    let cells: Vec<AnalysedCell> = spec.analyse_with(&budget)?;
+
+    // A cell whose exploration stopped at a budget ceiling has no arcs, hazards, leakage states or
+    // constraints — emitting its artifacts anyway would present that silence as the cell's behaviour, so
+    // this is an error and nothing is written. Every offending cell is named, not just the first.
+    let unexplored: Vec<(&AnalysedCell, ExplorationLimit)> = cells
+        .iter()
+        .filter_map(|c| c.unexplored.map(|limit| (c, limit)))
+        .collect();
+    if !unexplored.is_empty() {
+        for (c, limit) in unexplored {
+            let (stopped_at, flag) = match limit {
+                ExplorationLimit::Candidates(n) => (
+                    format!("the candidate budget ({n} seed minterms)"),
+                    "--max-candidates",
+                ),
+                ExplorationLimit::States(n) => (
+                    format!("the state budget ({n} explored states)"),
+                    "--max-states",
+                ),
+            };
+            eprintln!(
+                "cellsmith: error: cell {:?}: exploration stopped at {stopped_at}; no arcs, hazards, \
+                 leakage states or constraints are derived — raise it with {flag}",
+                c.repr_name(),
+            );
+        }
+        // Each cell's diagnostic is already complete on stderr, so there is no error value left for
+        // `main` to print: leave with the failing status before any artifact is rendered.
+        std::process::exit(1);
+    }
 
     // Diagnose detected oscillation hazards: a periodic, non-settling cycle rather than a fixpoint,
     // naming the nodes (outputs or internals) that oscillate — the user should know, as this is never

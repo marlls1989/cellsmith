@@ -312,6 +312,9 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         out
     };
 
+    // The raw explored order — `per_node` gates on eligibility itself, contributing nothing from an
+    // ineligible state. The walk keeps every state so its index space stays aligned with `scan.next`
+    // and `scan.eligible`, which every later scan indexes by state position.
     let aggs: Vec<CandAgg> = ex.order.par_iter().map(per_node).reduce(
         || vec![CandAgg::default(); candidates.len()],
         |mut a, b| {
@@ -879,7 +882,7 @@ struct Scan<'a, B: Brand, C: ManagerCell> {
     /// input order — in `order[s]` and settling. `None` when that toggle oscillates, or lands outside the
     /// explored set.
     next: Vec<Vec<Option<usize>>>,
-    /// Each state's arc eligibility ([`arc_eligible`]).
+    /// Each state's measurement eligibility ([`Machine::arc_eligible`]).
     eligible: Vec<bool>,
     /// The declared clocks, for membership tests. Every declared clock is a candidate edge key; whether a
     /// clock keeps edge arcs on a given node is decided behaviourally, not by input-class routing.
@@ -908,15 +911,15 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
             m,
             order,
             next,
-            eligible: order.iter().map(|s| arc_eligible(m, s)).collect(),
+            eligible: order.iter().map(|s| m.arc_eligible(s)).collect(),
             clock_set: m.cell.clock_pins.iter().map(Symbol::as_str).collect(),
         }
     }
 
-    /// Is `s` arc-eligible (see [`arc_eligible`])? The measurement gate for a state reached during a walk;
-    /// `eligible` answers the same question for a state already in `order`.
+    /// Is `s` eligible to be measured from (see [`Machine::arc_eligible`])? The measurement gate for a
+    /// state reached during a walk; `eligible` answers the same question for a state already in `order`.
     fn is_eligible(&self, s: &Minterm<Symbol>) -> bool {
-        arc_eligible(self.m, s)
+        self.m.arc_eligible(s)
     }
 
     /// The LIVE dependency graph among the state variables at every reachable stable state. `live_succ[i]`
@@ -1116,16 +1119,6 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
             }
         }
     }
-}
-
-/// ARC ELIGIBILITY: a reachable stable state is arc-eligible iff every STATE column is determinate — no
-/// don't-care. A don't-care is a MISSING variable, never coerced to 0/1, so an ineligible start would read
-/// an uninitialised latch as though it held a value. Traversal is untouched — a partial state stays a seed
-/// in the explored order — but no measurement quantifies over one.
-fn arc_eligible<B: Brand, C: ManagerCell>(m: &Machine<'_, B, C>, s: &Minterm<Symbol>) -> bool {
-    m.state_vars
-        .iter()
-        .all(|w| s.value_of(w.as_str()).is_some())
 }
 
 /// Does `f`, once every variable of its support EXCEPT `freed` is fixed to `state`'s values, still depend
@@ -1556,7 +1549,12 @@ mod tests {
                 $analysed.outputs.iter().map(|o| o.name.clone()).collect();
             let min = crate::logic::minimise::minimise_state_space(&mut $bdds, &order, &output_set);
             crate::model::recompute_signal_metadata(&mut $analysed, &$bdds, &min);
-            let $m = crate::logic::analysis::Machine::build(&$analysed, &$bdds).unwrap();
+            let $m = crate::logic::analysis::Machine::build(
+                &$analysed,
+                &$bdds,
+                &crate::logic::machine::ExplorationBudget::default(),
+            )
+            .unwrap();
             $body
         }};
     }
@@ -2979,12 +2977,13 @@ GCLK = "CLK*EL"
         });
     }
 
-    // === Blow-up guard ===
+    // === Exploration budget ===
 
     #[test]
-    fn edge_blowup_guard_yields_default() {
-        // A machine wider than MAX_MACHINE_VARS is never built ⇒ no Machine ⇒ default annotation.
-        let n = crate::logic::analysis::MAX_MACHINE_VARS + 1;
+    fn edge_budget_overrun_yields_default() {
+        // A cell whose exploration passes a budget ceiling has no Machine ⇒ default annotation. 24
+        // inputs put 2^23 seed minterms in each of Y's forced cover cubes, past the default ceiling.
+        let n = 24;
         let list = (0..n)
             .map(|i| format!("\"I{i}\""))
             .collect::<Vec<_>>()
@@ -3005,8 +3004,13 @@ GCLK = "CLK*EL"
         let min = crate::logic::minimise::minimise_state_space(&mut bdds, &order, &output_set);
         crate::model::recompute_signal_metadata(&mut analysed, &bdds, &min);
         assert!(
-            crate::logic::analysis::Machine::build(&analysed, &bdds).is_none(),
-            "wide cell trips the guard ⇒ default EdgeArcs"
+            crate::logic::analysis::Machine::build(
+                &analysed,
+                &bdds,
+                &crate::logic::machine::ExplorationBudget::default(),
+            )
+            .is_err(),
+            "wide cell passes the candidate budget ⇒ default EdgeArcs"
         );
         assert!(EdgeArcs::default().captures.is_empty());
     }

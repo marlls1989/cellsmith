@@ -31,8 +31,9 @@ use crate::logic::{machine, resolve};
 use crate::model::AnalysedCell;
 
 /// The plain-data outcome of the shared machine pass: the transition arcs, the two detected hazards
-/// (order-dependent and oscillation), and the constraints generated to avoid them. Empty when the cell
-/// is not explored (the combinatorial blow-up guard, see `MAX_MACHINE_VARS`).
+/// (order-dependent and oscillation), and the constraints generated to avoid them. Everything is empty
+/// when the exploration passed a budget ceiling, and `unexplored` then names the counter that stopped it
+/// (see [`machine::ExplorationBudget`]).
 ///
 /// `MachineAnalysis` itself never escapes this module: [`analyse_machine`]'s result is copied field-for-
 /// field into the matching [`crate::model::AnalysedCell`] fields by `Cell::analyse` (see `model.rs`).
@@ -45,18 +46,10 @@ pub struct MachineAnalysis {
     pub oscillation: Vec<Oscillation>,
     pub leakage: Vec<LeakageState>,
     pub edge: crate::logic::edge::EdgeArcs,
+    /// The budget counter that stopped the exploration, or `None` when the machine was explored in
+    /// full. Set ⇒ every field above is empty, because nothing was derived.
+    pub unexplored: Option<machine::ExplorationLimit>,
 }
-
-/// The single home for the combinatorial blow-up guard: a cell whose machine width (inputs + state
-/// variables) exceeds this bound is not explored at all — both arcs and hazards come back empty.
-///
-/// The bound is on `inputs + state variables`, and 22 is a deliberate memory/time ceiling: exploration
-/// materialises candidate pools by expanding the signals' input-projected FR covers (`cover_over_fr`)
-/// into full input minterms (via [`Cover::maximize`](espresso_logic::Cover::maximize)), so a machine of
-/// width `w` can seed on the order of `2^w` minterms. At 22 that worst case is ~4M candidates — the
-/// largest pool we accept — and each extra variable *doubles* it, so raising the constant grows the pool
-/// (and the exploration cost) exponentially.
-pub(crate) const MAX_MACHINE_VARS: usize = 22;
 
 /// A cell's asynchronous state machine, built once and shared by the arc and confluence derivations. The
 /// BDD brand is a generic parameter scoped to the builder that minted these handles.
@@ -78,17 +71,18 @@ pub struct Machine<'c, B: Brand, C: ManagerCell> {
 
 impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
     /// Build the shared machine for `cell` from the minimised `bdds` map (built once in
-    /// [`crate::model::Cell::analyse`]). Returns `None` — leaving the cell unexplored — when the machine
-    /// width would exceed `MAX_MACHINE_VARS` (the combinatorial blow-up guard).
+    /// [`crate::model::Cell::analyse`]), exploring it under `budget`. The exploration is the only
+    /// fallible step: it stops, leaving the cell unexplored, when one of the budget's two counters
+    /// passes its ceiling, and that counter comes back as the error.
     pub fn build(
         cell: &'c AnalysedCell,
         bdds: &BTreeMap<Symbol, Bdd<B, C>>,
-    ) -> Option<Machine<'c, B, C>>
+        budget: &machine::ExplorationBudget,
+    ) -> Result<Machine<'c, B, C>, machine::ExplorationLimit>
     where
         C: Send + Sync,
     {
         let inputs = &cell.inputs;
-        let n = inputs.len();
 
         let signals: Vec<&crate::model::AnalysedOutput> = cell.signals().collect();
         // Feedback was recomputed post-fold, so this classifier is now exact: every surviving state
@@ -100,12 +94,6 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             .map(|s| s.name.clone())
             .filter(|nm| state_set.contains(nm))
             .collect();
-        let k = state_vars.len();
-
-        // Guard against a combinatorial blow-up on pathologically wide cells (now on the minimised width).
-        if n + k > MAX_MACHINE_VARS {
-            return None;
-        }
 
         // The minimise fixpoint invariant (I3): every signal's signal-name support is a subset of the
         // state variables, so a state variable's next-state δ and a combinational output's δ are both a
@@ -141,9 +129,9 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             .map(|(_, d)| d.clone())
             .chain(out_deltas.values().cloned())
             .collect();
-        let explored = machine::explore(&deltas, &seed_funcs, inputs, &state_vars);
+        let explored = machine::explore(&deltas, &seed_funcs, inputs, &state_vars, budget)?;
 
-        Some(Machine {
+        Ok(Machine {
             cell,
             state_vars,
             state_set,
@@ -153,10 +141,24 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
         })
     }
 
+    /// MEASUREMENT ELIGIBILITY: a reachable stable state is measurement-eligible iff every STATE column
+    /// is determinate — no don't-care. A don't-care is a MISSING variable, never coerced to 0/1, so an
+    /// ineligible start would read an uninitialised latch as though it held a value. Traversal is
+    /// untouched — a partial state stays a seed in the explored order — but no measurement quantifies
+    /// over one: the arc derivation, the behavioural edge classification and the hazard probes all gate
+    /// on this one predicate.
+    pub(crate) fn arc_eligible(&self, s: &Minterm<Symbol>) -> bool {
+        self.state_vars
+            .iter()
+            .all(|w| s.value_of(w.as_str()).is_some())
+    }
+
     /// The value of `name` at a node, or `None` when the node does not define it: a state output reads
     /// its state field (absent ⇒ undefined); a combinational output is its δ evaluated at the node
     /// (`Err` ⇒ still depends on absent state ⇒ undefined). An arc is only measured where the output is
-    /// defined at both ends.
+    /// defined at both ends. The `Option` survives because [`leakage::derive`] reads the exploration's
+    /// seeds, which are not eligibility-gated: a seed's unforced state columns stay absent, and an output
+    /// that does not resolve there is dropped from that leakage state by design.
     pub(crate) fn output_value(&self, name: &str, node: &Minterm<Symbol>) -> Option<bool> {
         if self.state_set.contains(name) {
             node.value_of(name)
@@ -173,16 +175,24 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
 }
 
 /// Build the cell's state machine from the minimised `bdds` map and derive its arcs and hazards from the
-/// shared exploration. The builder was minted once in [`crate::model::Cell::analyse`]; this pass only
-/// reads the shared map. Returns an empty [`MachineAnalysis`] when the cell is not explored (the blow-up
-/// guard).
+/// shared exploration, bounded by `budget`. The builder was minted once in
+/// [`crate::model::Cell::analyse`]; this pass only reads the shared map. An exploration stopped by one of
+/// the budget's counters yields an otherwise-empty [`MachineAnalysis`] carrying that counter in
+/// `unexplored`: nothing was derived, and the caller reports it.
 pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     cell: &AnalysedCell,
     bdds: &BTreeMap<Symbol, Bdd<B, C>>,
     collapse: bool,
+    budget: &machine::ExplorationBudget,
 ) -> MachineAnalysis {
-    let Some(m) = Machine::build(cell, bdds) else {
-        return MachineAnalysis::default();
+    let m = match Machine::build(cell, bdds, budget) {
+        Ok(m) => m,
+        Err(limit) => {
+            return MachineAnalysis {
+                unexplored: Some(limit),
+                ..Default::default()
+            }
+        }
     };
     let (arcs, hidden_arcs) = arcs::derive(&m);
     // Detect the hazards, then generate the constraints that avoid them — two separate stages.
@@ -214,54 +224,104 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
         oscillation: detected.oscillation,
         leakage: leakage::derive(&m),
         edge,
+        unexplored: None,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::MAX_MACHINE_VARS;
     use crate::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
     use crate::emit::liberty::cell_liberty;
     use crate::emit::verilog::cell_verilog;
+    use crate::logic::machine::ExplorationLimit;
+    use crate::logic::resolve;
     use crate::model::analyse_one;
 
     #[test]
-    fn oversized_cell_trips_the_blowup_guard() {
-        // inputs + state variables > MAX_MACHINE_VARS ⇒ the machine is left unexplored, so arcs,
-        // constraints and both detected hazards all come back empty (the MachineAnalysis::default path)
-        // — yet the emitters must still run without panicking.
-        let n = MAX_MACHINE_VARS + 1; // 23 primary inputs, 0 state variables ⇒ machine width 23 > 22
+    fn oversized_cell_trips_the_candidate_budget() {
+        // 24 inputs, so each forced cover cube of Y carries 23 don't-care input columns and expands to
+        // 2^23 seed minterms — past the default candidate ceiling. The exploration stops there, so arcs,
+        // constraints and both detected hazards all come back empty (the unexplored path) — yet the
+        // emitters must still run without panicking.
+        let n = 24;
         let list = (0..n)
             .map(|i| format!("\"I{i}\""))
             .collect::<Vec<_>>()
             .join(", ");
-        // Opt in to constraints so the empty result below is the *guard* suppressing generation
-        // (MachineAnalysis::default), not merely the per-cell gate leaving `constraints` untouched.
+        // Opt in to constraints so the empty result below is the stopped exploration suppressing
+        // generation, not merely the per-cell gate leaving `constraints` untouched.
         let src = format!(
             "[[cell]]\nname = \"WIDE\"\nconstraint_arcs = true\ninputs = [{list}]\n[cell.outputs]\nY = \"I0\"\n"
         );
         let cell = analyse_one(&src);
-        assert!(cell.arcs.is_empty(), "guard must suppress arcs");
+        assert!(
+            matches!(cell.unexplored, Some(ExplorationLimit::Candidates(_))),
+            "the candidate counter is the one that stopped it, got {:?}",
+            cell.unexplored,
+        );
+        assert!(cell.arcs.is_empty(), "an unexplored cell has no arcs");
         assert!(
             cell.constraints.is_empty(),
-            "guard must suppress constraints"
+            "an unexplored cell has no constraints"
         );
         assert!(
             cell.oscillation.is_empty(),
-            "guard must suppress oscillation"
+            "an unexplored cell has no oscillation"
         );
         assert!(
             cell.order_dependence.is_empty(),
-            "guard must suppress order-dependent hazards"
+            "an unexplored cell has no order-dependent hazards"
         );
         assert!(
             cell.leakage.is_empty(),
-            "guard must suppress leakage states"
+            "an unexplored cell has no leakage states"
         );
         // Emission still succeeds (no panic); the artifacts are simply arc-free.
         let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         let _ = cell_verilog(&cell);
         let _ = cell_liberty(&cell);
+    }
+
+    #[test]
+    fn wide_machine_with_a_narrow_pool_is_analysed() {
+        // A machine 24 coordinates wide — 6 inputs and 18 state variables — is analysed in full: the
+        // candidate counter reads the input columns alone (6 of them, so no cube expands past 2^6 seed
+        // minterms) and the state counter reads the states actually discovered, so a cell carrying many
+        // state variables is no longer turned away for its width.
+        //
+        // Each `Qj` is set at one input vector, holds at the complementary vector and clears everywhere
+        // else: genuine memory (under the hold vector its δ reads `Qj`), a distinct δ per `j` so the
+        // minimisation dedups none of them, and one hold vector each so the explored set stays close to
+        // the 2^6 input vectors.
+        let (n, k) = (6, 18);
+        let literal = |i: usize, v: bool| if v { format!("I{i}") } else { format!("!I{i}") };
+        let vector = |bits: usize, invert: bool| {
+            (0..n)
+                .map(|i| literal(i, ((bits >> i) & 1 == 1) != invert))
+                .collect::<Vec<_>>()
+                .join("*")
+        };
+        let inputs = (0..n)
+            .map(|i| format!("\"I{i}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let outputs = (0..k)
+            .map(|j| format!("Q{j} = \"{} + Q{j}*{}\"", vector(j, true), vector(j, false)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let cell = analyse_one(&format!(
+            "[[cell]]\nname = \"WIDESTATE\"\ninputs = [{inputs}]\n[cell.outputs]\n{outputs}\n"
+        ));
+
+        let signals: Vec<&crate::model::AnalysedOutput> = cell.signals().collect();
+        let state_vars = resolve::state_variables(&signals);
+        assert_eq!(state_vars.len(), k, "every output is a state variable");
+        assert_eq!(cell.inputs.len() + state_vars.len(), 24, "machine width");
+        assert_eq!(cell.unexplored, None, "the exploration ran to completion");
+        assert!(
+            !cell.arcs.is_empty(),
+            "a fully explored machine yields arcs"
+        );
     }
 
     #[test]

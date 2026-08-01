@@ -13,9 +13,10 @@
 //!   the state into a periodic, non-settling cycle rather than a fixpoint. Detected when
 //!   [`super::machine::settle_or_cycle`] returns the cycle instead of settling.
 //!
-//! Both are *detected* during the state-space exploration in [`super::confluence`]; an undefined state
-//! variable simply means uninitialised. Metastability is the shared physical risk both create — the
-//! reason a constraint is generated. This module carries only the resulting report types.
+//! Both are *detected* during the state-space exploration in [`super::confluence`]. An uninitialised
+//! state variable is at an UNKNOWN state — not a value, and not a third one — so no detection runs from a
+//! state carrying one. Metastability is the shared physical risk both create — the reason a constraint is
+//! generated. This module carries only the resulting report types.
 //!
 //! **Implementation note:** deduplication is handled by [`super::confluence`].
 //! [`OrderDependence`] is keyed by the unordered `(pin,edge)|(pin,edge)` pair, keeping the min

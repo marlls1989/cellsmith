@@ -9,12 +9,13 @@
 //! for a pair of near-simultaneous input edges the machine is **non-confluent** — the settled state
 //! depends on which edge lands first — or oscillates outright, and either risks metastability.
 //!
-//! [`detect`] walks the reachable states and, for a stable state `s` and an unordered input pair
+//! [`detect`] walks the fully-initialised reachable states — the same `Machine::arc_eligible`
+//! measurement gate the arc derivation applies — and, for a stable state `s` and an unordered input pair
 //! `{x, y}` (all other inputs held), settles `x` then `y` (`s_xy`) and `y` then `x` (`s_yx`). If either
 //! oscillates or `s_xy == s_yx`, the pair is **confluent** at `s` — no order-dependent hazard.
 //! Otherwise the state has diverged, but global divergence alone is not the verdict: it must *interact*
-//! with the racing pair in the immediate combinational neighbourhood — some diverging state variable `w`
-//! (`s_xy.value_of(w) != s_yx.value_of(w)`) must have **both** `x` and `y` in the direct support of its
+//! with the racing pair in the immediate combinational neighbourhood — some state variable `w` whose
+//! value differs between `s_xy` and `s_yx` must have **both** `x` and `y` in the direct support of its
 //! transition function `δ_w`. The model minimisation ([`super::minimise`]) composes through
 //! combinational logic only — a state variable is kept as a variable, never substituted through — so
 //! both pins in `δ_w`'s direct support means the pins meet within one combinational neighbourhood. A
@@ -94,7 +95,8 @@ pub struct Constraint {
 impl Constraint {
     /// The input condition under which the hazard this constraint avoids occurs: the two switching
     /// edges, plus any other
-    /// inputs held at a fixed value in the pre-toggle state (e.g. `A↓ & B↑ with R=0`).
+    /// inputs held at a fixed value in the pre-toggle state (e.g. `A↓ & B↑ with R=0`). A hazard probed at
+    /// a start state has an empty prevector, hence no held inputs to name.
     pub fn condition(&self) -> String {
         let mut cond = format!(
             "{}{} & {}{}",
@@ -114,12 +116,16 @@ impl Constraint {
     }
 }
 
+/// The direction `name` toggles from its current value at `node`. Explored nodes carry a complete input
+/// assignment, so an input's value is always fixed there.
 fn edge_from(node: &Minterm<Symbol>, name: &str) -> Edge {
-    // The direction `name` toggles from its current value at `node`.
-    if node.value_of(name) == Some(false) {
-        Edge::Rise
-    } else {
+    if node
+        .value_of(name)
+        .expect("every input is fixed at an explored node")
+    {
         Edge::Fall
+    } else {
+        Edge::Rise
     }
 }
 
@@ -153,25 +159,40 @@ pub struct DetectedHazards {
     pub oscillation: Vec<Oscillation>,
 }
 
-/// The state variables that oscillate across a `settle_or_cycle` cycle (`value_of` differs between any
-/// two cycle nodes — `Some(v)` vs `None` counts as differing), in `state_vars` declaration order.
+/// Why every state value the hazard path reads is defined: a settle from a fully-initialised state
+/// leaves every state column determinate. `machine`'s `step` evaluates each δ over the node's concrete
+/// inputs and state values, and the minimise invariant I3 bounds a δ's support to the inputs plus the
+/// state variables (asserted in `Machine::build`), so a total node steps to a total node. Every probe
+/// starts from a state `Machine::arc_eligible` admits, so its whole trajectory — the singles, the two
+/// orders and the simultaneous settle alike — is total, and this message is unreachable.
+const DETERMINATE: &str =
+    "a settle from a fully-initialised state leaves every state column determinate";
+
+/// The state variables that oscillate across a `settle_or_cycle` cycle — those whose VALUE differs
+/// between any two cycle nodes — in `state_vars` declaration order.
 fn oscillating_group(cycle: &[Minterm<Symbol>], state_vars: &[Symbol]) -> Vec<Symbol> {
     state_vars
         .iter()
         .filter(|v| {
-            let mut vals = cycle.iter().map(|m| m.value_of(v.as_str()));
-            let first = vals.next();
-            vals.any(|val| Some(val) != first)
+            let mut vals = cycle
+                .iter()
+                .map(|m| m.value_of(v.as_str()).expect(DETERMINATE));
+            let Some(first) = vals.next() else {
+                return false;
+            };
+            vals.any(|val| val != first)
         })
         .cloned()
         .collect()
 }
 
 /// Detect a cell's hazards by re-walking its shared state machine ([`Machine`]) and testing pairwise
-/// input-order confluence. Produces the two detected hazards symmetrically — [`OrderDependence`] and
-/// [`Oscillation`] — but generates no constraint (that is `constrain`'s job). Empty for confluent
-/// cells (ordinary combinational / self-holding gates without oscillation) and for cells with too few
-/// inputs or no state to latch.
+/// input-order confluence. Probes only the fully-initialised reachable stable states
+/// (`Machine::arc_eligible`): a state carrying an uninitialised state variable is at an unknown state,
+/// from which nothing can be concluded. Produces the two detected hazards symmetrically —
+/// [`OrderDependence`] and [`Oscillation`] — but generates no constraint (that is `constrain`'s job).
+/// Empty for confluent cells (ordinary combinational / self-holding gates without oscillation) and for
+/// cells with too few inputs or no state to latch.
 pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> DetectedHazards {
     let cell = m.cell;
     let inputs = &cell.inputs;
@@ -214,6 +235,10 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
         BTreeMap<String, OrderDependence>,
         BTreeMap<String, Oscillation>,
     ) {
+        debug_assert!(
+            m.arc_eligible(s),
+            "detect: a probe may only start from a fully-initialised state"
+        );
         let mut order_dependence: BTreeMap<String, OrderDependence> = BTreeMap::new();
         let mut oscillation: BTreeMap<String, Oscillation> = BTreeMap::new();
 
@@ -313,13 +338,20 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                     continue; // confluent at this state — no hazard
                 }
 
+                // Does `w` hold a different value in the two settle orders? Both are total (see
+                // `DETERMINATE`), so this is a comparison of values, not of definedness.
+                let diverges = |w: &Symbol| {
+                    s_xy.value_of(w.as_str()).expect(DETERMINATE)
+                        != s_yx.value_of(w.as_str()).expect(DETERMINATE)
+                };
+
                 // Global divergence is not enough: it must interact with {x, y} in the immediate
                 // combinational neighbourhood — some state variable that actually diverges between the
                 // two settle orders must have BOTH x and y in the direct support of its own δ. Otherwise
                 // the divergence is a settled snapshot mediated across a latch boundary (e.g. a
                 // dual-clock synchroniser's two domains), not a pin-pair hazard.
                 let interacts = state_vars.iter().any(|w| {
-                    s_xy.value_of(w.as_str()) != s_yx.value_of(w.as_str())
+                    diverges(w)
                         && support[w].contains(x.as_str())
                         && support[w].contains(y.as_str())
                 });
@@ -332,11 +364,8 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                 // pair races. The constraint generated from it (see [`constrain`]) has its kind decided
                 // there, solely by the declared clock, since the hazard is a property of the cell rather
                 // than of the declaration.
-                let group: Vec<Symbol> = state_vars
-                    .iter()
-                    .filter(|w| s_xy.value_of(w.as_str()) != s_yx.value_of(w.as_str()))
-                    .cloned()
-                    .collect();
+                let group: Vec<Symbol> =
+                    state_vars.iter().filter(|w| diverges(w)).cloned().collect();
                 let mut stable_set: BTreeSet<Minterm<Symbol>> = BTreeSet::new();
                 stable_set.insert(s_xy.project_to(&group));
                 stable_set.insert(s_yx.project_to(&group));
@@ -361,22 +390,30 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
         (order_dependence, oscillation)
     };
 
-    // Probe every reachable state in parallel, then fold the per-state dedup maps together. The merge is
+    // Probe every fully-initialised reachable state in parallel, then fold the per-state dedup maps
+    // together. The filter comes AFTER `enumerate`, so `discovered` stays the BFS index of the state —
+    // the tie-break both dedup reads use — rather than a position in the filtered sequence. The merge is
     // associative and commutative: `record_order_dependence` keeps the min `(prevector.len, discovered)`
     // — a total order per key — and `merge_oscillation` unions races into an arbitrary surviving
     // representative, so the folded result equals the sequential one regardless of state/thread order.
-    let (order_dependence, oscillation) = ex.order.par_iter().enumerate().map(per_state).reduce(
-        || (BTreeMap::new(), BTreeMap::new()),
-        |(mut oa, mut osca), (ob, oscb)| {
-            for od in ob.into_values() {
-                record_order_dependence(&mut oa, od);
-            }
-            for (k, o) in oscb {
-                merge_oscillation(&mut osca, k, o);
-            }
-            (oa, osca)
-        },
-    );
+    let (order_dependence, oscillation) = ex
+        .order
+        .par_iter()
+        .enumerate()
+        .filter(|(_, s)| m.arc_eligible(s))
+        .map(per_state)
+        .reduce(
+            || (BTreeMap::new(), BTreeMap::new()),
+            |(mut oa, mut osca), (ob, oscb)| {
+                for od in ob.into_values() {
+                    record_order_dependence(&mut oa, od);
+                }
+                for (k, o) in oscb {
+                    merge_oscillation(&mut osca, k, o);
+                }
+                (oa, osca)
+            },
+        );
 
     DetectedHazards {
         order_dependence: order_dependence.into_values().collect(),
@@ -469,6 +506,8 @@ fn record_order_dependence(map: &mut BTreeMap<String, OrderDependence>, od: Orde
     let b = format!("{}{}", od.y, od.y_edge.rf());
     let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
     let key = format!("{lo}|{hi}");
+    // The `Option` read here is the incumbent — no entry yet, or one this candidate beats on
+    // `(prevector.len, discovered)` — nothing to do with a state value's determinacy.
     if map
         .get(&key)
         .is_none_or(|e| (od.prevector.len(), od.discovered) < (e.prevector.len(), e.discovered))
@@ -538,6 +577,7 @@ fn record_constraint(
     discovered: usize,
 ) {
     let key = constraint_key(&cons);
+    // As in `record_order_dependence`: the `Option` is the incumbent, not a value's determinacy.
     if found
         .get(&key)
         .is_none_or(|(e, ed)| (cons.prevector.len(), discovered) < (e.prevector.len(), *ed))
@@ -719,8 +759,10 @@ Q = "A*B + Q*(A+B)"
 
     #[test]
     fn constraint_prevector_lengths_are_minimal() {
-        // multiset of per-key minimal prevector lengths — pins the min-by-len quality criterion;
-        // re-capture only for a deliberate algorithm change
+        // Multiset of per-key minimal prevector lengths — pins the min-by-len quality criterion. The
+        // minimum runs over the fully-initialised probed states (`Machine::arc_eligible`), so a cell
+        // whose seeds leave a state variable undriven measures from further along its BFS. Re-capture
+        // only for a deliberate algorithm change.
         let dff = analyse(
             r#"
 [[cell]]
@@ -736,7 +778,11 @@ Q = "CLK*M + !CLK*Q"
         );
         let mut dff_lens: Vec<usize> = dff.constraints.iter().map(|c| c.prevector.len()).collect();
         dff_lens.sort();
-        assert_eq!(dff_lens, vec![1, 1]);
+        // Every DFF seed sits at CLK=0, where δ_M = !CLK*D + CLK*M forces M but δ_Q = CLK*M + !CLK*Q
+        // holds Q: Q is undriven there, so no probe starts at a seed. The shortest eligible state a
+        // CLK↑ probe can start from is three input states along — CLK low, a pulse that drives Q, and
+        // CLK low again.
+        assert_eq!(dff_lens, vec![3, 3]);
 
         let c2 = analyse(
             r#"
@@ -750,6 +796,8 @@ Q = "A*B + Q*(A+B)"
         );
         let mut c2_lens: Vec<usize> = c2.constraints.iter().map(|c| c.prevector.len()).collect();
         c2_lens.sort();
+        // C2's single state variable is forced at both seeds, so every state in its explored order is
+        // eligible and the minimum is the BFS distance alone.
         assert_eq!(c2_lens, vec![2, 2]);
     }
 

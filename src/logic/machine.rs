@@ -21,8 +21,29 @@
 //! The machine model, settling, cycle detection and start-state discovery are described concept-first in
 //! `state-machine-arc-engine.md`; this module records only the implementation specifics the concept
 //! doesn't need.
+//!
+//! # Exploration budgets
+//!
+//! [`explore`] is bounded by two counters, carried together in [`ExplorationBudget`] and charged against
+//! the work the call actually performs — never against the cell's declared shape (a cell is not turned
+//! away for having many inputs or many state variables). Whichever counter trips is the returned
+//! [`ExplorationLimit`] variant, carrying the ceiling it passed.
+//!
+//! * **`candidates`** counts the **seed minterms** of the candidate pool. The pool expands every seed
+//!   function's forced FR cover into complete input assignments, so one cube carrying `d` don't-care
+//!   *input* columns is exactly `2^d` minterms — a quantity in the input count alone, not in
+//!   inputs + state variables. Every pooled candidate then costs a settlement map (one δ evaluation per
+//!   state variable) for the ranking, so the pool sets both the memory and the ranking cost.
+//!   [`Cube::expand_to`](espresso_logic::Cube::expand_to) yields a cube's minterms lazily and knows its
+//!   own length up front, so each cube is charged before it is expanded and an over-budget pool is
+//!   counted without ever being materialised.
+//! * **`states`** counts the reachable stable states the BFS records in [`Explored::order`]. That vector
+//!   is what the downstream passes re-walk: [`super::arcs::derive`] at O(|order| · inputs) settles and
+//!   [`super::confluence::detect`] at O(|order| · inputs²), so a machine that explores unboundedly many
+//!   states is one whose hazard detection does not finish.
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
@@ -30,6 +51,38 @@ use rayon::prelude::*;
 
 /// A state variable paired with its next-state function δ (over inputs + state variables).
 pub type Delta<B, C> = (Symbol, Bdd<B, C>);
+
+/// What one [`explore`] call may spend, in the two quantities that drive its cost (see the module
+/// documentation): the seed minterms pooled as initialisation candidates and the reachable stable states
+/// the BFS records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExplorationBudget {
+    /// Ceiling on the candidate pool's seed minterms, charged per expanded FR cube.
+    pub candidates: usize,
+    /// Ceiling on the reachable stable states recorded in [`Explored::order`].
+    pub states: usize,
+}
+
+impl Default for ExplorationBudget {
+    /// 2^22 seed minterms and 2^20 explored states: the pool ceiling holds the candidate expansion (and
+    /// the per-candidate settlement maps ranking it) to a few million rows, and a machine reaching a
+    /// million stable states carries a downstream hazard probe that does not finish.
+    fn default() -> Self {
+        Self {
+            candidates: 1 << 22,
+            states: 1 << 20,
+        }
+    }
+}
+
+/// The counter that stopped an [`explore`] call, carrying the ceiling it passed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExplorationLimit {
+    /// The candidate pool passed this many seed minterms.
+    Candidates(usize),
+    /// The BFS passed this many reachable stable states.
+    States(usize),
+}
 
 /// Build a fully-fixed node over `names` from a `name -> value` lookup (called once per variable).
 #[cfg(test)]
@@ -188,12 +241,17 @@ impl Explored {
 /// refining further state as inputs toggle.
 ///
 /// Shared by [`super::arcs`] and [`super::confluence`], which re-walk `order`.
+///
+/// `budget` bounds the two costs the exploration incurs — the pooled seed minterms and the recorded
+/// stable states (see the module documentation) — and the counter that passes its ceiling comes back as
+/// the [`ExplorationLimit`] error.
 pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     state_deltas: &[Delta<B, C>],
     seed_funcs: &[Bdd<B, C>],
     input_names: &[Symbol],
     state_names: &[Symbol],
-) -> Explored {
+    budget: &ExplorationBudget,
+) -> Result<Explored, ExplorationLimit> {
     // The full node columns: inputs then state variables, in state-variable order (see analysis.rs).
     let full_names: Vec<Symbol> = input_names
         .iter()
@@ -210,14 +268,33 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     // Forced on/off cover of a function over the inputs. `cover_over_fr(input_names)` re-bases the
     // function onto the inputs by universal projection — each cube is an input assignment that forces
     // the function's value regardless of the (undefined) power-on state — yielding both the on-set (F)
-    // and off-set (R) in one FR cover. `.maximize()` expands every don't-care, so each cube is a
-    // complete input assignment; `project_to` re-homes each cube's inputs onto the input columns for
-    // canonical membership tests.
+    // and off-set (R) in one FR cover. `expand_to(input_names)` then expands one cube into every
+    // complete assignment of the input columns, on the canonical header membership tests compare on.
+    //
+    // The expansion is lazy and knows its length, so each cube's exact minterm count is charged into
+    // `charged` before a single minterm is packed: the pool is measured whether or not it is affordable.
+    // The charge is saturating, so a cube whose expansion exceeds `usize` still reads as over budget.
+    let charged = AtomicUsize::new(0);
     let cover_inputs = |f: &Bdd<B, C>| -> BTreeSet<Minterm<Symbol>> {
         f.cover_over_fr(input_names)
-            .maximize()
             .cubes()
-            .map(|c| c.inputs().project_to(input_names))
+            .flat_map(|c| {
+                let minterms = c.expand_to(input_names);
+                let n = minterms.len();
+                let total = charged
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |t| {
+                        Some(t.saturating_add(n))
+                    })
+                    .unwrap_or_else(|t| t) // the closure never declines, so this is the observed total
+                    .saturating_add(n);
+                // Past the ceiling the verdict is already settled, so nothing more is materialised.
+                // Every cube is still charged, which keeps the total an interleaving-free sum and the
+                // verdict identical under any thread count.
+                (total <= budget.candidates)
+                    .then_some(minterms)
+                    .into_iter()
+                    .flatten()
+            })
             .collect()
     };
 
@@ -227,6 +304,9 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     // type-blind, so `cover_inputs(&!f) == cover_inputs(f)` as a minterm set — no complement call.
     let pool: BTreeSet<Minterm<Symbol>> =
         seed_funcs.par_iter().flat_map_iter(cover_inputs).collect();
+    if charged.load(Ordering::Relaxed) > budget.candidates {
+        return Err(ExplorationLimit::Candidates(budget.candidates));
+    }
 
     // Depth of each state variable from the inputs (shallowest dependency chain), for the ranking
     // tie-break. A variable driven purely by inputs is depth 1; others are 1 + the shallowest state
@@ -318,6 +398,11 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     let mut order: Vec<Minterm<Symbol>> = Vec::new();
     while let Some(node) = queue.pop_front() {
         order.push(node.clone());
+        // `order` holds every state the exploration has recorded, seeds included (a seed enters here
+        // when it is dequeued), so its length is the state counter.
+        if order.len() > budget.states {
+            return Err(ExplorationLimit::States(budget.states));
+        }
         for related in input_names {
             let toggled = toggle(&node, &[related.as_str()]);
             let Some(np) = settle(state_deltas, &toggled) else {
@@ -330,7 +415,7 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
         }
     }
 
-    Explored { order, prev }
+    Ok(Explored { order, prev })
 }
 
 #[cfg(test)]
@@ -366,7 +451,14 @@ mod tests {
         let deltas = vec![(Symbol::from("Q"), dq.clone())];
         let inputs = [Symbol::from("A"), Symbol::from("B")];
         let state = [Symbol::from("Q")];
-        let explored = explore(&deltas, &[dq], &inputs, &state);
+        let explored = explore(
+            &deltas,
+            &[dq],
+            &inputs,
+            &state,
+            &ExplorationBudget::default(),
+        )
+        .expect("a 2-input C-element is well inside the default budget");
 
         let seeds: Vec<Minterm<Symbol>> = explored.seeds().cloned().collect();
         let on = node_from(&["A", "B", "Q"], |_| true);
@@ -374,6 +466,37 @@ mod tests {
         assert_eq!(seeds.len(), 2, "expected exactly two seeds, got {seeds:?}");
         assert!(seeds.contains(&on), "on-set seed (A=1,B=1,Q=1) present");
         assert!(seeds.contains(&off), "off-set seed (A=0,B=0,Q=0) present");
+    }
+
+    #[test]
+    fn wide_input_cell_trips_the_candidate_budget() {
+        // Y = I0 over 24 inputs. Each FR cube of Y carries 23 don't-care input columns, so expanding
+        // one packs 2^23 seed minterms — past the default 2^22 ceiling on that cube alone, and this
+        // with no state variable at all: the charge reads the input columns, never the machine width.
+        // The count comes from the lazy expansion's length before any minterm is packed, so a pool this
+        // size is measured without being built (building it would cost gigabytes, and this test would
+        // not return).
+        let builder = sync_bdd_builder!();
+        let f = builder.parse("I0").unwrap();
+        let inputs: Vec<Symbol> = (0..24)
+            .map(|i| Symbol::from(format!("I{i}").as_str()))
+            .collect();
+        let budget = ExplorationBudget::default();
+        let verdict = |threads: usize| {
+            let explored = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("thread pool")
+                .install(|| explore(&[], std::slice::from_ref(&f), &inputs, &[], &budget));
+            let Err(limit) = explored else {
+                panic!("the candidate pool passes the ceiling, so exploration must stop");
+            };
+            limit
+        };
+        assert_eq!(verdict(1), ExplorationLimit::Candidates(budget.candidates));
+        // Every cube is charged whatever the interleaving and the early stop only fires once the
+        // ceiling is already passed, so the verdict is the same however many threads expand the seeds.
+        assert_eq!(verdict(1), verdict(8));
     }
 
     #[test]

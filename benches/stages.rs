@@ -10,6 +10,7 @@ use cellsmith::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
 use cellsmith::emit::liberty::cell_liberty;
 use cellsmith::emit::verilog::cell_verilog;
 use cellsmith::logic::analysis::{analyse_machine, Machine};
+use cellsmith::logic::machine::ExplorationBudget;
 use cellsmith::logic::minimise::minimise_state_space;
 use cellsmith::logic::{arcs, confluence, leakage};
 use cellsmith::model::{build_signal_bdds, derive_regions};
@@ -87,16 +88,18 @@ fn bench_machine_stages(c: &mut Criterion) {
     for cell in common::raw_cells() {
         let heavy = common::is_heavy(cell.name[0].as_str());
         // Fixture built once per cell: analyse folds the exprs post-minimise, so this map equals the
-        // minimised map Machine::build consumes. The else-continue guards MAX_MACHINE_VARS.
+        // minimised map Machine::build consumes. The else-continue skips a cell whose exploration
+        // passes an ExplorationBudget ceiling — there is no machine to time.
         let ac = cell.analyse().unwrap();
         let builder = sync_bdd_builder!();
         let bdds = build_signal_bdds(&ac, &builder);
-        let Some(m) = Machine::build(&ac, &bdds) else {
+        let budget = ExplorationBudget::default();
+        let Ok(m) = Machine::build(&ac, &bdds, &budget) else {
             continue;
         };
 
         sweep_bench!(g, "machine_build", cell.name[0], true, heavy, || {
-            Machine::build(&ac, &bdds).unwrap()
+            Machine::build(&ac, &bdds, &budget).unwrap()
         });
         sweep_bench!(
             g,
@@ -110,7 +113,7 @@ fn bench_machine_stages(c: &mut Criterion) {
             confluence::detect(&m)
         });
         sweep_bench!(g, "analyse_machine", cell.name[0], true, heavy, || {
-            analyse_machine(&ac, &bdds, true)
+            analyse_machine(&ac, &bdds, true, &budget)
         });
         sweep_bench!(g, "leakage_derive", cell.name[0], false, heavy, || {
             leakage::derive(&m)

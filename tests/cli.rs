@@ -634,6 +634,82 @@ fn when_output_contains_every_default_arc_block() {
     }
 }
 
+/// A cell whose forced covers expand past the candidate ceiling: 10 inputs put 2^9 seed minterms in
+/// each of Y's two cover cubes, so `--max-candidates 512` stops the exploration and a raised ceiling
+/// lets the same cell through.
+const WIDE: &str = r#"
+[[cell]]
+name = "WIDE"
+inputs = ["I0", "I1", "I2", "I3", "I4", "I5", "I6", "I7", "I8", "I9"]
+[cell.outputs]
+Y = "I0"
+"#;
+
+#[test]
+fn candidate_budget_overrun_errors_and_writes_nothing() {
+    let dir = scratch_dir("budget");
+    let spec = dir.join("wide.toml");
+    std::fs::write(&spec, WIDE).unwrap();
+    let outdir = dir.join("out");
+
+    let out = Command::new(BIN)
+        .arg("--outdir")
+        .arg(&outdir)
+        .arg("--max-candidates")
+        .arg("512")
+        .arg(&spec)
+        .output()
+        .expect("run cellsmith");
+    assert!(
+        !out.status.success(),
+        "an exploration stopped at a budget is an error, not a warning"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains(
+            "cellsmith: error: cell \"WIDE\": exploration stopped at the candidate budget \
+             (512 seed minterms); no arcs, hazards, leakage states or constraints are derived — \
+             raise it with --max-candidates"
+        ),
+        "missing the budget diagnostic:\n{stderr}"
+    );
+    // Nothing is emitted for a spec that could not be analysed: an arc-free artifact would read as
+    // the cell's behaviour.
+    let written: Vec<_> = std::fs::read_dir(&outdir)
+        .map(|d| d.map(|e| e.unwrap().path()).collect())
+        .unwrap_or_default();
+    assert!(written.is_empty(), "artifacts written anyway: {written:?}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn raising_the_candidate_budget_analyses_the_same_cell() {
+    let dir = scratch_dir("budget_raised");
+    let spec = dir.join("wide.toml");
+    std::fs::write(&spec, WIDE).unwrap();
+
+    let out = Command::new(BIN)
+        .arg("--stdout")
+        .arg("--max-candidates")
+        .arg("4096")
+        .arg(&spec)
+        .output()
+        .expect("run cellsmith");
+    assert!(out.status.success(), "exit: {:?}", out.status);
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout.contains("WIDE"),
+        "cell missing from stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("define_arc"),
+        "the raised ceiling must let the arcs be derived:\n{stdout}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn bad_spec_exits_non_zero() {
     let dir = scratch_dir("bad");

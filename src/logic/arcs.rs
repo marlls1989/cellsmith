@@ -4,7 +4,8 @@
 //! internal state node; see [`resolve`](super::resolve)). A node is a [`Minterm<Symbol>`] over
 //! `inputs…, state_vars…` ([`machine`]); traversal states may be partial — an uninitialised latch
 //! leaves its state column a don't-care — but every MEASURED arc comes only from a fully-initialised
-//! (determinate) state, per the eligibility filter below. Arcs are derived by exploring it:
+//! (determinate) state, per the shared `Machine::arc_eligible` predicate. Arcs are derived by
+//! exploring it:
 //!
 //!   1. Each state variable's δ comes directly from the cell's minimised signal functions; [`machine::settle`] applies them
 //!      via [`Bdd::evaluate`](espresso_logic::bdd::Bdd::evaluate) until the state stops changing.
@@ -89,7 +90,7 @@ pub struct HiddenArc {
 /// Derive transition arcs for every output of a cell by re-walking its shared asynchronous state machine
 /// (see [`machine`] and [`Machine`]). A machine node is a [`Minterm<Symbol>`] over
 /// `[inputs…, state_vars…]`; traversal states may be partial, but each arc is measured only from a
-/// fully-initialised (determinate) state (see the eligibility check below). Also derives the
+/// fully-initialised (determinate) state (see `Machine::arc_eligible`). Also derives the
 /// whole-cell internal-power ('hidden') arcs — single input toggles that settle but leave every
 /// output unchanged.
 pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
@@ -118,14 +119,10 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
         .fold(
             || (Vec::new(), Vec::new()),
             |mut acc, node| {
-                // ELIGIBILITY: only measure from a FULLY-DETERMINATE start — every state column concrete. A
-                // partially-fixed start carries an uninitialised (don't-care) latch that must not be read as a
-                // held value, so it seeds traversal but is never an arc context (see `logic::edge`).
-                if !m
-                    .state_vars
-                    .iter()
-                    .all(|w| node.value_of(w.as_str()).is_some())
-                {
+                // ELIGIBILITY: only measure from a FULLY-DETERMINATE start — a partially-fixed start
+                // carries an uninitialised latch that must not be read as a held value, so it seeds
+                // traversal but is never an arc context (see `Machine::arc_eligible`).
+                if !m.arc_eligible(node) {
                     return acc;
                 }
                 for related in inputs {

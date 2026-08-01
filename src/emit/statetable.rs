@@ -1631,8 +1631,12 @@ Q = "!R*(CLK*M + !CLK*Q)"
         // is pure over the folded `expr`s, so this reproduces the machine `analyse` explored.
         let builder = sync_bdd_builder!();
         let bdds = crate::model::build_signal_bdds(&cell, &builder);
-        let machine =
-            crate::logic::analysis::Machine::build(&cell, &bdds).expect("fixture is explored");
+        let machine = crate::logic::analysis::Machine::build(
+            &cell,
+            &bdds,
+            &crate::logic::machine::ExplorationBudget::default(),
+        )
+        .expect("fixture is explored");
 
         // Per-node async-forcing covers (the off-edge set/clear), used below to detect a node whose async
         // force lapses between the start and destination state. A node with no edge-register entry (a

@@ -30,6 +30,9 @@ pub struct LeakageState {
 /// still emitted). Collect into a [`BTreeSet`] for a deterministic, sorted result (`Minterm: Ord`);
 /// each seed's fully-fixed input vector makes the states distinct, so this only orders them.
 pub fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> Vec<LeakageState> {
+    // The raw seeds, deliberately not eligibility-gated: a leakage state is a static DC condition, not a
+    // measurement across a transition, so a seed whose unforced state columns are still absent is a
+    // legitimate one — only the outputs that do not resolve there drop out.
     m.explored
         .seeds()
         .map(|node| {
