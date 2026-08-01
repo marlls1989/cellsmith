@@ -984,9 +984,9 @@ define_arc \
 	-type combinational \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00010 10010 00010} \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "0 0 0 $VDD 0 0" \
-	-vector {R 0 0 1 0 R} \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "0 0 0 $VDD 0 $VDD $VDD $VDD 0 0 0 0" \
+	-vector {R 0 0 1 0 1 1 1 0 0 0 R} \
 	-related_pin CLKA \
 	-pin GCLK \
 	{ ICM }
@@ -995,9 +995,9 @@ define_arc \
 	-type combinational \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00101 01101 00101} \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "0 0 $VDD 0 $VDD 0" \
-	-vector {0 R 1 0 1 R} \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "0 0 $VDD 0 $VDD 0 0 0 $VDD $VDD $VDD 0" \
+	-vector {0 R 1 0 1 0 0 0 1 1 1 R} \
 	-related_pin CLKB \
 	-pin GCLK \
 	{ ICM }
@@ -1006,9 +1006,9 @@ define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00010 10010 00010 10010} \
 	-type combinational \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "$VDD 0 0 $VDD 0 $VDD" \
-	-vector {F 0 0 1 0 F} \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "$VDD 0 0 $VDD 0 $VDD $VDD $VDD 0 0 0 $VDD" \
+	-vector {F 0 0 1 0 1 1 1 0 0 0 F} \
 	-related_pin CLKA \
 	-pin GCLK \
 	{ ICM }
@@ -1017,9 +1017,9 @@ define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00010 10010 00010 10010} \
 	-type combinational \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "$VDD 0 0 $VDD 0 $VDD" \
-	-vector {1 0 R 1 0 F} \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "$VDD 0 0 $VDD 0 $VDD $VDD $VDD 0 0 0 $VDD" \
+	-vector {1 0 R 1 0 F F F 0 0 0 F} \
 	-related_pin RA \
 	-pin GCLK \
 	{ ICM }
@@ -1028,9 +1028,9 @@ define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00101 01101 00101 01101} \
 	-type combinational \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "0 $VDD $VDD 0 $VDD $VDD" \
-	-vector {0 F 1 0 1 F} \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "0 $VDD $VDD 0 $VDD 0 0 0 $VDD $VDD $VDD $VDD" \
+	-vector {0 F 1 0 1 0 0 0 1 1 1 F} \
 	-related_pin CLKB \
 	-pin GCLK \
 	{ ICM }
@@ -1039,9 +1039,9 @@ define_arc \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00101 01101 00101 01101} \
 	-type combinational \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "0 $VDD $VDD 0 $VDD $VDD" \
-	-vector {0 1 1 R 1 F} \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "0 $VDD $VDD 0 $VDD 0 0 0 $VDD $VDD $VDD $VDD" \
+	-vector {0 1 1 R 1 0 0 0 F F F F} \
 	-related_pin RB \
 	-pin GCLK \
 	{ ICM }
@@ -1050,9 +1050,9 @@ define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00110} \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "0 0 $VDD $VDD 0 0" \
-	-vector {R 0 1 1 0 0} \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "0 0 $VDD $VDD 0 0 0 0 0 0 0 0" \
+	-vector {R 0 1 1 0 0 0 0 0 0 0 0} \
 	-pin CLKA \
 	{ ICM }
 
@@ -1060,9 +1060,9 @@ define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00110} \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "0 0 $VDD $VDD 0 0" \
-	-vector {0 R 1 1 0 0} \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "0 0 $VDD $VDD 0 0 0 0 0 0 0 0" \
+	-vector {0 R 1 1 0 0 0 0 0 0 0 0} \
 	-pin CLKB \
 	{ ICM }
 
@@ -1070,9 +1070,9 @@ define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00110} \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "0 0 $VDD $VDD 0 0" \
-	-vector {0 0 F 1 0 0} \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "0 0 $VDD $VDD 0 0 0 0 0 0 0 0" \
+	-vector {0 0 F 1 0 R 0 0 0 0 0 0} \
 	-pin RA \
 	{ ICM }
 
@@ -1080,9 +1080,9 @@ define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00110} \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "0 0 $VDD $VDD 0 0" \
-	-vector {0 0 1 F 0 0} \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "0 0 $VDD $VDD 0 0 0 0 0 0 0 0" \
+	-vector {0 0 1 F 0 0 0 0 0 0 0 0} \
 	-pin RB \
 	{ ICM }
 
@@ -1090,9 +1090,9 @@ define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00110} \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "0 0 $VDD $VDD 0 0" \
-	-vector {0 0 1 1 R 0} \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "0 0 $VDD $VDD 0 0 0 0 0 0 0 0" \
+	-vector {0 0 1 1 R 0 0 0 0 0 0 0} \
 	-pin S \
 	{ ICM }
 
@@ -1100,9 +1100,9 @@ define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00111} \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "0 0 $VDD $VDD $VDD 0" \
-	-vector {0 0 1 1 F 0} \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "0 0 $VDD $VDD $VDD 0 0 0 0 0 0 0" \
+	-vector {0 0 1 1 F 0 0 0 0 0 0 0} \
 	-pin S \
 	{ ICM }
 
@@ -1110,9 +1110,9 @@ define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {01110} \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "0 $VDD $VDD $VDD 0 0" \
-	-vector {0 F 1 1 0 0} \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "0 $VDD $VDD $VDD 0 0 0 0 0 0 0 0" \
+	-vector {0 F 1 1 0 0 0 0 0 0 0 0} \
 	-pin CLKB \
 	{ ICM }
 
@@ -1120,9 +1120,9 @@ define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {10110} \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "$VDD 0 $VDD $VDD 0 0" \
-	-vector {F 0 1 1 0 0} \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "$VDD 0 $VDD $VDD 0 0 0 0 0 0 0 0" \
+	-vector {F 0 1 1 0 0 0 0 0 0 0 0} \
 	-pin CLKA \
 	{ ICM }
 
@@ -1130,9 +1130,9 @@ define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00110 00010} \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "0 0 0 $VDD 0 0" \
-	-vector {0 0 R 1 0 0} \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "0 0 0 $VDD 0 $VDD 0 0 0 0 0 0" \
+	-vector {0 0 R 1 0 F 0 0 0 0 0 0} \
 	-pin RA \
 	{ ICM }
 
@@ -1140,9 +1140,9 @@ define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00110 00100} \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "0 0 $VDD 0 0 0" \
-	-vector {0 0 1 R 0 0} \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "0 0 $VDD 0 0 0 0 0 0 0 0 0" \
+	-vector {0 0 1 R 0 0 0 0 0 0 0 0} \
 	-pin RB \
 	{ ICM }
 
@@ -1178,98 +1178,12 @@ define_arc \
 	-type combinational \
 	-prevector_pinlist {A B} \
 	-prevector {00 10} \
-	-pinlist {A B Q} \
-	-ic "$VDD 0 0" \
-	-vector {1 R R} \
-	-related_pin B \
-	-pin Q \
-	{ C2GATE }
-
-define_arc \
-	-type combinational \
-	-prevector_pinlist {A B} \
-	-prevector {00 01} \
-	-pinlist {A B Q} \
-	-ic "0 $VDD 0" \
-	-vector {R 1 R} \
-	-related_pin A \
-	-pin Q \
-	{ C2GATE }
-
-define_arc \
-	-prevector_pinlist {A B} \
-	-prevector {11 01} \
-	-type combinational \
-	-pinlist {A B Q} \
-	-ic "0 $VDD $VDD" \
-	-vector {0 F F} \
-	-related_pin B \
-	-pin Q \
-	{ C2GATE }
-
-define_arc \
-	-prevector_pinlist {A B} \
-	-prevector {11 10} \
-	-type combinational \
-	-pinlist {A B Q} \
-	-ic "$VDD 0 $VDD" \
-	-vector {F 0 F} \
-	-related_pin A \
-	-pin Q \
-	{ C2GATE }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {A B} \
-	-prevector {00} \
-	-pinlist {A B Q} \
-	-ic "0 0 0" \
-	-vector {R 0 0} \
-	-pin A \
-	{ C2GATE }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {A B} \
-	-prevector {00} \
-	-pinlist {A B Q} \
-	-ic "0 0 0" \
-	-vector {0 R 0} \
-	-pin B \
-	{ C2GATE }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {A B} \
-	-prevector {11} \
-	-pinlist {A B Q} \
-	-ic "$VDD $VDD $VDD" \
-	-vector {F 1 1} \
-	-pin A \
-	{ C2GATE }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {A B} \
-	-prevector {11} \
-	-pinlist {A B Q} \
-	-ic "$VDD $VDD $VDD" \
-	-vector {1 F 1} \
-	-pin B \
-	{ C2GATE }
-
-define_leakage -when "!A*!B*!Q" { C2GATE }
-define_leakage -when "A*B*Q" { C2GATE }
-define_arc \
-	-type combinational \
-	-prevector_pinlist {A B} \
-	-prevector {00 10} \
 	-pinlist {A B QN Q} \
 	-ic "$VDD 0 $VDD 0" \
 	-vector {1 R F R} \
 	-related_pin B \
 	-pin Q \
-	{ C2EXP }
+	{ C2GATE }
 
 define_arc \
 	-type combinational \
@@ -1280,7 +1194,7 @@ define_arc \
 	-vector {R 1 F R} \
 	-related_pin A \
 	-pin Q \
-	{ C2EXP }
+	{ C2GATE }
 
 define_arc \
 	-prevector_pinlist {A B} \
@@ -1291,7 +1205,7 @@ define_arc \
 	-vector {0 F R F} \
 	-related_pin B \
 	-pin Q \
-	{ C2EXP }
+	{ C2GATE }
 
 define_arc \
 	-prevector_pinlist {A B} \
@@ -1302,7 +1216,7 @@ define_arc \
 	-vector {F 0 R F} \
 	-related_pin A \
 	-pin Q \
-	{ C2EXP }
+	{ C2GATE }
 
 define_arc \
 	-type hidden \
@@ -1312,7 +1226,7 @@ define_arc \
 	-ic "0 0 $VDD 0" \
 	-vector {R 0 1 0} \
 	-pin A \
-	{ C2EXP }
+	{ C2GATE }
 
 define_arc \
 	-type hidden \
@@ -1322,7 +1236,7 @@ define_arc \
 	-ic "0 0 $VDD 0" \
 	-vector {0 R 1 0} \
 	-pin B \
-	{ C2EXP }
+	{ C2GATE }
 
 define_arc \
 	-type hidden \
@@ -1332,7 +1246,7 @@ define_arc \
 	-ic "$VDD $VDD 0 $VDD" \
 	-vector {F 1 0 1} \
 	-pin A \
-	{ C2EXP }
+	{ C2GATE }
 
 define_arc \
 	-type hidden \
@@ -1342,7 +1256,7 @@ define_arc \
 	-ic "$VDD $VDD 0 $VDD" \
 	-vector {1 F 0 1} \
 	-pin B \
-	{ C2EXP }
+	{ C2GATE }
 
-define_leakage -when "!A*!B*!Q" { C2EXP }
-define_leakage -when "A*B*Q" { C2EXP }
+define_leakage -when "!A*!B*!Q" { C2GATE }
+define_leakage -when "A*B*Q" { C2GATE }

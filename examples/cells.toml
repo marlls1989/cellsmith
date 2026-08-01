@@ -77,6 +77,11 @@ Q = "G*D + !G*Q"               # transparent-high D latch: Q follows D while G h
 name = "ICM"
 inputs = ["CLKA", "CLKB", "RA", "RB", "S"]
 clock = ["CLKA", "CLKB"]
+expose = ["sela1", "sela2", "enA", "selb1", "selb2", "enB"]
+                               # the three latch levels of both synchronisers. Each holds its own value,
+                               #   so each is a coordinate the reduction keeps either way; exposing them
+                               #   names them in the arcs, where a column and an -ic entry state which
+                               #   stage of a chain a measurement starts from.
 
 [cell.internal]
 # selection interlock
@@ -94,22 +99,17 @@ enB   = "!RB*(!CLKB*selb2+CLKB*enB)"
 GCLK = "enA*CLKA+enB*CLKB"
 
 [[cell]]
-name = "C2GATE"               # gate-level C-element: complementary internals collapse to one bit
+name = "C2GATE"               # gate-level C-element: two reducible internals, one of them exposed
 inputs = ["A", "B"]
+expose = ["QN"]                # IQ carries the same function as the output pin Q, so it retires into it
+                               #   before anything else runs. QN is held back from that reduction while
+                               #   the arcs are derived: it takes a -pinlist column of its own, the arcs
+                               #   state the voltage it starts at (-ic) and the edge it makes, and the
+                               #   Liberty, Verilog and cells.tcl artifacts are those of the cell
+                               #   reduced the whole way, where the single coordinate Q carries the bit.
 [cell.internal]
 IQ = "!QN"
 QN = "!(A*B + IQ*(A+B))"
 [cell.outputs]
-Q = "!QN"                      # must minimise to the single coordinate Q, delta_Q = A*B + Q*(A+B)
+Q = "!QN"                      # reduced the whole way this is one coordinate, delta_Q = A*B + Q*(A+B)
 
-[[cell]]
-name = "C2EXP"                 # the same C-element with its internal node exposed to the arcs
-inputs = ["A", "B"]
-expose = ["QN"]                # QN is no pin, so it gets a -pinlist column of its own: the arcs state
-                               #   the voltage it starts at (-ic) and the edge it makes (-vector).
-                               #   Exposure is arcs-only — the Liberty, Verilog and cells.tcl artifacts
-                               #   are those of the same cell without the key.
-[cell.internal]
-QN = "!(A*B + Q*(A+B))"
-[cell.outputs]
-Q = "!QN"
