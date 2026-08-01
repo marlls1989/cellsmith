@@ -225,13 +225,28 @@ variable reference (`$VDD`, `${VDD}`), or a value written as one balanced brace 
 wrapped in a brace pair, which makes it one column whatever whitespace the substitution leaves in it —
 `--logic-high='$VDD * 0.9'` emits `{$VDD * 0.9}`, a column reading `1.08 * 0.9` where `$VDD` is `1.08`,
 and `[expr $VDD*0.9]` emits `{[expr $VDD*0.9]}`, whose command substitution runs before the split and
-leaves the column holding the result. A double quote is emitted escaped (`\"`), since it would otherwise
-close the `-ic` word wherever it sat.
+leaves the column holding the result.
+
+The characters that would end the word or shift the split are escaped, so an expression carrying them
+still comes out as one column of a line Tcl reads. A double quote goes out as `\"`, since it would
+otherwise close the `-ic` word wherever it sat. A backslash goes out doubled, and a brace with no
+partner — the `{` of `--logic-high='{$VDD'`, a stray `}` — goes out backslashed, so the list parser
+passes over it instead of looking for a group that is not there. Both escapes are written to survive the
+substitution the word goes through first, and the list parser performs no substitution of its own inside
+a braced element, so they reach Liberate as text: the expression `a{b` arrives as the column `a\{b`,
+backslash and all, and a `\n` written for a newline arrives as a backslash and an `n`. A matched pair of
+braces is left as it stands, keeping a group written inside a command substitution or a spaced variable
+reference (`${a b}`) intact.
+
+An open bracket that no close bracket reaches goes out as `\[`, one backslash rather than two: a bracket
+means nothing to the list, so the escape is spent on the word alone, and the bracket reaches Liberate
+without it. A bracket that does close is left as it stands, command substitution being what makes
+`[expr $VDD*0.9]` name a level at all.
 
 What a column then means to Liberate is yours to get right: cellsmith keeps the columns aligned with the
 `-pinlist`, and no check on the text can tell you what a variable will hold when Liberate runs the
-script. Braces that do not balance are the one case the wrap cannot carry — `{$VDD` has no group to
-close — and Tcl rejects the line rather than reading a shifted column.
+script. A variable that holds whitespace still splits its own column, since the substitution runs after
+the escaping and before the split.
 
 ### Characterisation templates
 
@@ -319,10 +334,12 @@ Options:
                           cell's `-ic` renders — every entry on its transition, hidden and
                           constraint blocks, whether an input, an exposed internal node or an
                           output — applied to every cell that doesn't declare its own `logic_low`
-                          (default: `0`). Written into the emitted Tcl verbatim, so a Tcl variable
-                          works as well as a literal
+                          (default: `0`). Recognised simple forms are emitted as written; any other
+                          value is escaped and wrapped so it occupies exactly one `-ic` column
       --logic-high <VOLTAGE>  Override the high-logic-level (`1`) voltage expression, mirroring
-                          `--logic-low` (default: `$VDD`)
+                          `--logic-low` (default: `$VDD`). Recognised simple forms are emitted as
+                          written; any other value is escaped and wrapped so it occupies exactly one
+                          `-ic` column
       --stdout            Write all four artifacts to stdout (with banners) instead of writing files
       --max-candidates <N>    Ceiling on the seed minterms a cell's exploration may pool as
                           initialisation candidates: a forced cover cube expands to 2^d of them for its d

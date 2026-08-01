@@ -23,7 +23,7 @@
 //! reads that view — the `define_cell` pinlist ([`pinlist_str`]) and every other artifact keep to the
 //! cell's actual pins.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::Hash;
 
 use espresso_logic::Symbol;
@@ -644,22 +644,110 @@ fn exposed_vector_sym(level: &ExposedLevel) -> String {
 /// substitution resolves to. What that column then means to Liberate is the spec author's affair — the
 /// wrap is here to keep the columns aligned with the `-pinlist`.
 ///
-/// A double quote ends the `-ic` word wherever it sits — braces are ordinary characters to the word
-/// parser, so a wrap is no shield — and each one therefore goes out as `\"`. Substitution turns it back
-/// into a quote before the list is read, so the column holds the character the spec wrote.
-///
-/// Braces that do not balance are the case a wrap cannot carry: `{$VDD` has no group to close, and Tcl
-/// rejects the line as Liberate reads it (`unmatched open brace in list`) rather than passing on a
-/// column count that has shifted.
+/// The characters that would end the word or shift the split are escaped by [`escape_ic`], so every
+/// expression — whatever it holds — comes out as exactly one column of a parseable line.
 fn ic_column(value: &str) -> String {
     // The form is recognised in the expression as written; the escaping is about the word it is
     // emitted into, so it applies to a recognised expression and a wrapped one alike.
-    let escaped = value.replace('"', "\\\"");
+    let escaped = escape_ic(value);
     if is_one_list_element(value) {
         escaped
     } else {
         format!("{{{escaped}}}")
     }
+}
+
+/// One expression's own characters, escaped for the two stages its text crosses: Tcl's backslash
+/// substitution as the double-quoted `-ic` word is read, and then the list split Liberate applies to the
+/// substituted result. An escape meant for the second stage has to survive the first, so it goes out
+/// doubled — `\\{` leaves the word as `\{`, which the list parser reads as a quoted brace and does not
+/// count (Tcl(n), "Braces": a brace quoted with a backslash is not counted in locating the matching
+/// close brace).
+///
+/// - A double quote ends the `-ic` word wherever it sits — braces are ordinary characters to the word
+///   parser, so a wrap is no shield — and each one therefore goes out as `\"`. Substitution turns it
+///   back into a quote before the list is read.
+/// - A backslash goes out as `\\\\`, which the substitution halves into the `\\` the list then reads as
+///   one quoted backslash. Spending both stages on it is what makes it inert: to the list parser a lone
+///   backslash quotes whatever follows — the wrap's own closing brace where the expression ends in one,
+///   or a brace whose partner sits elsewhere — so doubling every backslash is what lets each brace be
+///   counted whatever precedes it. Left unescaped it would be spent on the first stage instead, either
+///   substituting (a `\n` becoming the newline that splits the column in two) or quoting the character
+///   after it (the `\` of `$V\"X` consuming the escape that was to tame the quote, and the live quote
+///   then ending the word). The consequence is that a backslash sequence in a `logic_low`/`logic_high`
+///   expression is literal text rather than the character it names.
+/// - A brace with no match — a close brace reached at depth zero, an open brace never closed — goes out
+///   as `\\}`/`\\{`, so the list parser passes over it and the wrap still closes on its own brace.
+///   `{$VDD` would otherwise leave a group with nothing to close it, and Liberate would reject the line
+///   (`unmatched open brace in list`) instead of reading a column count that has shifted. A matched
+///   pair is left as it stands: braces are how Tcl groups, and a group written inside a command
+///   substitution or a spaced variable reference (`${a b}`) has to reach the first stage intact.
+/// - An open bracket that no close bracket reaches goes out as `\[`, a single backslash and not a
+///   doubled one: a bracket means nothing to the list parser, so the escape is spent entirely on the
+///   first stage, where it stops the command substitution that would otherwise run past the end of the
+///   word (`missing close-bracket`). It reaches Liberate as the bracket alone, no backslash beside it. A
+///   bracket that does close is left as it stands, command substitution being how an expression such as
+///   `[expr $VDD*0.9]` names its level; and a close bracket standing on its own needs nothing, starting
+///   no substitution to run away with.
+///
+/// An escape made here reaches Liberate carrying its backslash, the list parser performing no
+/// substitution inside a braced element: the expression `a{b` arrives as the column `a\{b`, and a
+/// backslash as the pair it was doubled into. The columns stay aligned and the line parses, which is
+/// what the escaping is for; what the column then holds is the spec author's affair.
+fn escape_ic(value: &str) -> String {
+    // The braces and brackets are decided over the expression as written, before anything is emitted,
+    // so the one pass that builds the text reads only its input and never re-escapes its own output.
+    let unmatched = unmatched_braces(value);
+    let unclosed = unclosed_brackets(value);
+    let mut escaped = String::with_capacity(value.len());
+    for (i, c) in value.char_indices() {
+        match c {
+            '\\' => escaped.push_str("\\\\\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '{' | '}' if unmatched.contains(&i) => {
+                escaped.push_str("\\\\");
+                escaped.push(c);
+            }
+            '[' if unclosed.contains(&i) => escaped.push_str("\\["),
+            _ => escaped.push(c),
+        }
+    }
+    escaped
+}
+
+/// The byte offsets of the braces in `value` that have no partner: a close brace reached at depth zero,
+/// and every open brace still standing at the end. Each brace counts whatever precedes it, because
+/// [`escape_ic`] escapes every backslash and so leaves none quoting the brace that follows.
+fn unmatched_braces(value: &str) -> HashSet<usize> {
+    // Each open brace waits on the stack for the close brace that takes it off again; a close brace
+    // arriving with the stack empty has none to take, and whatever is still waiting at the end never
+    // found one.
+    let mut open = Vec::new();
+    let mut unmatched = HashSet::new();
+    for (i, c) in value.char_indices() {
+        if c == '{' {
+            open.push(i);
+        } else if c == '}' && open.pop().is_none() {
+            unmatched.insert(i);
+        }
+    }
+    unmatched.extend(open);
+    unmatched
+}
+
+/// The byte offsets of the open brackets in `value` that no close bracket ever reaches. A close bracket
+/// standing on its own is not among them: it is only the opening one that starts a command
+/// substitution, and one left running off the end of the word is what the word parser refuses.
+fn unclosed_brackets(value: &str) -> HashSet<usize> {
+    let mut open = Vec::new();
+    for (i, c) in value.char_indices() {
+        if c == '[' {
+            open.push(i);
+        } else if c == ']' {
+            open.pop();
+        }
+    }
+    open.into_iter().collect()
 }
 
 /// Whether the expression already reaches Liberate as one list element: a bare word, a number, a
@@ -704,8 +792,8 @@ fn is_bare_word(s: &str) -> bool {
 
 /// Whether the whole value is one balanced brace group — it opens with a brace whose match is its last
 /// character. `{a} {b}` is not: its group closes early, leaving two elements. Every brace counts,
-/// backslash or no backslash, because the word's backslash substitution has already run by the time the
-/// list is read.
+/// backslash or no backslash, matching how [`escape_ic`] doubles each backslash and so leaves none
+/// quoting the brace that follows it.
 fn is_one_brace_group(value: &str) -> bool {
     if !value.starts_with('{') {
         return false;
@@ -2297,6 +2385,125 @@ Y = "!A"
                 2,
                 "the escaped quotes leave the word its own pair:\n{line}"
             );
+        }
+    }
+
+    /// The expressions that need more than the wrap to hold their column, each with the text the
+    /// emitter writes between the `-ic` quotes. Every one of them is read back through real Tcl by
+    /// [`tclsh_reads_an_awkward_logic_voltage_as_one_column_per_pin`], which is where the doubling was
+    /// established; the pairs here pin it without an interpreter to hand.
+    const AWKWARD_VOLTAGES: [(&str, &str); 17] = [
+        // The backslash the word's substitution would otherwise spend on the quote after it.
+        (r#"$V\"X"#, r#"{$V\\\\\"X}"#),
+        // A brace with nothing to close it, either way round, alone or amid text.
+        (r"{$VDD", r"{\\{$VDD}"),
+        (r"$VDD}", r"{$VDD\\}}"),
+        (r"{", r"{\\{}"),
+        (r"}", r"{\\}}"),
+        (r"{{{", r"{\\{\\{\\{}"),
+        (r"}{", r"{\\}\\{}"),
+        // A matched pair stands: only the stray close brace is escaped.
+        (r"{a}}", r"{{a}\\}}"),
+        // A backslash of the expression's own, before a brace and standing alone.
+        (r"a\{b", r"{a\\\\\\{b}"),
+        (r"\", r"{\\\\}"),
+        // The escape reaching the column as text: `\n` is a backslash and an `n`, not a newline.
+        (r"x\ny", r"{x\\\\ny}"),
+        // Braces and nothing else, balanced: one empty element, written as it stands.
+        (r"{}", r"{}"),
+        // A command substitution with nothing to close it, alone and amid text: one backslash, the
+        // bracket reaching the column on its own.
+        (r"[expr", r"{\[expr}"),
+        (r"a[b", r"{a\[b}"),
+        (r"[[", r"{\[\[}"),
+        // The close bracket starts nothing, so it stands as written.
+        (r"a]b", r"{a]b}"),
+        // A substitution that does close is how an expression names its level: left alone.
+        (r"[expr $VDD*0.9]", r"{[expr $VDD*0.9]}"),
+    ];
+
+    #[test]
+    fn an_awkward_logic_voltage_is_escaped_into_one_element() {
+        for (value, column) in AWKWARD_VOLTAGES {
+            assert_eq!(ic_column(value), column, "{value:?} holds its column");
+        }
+    }
+
+    /// Run `script` through `tclsh`, or `None` where the interpreter is not installed.
+    fn tclsh(script: &str) -> Option<std::process::Output> {
+        let mut child = match std::process::Command::new("tclsh")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(e) => panic!("spawn tclsh: {e}"),
+        };
+        use std::io::Write;
+        child
+            .stdin
+            .as_mut()
+            .expect("piped stdin")
+            .write_all(script.as_bytes())
+            .expect("feed tclsh its script");
+        Some(child.wait_with_output().expect("tclsh runs to completion"))
+    }
+
+    #[test]
+    fn tclsh_reads_an_awkward_logic_voltage_as_one_column_per_pin() {
+        // The emitter's own output, read the way Liberate reads it: Tcl parses the `define_arc` command
+        // — substituting the word, which is where an unescaped quote or backslash ends the line early —
+        // and the stub then splits the `-ic` argument by the list rules that decide the columns. Both
+        // logic levels carry the awkward expression, so every column is one of the cases under test.
+        // The run is skipped where `tclsh` is not installed, `an_awkward_logic_voltage_is_escaped_into_
+        // one_element` pinning the emitted text there.
+        //
+        // The verdict is read off the interpreter's own output rather than its exit status: a script fed
+        // through stdin leaves tclsh exiting zero whether or not a command in it failed. Anything on
+        // stderr is a Tcl complaint, and the closing `end` marker is what says the whole script ran.
+        for (value, _) in AWKWARD_VOLTAGES {
+            let cell = analyse(&IC_DFF.replace(
+                "constraint_arcs = true",
+                &format!("constraint_arcs = true\nlogic_low = {value:?}\nlogic_high = {value:?}"),
+            ));
+            let script = format!(
+                "set VDD 1.08\n\
+                 set V 0.5\n\
+                 proc define_arc args {{\n\
+                 \x20   set ic [lindex $args [expr {{[lsearch -exact $args -ic] + 1}}]]\n\
+                 \x20   set pins [lindex $args [expr {{[lsearch -exact $args -pinlist] + 1}}]]\n\
+                 \x20   puts \"[llength $ic] [llength $pins]\"\n\
+                 }}\n\
+                 proc unknown args {{ return }}\n\
+                 {}\n\
+                 puts end\n",
+                cell_arcs_tcl(&cell, ArcsTclOptions::default())
+            );
+            let Some(out) = tclsh(&script) else {
+                eprintln!("tclsh is not installed: skipping the Tcl read-back");
+                return;
+            };
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                stderr.is_empty(),
+                "Tcl reads the {value:?} line: {stderr}\n{script}"
+            );
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let counts = stdout
+                .strip_suffix("end\n")
+                .unwrap_or_else(|| panic!("the {value:?} script runs to its end:\n{stdout}"));
+            let mut arcs = 0;
+            for line in counts.lines() {
+                let (ic, pins) = line.split_once(' ').expect("one count pair per arc");
+                assert_eq!(
+                    ic, pins,
+                    "{value:?} leaves one -ic column per pin:\n{script}"
+                );
+                arcs += 1;
+            }
+            assert!(arcs > 0, "the fixture emits arcs to read back:\n{script}");
         }
     }
 

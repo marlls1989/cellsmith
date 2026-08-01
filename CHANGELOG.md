@@ -19,8 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its settled values into the measured vector, so `-ic` states the start condition directly. Purely
   combinational cells carry no `-ic`.
 - **`logic_low`/`logic_high` (per cell) and `--logic-low`/`--logic-high` (per run) name the voltage
-  expressions `-ic` renders for the two logic levels**, defaulting to `0` and `$VDD` and written into the
-  emitted Tcl verbatim; a cell's own key wins over the command-line value.
+  expressions `-ic` renders for the two logic levels**, defaulting to `0` and `$VDD`. Recognised simple
+  forms are emitted as written; any other value is escaped and wrapped so it occupies exactly one
+  `-ic` column. A cell's own key wins over the command-line value.
 - **`--max-candidates` and `--max-states` bound a cell's exploration**, charged against the seed
   minterms pooled as initialisation candidates and the reachable stable states the search records — the
   work actually performed, not the cell's declared width. Exceeding either is a hard error naming every

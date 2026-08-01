@@ -66,12 +66,14 @@ struct Cli {
     /// Override the low-logic-level (`0`) voltage expression a state-holding cell's `-ic` renders —
     /// every entry on its transition, hidden and constraint blocks, whether an input, an exposed
     /// internal node or an output — applied to every cell that doesn't declare its own `logic_low`
-    /// (default: `0`). Written into the emitted Tcl verbatim, so a Tcl variable works as well as a
-    /// literal.
+    /// (default: `0`). Recognised simple forms are emitted as written; any other value is escaped
+    /// and wrapped so it occupies exactly one `-ic` column.
     #[arg(long, value_name = "VOLTAGE")]
     logic_low: Option<String>,
 
     /// Override the high-logic-level (`1`) voltage expression, mirroring `--logic-low` (default: `$VDD`).
+    /// Recognised simple forms are emitted as written; any other value is escaped and wrapped so it
+    /// occupies exactly one `-ic` column.
     #[arg(long, value_name = "VOLTAGE")]
     logic_high: Option<String>,
 
