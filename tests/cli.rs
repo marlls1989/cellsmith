@@ -446,6 +446,42 @@ fn default_run_emits_no_arc_when_lines() {
     );
 }
 
+/// `--logic-low`/`--logic-high` name the voltage expressions the `-ic` initial condition starts each
+/// pin at. They are Tcl value fragments written verbatim, so a variable reference reaches Liberate as
+/// one — which is also why `-ic` quotes its values instead of bracing them. Every cell in `MULTI` holds
+/// state, so every block carries an `-ic` and no entry can be anything but the two overrides.
+#[test]
+fn logic_level_overrides_reach_the_ic_lines() {
+    let out = run_spec(
+        "multi_logic_levels",
+        MULTI,
+        &["--constraints", "--logic-low=GND", "--logic-high=$VDDH"],
+    );
+    let arcs = arcs_section(&out);
+    let ic_lines: Vec<&str> = arcs
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("-ic "))
+        .collect();
+    assert_eq!(
+        ic_lines.len(),
+        arcs.matches("define_arc").count(),
+        "every block of a state-holding cell carries an -ic:\n{arcs}"
+    );
+    for line in ic_lines {
+        let values = line
+            .split('"')
+            .nth(1)
+            .unwrap_or_else(|| panic!("-ic values are double-quoted: {line}"));
+        for v in values.split_whitespace() {
+            assert!(
+                v == "GND" || v == "$VDDH",
+                "the overrides are the only -ic levels, got {v:?} in: {line}"
+            );
+        }
+    }
+}
+
 #[test]
 fn bare_when_emits_arc_when_lines() {
     let default = run_spec("two_default_for_bare", TWO, &[]);

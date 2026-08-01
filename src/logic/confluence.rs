@@ -66,7 +66,7 @@ use espresso_logic::bdd::{Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::analysis::Machine;
-use crate::logic::arcs::Edge;
+use crate::logic::arcs::{ArcLevels, Edge};
 use crate::logic::hazard::{OrderDependence, Oscillation, Race};
 use crate::logic::machine;
 
@@ -90,6 +90,9 @@ pub struct Constraint {
     /// The prevector: the input-assignment path that drives every state variable into the state where
     /// the constraint manifests (each node projected onto the inputs).
     pub prevector: Vec<Minterm<Symbol>>,
+    /// The levels the cell's outputs hold in that state — the constraint arc's `-ic` initial condition,
+    /// sampled at the same probed state as `prevector`.
+    pub levels: ArcLevels,
 }
 
 impl Constraint {
@@ -244,6 +247,11 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
 
         // `path_to` depends only on `s`: compute the prevector into `s` once and clone it per hazard.
         let prevector_s = ex.path_to(s, inputs);
+        // The output levels likewise depend only on `s`. Sampling them here — beside the prevector, at
+        // the one probed state — is what keeps the two consistent through `record_constraint`'s
+        // min-by-`(prevector.len, discovered)` dedup: a surviving representative carries the levels of
+        // the very state its prevector walks to.
+        let levels_s = ArcLevels::at(m, s);
 
         // Each input's single-toggle settle, computed once per state (O(n) instead of O(n²)): reused as
         // `r_x`/`r_y` across every pair and as the base of the `s_xy`/`s_yx` compositions below.
@@ -318,6 +326,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                         y: y.clone(),
                         y_edge: edge_from(s, y.as_str()),
                         prevector: prevector_s.clone(),
+                        levels: levels_s.clone(),
                         discovered,
                     };
                     record_oscillation(
@@ -381,6 +390,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                         group,
                         stable: stable_set.into_iter().collect(),
                         prevector: prevector_s.clone(),
+                        levels: levels_s.clone(),
                         discovered,
                     },
                 );
@@ -438,6 +448,7 @@ pub(crate) fn constrain(hz: &DetectedHazards, clock_pins: &[Symbol]) -> Vec<Cons
                 od.y_edge,
                 clock_pins,
                 od.prevector.clone(),
+                od.levels.clone(),
             ),
             od.discovered,
         );
@@ -453,6 +464,7 @@ pub(crate) fn constrain(hz: &DetectedHazards, clock_pins: &[Symbol]) -> Vec<Cons
                     race.y_edge,
                     clock_pins,
                     race.prevector.clone(),
+                    race.levels.clone(),
                 ),
                 race.discovered,
             );
@@ -463,7 +475,8 @@ pub(crate) fn constrain(hz: &DetectedHazards, clock_pins: &[Symbol]) -> Vec<Cons
 
 /// Build the constraint that avoids a hazard on pins `x`,`y` with edges taken at the probed state: a
 /// directed setup/hold when exactly one of the pair is a declared clock (clock ← data), else a symmetric
-/// non_seq. `prevector` is the (pre-cloned) path into that state.
+/// non_seq. `prevector` is the (pre-cloned) path into that state and `levels` the (pre-cloned) output
+/// levels sampled there.
 fn make_constraint(
     x: &str,
     x_edge: Edge,
@@ -471,6 +484,7 @@ fn make_constraint(
     y_edge: Edge,
     clock_pins: &[Symbol],
     prevector: Vec<Minterm<Symbol>>,
+    levels: ArcLevels,
 ) -> Constraint {
     let is_clock = |p: &str| clock_pins.iter().any(|c| c.as_str() == p);
     if is_clock(x) ^ is_clock(y) {
@@ -486,6 +500,7 @@ fn make_constraint(
             pin: Symbol::from(data),
             pin_edge: data_edge,
             prevector,
+            levels,
         }
     } else {
         Constraint {
@@ -495,6 +510,7 @@ fn make_constraint(
             pin: Symbol::from(y),
             pin_edge: y_edge,
             prevector,
+            levels,
         }
     }
 }
@@ -799,6 +815,45 @@ Q = "A*B + Q*(A+B)"
         // C2's single state variable is forced at both seeds, so every state in its explored order is
         // eligible and the minimum is the BFS distance alone.
         assert_eq!(c2_lens, vec![2, 2]);
+    }
+
+    #[test]
+    fn constraint_levels_travel_with_the_representative_prevector() {
+        // The levels and the prevector are sampled at the SAME probed state, so the representative the
+        // min-`(prevector.len, discovered)` dedup keeps carries a consistent pair: each surviving
+        // constraint matches one detected hazard on BOTH, never a mix of two states.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+constraint_arcs = true
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#,
+        );
+        let cons = cell.constraints.clone();
+        assert!(!cons.is_empty());
+        let outputs: Vec<Symbol> = cell.outputs.iter().map(|o| o.name.clone()).collect();
+        for c in &cons {
+            assert_eq!(
+                c.levels
+                    .outputs
+                    .iter()
+                    .map(|(n, _)| n.clone())
+                    .collect::<Vec<_>>(),
+                outputs
+            );
+            assert!(
+                cell.order_dependence
+                    .iter()
+                    .any(|od| od.prevector == c.prevector && od.levels == c.levels),
+                "constraint {c:?} must carry one probed state's prevector AND its levels"
+            );
+        }
     }
 
     #[test]

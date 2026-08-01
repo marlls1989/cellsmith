@@ -10,13 +10,18 @@
 //! unlabelled arc — a data change propagating through an already-transparent latch, or a clock acting by
 //! its level rather than being held — stays `-type combinational`, and a declared-async related pin
 //! takes precedence with `-type async`.
+//!
+//! Every block of a state-holding cell — transition, hidden and constraint alike — also carries an
+//! `-ic` line giving each `-pinlist` pin the voltage it starts the measured vector at (see [`ic_str`]).
+//! Liberate discards the `-prevector` simulation instead of carrying its settled values into the
+//! vector, so a cell with memory would otherwise begin measuring from state nothing established.
 
 use std::collections::{BTreeMap, HashMap};
 use std::hash::Hash;
 
 use espresso_logic::Symbol;
 
-use crate::logic::arcs::{Arc, Edge, HiddenArc};
+use crate::logic::arcs::{Arc, ArcLevels, Edge, HiddenArc};
 use crate::logic::assignment;
 use crate::logic::confluence::{Constraint, ConstraintKind};
 use crate::logic::hazard::Oscillation;
@@ -290,6 +295,12 @@ fn constraint_block(cell: &AnalysedCell, c: &Constraint, arc_type: &str) -> Stri
         prevector_str(cell, &c.prevector)
     ));
     s.push_str(&format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell)));
+    if cell.state_holding {
+        s.push_str(&format!(
+            "\t-ic \"{}\" \\\n",
+            ic_str(cell, &c.prevector, &c.levels)
+        ));
+    }
     s.push_str(&format!(
         "\t-vector {{{}}} \\\n",
         constraint_vector_str(cell, c)
@@ -373,6 +384,16 @@ fn format_arc(cell: &AnalysedCell, arc: &Arc, with_when: bool) -> String {
         prevector_str(cell, &arc.prevector)
     );
     let pinlist = format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell));
+    // The `-ic` VALUES are double-quoted, never braced: Tcl substitutes no variable inside braces, so a
+    // braced `$VDD` would reach Liberate as that literal text instead of the supply voltage.
+    let ic = if cell.state_holding {
+        format!(
+            "\t-ic \"{}\" \\\n",
+            ic_str(cell, &arc.prevector, &arc.levels)
+        )
+    } else {
+        String::new()
+    };
     let vector = format!("\t-vector {{{}}} \\\n", vector_str(cell, arc));
     let when = match (with_when, when_str(&arc.end, &arc.related)) {
         (true, Some(w)) => format!("\t-when \"{w}\" \\\n"),
@@ -397,6 +418,7 @@ fn format_arc(cell: &AnalysedCell, arc: &Arc, with_when: bool) -> String {
         }
     }
     s.push_str(&pinlist);
+    s.push_str(&ic);
     s.push_str(&vector);
     s.push_str(&when);
     s.push_str(&related);
@@ -411,7 +433,12 @@ fn format_arc(cell: &AnalysedCell, arc: &Arc, with_when: bool) -> String {
 /// arc measures no output transition). Mirrors [`vector_str`] for [`Arc`], and is the ONE source of
 /// `format_hidden_arc`'s `-vector` line.
 fn hidden_vector_str(cell: &AnalysedCell, h: &HiddenArc) -> String {
-    let held: BTreeMap<&str, bool> = h.outputs.iter().map(|(s, b)| (s.as_str(), *b)).collect();
+    let held: BTreeMap<&str, bool> = h
+        .levels
+        .outputs
+        .iter()
+        .map(|(s, b)| (s.as_str(), *b))
+        .collect();
     let end = assignment(&h.end);
     vector(
         cell,
@@ -465,6 +492,12 @@ fn format_hidden_arc(cell: &AnalysedCell, h: &HiddenArc, with_when: bool) -> Str
         prevector_str(cell, &h.prevector)
     ));
     s.push_str(&format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell)));
+    if cell.state_holding {
+        s.push_str(&format!(
+            "\t-ic \"{}\" \\\n",
+            ic_str(cell, &h.prevector, &h.levels)
+        ));
+    }
     s.push_str(&format!("\t-vector {{{vec}}} \\\n"));
     if let (true, Some(w)) = (with_when, hidden_when_str(h)) {
         s.push_str(&format!("\t-when \"{w}\" \\\n"));
@@ -524,6 +557,41 @@ fn vector(
     parts.join(" ")
 }
 
+/// The `-ic` initial condition over `pinlist_str` order (inputs then outputs): each pin's starting
+/// voltage, written as the cell's `logic_low`/`logic_high` expression for the level it starts at.
+/// Inputs start where the prevector leaves them (its last step); outputs start at the levels measured
+/// at the arc's start state. Liberate discards the `-prevector` simulation rather than carrying its
+/// settled values forward, so this is what actually establishes a state-holding cell's start condition.
+/// Rendered through the same [`vector`] helper as `-pinlist` and `-vector`, so the three lines' columns
+/// line up by construction.
+fn ic_str(
+    cell: &AnalysedCell,
+    prevector: &[espresso_logic::Minterm<espresso_logic::Symbol>],
+    levels: &ArcLevels,
+) -> String {
+    let held = prevector.last().map(assignment).unwrap_or_default();
+    let start: BTreeMap<&str, bool> = levels
+        .outputs
+        .iter()
+        .map(|(s, b)| (s.as_str(), *b))
+        .collect();
+    vector(
+        cell,
+        |input| {
+            let level = *held
+                .get(input)
+                .expect("every input has a held value in the arc's prevector");
+            cell.voltages.of(level).to_owned()
+        },
+        |name| {
+            let level = *start
+                .get(name)
+                .expect("the arc's levels define every output");
+            cell.voltages.of(level).to_owned()
+        },
+    )
+}
+
 /// The measured vector: the related input pin and the measured output as `R`/`F`, the other inputs
 /// as their `1`/`0` value in the end state, and the other outputs as `X`.
 fn vector_str(cell: &AnalysedCell, arc: &Arc) -> String {
@@ -578,7 +646,7 @@ fn hidden_when_str(h: &HiddenArc) -> Option<String> {
         .into_iter()
         .filter(|(k, _)| *k != h.pin.as_str())
         .collect();
-    lits.extend(h.outputs.iter().map(|(s, v)| (s.clone(), *v)));
+    lits.extend(h.levels.outputs.iter().map(|(s, v)| (s.clone(), *v)));
     if lits.is_empty() {
         return None;
     }
@@ -1786,6 +1854,166 @@ Q = "CLK*M + !CLK*Q"
         assert!(on.contains("-related_pin CLK"));
         assert!(on.contains("-pin D"));
         assert!(!on.contains("non_seq"));
+    }
+
+    /// A rising-edge DFF opting into constraint arcs: one state-holding cell emitting all three block
+    /// kinds — transition, hidden and constraint — so one pass over its blocks covers every `-ic`
+    /// emission site.
+    const IC_DFF: &str = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+constraint_arcs = true
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+
+    /// The values on a block's `-ic` line — the whitespace-separated text between its double quotes —
+    /// or `None` when the block renders no `-ic`. The quoting is asserted here: braces would stop Tcl
+    /// substituting a `$VDD`-style expression.
+    fn ic_values(block: &str) -> Option<Vec<&str>> {
+        let line = block.lines().find(|l| l.trim_start().starts_with("-ic "))?;
+        let open = line.find('"').expect("-ic values are double-quoted");
+        let close = line.rfind('"').expect("-ic renders a closing quote");
+        assert!(open < close, "-ic renders a pair of quotes: {line}");
+        assert!(!line.contains('{'), "-ic values are never braced: {line}");
+        Some(line[open + 1..close].split_whitespace().collect())
+    }
+
+    /// The pins on a block's `-pinlist` line, in column order.
+    fn pinlist_of(block: &str) -> Vec<&str> {
+        braced(block, "-pinlist")
+            .expect("every block renders a -pinlist")
+            .split_whitespace()
+            .collect()
+    }
+
+    /// The text between the braces on the block's `-<tag>` line.
+    fn braced<'a>(block: &'a str, tag: &str) -> Option<&'a str> {
+        let line = block
+            .lines()
+            .find(|l| l.trim_start().starts_with(&format!("{tag} ")))?;
+        let open = line.find('{')?;
+        let close = line.rfind('}')?;
+        Some(&line[open + 1..close])
+    }
+
+    #[test]
+    fn state_holding_blocks_carry_a_pinlist_aligned_ic() {
+        // Every block a state-holding cell emits states its start condition: one voltage per `-pinlist`
+        // pin, in the same column order. The input columns are read back against the prevector's last
+        // step — the state the cell is in when the measured vector begins — which is what pins the
+        // alignment rather than merely the count.
+        let cell = analyse(IC_DFF);
+        assert!(cell.state_holding);
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        let voltage = |level: bool| cell.voltages.of(level);
+        let (mut transitions, mut hidden, mut constraints) = (0, 0, 0);
+        for block in blocks(&tcl) {
+            let pins = pinlist_of(&block);
+            let ic = ic_values(&block)
+                .unwrap_or_else(|| panic!("a state-holding cell's block carries an -ic:\n{block}"));
+            assert_eq!(ic.len(), pins.len(), "one -ic entry per pin:\n{block}");
+            let last = braced(&block, "-prevector")
+                .expect("every block renders a -prevector")
+                .split_whitespace()
+                .last()
+                .expect("a prevector has at least one step")
+                .to_owned();
+            assert_eq!(last.len(), cell.inputs.len());
+            for (i, step) in last.chars().enumerate() {
+                assert_eq!(
+                    ic[i],
+                    voltage(step == '1'),
+                    "{} starts where the prevector leaves it:\n{block}",
+                    pins[i]
+                );
+            }
+            for entry in &ic[cell.inputs.len()..] {
+                assert!(
+                    [voltage(false), voltage(true)].contains(entry),
+                    "an output starts at a logic voltage:\n{block}"
+                );
+            }
+            if block.contains("-type hidden") {
+                hidden += 1;
+            } else if block.contains("-type setup") || block.contains("-type hold") {
+                constraints += 1;
+            } else {
+                transitions += 1;
+            }
+        }
+        assert!(
+            transitions > 0 && hidden > 0 && constraints > 0,
+            "the fixture covers all three block kinds, got {transitions}/{hidden}/{constraints}"
+        );
+    }
+
+    #[test]
+    fn combinational_cell_emits_no_ic() {
+        // A cell with no state loses nothing when Liberate discards the prevector simulation, so no
+        // block states a start condition.
+        for src in [
+            AND2,
+            r#"
+[[cell]]
+name = "INV"
+inputs = ["A"]
+[cell.outputs]
+Y = "!A"
+"#,
+        ] {
+            let cell = analyse(src);
+            assert!(!cell.state_holding);
+            let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+            assert!(
+                !tcl.contains("-ic"),
+                "combinational cell emitted -ic:\n{tcl}"
+            );
+        }
+    }
+
+    #[test]
+    fn ic_is_the_only_line_the_gate_adds() {
+        // `-ic` is purely additive: dropping the `-ic` lines from a state-holding cell's blocks yields
+        // exactly what the same cell renders with the gate clear, line for line.
+        let mut cell = analyse(IC_DFF);
+        let gated = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        cell.state_holding = false;
+        let ungated = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        assert!(gated.contains("-ic \""));
+        assert!(!ungated.contains("-ic"));
+        let stripped: String = gated
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("-ic "))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        assert_eq!(stripped, ungated);
+    }
+
+    #[test]
+    fn logic_voltage_overrides_reach_the_ic_text() {
+        // The level expressions are written into `-ic` verbatim — they are Tcl value fragments, so a
+        // variable reference reaches Liberate as one.
+        let cell = analyse(&IC_DFF.replace(
+            "constraint_arcs = true",
+            "constraint_arcs = true\nlogic_low = \"GND\"\nlogic_high = \"$VDDH\"",
+        ));
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        let mut entries: BTreeSet<String> = BTreeSet::new();
+        for block in blocks(&tcl) {
+            let ic = ic_values(&block).expect("a state-holding cell's block carries an -ic");
+            entries.extend(ic.into_iter().map(str::to_owned));
+        }
+        assert_eq!(
+            entries,
+            BTreeSet::from(["GND".to_owned(), "$VDDH".to_owned()])
+        );
     }
 
     /// The same two-latch DFF, with edge collapse explicitly suppressed (`no_edge_collapse = true`) —

@@ -53,6 +53,40 @@ impl Edge {
     }
 }
 
+/// What the cell's non-input pins hold at an arc's start state: each output pin's level there, in
+/// `cell.outputs` order. Liberate reads these as the arc's `-ic` initial condition — the voltage each
+/// pin starts the measured vector at.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ArcLevels {
+    pub outputs: Vec<(Symbol, bool)>,
+}
+
+impl ArcLevels {
+    /// The levels every output of `m`'s cell holds at `node`, in `cell.outputs` order.
+    ///
+    /// TOTAL, never partial: a level is read at a measurement site, and every measurement starts from a
+    /// state `Machine::arc_eligible` admits — [`derive`] measures only eligible starts and
+    /// [`super::confluence::detect`] probes only eligible states. At such a node every state column is
+    /// determinate, and a combinational output's δ is bounded by the inputs plus the state variables
+    /// (minimise invariant I3, asserted in `Machine::build` at `analysis.rs`), so `output_value` resolves
+    /// for every output.
+    pub fn at<B: Brand, C: ManagerCell>(m: &Machine<B, C>, node: &Minterm<Symbol>) -> ArcLevels {
+        ArcLevels {
+            outputs: m
+                .cell
+                .outputs
+                .iter()
+                .map(|o| {
+                    let v = m
+                        .output_value(&o.name, node)
+                        .expect("every output is defined at a fully-initialised probed state");
+                    (o.name.clone(), v)
+                })
+                .collect(),
+        }
+    }
+}
+
 /// One characterization arc: an input edge on `related` driving `output` in direction `edge`. The
 /// related pin is **always a primary input** — outputs and internal state variables are never arc
 /// sources; they are established indirectly by the prevector.
@@ -70,6 +104,8 @@ pub struct Arc {
     pub end: Minterm<Symbol>,
     /// The prevector: the input-assignment sequence that drives every state variable into `start`.
     pub prevector: Vec<Minterm<Symbol>>,
+    /// The levels the cell's outputs hold at `start` — the arc's `-ic` initial condition.
+    pub levels: ArcLevels,
     pub is_async: bool,
 }
 
@@ -84,7 +120,9 @@ pub struct HiddenArc {
     pub start: Minterm<Symbol>,
     pub end: Minterm<Symbol>, // input vector after the toggle
     pub prevector: Vec<Minterm<Symbol>>,
-    pub outputs: Vec<(Symbol, bool)>, // each output's HELD logic value, in cell.outputs order
+    /// Each output's HELD logic value, in `cell.outputs` order. Every output is defined at both ends of
+    /// the toggle and none of them changes across it, so the values held ARE the levels at `start`.
+    pub levels: ArcLevels,
 }
 
 /// Derive transition arcs for every output of a cell by re-walking its shared asynchronous state machine
@@ -125,6 +163,8 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
                 if !m.arc_eligible(node) {
                     return acc;
                 }
+                // The start levels depend only on `node`, so sample them once and clone per arc.
+                let levels = ArcLevels::at(m, node);
                 for related in inputs {
                     // Toggle one input, hold the (partial) state, and let the state settle.
                     let toggled = machine::toggle(node, &[related.as_str()]);
@@ -163,6 +203,7 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
                             start: node.clone(),
                             end: end.clone(),
                             prevector: prevector.clone(),
+                            levels: levels.clone(),
                             is_async: async_set.contains(related.as_str()),
                         });
                     }
@@ -177,17 +218,13 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
                         let rose = end
                             .value_of(related.as_str())
                             .expect("toggled input is fully fixed in the settled end state");
-                        let outputs: Vec<(Symbol, bool)> = vals
-                            .iter()
-                            .map(|(o, _, a)| (o.name.clone(), a.unwrap()))
-                            .collect();
                         acc.1.push(HiddenArc {
                             pin: related.clone(),
                             edge: if rose { Edge::Rise } else { Edge::Fall },
                             start: node.clone(),
                             end: end.clone(),
                             prevector: prevector.clone(),
-                            outputs,
+                            levels: levels.clone(),
                         });
                     }
                 }
@@ -268,6 +305,80 @@ Q = "A*B + Q*(A+B)"
     }
 
     #[test]
+    fn arc_levels_read_every_output_at_a_probed_state() {
+        // Q is a state output (its level is its own state column) and QN a combinational one (its level
+        // is its δ evaluated at the node): `at` must agree with `output_value` on both, at every
+        // measurement-eligible state, and name the outputs in declaration order.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "C2N"
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+QN = "!Q"
+"#,
+        );
+        let builder = espresso_logic::sync_bdd_builder!();
+        let bdds = crate::model::build_signal_bdds(&cell, &builder);
+        let m = crate::logic::analysis::Machine::build(
+            &cell,
+            &bdds,
+            &crate::logic::machine::ExplorationBudget::default(),
+        )
+        .expect("fixture is explored");
+        let names: Vec<&str> = cell.outputs.iter().map(|o| o.name.as_str()).collect();
+        let mut eligible = 0;
+        for node in m.explored.order.iter().filter(|n| m.arc_eligible(n)) {
+            let levels = ArcLevels::at(&m, node);
+            assert_eq!(
+                levels
+                    .outputs
+                    .iter()
+                    .map(|(n, _)| n.as_str())
+                    .collect::<Vec<_>>(),
+                names
+            );
+            for (name, value) in &levels.outputs {
+                assert_eq!(Some(*value), m.output_value(name, node));
+            }
+            eligible += 1;
+        }
+        assert!(eligible > 0, "the fixture has measurement-eligible states");
+    }
+
+    #[test]
+    fn c2_arc_levels_hold_the_pre_edge_output_value() {
+        // An arc's levels are read at its START state, so the measured output sits at the value the edge
+        // leaves: low before a rise, high before a fall.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "C2"
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+"#,
+        );
+        assert!(!cell.arcs.is_empty());
+        for a in &cell.arcs {
+            let (_, level) = a
+                .levels
+                .outputs
+                .iter()
+                .find(|(n, _)| *n == a.output)
+                .expect("the measured output carries a level");
+            assert_eq!(
+                *level,
+                a.edge == Edge::Fall,
+                "{} {:?} must start at its pre-edge value",
+                a.output,
+                a.edge
+            );
+        }
+    }
+
+    #[test]
     fn c2_arc_and_hidden_prevector_walk_depths() {
         // multiset of prevector lengths, one entry per derived arc — pins the walk depth each context
         // costs. C2's only state variable is the output itself, so no two contexts share an identity:
@@ -307,12 +418,12 @@ Y = "A*B"
         assert!(cell.hidden_arcs.iter().any(|h| {
             h.pin.as_str() == "A"
                 && h.edge == Edge::Fall
-                && h.outputs.len() == 1
-                && h.outputs[0].0.as_str() == "Y"
-                && !h.outputs[0].1
+                && h.levels.outputs.len() == 1
+                && h.levels.outputs[0].0.as_str() == "Y"
+                && !h.levels.outputs[0].1
         }));
         // Single-output cell: every hidden arc holds exactly one output value.
-        assert!(cell.hidden_arcs.iter().all(|h| h.outputs.len() == 1));
+        assert!(cell.hidden_arcs.iter().all(|h| h.levels.outputs.len() == 1));
         // Every hidden arc's prevector is a real single-step walk into its start state, projected onto
         // the inputs.
         for h in &cell.hidden_arcs {
@@ -348,7 +459,8 @@ Q = "E*D + !E*Q"
             d_rise.len()
         );
         let q_val = |h: &HiddenArc| {
-            h.outputs
+            h.levels
+                .outputs
                 .iter()
                 .find(|(s, _)| s.as_str() == "Q")
                 .map(|(_, v)| *v)
@@ -417,7 +529,7 @@ Y = "K + S*L"
         // so two hidden arcs, though their input vectors and held output values coincide.
         let cell = analyse(MASKED_PAIR);
         let at = [("E", false), ("D", true), ("S", false), ("C", false)];
-        let held_low = |h: &HiddenArc| h.outputs.iter().all(|(o, v)| o == "Y" && !v);
+        let held_low = |h: &HiddenArc| h.levels.outputs.iter().all(|(o, v)| o == "Y" && !v);
         let contexts = masked_values(
             cell.hidden_arcs
                 .iter()

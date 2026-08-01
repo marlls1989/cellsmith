@@ -29,7 +29,7 @@
 
 use espresso_logic::{Minterm, Symbol};
 
-use crate::logic::arcs::Edge;
+use crate::logic::arcs::{ArcLevels, Edge};
 
 /// One detected **oscillation hazard** of a cell: the oscillating state variables, the primary-input
 /// condition under which they oscillate, and the competing order-of-arrival outcomes (if any).
@@ -60,6 +60,9 @@ pub struct Race {
     /// The prevector: the input-assignment path that drives every state variable into the probed state
     /// (each node projected onto the inputs).
     pub prevector: Vec<Minterm<Symbol>>,
+    /// The levels the cell's outputs hold at the probed state — sampled at the SAME state as
+    /// `prevector`, so the pair the constraint carries is consistent.
+    pub levels: ArcLevels,
     /// Index of the probed state in `ex.order` (the sequential BFS exploration order).
     pub discovered: usize,
 }
@@ -81,6 +84,9 @@ pub struct OrderDependence {
     pub stable: Vec<Minterm<Symbol>>,
     /// The prevector: the input-assignment path that drives every state variable into the probed state.
     pub prevector: Vec<Minterm<Symbol>>,
+    /// The levels the cell's outputs hold at the probed state — sampled at the SAME state as
+    /// `prevector`, so the pair the constraint carries is consistent.
+    pub levels: ArcLevels,
     /// Index of the probed state in `ex.order` (the sequential BFS exploration order) — the secondary
     /// tie-break key: on equal `prevector.len`, the earlier-discovered representative is kept.
     pub discovered: usize,

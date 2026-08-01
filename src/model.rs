@@ -441,6 +441,13 @@ pub struct AnalysedCell {
     /// Each signal's state-table regions, precomputed once and cached in `signals()` order (outputs
     /// then internals), so emitters don't rebuild the BDDs per call site.
     pub regions: Vec<crate::logic::regions::StateRegions>,
+    /// Whether the cell holds state: at least one of its minimised signals is a state variable — a
+    /// signal on a dependency cycle ([`crate::logic::resolve::state_variables`]). The Liberate arc
+    /// emitter gates the `-ic` initial condition on it: Liberate discards the `-prevector` simulation
+    /// instead of carrying its settled values into the measured vector, so a cell with memory starts
+    /// that vector from state the prevector was supposed to establish and did not, and `-ic` states the
+    /// start condition outright. A combinational cell has no state to lose and gets no `-ic`.
+    pub state_holding: bool,
     /// The cell's behavioural edge classification ([`crate::logic::edge::EdgeArcs`]): the per-node edge
     /// seams (`captures`), the per-arc `-type edge` labels (`labels`) — the field the Liberate arc emitter
     /// reads to type each arc — the cell-level set of internal non-seam master nodes folded away
@@ -582,8 +589,10 @@ impl Cell {
         analysed.unexplored = analysis.unexplored;
 
         // Cache each signal's state-table regions once, in `signals()` order, from the shared folded
-        // BDDs, so downstream emitters don't rebuild the BDDs per call site.
+        // BDDs, so downstream emitters don't rebuild the BDDs per call site, and record whether the
+        // minimised model holds any state at all — both read the same cyclic classifier.
         analysed.regions = derive_regions(&analysed, &bdds);
+        analysed.state_holding = holds_state(&analysed);
 
         Ok(analysed)
     }
@@ -733,6 +742,7 @@ impl Cell {
             constraint_arcs_declared: self.constraint_arcs,
             when: self.when,
             regions: Vec::new(),
+            state_holding: false,
             edge: Default::default(),
             unexplored: None,
             template: self.template.clone(),
@@ -811,6 +821,14 @@ pub fn derive_regions<B: Brand, C: ManagerCell>(
             )
         })
         .collect()
+}
+
+/// Whether the minimised model holds state: at least one signal is a state variable — one on a
+/// dependency cycle, as classified by [`crate::logic::resolve::state_variables`] over the recomputed
+/// feedback — the same pure-graph classifier [`derive_regions`] reads to mark a region hysteretic.
+fn holds_state(cell: &AnalysedCell) -> bool {
+    let signals: Vec<&AnalysedOutput> = cell.signals().collect();
+    !crate::logic::resolve::state_variables(&signals).is_empty()
 }
 
 /// Parse a TOML spec into a [`Spec`].
