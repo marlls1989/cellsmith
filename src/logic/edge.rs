@@ -146,6 +146,12 @@ pub struct EdgeArcs {
     /// already-transparent latch. Membership is PER FIRING, so two firings of one
     /// `(output, clock, direction)` that differ only in internal state can type differently. Every reader
     /// asks the set whether an identity is a member, so it is a [`HashSet`].
+    ///
+    /// The start minterm is the machine's own node, so it is as wide as the machine's coordinates — a
+    /// column per state variable and per combinational survivor. That width never has to be matched by
+    /// hand at the reading end: the probe is the same `arc.start` of the same derived arc, and a
+    /// [`Minterm`] compares and hashes by label-aligned value, an absent column reading as the don't-care
+    /// it would carry anyway. Widening the coordinates therefore widens key and probe together.
     pub labels: HashSet<(Symbol, Symbol, Edge, Minterm<Symbol>)>,
     /// The read-gate factorisations recognised across the cell's outputs (see [`DerivedRegister`]). Empty
     /// for every cell that carries no read-gated register output. Each entry names a state-holding register
@@ -246,12 +252,13 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
 
     let cell = m.cell;
     let inputs = &cell.inputs;
-    let deltas = &m.deltas;
     let ex = &m.explored;
 
-    // The scan context: the transition table, the per-state arc eligibility and the declared clock set,
-    // all node-independent, built once and indexed into by every scan below.
+    // The scan context: the coordinate δ set, the transition table, the per-state arc eligibility and the
+    // declared clock set, all node-independent, built once and indexed into by every scan below.
     let scan = Scan::new(m);
+    // What every re-walk below settles over (see `coordinate_deltas`).
+    let stepped = &scan.stepped[..];
 
     // Candidates: every output (value read via `Machine::output_value`, so combinational outputs are
     // included) plus every internal state variable (the state-machine coordinates that are not outputs).
@@ -281,7 +288,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         }
         for related in inputs {
             let toggled = machine::toggle(node, &[related.as_str()]);
-            let Some(np) = machine::settle(deltas, &toggled) else {
+            let Some(np) = machine::settle(stepped, &toggled) else {
                 continue;
             };
             let is_clock = scan.clock_set.contains(related.as_str());
@@ -336,9 +343,11 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
 
     // Every candidate's raw function δ (state δ then combinational-output δ), for the output CONE
     // (`support(δ_node)` state variables), the propagation walk and the fold's surviving-signal reference
-    // check.
+    // check. This is the CANDIDATE half of the coordinates, not the whole of them: an exposed
+    // combinational coordinate is not a candidate, so it carries no entry here and no cone, propagation
+    // or liveness question is ever asked of it.
     let mut fn_of: BTreeMap<&str, &Bdd<B, C>> = BTreeMap::new();
-    for (n, d) in deltas {
+    for (n, d) in &m.deltas {
         fn_of.insert(n.as_str(), d);
     }
     for (n, d) in m.combinational_outputs() {
@@ -495,14 +504,16 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // THE PER-ARC LABELS: each derived delay arc whose related pin is a declared clock is an edge arc iff it
     // TYPES EDGE at its own firing's post-arc stable state. Membership is the identity itself, so two
     // firings of one `(output, clock, direction)` can type differently, and an unobserved edge — masked in
-    // `arcs::derive`, or from an ineligible start — has no identity to add.
+    // `arcs::derive`, or from an ineligible start — has no identity to add. The start minterm keyed on is
+    // `a.start` VERBATIM, which is what makes the key line up with the emitter's probe whatever the
+    // machine's coordinates are (see [`EdgeArcs::labels`]).
     let mut labels: HashSet<(Symbol, Symbol, Edge, Minterm<Symbol>)> = HashSet::new();
     for a in delay_arcs {
         if !scan.clock_set.contains(a.related.as_str()) || !scan.is_eligible(&a.start) {
             continue;
         }
         let is_rise = a.end.value_of(a.related.as_str()) == Some(true);
-        let Some(sp) = machine::settle(deltas, &machine::toggle(&a.start, &[a.related.as_str()]))
+        let Some(sp) = machine::settle(stepped, &machine::toggle(&a.start, &[a.related.as_str()]))
         else {
             continue;
         };
@@ -869,13 +880,17 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     }
 }
 
-/// The classifier's scan context over one machine: the single-input transition table across the reachable
-/// stable states, those states' ARC ELIGIBILITY, and the declared clock set. All three are
-/// NODE-INDEPENDENT — they describe the cell's state machine, not any one candidate — so they are read
-/// once per cell and every seam, phase and forcing scan indexes into them rather than re-settling.
+/// The classifier's scan context over one machine: the machine's coordinate δ set, the single-input
+/// transition table across the reachable stable states, those states' ARC ELIGIBILITY, and the declared
+/// clock set. All of them are NODE-INDEPENDENT — they describe the cell's state machine, not any one
+/// candidate — so they are read once per cell and every seam, phase and forcing scan indexes into them
+/// rather than re-settling.
 struct Scan<'a, B: Brand, C: ManagerCell> {
     /// The machine every scan reads.
     m: &'a Machine<'a, B, C>,
+    /// The machine's coordinate δ set ([`coordinate_deltas`]), which every settle in this module — this
+    /// context's own `next` table included — steps over.
+    stepped: Vec<machine::Delta<B, C>>,
     /// The reachable stable states: the index space `next` and `eligible` are aligned with.
     order: &'a [Minterm<Symbol>],
     /// `next[s][x]` is the index of the stable state reached by toggling input `x` — the machine's own
@@ -892,6 +907,7 @@ struct Scan<'a, B: Brand, C: ManagerCell> {
 impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
     fn new(m: &'a Machine<'a, B, C>) -> Self {
         let order = &m.explored.order[..];
+        let stepped = coordinate_deltas(m);
         let index: HashMap<&Minterm<Symbol>, usize> =
             order.iter().enumerate().map(|(i, s)| (s, i)).collect();
         let next: Vec<Vec<Option<usize>>> = order
@@ -901,7 +917,7 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
                     .inputs
                     .iter()
                     .map(|x| {
-                        machine::settle(&m.deltas, &machine::toggle(s, &[x.as_str()]))
+                        machine::settle(&stepped, &machine::toggle(s, &[x.as_str()]))
                             .and_then(|np| index.get(&np).copied())
                     })
                     .collect()
@@ -909,6 +925,7 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
             .collect();
         Scan {
             m,
+            stepped,
             order,
             next,
             eligible: order.iter().map(|s| m.arc_eligible(s)).collect(),
@@ -1119,6 +1136,19 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
             }
         }
     }
+}
+
+/// Every coordinate's δ in [`machine::Coordinates`] order — the state variables followed by the
+/// combinational survivors — which is the set one [`machine::step`] writes and the set
+/// [`machine::explore`] settled the reachable states over. Every re-walk in this module settles over all
+/// of them: a narrower set leaves a combinational coordinate's column holding its pre-toggle value, so the
+/// node would read back stale and would not match the explored state it belongs to.
+fn coordinate_deltas<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> Vec<machine::Delta<B, C>> {
+    machine::Coordinates {
+        state: &m.deltas,
+        combinational: &m.combinational,
+    }
+    .stepped()
 }
 
 /// Does `f`, once every variable of its support EXCEPT `freed` is fixed to `state`'s values, still depend
@@ -2767,9 +2797,10 @@ T = "M*!M2 + !M*M2"
             // D is preserved as a live data dependency: some reachable state where toggling D moves T.
             // Typing T as a register keyed off CLK would drop D while the run still emits D→T data arcs, so
             // T correctly stays level and D survives in T's function.
+            let stepped = coordinate_deltas(&m);
             let d_drives_t = m.explored.order.iter().any(|node| {
                 let before = m.output_value("T", node);
-                let Some(np) = machine::settle(&m.deltas, &machine::toggle(node, &["D"])) else {
+                let Some(np) = machine::settle(&stepped, &machine::toggle(node, &["D"])) else {
                     return false;
                 };
                 matches!((before, m.output_value("T", &np)), (Some(b0), Some(b1)) if b0 != b1)
