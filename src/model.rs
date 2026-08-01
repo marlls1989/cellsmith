@@ -948,7 +948,9 @@ pub(crate) fn analyse_one(src: &str) -> AnalysedCell {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use espresso_logic::{bdd_builder, expr};
+    use crate::logic::arcs::Edge;
+    use crate::logic::confluence::ConstraintKind;
+    use espresso_logic::{bdd_builder, expr, Minterm};
 
     const SAMPLE: &str = r#"
 [[cell]]
@@ -1488,20 +1490,37 @@ Q = "!QN"
     #[test]
     fn the_model_view_is_what_an_expose_free_analysis_yields() {
         // Exposure is arcs-only: the view the Liberty, Verilog and statetable emitters read must be the
-        // fully-minimised model, signal for signal and expression for expression.
-        let exposed = analyse_one(&c_element_src(r#"expose = ["QN"]"#));
-        let plain = analyse_one(&c_element_src(""));
+        // fully-minimised model, signal for signal, expression for expression and record for record.
+        // The model view carries the arc view's exploration onto its own coordinates instead of
+        // exploring for itself, so this also holds that projection to what a plain analysis discovers —
+        // across the C-element, where releasing the exposure moves the coordinate from `QN` to `Q`, and
+        // the DFF, where the exposed master survives both views.
+        for (with, without, _) in exposure_pairs() {
+            let exposed = analyse_one(&with);
+            let plain = analyse_one(&without);
+            let cell = exposed.repr_name();
 
-        let names = |c: &AnalysedCell| c.signals().map(|s| s.name.clone()).collect::<Vec<_>>();
-        assert_eq!(names(&exposed), names(&plain));
-        for (a, b) in exposed.signals().zip(plain.signals()) {
-            assert_eq!(a.expr, b.expr, "signal {} display expression", a.name);
-            assert_eq!(a.vars, b.vars, "signal {} support", a.name);
-            assert_eq!(a.feedback, b.feedback, "signal {} feedback", a.name);
+            let names = |c: &AnalysedCell| c.signals().map(|s| s.name.clone()).collect::<Vec<_>>();
+            assert_eq!(names(&exposed), names(&plain), "cell {cell}: signals");
+            for (a, b) in exposed.signals().zip(plain.signals()) {
+                assert_eq!(
+                    a.expr, b.expr,
+                    "cell {cell}: signal {} display expression",
+                    a.name
+                );
+                assert_eq!(a.vars, b.vars, "cell {cell}: signal {} support", a.name);
+                assert_eq!(
+                    a.feedback, b.feedback,
+                    "cell {cell}: signal {} feedback",
+                    a.name
+                );
+            }
+            assert_eq!(
+                exposed.state_holding, plain.state_holding,
+                "cell {cell}: state_holding"
+            );
+            assert_same_cell_records(&exposed, &plain);
         }
-        assert_eq!(exposed.state_holding, plain.state_holding);
-        assert_eq!(exposed.regions.len(), plain.regions.len());
-        assert_eq!(exposed.arcs.len(), plain.arcs.len());
     }
 
     /// A master-slave DFF, in the two spellings the view split is read against: `{expose}` is the
@@ -1532,12 +1551,217 @@ Q = "CLK*M + !CLK*Q"
         ]
     }
 
+    /// One transition arc reduced to the identity [`crate::logic::arcs::derive`] keys it on. The rest of
+    /// an arc follows from that identity — its end state and levels are read off the start state, and its
+    /// prevector is one path into it.
+    #[derive(Debug, PartialEq, Eq)]
+    struct ArcRecord {
+        output: Symbol,
+        related: Symbol,
+        edge: Edge,
+        start: Minterm<Symbol>,
+    }
+
+    /// One internal-power ('hidden') arc reduced to its identity: the toggled pin, its direction and the
+    /// state the toggle is measured from.
+    #[derive(Debug, PartialEq, Eq)]
+    struct HiddenArcRecord {
+        pin: Symbol,
+        edge: Edge,
+        start: Minterm<Symbol>,
+    }
+
+    /// One generated constraint by its identity: the kind and the two pins with their edges.
+    #[derive(Debug, PartialEq, Eq)]
+    struct ConstraintRecord {
+        kind: ConstraintKind,
+        related: Symbol,
+        related_edge: Edge,
+        pin: Symbol,
+        pin_edge: Edge,
+    }
+
+    /// The two racing pins and their edges of one hazard observation.
+    #[derive(Debug, PartialEq, Eq)]
+    struct HazardPins {
+        x: Symbol,
+        x_edge: Edge,
+        y: Symbol,
+        y_edge: Edge,
+    }
+
+    /// One detected hazard: the input condition it occurs under, the state variables that diverge and the
+    /// competing settled states, plus the pins raced to observe it. An [`OrderDependence`] always names a
+    /// pin pair; an [`Oscillation`] names one per pair-probe [`crate::logic::hazard::Race`], and none at
+    /// all when a single input toggle drove it.
+    #[derive(Debug, PartialEq, Eq)]
+    struct HazardRecord {
+        pins: Option<HazardPins>,
+        condition: Minterm<Symbol>,
+        group: Vec<Symbol>,
+        stable: Vec<Minterm<Symbol>>,
+    }
+
+    /// The behavioural edge classification reduced to the node names it carries: the folded masters, the
+    /// nodes holding an edge capture, and the derived registers.
+    #[derive(Debug, PartialEq, Eq)]
+    struct EdgeRecord {
+        folded: BTreeSet<Symbol>,
+        captures: BTreeSet<Symbol>,
+        derived: BTreeSet<Symbol>,
+    }
+
+    /// Everything one analysed view emits, each record reduced to what identifies it. Two views agreeing
+    /// here emit the same arcs, hazards and constraints.
+    ///
+    /// A record's prevector, the levels sampled alongside it and its exploration-order index are left
+    /// out. Each names WHICH of several equally-good reachable states the pipeline chose to observe the
+    /// record from, and that choice follows the BFS order — a representative, not behaviour.
+    #[derive(Debug)]
+    struct CellRecords {
+        arcs: Vec<ArcRecord>,
+        hidden_arcs: Vec<HiddenArcRecord>,
+        leakage: Vec<LeakageState>,
+        constraints: Vec<ConstraintRecord>,
+        order_dependence: Vec<HazardRecord>,
+        oscillation: Vec<HazardRecord>,
+        edge: EdgeRecord,
+    }
+
+    /// Reduce a view to [`CellRecords`]. Takes the whole shipped [`AnalysedCell`] rather than any piece
+    /// of the analysis, so a view routed to the wrong place reads back as a record-set difference.
+    fn records(cell: &AnalysedCell) -> CellRecords {
+        let pins = |x: &Symbol, x_edge, y: &Symbol, y_edge| HazardPins {
+            x: x.clone(),
+            x_edge,
+            y: y.clone(),
+            y_edge,
+        };
+        let mut oscillation = Vec::new();
+        for osc in &cell.oscillation {
+            let observed = osc
+                .races
+                .iter()
+                .map(|r| Some(pins(&r.x, r.x_edge, &r.y, r.y_edge)));
+            for raced in observed.chain(osc.races.is_empty().then_some(None)) {
+                oscillation.push(HazardRecord {
+                    pins: raced,
+                    condition: osc.condition.clone(),
+                    group: osc.group.clone(),
+                    stable: osc.stable.clone(),
+                });
+            }
+        }
+        CellRecords {
+            arcs: cell
+                .arcs
+                .iter()
+                .map(|a| ArcRecord {
+                    output: a.output.clone(),
+                    related: a.related.clone(),
+                    edge: a.edge,
+                    start: a.start.clone(),
+                })
+                .collect(),
+            hidden_arcs: cell
+                .hidden_arcs
+                .iter()
+                .map(|h| HiddenArcRecord {
+                    pin: h.pin.clone(),
+                    edge: h.edge,
+                    start: h.start.clone(),
+                })
+                .collect(),
+            leakage: cell.leakage.clone(),
+            constraints: cell
+                .constraints
+                .iter()
+                .map(|c| ConstraintRecord {
+                    kind: c.kind,
+                    related: c.related.clone(),
+                    related_edge: c.related_edge,
+                    pin: c.pin.clone(),
+                    pin_edge: c.pin_edge,
+                })
+                .collect(),
+            order_dependence: cell
+                .order_dependence
+                .iter()
+                .map(|od| HazardRecord {
+                    pins: Some(pins(&od.x, od.x_edge, &od.y, od.y_edge)),
+                    condition: od.condition.clone(),
+                    group: od.group.clone(),
+                    stable: od.stable.clone(),
+                })
+                .collect(),
+            oscillation,
+            edge: EdgeRecord {
+                folded: cell.edge.folded.iter().cloned().collect(),
+                captures: cell.edge.captures.iter().map(|c| c.node.clone()).collect(),
+                derived: cell.edge.derived.iter().map(|d| d.name.clone()).collect(),
+            },
+        }
+    }
+
+    /// Assert two runs emitted the same records of one kind, in any order. A record carries `Eq` and not
+    /// `Ord`, so membership is a scan — free at fixture size, and a mismatch names the record itself
+    /// rather than the position it sits at.
+    fn assert_same_records<T: PartialEq + std::fmt::Debug>(
+        exposing: &[T],
+        plain: &[T],
+        what: &str,
+    ) {
+        for r in exposing {
+            assert!(
+                plain.contains(r),
+                "{what}: only the exposing run emits {r:?}"
+            );
+        }
+        for r in plain {
+            assert!(
+                exposing.contains(r),
+                "{what}: only the exposure-free run emits {r:?}"
+            );
+        }
+        assert_eq!(exposing.len(), plain.len(), "{what}: record counts differ");
+    }
+
+    /// Assert an exposing cell's model view and an exposure-free analysis of the same cell emit the same
+    /// records — the whole of what exposure is not allowed to reach.
+    fn assert_same_cell_records(exposing: &AnalysedCell, plain: &AnalysedCell) {
+        let cell = exposing.repr_name();
+        let (a, b) = (records(exposing), records(plain));
+        assert_same_records(&a.arcs, &b.arcs, &format!("cell {cell}: arcs"));
+        assert_same_records(
+            &a.hidden_arcs,
+            &b.hidden_arcs,
+            &format!("cell {cell}: hidden arcs"),
+        );
+        assert_same_records(&a.leakage, &b.leakage, &format!("cell {cell}: leakage"));
+        assert_same_records(
+            &a.constraints,
+            &b.constraints,
+            &format!("cell {cell}: constraints"),
+        );
+        assert_same_records(
+            &a.order_dependence,
+            &b.order_dependence,
+            &format!("cell {cell}: order dependence"),
+        );
+        assert_same_records(
+            &a.oscillation,
+            &b.oscillation,
+            &format!("cell {cell}: oscillation"),
+        );
+        assert_eq!(a.edge, b.edge, "cell {cell}: edge classification");
+    }
+
     #[test]
     fn exposure_changes_the_arcs_and_nothing_else() {
         // The arcs-only claim, as an invariance of THIS binary rather than against a recorded baseline:
-        // analyse each fixture twice, once exposing and once not, and every artifact but the arcs comes
-        // out the same text — Liberty, the Verilog primitive's state table, and `define_cell`. The arcs
-        // are where the difference lands, as the exposed node's own column.
+        // analyse each fixture twice, once exposing and once not, and the model view every emitter but
+        // the arcs one reads emits the same records either way. The arcs are where the difference lands,
+        // as the exposed node's own column.
         for (with, without, node) in exposure_pairs() {
             let exposed = analyse_one(&with);
             let plain = analyse_one(&without);
@@ -1545,21 +1769,7 @@ Q = "CLK*M + !CLK*Q"
             assert!(plain.exposed.is_empty());
 
             let cell = exposed.repr_name();
-            assert_eq!(
-                crate::emit::liberty::cell_liberty(&exposed),
-                crate::emit::liberty::cell_liberty(&plain),
-                "cell {cell}: exposure reaches the Liberty"
-            );
-            assert_eq!(
-                crate::emit::verilog::cell_verilog(&exposed),
-                crate::emit::verilog::cell_verilog(&plain),
-                "cell {cell}: exposure reaches the Verilog"
-            );
-            assert_eq!(
-                crate::emit::define_cell::cell_define_cell(&exposed),
-                crate::emit::define_cell::cell_define_cell(&plain),
-                "cell {cell}: exposure reaches define_cell"
-            );
+            assert_same_cell_records(&exposed, &plain);
 
             // The arcs differ in exactly one way: every block of the exposing run lists the node among
             // its columns, and no block of the other run does.
