@@ -95,8 +95,8 @@ pub struct Cell {
     #[serde(default, deserialize_with = "de_template_overrides")]
     pub template_overrides: IndexMap<Symbol, TemplateSpec>,
     /// Optional: override the low-logic-level (`0`) voltage expression the exposed nodes' `-ic` renders.
-    /// Falls back to the `--logic-low` CLI default, then to [`LogicVoltages::default`]'s `"0"`. Written
-    /// into the emitted Tcl verbatim, so a Tcl variable is as good as a literal.
+    /// Falls back to the `--logic-low` CLI default, then to [`LogicVoltages::default`]'s `"0"`. A Tcl
+    /// variable is as good as a literal: the arcs emitter renders the value as one `-ic` column.
     #[serde(default)]
     pub logic_low: Option<String>,
     /// Optional: override the high-logic-level (`1`) voltage expression, mirroring `logic_low`. Falls
@@ -120,9 +120,10 @@ pub struct TemplateSpec {
 }
 
 /// The voltage expressions the Liberate arcs' `-ic` renders for the two logic levels (`low` for `0`,
-/// `high` for `1`). Each string is written into the emitted Tcl verbatim, so a Tcl variable (`$VDD`) is
-/// as good as a literal (`0`) — these are user-supplied Tcl VALUE fragments, not name fields, so this
-/// holds `String` rather than the `Symbol` the rest of the model uses for names.
+/// `high` for `1`). A Tcl variable (`$VDD`) is as good as a literal (`0`) — these are user-supplied Tcl
+/// VALUE fragments, not name fields, so this holds `String` rather than the `Symbol` the rest of the
+/// model uses for names. Each is carried here exactly as written; making it one `-ic` column is the arcs
+/// emitter's job, that being a question about the Tcl line it renders rather than about the cell.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogicVoltages {
     pub low: String,
@@ -157,55 +158,6 @@ impl LogicVoltages {
             high: high.map(str::to_owned).unwrap_or(default.high),
         }
     }
-}
-
-/// Whether a voltage expression renders as exactly one `-ic` column.
-///
-/// The arcs emitter joins one voltage per `-pinlist` entry with spaces inside a single double-quoted
-/// Tcl word, and Liberate reads the result positionally, column by column. A fragment therefore has to
-/// reach Liberate as one whitespace-free run of characters: one that splits shifts every column after
-/// it, silently, since the two lines are only related by position.
-///
-/// Tcl performs command, variable and backslash substitution between double quotes, and treats braces
-/// there as ordinary characters (see the Tcl(n) syntax rules). That settles which forms survive as one
-/// column:
-///
-/// - `[...]` command substitution is resolved while the word is parsed and its result stays inside the
-///   word, so whitespace between the brackets never reaches Liberate — `[expr {$VDD * 0.9}]` is one
-///   column, `$VDD * 0.9` is three.
-/// - Braces do NOT group inside the quoted word, so `{$VDD * 0.9}` arrives at Liberate braces and
-///   spaces intact, its column reading `1.08 * 0.9` rather than a voltage. Whitespace under braces is
-///   rejected with the rest.
-/// - A backslash can synthesise whitespace (`\ `, `\n`, `\x20`) or a quote, and a `"` ends the quoted
-///   word early; neither can be resolved by looking at the fragment, so both characters are refused.
-/// - An unbalanced bracket or brace leaves the surrounding word's structure undecidable, so it is
-///   refused too.
-///
-/// A Tcl variable (`$VDD`) or a literal (`0`) passes unexamined: what the variable holds is the user's
-/// business — only the column count is checked here.
-fn renders_as_one_ic_column(value: &str) -> bool {
-    if value.is_empty() || value.contains(['"', '\\']) {
-        return false;
-    }
-    let mut brackets = 0usize;
-    let mut braces = 0usize;
-    for c in value.chars() {
-        match c {
-            '[' => brackets += 1,
-            ']' => match brackets.checked_sub(1) {
-                Some(depth) => brackets = depth,
-                None => return false,
-            },
-            '{' => braces += 1,
-            '}' => match braces.checked_sub(1) {
-                Some(depth) => braces = depth,
-                None => return false,
-            },
-            _ if c.is_whitespace() && brackets == 0 => return false,
-            _ => {}
-        }
-    }
-    brackets == 0 && braces == 0
 }
 
 /// A class of emitted arc, the granularity at which `-when` arcs are opted into. The `clap::ValueEnum`
@@ -424,8 +376,6 @@ pub enum ModelError {
     ExposeNotInternal { cell: Symbol, node: Symbol },
     #[error("cell {cell:?}: duplicate exposed node {node:?}")]
     DuplicateExpose { cell: Symbol, node: Symbol },
-    #[error("cell {cell:?}: logic voltage {value:?} does not render as a single -ic column: whitespace is allowed only inside a [...] command substitution, quotes and backslashes not at all, and brackets and braces must balance")]
-    LogicVoltageNotOneColumn { cell: Symbol, value: String },
 }
 
 /// A signal (output **or** internal) after analysis: its function, the variables it references, and
@@ -813,20 +763,10 @@ impl Cell {
             }
         }
 
-        // Each logic voltage occupies one positional `-ic` column, so it has to survive Tcl's
-        // substitutions as a single unsplit run (see [`renders_as_one_ic_column`]). Resolving the
-        // overrides first checks a `--logic-low`/`--logic-high` value alongside a spec key: `main`
-        // folds the command-line defaults into these keys before analysis.
+        // A `--logic-low`/`--logic-high` value reaches analysis as a spec key: `main` folds the
+        // command-line defaults into the cell's own keys, which win where both are set.
         let voltages =
             LogicVoltages::from_options(self.logic_low.as_deref(), self.logic_high.as_deref());
-        for value in [&voltages.low, &voltages.high] {
-            if !renders_as_one_ic_column(value) {
-                return Err(ModelError::LogicVoltageNotOneColumn {
-                    cell: self.name[0].clone(),
-                    value: value.clone(),
-                });
-            }
-        }
 
         // Signal order: outputs first, then internals. Feedback references are classified against it.
         let signal_names: Vec<Symbol> = output_names
@@ -1749,7 +1689,7 @@ Q = "CLK*M + !CLK*Q"
         assert_eq!(v.high, "$VDDH");
     }
 
-    /// A cell carrying `low`/`high` verbatim, for the one-column check on the resolved voltages.
+    /// A cell carrying `low`/`high` verbatim, for the analysis of the resolved voltages.
     fn cell_with_voltages(low: &str, high: &str) -> Cell {
         let s = format!(
             r#"
@@ -1766,50 +1706,23 @@ Q = "A"
     }
 
     #[test]
-    fn one_column_logic_voltages_are_accepted() {
-        // A literal, a Tcl variable, and both bracketed forms: command substitution resolves inside the
-        // emitted word, so the whitespace in the braced `expr` never reaches Liberate's column split.
-        for value in ["0", "$VDD", "[expr $VDD*0.9]", "[expr {$VDD * 0.9}]"] {
-            let cell = cell_with_voltages("0", value);
-            assert!(
-                cell.analyse().is_ok(),
-                "expected {value:?} to render as one -ic column",
-            );
-        }
-    }
-
-    #[test]
-    fn split_logic_voltage_is_rejected() {
+    fn any_logic_voltage_is_carried_through_analysis() {
+        // Analysis turns no voltage expression away and rewrites none of them: whatever the spec says
+        // reaches the arcs emitter as written, which is where it is rendered into one `-ic` column.
         for value in [
-            "$VDD * 0.9",   // three columns where one is meant
-            "$VDD\t0.9",    // any whitespace splits, not just a space
-            "{$VDD * 0.9}", // braces are ordinary characters inside the emitted quoted word
-            "",             // renders nothing, dropping the column
-            "$V\\\"X",      // a backslash can synthesise whitespace, a quote ends the word
+            "$VDD * 0.9",
+            "[expr $VDD*0.9]",
+            "{$VDD * 0.9}",
+            "",
             "$V\"X",
-            "[expr $VDD*0.9", // unbalanced: neither parse can be reasoned about through it
-            "expr $VDD*0.9]",
             "{$VDD",
-            "$VDD}",
         ] {
-            let err = cell_with_voltages("0", value).analyse().unwrap_err();
-            assert!(
-                matches!(&err, ModelError::LogicVoltageNotOneColumn { cell, value: v }
-                    if cell.as_str() == "X" && v.as_str() == value),
-                "expected {value:?} to be rejected naming the cell and quoting it, got {err}",
-            );
+            let cell = cell_with_voltages("0", value)
+                .analyse()
+                .unwrap_or_else(|e| panic!("expected {value:?} to analyse, got {e}"));
+            assert_eq!(cell.voltages.high, value);
+            assert_eq!(cell.voltages.low, "0");
         }
-    }
-
-    #[test]
-    fn logic_low_is_checked_alongside_logic_high() {
-        let err = cell_with_voltages("$GND * 0", "$VDD")
-            .analyse()
-            .unwrap_err();
-        assert!(
-            matches!(&err, ModelError::LogicVoltageNotOneColumn { value, .. } if value.as_str() == "$GND * 0"),
-            "the low side is checked too, got {err}",
-        );
     }
 
     #[test]

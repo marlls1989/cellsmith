@@ -109,11 +109,13 @@ fn render_path(prevector: &[Minterm<Symbol>]) -> String {
 }
 
 /// The pre-hazard state: the reachable stable state the probe toggles from — the prevector's last input
-/// state (empty braces if the prevector is somehow empty, which `path_to` never produces).
+/// state.
 fn render_pre_state(prevector: &[Minterm<Symbol>]) -> String {
-    prevector
-        .last()
-        .map_or_else(|| "{}".to_owned(), render_state)
+    render_state(
+        prevector
+            .last()
+            .expect("path_to seeds its chain with the probed node itself"),
+    )
 }
 
 impl Oscillation {

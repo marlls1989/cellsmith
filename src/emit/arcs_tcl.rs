@@ -404,8 +404,9 @@ fn format_arc(cell: &AnalysedCell, arc: &Arc, with_when: bool) -> String {
         prevector_str(cell, &arc.prevector)
     );
     let pinlist = format!("\t-pinlist {{{}}} \\\n", arc_pinlist_str(cell));
-    // The `-ic` VALUES are double-quoted, never braced: Tcl substitutes no variable inside braces, so a
-    // braced `$VDD` would reach Liberate as that literal text instead of the supply voltage.
+    // The `-ic` VALUES are one double-quoted word, never a braced one: Tcl substitutes no variable
+    // inside braces, so a braced `$VDD` would reach Liberate as that literal text instead of the supply
+    // voltage. A single column within the word carries braces of its own where [`ic_column`] wraps it.
     let ic = if cell.state_holding {
         format!(
             "\t-ic \"{}\" \\\n",
@@ -629,8 +630,107 @@ fn exposed_vector_sym(level: &ExposedLevel) -> String {
     }
 }
 
+/// One `-ic` column: a `logic_low`/`logic_high` expression rendered so Liberate reads it as a single
+/// list element.
+///
+/// The `-ic` values leave as one double-quoted Tcl word, so Tcl runs command, variable and backslash
+/// substitution over them and Liberate splits the SUBSTITUTED text into columns by the Tcl list rules:
+/// whitespace separates the elements, and an element opening with a brace runs to the matching close
+/// brace whatever lies between. An expression that is already one element is written as it stands — a
+/// bare word (`GND`), a number (`0.99`), a variable reference in either form (`$VDD`, `${VDD}`), or a
+/// value the spec itself wrote as one balanced brace group. Anything else is wrapped in a brace pair,
+/// which makes it one element whatever whitespace the substitution leaves in it: `$VDD * 0.9` reaches
+/// Liberate as the single column `1.08 * 0.9`, and `[expr $VDD*0.9]` as the one its command
+/// substitution resolves to. What that column then means to Liberate is the spec author's affair — the
+/// wrap is here to keep the columns aligned with the `-pinlist`.
+///
+/// A double quote ends the `-ic` word wherever it sits — braces are ordinary characters to the word
+/// parser, so a wrap is no shield — and each one therefore goes out as `\"`. Substitution turns it back
+/// into a quote before the list is read, so the column holds the character the spec wrote.
+///
+/// Braces that do not balance are the case a wrap cannot carry: `{$VDD` has no group to close, and Tcl
+/// rejects the line as Liberate reads it (`unmatched open brace in list`) rather than passing on a
+/// column count that has shifted.
+fn ic_column(value: &str) -> String {
+    // The form is recognised in the expression as written; the escaping is about the word it is
+    // emitted into, so it applies to a recognised expression and a wrapped one alike.
+    let escaped = value.replace('"', "\\\"");
+    if is_one_list_element(value) {
+        escaped
+    } else {
+        format!("{{{escaped}}}")
+    }
+}
+
+/// Whether the expression already reaches Liberate as one list element: a bare word, a number, a
+/// variable reference (`$VDD` or `${VDD}`), or one balanced brace group. A reference whose name falls
+/// outside the ordinary character set — Tcl(n) allows the braced form any character but a close brace —
+/// is left to the wrap, which carries it just as well.
+fn is_one_list_element(value: &str) -> bool {
+    if let Some(reference) = value.strip_prefix('$') {
+        let name = reference
+            .strip_prefix('{')
+            .and_then(|n| n.strip_suffix('}'))
+            .unwrap_or(reference);
+        return is_bare_word(name);
+    }
+    is_bare_word(value) || value.parse::<f64>().is_ok() || is_one_brace_group(value)
+}
+
+/// Whether `s` is a run of Tcl's variable-name characters: ASCII letters, digits and underscore, plus
+/// namespace separators of two or more colons (Tcl(n), "Variable substitution"). Such a run names the
+/// variable of a `$` reference, and standing alone it is a literal holding nothing for Tcl to
+/// substitute, group or split.
+fn is_bare_word(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    // A single colon separates nothing — it takes two to make a namespace separator.
+    let mut colons = 0usize;
+    for c in s.chars() {
+        match c {
+            ':' => colons += 1,
+            _ if c.is_ascii_alphanumeric() || c == '_' => {
+                if colons == 1 {
+                    return false;
+                }
+                colons = 0;
+            }
+            _ => return false,
+        }
+    }
+    colons != 1
+}
+
+/// Whether the whole value is one balanced brace group — it opens with a brace whose match is its last
+/// character. `{a} {b}` is not: its group closes early, leaving two elements. Every brace counts,
+/// backslash or no backslash, because the word's backslash substitution has already run by the time the
+/// list is read.
+fn is_one_brace_group(value: &str) -> bool {
+    if !value.starts_with('{') {
+        return false;
+    }
+    let mut depth = 0usize;
+    for (i, c) in value.char_indices() {
+        match c {
+            '{' => depth += 1,
+            // The depth reaches zero at the opening brace's match and the scan returns there, so this
+            // never runs at depth zero.
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return i + 1 == value.len();
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// The `-ic` initial condition over [`arc_pinlist_str`] order: each column's starting voltage, written
-/// as the cell's `logic_low`/`logic_high` expression for the level it starts at. Inputs start where the
+/// as the cell's `logic_low`/`logic_high` expression for the level it starts at (through
+/// [`ic_column`]). Inputs start where the
 /// prevector leaves them (its last step); outputs and exposed nodes start at the levels measured at the
 /// arc's start state. Liberate discards the `-prevector` simulation rather than carrying its settled
 /// values forward, so this is what actually establishes a state-holding cell's start condition — and
@@ -655,26 +755,27 @@ fn ic_str(
         .map(|(s, b)| (s.as_str(), *b))
         .collect();
     let exposed = exposed_levels(levels);
+    let column = |level: bool| ic_column(cell.voltages.of(level));
     vector(
         cell,
         |input| {
             let level = *held
                 .get(input)
                 .expect("every input has a held value in the arc's prevector");
-            cell.voltages.of(level).to_owned()
+            column(level)
         },
         |node| {
             let level = exposed
                 .get(node)
                 .expect("the arc's levels define every exposed node")
                 .start;
-            cell.voltages.of(level).to_owned()
+            column(level)
         },
         |name| {
             let level = *start
                 .get(name)
                 .expect("the arc's levels define every output");
-            cell.voltages.of(level).to_owned()
+            column(level)
         },
     )
 }
@@ -1967,16 +2068,38 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 "#;
 
-    /// The values on a block's `-ic` line — the whitespace-separated text between its double quotes —
-    /// or `None` when the block renders no `-ic`. The quoting is asserted here: braces would stop Tcl
-    /// substituting a `$VDD`-style expression.
+    /// The columns on a block's `-ic` line, or `None` when the block renders no `-ic`. The word between
+    /// the line's double quotes is split the way Liberate reads it — by the Tcl list rules, so
+    /// whitespace inside a brace group belongs to its element rather than separating two — and each
+    /// column comes back as the text emitted for it, braces and all. The double quoting is asserted
+    /// here: bracing the word instead would stop Tcl substituting a `$VDD`-style expression.
     fn ic_values(block: &str) -> Option<Vec<&str>> {
         let line = block.lines().find(|l| l.trim_start().starts_with("-ic "))?;
         let open = line.find('"').expect("-ic values are double-quoted");
         let close = line.rfind('"').expect("-ic renders a closing quote");
         assert!(open < close, "-ic renders a pair of quotes: {line}");
-        assert!(!line.contains('{'), "-ic values are never braced: {line}");
-        Some(line[open + 1..close].split_whitespace().collect())
+        let word = &line[open + 1..close];
+        let mut columns = Vec::new();
+        let mut depth = 0usize;
+        let mut start = None;
+        for (i, c) in word.char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => depth = depth.saturating_sub(1),
+                _ if c.is_whitespace() && depth == 0 => {
+                    if let Some(s) = start.take() {
+                        columns.push(&word[s..i]);
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            start.get_or_insert(i);
+        }
+        if let Some(s) = start {
+            columns.push(&word[s..]);
+        }
+        Some(columns)
     }
 
     /// The pins on a block's `-pinlist` line, in column order.
@@ -2110,6 +2233,94 @@ Y = "!A"
             entries,
             BTreeSet::from(["GND".to_owned(), "$VDDH".to_owned()])
         );
+    }
+
+    #[test]
+    fn a_one_element_logic_voltage_is_written_as_it_stands() {
+        // The forms Liberate's list split already reads as one column: a bare word, a number in either
+        // notation, a variable reference either way round, a namespaced one, and a value the spec wrote
+        // as one balanced brace group. `0` and `$VDD` are the defaults, so this is also what keeps every
+        // emitted artifact free of braces it never had.
+        for value in [
+            "0",
+            "0.99",
+            "-0.5",
+            "1e-3",
+            "GND",
+            "VDD_H",
+            "$VDD",
+            "${VDD}",
+            "$::VDD",
+            "{$VDD * 0.9}",
+            "{}",
+        ] {
+            assert_eq!(ic_column(value), value, "{value:?} is already one column");
+        }
+    }
+
+    #[test]
+    fn any_other_logic_voltage_is_wrapped_into_one_element() {
+        // Whitespace splits the column, a bracket resolves to whatever the command returns, two groups
+        // are two elements and an empty value is none: the wrap makes each of them exactly one.
+        for (value, column) in [
+            ("$VDD * 0.9", "{$VDD * 0.9}"),
+            ("$VDD\t0.9", "{$VDD\t0.9}"),
+            ("[expr $VDD*0.9]", "{[expr $VDD*0.9]}"),
+            ("{a} {b}", "{{a} {b}}"),
+            ("${a b}", "{${a b}}"),
+            ("", "{}"),
+        ] {
+            assert_eq!(ic_column(value), column, "{value:?} is wrapped");
+        }
+    }
+
+    #[test]
+    fn a_double_quote_in_a_logic_voltage_is_escaped() {
+        // A quote would close the `-ic` word wherever it sat, so it goes out escaped — inside the wrap
+        // where the expression's own text goes, and inside a group the spec braced itself.
+        assert_eq!(ic_column("a\"b"), "{a\\\"b}");
+        assert_eq!(ic_column("{a\"b}"), "{a\\\"b}");
+        let cell = analyse(&IC_DFF.replace(
+            "constraint_arcs = true",
+            "constraint_arcs = true\nlogic_high = \"a\\\"b\"",
+        ));
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        for block in blocks(&tcl) {
+            let line = block
+                .lines()
+                .map(str::trim)
+                .find(|l| l.starts_with("-ic "))
+                .unwrap_or_else(|| panic!("a state-holding cell's block carries an -ic:\n{block}"));
+            assert_eq!(
+                line.matches('"').count() - line.matches("\\\"").count(),
+                2,
+                "the escaped quotes leave the word its own pair:\n{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_wrapped_logic_voltage_still_leaves_one_column_per_pin() {
+        // The point of the wrap, on the cell that has the most columns to shift: an exposed node sits
+        // between the inputs and the outputs, so a voltage that split would move it off its pin.
+        let cell = analyse(&C2_EXPOSED.replace(
+            "constraint_arcs = true",
+            "constraint_arcs = true\nlogic_high = \"$VDD * 0.9\"",
+        ));
+        let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{tcl}");
+        let mut wrapped = 0;
+        for block in blocks(&tcl) {
+            let ic = ic_values(&block).expect("a state-holding cell's block carries an -ic");
+            assert_eq!(
+                ic.len(),
+                pinlist_of(&block).len(),
+                "one -ic column per pin:\n{block}"
+            );
+            wrapped += ic.iter().filter(|c| **c == "{$VDD * 0.9}").count();
+        }
+        assert!(wrapped > 0, "the high level reaches the -ic lines:\n{tcl}");
     }
 
     // ---- Exposed internal nodes: their own pinlist column, and what each block kind puts in it ----

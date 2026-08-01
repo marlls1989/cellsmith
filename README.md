@@ -213,19 +213,25 @@ Q = "CLK*M + !CLK*Q"
 ```
 
 `logic_low` and `logic_high` name the voltage expressions a cell's `-ic` line renders for the two logic
-levels, defaulting to `0` and `$VDD`. Either is written into the emitted Tcl verbatim, so a Tcl variable
-works as well as a literal; a cell's own key wins over the `--logic-low`/`--logic-high` command-line
-value.
+levels, defaulting to `0` and `$VDD`. Either is a Tcl value fragment, so a Tcl variable works as well as
+a literal; a cell's own key wins over the `--logic-low`/`--logic-high` command-line value.
 
 `-ic` lists one voltage per `-pinlist` entry and Liberate reads it by position, so each expression has
-to reach Liberate as a single column — one that splits shifts every column after it. An expression is
-accepted when it stays unsplit through Tcl's substitutions: a literal (`0`, `0.99`), a variable
-(`$VDD`), or a bracketed command substitution, whose result is resolved into the quoted word before the
-columns are read and which may therefore contain spaces (`[expr $VDD*0.9]`, `[expr {$VDD * 0.9}]`).
-Anything else is rejected, naming the cell and quoting the expression: whitespace outside brackets
-(`$VDD * 0.9` — three columns, not one), a double quote or a backslash (both alter the emitted word),
-and an unbalanced bracket or brace. Braces do not group inside the emitted word, so `{$VDD * 0.9}` is
-rejected as well.
+to occupy a single column — one that splits shifts every column after it. The values go out as one
+double-quoted Tcl word, which is what lets `$VDD` reach Liberate as the supply voltage rather than as
+that literal text, and Liberate splits the substituted result by Tcl's list rules. An expression that is
+already one list element is written as it stands: a bare word (`GND`), a number (`0`, `0.99`), a
+variable reference (`$VDD`, `${VDD}`), or a value written as one balanced brace group. Anything else is
+wrapped in a brace pair, which makes it one column whatever whitespace the substitution leaves in it —
+`--logic-high='$VDD * 0.9'` emits `{$VDD * 0.9}`, a column reading `1.08 * 0.9` where `$VDD` is `1.08`,
+and `[expr $VDD*0.9]` emits `{[expr $VDD*0.9]}`, whose command substitution runs before the split and
+leaves the column holding the result. A double quote is emitted escaped (`\"`), since it would otherwise
+close the `-ic` word wherever it sat.
+
+What a column then means to Liberate is yours to get right: cellsmith keeps the columns aligned with the
+`-pinlist`, and no check on the text can tell you what a variable will hold when Liberate runs the
+script. Braces that do not balance are the one case the wrap cannot carry — `{$VDD` has no group to
+close — and Tcl rejects the line rather than reading a shifted column.
 
 ### Characterisation templates
 
@@ -471,7 +477,8 @@ and the constraints generated to avoid them.
 
 ## Known issues
 
-Cells whose forced cover carries 65 or more don't-care input columns cause a panic in the espresso-logic dependency. The expansion iterator is constructed before the budget can be charged, and espresso-logic asserts that the don't-care count is below the platform word size. This is filed as https://github.com/marlls1989/espresso-logic/issues/24.
+Cells wide enough to panic the espresso-logic dependency during cover expansion are
+tracked in [`KNOWN-ISSUES.md`](KNOWN-ISSUES.md).
 
 ## Licence
 
