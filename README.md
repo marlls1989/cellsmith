@@ -469,6 +469,10 @@ otherwise a symmetric `non_seq`) to avoid it, gated by the `--constraints` flag 
 hazards, the order-dependent hazards (grouped per racing input pair, a pair's conditions joined), 
 and the constraints generated to avoid them.
 
+## Known issues
+
+Cells whose forced cover carries 65 or more don't-care input columns cause a panic in the espresso-logic dependency. The expansion iterator is constructed before the budget can be charged, and espresso-logic asserts that the don't-care count is below the platform word size. This is filed as https://github.com/marlls1989/espresso-logic/issues/24.
+
 ## Licence
 
 MIT.
