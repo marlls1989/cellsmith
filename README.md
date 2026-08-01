@@ -197,8 +197,10 @@ listed node gains its own `-pinlist`, `-vector` and `-ic` column, positioned bet
 outputs in declared order, so the arcs can state its level across a measured transition, and is
 preserved through the state-space minimisation that would otherwise fold it away. An exposed node is
 never a `-related_pin` or a `-pin` — arc sources and targets remain primary inputs. The Liberty, Verilog,
-statetable and `define_cell` artifacts are unaffected: they render from the fully minimised model, so the
-same cell with and without `expose` produces identical files there.
+statetable and `define_cell` artifacts render from the fully minimised model, so exposure does not change
+the behaviour they describe. Where the minimisation collapses a group of coordinates that hold the same
+value into one, exposure can change which member of the group supplies the surviving name, so an internal
+node and the `state_function` that reads it may be written under a different name of that group.
 
 ```toml
 [[cell]]

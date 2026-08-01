@@ -616,11 +616,14 @@ impl Cell {
         let (arc_view, explored) =
             self.finish_view(analysed, &bdds, &min, Exploration::Fresh(budget));
 
-        // Release the exposure and carry the SAME map on to the outputs-only fixpoint, which is where a
-        // single outputs-only run would have landed it (the differential gate in
-        // `crate::logic::minimise` checks that over every fixture shape). The model view is re-derived
-        // from a fresh parse against the twice-minimised map, under the composition of the two runs, so
-        // its display expressions are those of an exposure-free analysis.
+        // Release the exposure and carry the SAME map on to the outputs-only fixpoint. The composition
+        // reaches the reduced system a single outputs-only run reaches, save for which member of a
+        // collapsed group of equal-valued coordinates supplies the surviving name: protecting a member
+        // through the first run leaves that one the representative, and the second run has no remaining
+        // member of the group to reconsider. Which name survives carries no meaning — the group holds
+        // one value. The model view is re-derived from a fresh parse against the twice-minimised map,
+        // under the composition of the two runs, so its display expressions are those of an
+        // exposure-free analysis.
         let released = crate::logic::minimise::minimise_state_space(
             &mut bdds,
             &order,
