@@ -97,9 +97,9 @@ pub struct Constraint {
 
 impl Constraint {
     /// The input condition under which the hazard this constraint avoids occurs: the two switching
-    /// edges, plus any other
-    /// inputs held at a fixed value in the pre-toggle state (e.g. `A↓ & B↑ with R=0`). A hazard probed at
-    /// a start state has an empty prevector, hence no held inputs to name.
+    /// edges, plus any other inputs held at a fixed value in the pre-toggle state (e.g. `A↓ & B↑ with
+    /// R=0`). `path_to` seeds its chain with the probed node itself, so `prevector` always names at
+    /// least that state's held inputs.
     pub fn condition(&self) -> String {
         let mut cond = format!(
             "{}{} & {}{}",
@@ -108,12 +108,13 @@ impl Constraint {
             self.pin,
             self.pin_edge.arrow()
         );
-        if let Some(state) = self.prevector.last() {
-            let others =
-                crate::logic::fixed_pairs(state, &[self.related.as_str(), self.pin.as_str()]);
-            if !others.is_empty() {
-                cond.push_str(&format!(" with {}", others.join(", ")));
-            }
+        let state = self
+            .prevector
+            .last()
+            .expect("path_to seeds its chain with the probed node itself");
+        let others = crate::logic::fixed_pairs(state, &[self.related.as_str(), self.pin.as_str()]);
+        if !others.is_empty() {
+            cond.push_str(&format!(" with {}", others.join(", ")));
         }
         cond
     }

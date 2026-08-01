@@ -640,7 +640,11 @@ fn ic_str(
     prevector: &[espresso_logic::Minterm<espresso_logic::Symbol>],
     levels: &ArcLevels,
 ) -> String {
-    let held = prevector.last().map(assignment).unwrap_or_default();
+    let held = assignment(
+        prevector
+            .last()
+            .expect("path_to seeds its chain with the probed node itself"),
+    );
     let start: BTreeMap<&str, bool> = levels
         .outputs
         .iter()
