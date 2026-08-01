@@ -93,12 +93,21 @@ fn bench_machine_stages(c: &mut Criterion) {
         let builder = sync_bdd_builder!();
         let bdds = build_signal_bdds(&ac, &builder);
         let budget = ExplorationBudget::default();
-        let Ok(m) = Machine::build(&ac, &bdds, &budget) else {
+        let Ok(m) = Machine::build(
+            &ac,
+            &bdds,
+            cellsmith::logic::analysis::Exploration::Fresh(&budget),
+        ) else {
             continue;
         };
 
         sweep_bench!(g, "machine_build", cell.name[0], true, heavy, || {
-            Machine::build(&ac, &bdds, &budget).unwrap()
+            Machine::build(
+                &ac,
+                &bdds,
+                cellsmith::logic::analysis::Exploration::Fresh(&budget),
+            )
+            .unwrap()
         });
         sweep_bench!(
             g,
@@ -112,7 +121,12 @@ fn bench_machine_stages(c: &mut Criterion) {
             confluence::detect(&m)
         });
         sweep_bench!(g, "analyse_machine", cell.name[0], true, heavy, || {
-            analyse_machine(&ac, &bdds, true, &budget)
+            analyse_machine(
+                &ac,
+                &bdds,
+                true,
+                cellsmith::logic::analysis::Exploration::Fresh(&budget),
+            )
         });
         sweep_bench!(g, "leakage_derive", cell.name[0], false, heavy, || {
             leakage::derive(&m)

@@ -1570,7 +1570,9 @@ mod tests {
             let $m = crate::logic::analysis::Machine::build(
                 &$analysed,
                 &$bdds,
-                &crate::logic::machine::ExplorationBudget::default(),
+                crate::logic::analysis::Exploration::Fresh(
+                    &crate::logic::machine::ExplorationBudget::default(),
+                ),
             )
             .unwrap();
             $body
@@ -3024,7 +3026,9 @@ GCLK = "CLK*EL"
             crate::logic::analysis::Machine::build(
                 &analysed,
                 &bdds,
-                &crate::logic::machine::ExplorationBudget::default(),
+                crate::logic::analysis::Exploration::Fresh(
+                    &crate::logic::machine::ExplorationBudget::default(),
+                ),
             )
             .is_err(),
             "wide cell passes the candidate budget ⇒ default EdgeArcs"

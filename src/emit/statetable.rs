@@ -1634,7 +1634,9 @@ Q = "!R*(CLK*M + !CLK*Q)"
         let machine = crate::logic::analysis::Machine::build(
             &cell,
             &bdds,
-            &crate::logic::machine::ExplorationBudget::default(),
+            crate::logic::analysis::Exploration::Fresh(
+                &crate::logic::machine::ExplorationBudget::default(),
+            ),
         )
         .expect("fixture is explored");
 

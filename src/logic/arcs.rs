@@ -398,7 +398,9 @@ QN = "!Q"
         let m = crate::logic::analysis::Machine::build(
             &cell,
             &bdds,
-            &crate::logic::machine::ExplorationBudget::default(),
+            crate::logic::analysis::Exploration::Fresh(
+                &crate::logic::machine::ExplorationBudget::default(),
+            ),
         )
         .expect("fixture is explored");
         let names: Vec<&str> = cell.outputs.iter().map(|o| o.name.as_str()).collect();
@@ -501,7 +503,9 @@ Y = "!(W + C)"
         let m = crate::logic::analysis::Machine::build(
             &cell,
             &bdds,
-            &crate::logic::machine::ExplorationBudget::default(),
+            crate::logic::analysis::Exploration::Fresh(
+                &crate::logic::machine::ExplorationBudget::default(),
+            ),
         )
         .expect("fixture is explored");
         assert_eq!(m.exposed, ["W"]);
