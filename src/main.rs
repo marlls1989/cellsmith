@@ -63,6 +63,16 @@ struct Cli {
     #[arg(long)]
     no_edge_collapse: bool,
 
+    /// Override the low-logic-level (`0`) voltage expression an exposed node's `-ic` renders, applied to
+    /// every cell that doesn't declare its own `logic_low` (default: `0`). Written into the emitted Tcl
+    /// verbatim, so a Tcl variable works as well as a literal.
+    #[arg(long, value_name = "VOLTAGE")]
+    logic_low: Option<String>,
+
+    /// Override the high-logic-level (`1`) voltage expression, mirroring `--logic-low` (default: `$VDD`).
+    #[arg(long, value_name = "VOLTAGE")]
+    logic_high: Option<String>,
+
     /// Write all four artifacts to stdout (with banners) instead of writing files.
     #[arg(long)]
     stdout: bool,
@@ -172,6 +182,18 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     // own `when` set, so a cell can select more classes but never opt back out of a CLI-selected one.
     for c in &mut spec.cells {
         c.when = c.when.union(cli.when.classes);
+    }
+    // `--logic-low`/`--logic-high` are per-field CLI defaults: a cell's own key wins, so the CLI value
+    // only fills in where the cell left its own key unset.
+    if let Some(v) = &cli.logic_low {
+        for c in &mut spec.cells {
+            c.logic_low.get_or_insert_with(|| v.clone());
+        }
+    }
+    if let Some(v) = &cli.logic_high {
+        for c in &mut spec.cells {
+            c.logic_high.get_or_insert_with(|| v.clone());
+        }
     }
     let budget = ExplorationBudget {
         candidates: cli.max_candidates,
@@ -430,6 +452,28 @@ mod tests {
     fn when_does_not_take_a_spaced_value() {
         // `require_equals`: the spaced token is the positional `<SPEC>`, so a second one is unexpected.
         assert!(Cli::try_parse_from(["cellsmith", "--when", "hidden", "s.toml"]).is_err());
+    }
+
+    #[test]
+    fn cell_logic_high_key_wins_over_cli_default() {
+        let mut spec = parse_spec(
+            r#"
+[[cell]]
+name = "X"
+inputs = ["A"]
+logic_high = "$VDDH"
+[cell.outputs]
+Y = "A"
+"#,
+        )
+        .unwrap();
+        let cli = Cli::try_parse_from(["cellsmith", "--logic-high=$VDD", "s.toml"]).unwrap();
+        if let Some(v) = &cli.logic_high {
+            for c in &mut spec.cells {
+                c.logic_high.get_or_insert_with(|| v.clone());
+            }
+        }
+        assert_eq!(spec.cells[0].logic_high.as_deref(), Some("$VDDH"));
     }
 
     #[test]

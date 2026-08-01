@@ -52,6 +52,12 @@ pub struct Cell {
     /// table), but emits **no** external output pin and is never an arc source or target.
     #[serde(default, deserialize_with = "de_symbol_expr_map")]
     pub internal: IndexMap<Symbol, BoolExpr>,
+    /// Optional: the internal nodes listed in the Liberate arcs' `-pinlist`, in declared order (the
+    /// declared order fixes their pinlist position). Each is preserved through the state-space
+    /// minimisation so the arcs can drive it (`-ic`) and observe it (`-vector`). Spec-only: like
+    /// `template`/`template_overrides` above, there is no CLI counterpart.
+    #[serde(default, deserialize_with = "de_symbol_vec")]
+    pub expose: Vec<Symbol>,
     /// Optional: input pins that force the output regardless of held state (async set/reset),
     /// so their arcs are emitted as `-type async` rather than combinational.
     #[serde(rename = "async", default, deserialize_with = "de_symbol_vec")]
@@ -88,6 +94,15 @@ pub struct Cell {
     /// validated against the cell's declared names at analyse time.
     #[serde(default, deserialize_with = "de_template_overrides")]
     pub template_overrides: IndexMap<Symbol, TemplateSpec>,
+    /// Optional: override the low-logic-level (`0`) voltage expression the exposed nodes' `-ic` renders.
+    /// Falls back to the `--logic-low` CLI default, then to [`LogicVoltages::default`]'s `"0"`. Written
+    /// into the emitted Tcl verbatim, so a Tcl variable is as good as a literal.
+    #[serde(default)]
+    pub logic_low: Option<String>,
+    /// Optional: override the high-logic-level (`1`) voltage expression, mirroring `logic_low`. Falls
+    /// back to the `--logic-high` CLI default, then to [`LogicVoltages::default`]'s `"$VDD"`.
+    #[serde(default)]
+    pub logic_high: Option<String>,
 }
 
 /// The characterisation-template references for a cell (or a drive-strength alias override): the
@@ -102,6 +117,46 @@ pub struct TemplateSpec {
     pub power: Option<Symbol>,
     #[serde(default, deserialize_with = "de_opt_symbol")]
     pub constrain: Option<Symbol>,
+}
+
+/// The voltage expressions the Liberate arcs' `-ic` renders for the two logic levels (`low` for `0`,
+/// `high` for `1`). Each string is written into the emitted Tcl verbatim, so a Tcl variable (`$VDD`) is
+/// as good as a literal (`0`) — these are user-supplied Tcl VALUE fragments, not name fields, so this
+/// holds `String` rather than the `Symbol` the rest of the model uses for names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogicVoltages {
+    pub low: String,
+    pub high: String,
+}
+
+impl Default for LogicVoltages {
+    /// The Liberate defaults: `0` for low, `$VDD` for high.
+    fn default() -> Self {
+        Self {
+            low: "0".to_owned(),
+            high: "$VDD".to_owned(),
+        }
+    }
+}
+
+impl LogicVoltages {
+    /// The voltage expression for `level` (`false` → low, `true` → high).
+    pub fn of(&self, level: bool) -> &str {
+        if level {
+            &self.high
+        } else {
+            &self.low
+        }
+    }
+
+    /// Fill each side from its optional override, falling back to [`Default`] where absent.
+    fn from_options(low: Option<&str>, high: Option<&str>) -> Self {
+        let default = Self::default();
+        Self {
+            low: low.map(str::to_owned).unwrap_or(default.low),
+            high: high.map(str::to_owned).unwrap_or(default.high),
+        }
+    }
 }
 
 /// A class of emitted arc, the granularity at which `-when` arcs are opted into. The `clap::ValueEnum`
@@ -316,6 +371,10 @@ pub enum ModelError {
     ClockNotInput { cell: Symbol, pin: Symbol },
     #[error("cell {cell:?}: template override alias {alias:?} is not a declared cell name")]
     UnknownTemplateOverride { cell: Symbol, alias: Symbol },
+    #[error("cell {cell:?}: exposed node {node:?} is not a declared internal signal")]
+    ExposeNotInternal { cell: Symbol, node: Symbol },
+    #[error("cell {cell:?}: duplicate exposed node {node:?}")]
+    DuplicateExpose { cell: Symbol, node: Symbol },
 }
 
 /// A signal (output **or** internal) after analysis: its function, the variables it references, and
@@ -342,6 +401,10 @@ pub struct AnalysedCell {
     /// function; never an arc source or target. Relay/alias internals are folded away by the
     /// state-space minimisation in [`Cell::analyse`], so only genuine-memory internals survive here.
     pub internals: Vec<AnalysedOutput>,
+    /// The internal nodes named in the spec's `expose` list, in declared order, carried verbatim from
+    /// `Cell::expose` (validated to be declared internal signals). Some may later be folded away by the
+    /// state-space minimisation — see [`AnalysedCell::exposed_signals`] for the survivors in this view.
+    pub exposed: Vec<Symbol>,
     pub async_pins: Vec<Symbol>,
     /// The transition arcs derived for the cell's outputs, precomputed once by the shared machine pass
     /// ([`crate::logic::analysis::analyse_machine`]) and consumed by the arcs emitter.
@@ -399,6 +462,10 @@ pub struct AnalysedCell {
     /// from `name`. Merged per-field over `template` by the `define_cell` emitter. Keys are validated
     /// against the declared names in [`Cell::analyse_signals`]; raw carry otherwise.
     pub template_overrides: IndexMap<Symbol, TemplateSpec>,
+    /// The voltage expressions the Liberate arcs' `-ic` renders for the two logic levels, resolved from
+    /// the cell's `logic_low`/`logic_high` overrides (falling back to [`LogicVoltages::default`]). Raw
+    /// carry — analysis never reads it, like `template`.
+    pub voltages: LogicVoltages,
 }
 
 impl AnalysedCell {
@@ -411,6 +478,15 @@ impl AnalysedCell {
     /// Every state-bearing signal: outputs first, then internals, in declaration order.
     pub fn signals(&self) -> impl Iterator<Item = &AnalysedOutput> {
         self.outputs.iter().chain(self.internals.iter())
+    }
+
+    /// The exposed nodes surviving in this view, in declared order. `exposed` keeps every declared
+    /// node (they are preserved through the state-space minimisation), while this keeps only those that
+    /// also survive the outputs-only minimisation reflected in `internals`.
+    pub fn exposed_signals(&self) -> impl Iterator<Item = &Symbol> {
+        self.exposed
+            .iter()
+            .filter(|e| self.internals.iter().any(|s| s.name == **e))
     }
 
     /// Each signal paired with its cached state-table regions, in `signals()` order (outputs then
@@ -477,9 +553,10 @@ impl Cell {
         let builder = sync_bdd_builder!();
         let mut bdds = build_signal_bdds(&analysed, &builder);
         let order: Vec<Symbol> = analysed.signals().map(|s| s.name.clone()).collect();
-        let output_set: BTreeSet<Symbol> =
-            analysed.outputs.iter().map(|o| o.name.clone()).collect();
-        let min = crate::logic::minimise::minimise_state_space(&mut bdds, &order, &output_set);
+        let preserved = crate::logic::minimise::Preserved::outputs(
+            analysed.outputs.iter().map(|o| o.name.clone()).collect(),
+        );
+        let min = crate::logic::minimise::minimise_state_space(&mut bdds, &order, &preserved);
 
         recompute_signal_metadata(&mut analysed, &bdds, &min);
 
@@ -583,6 +660,24 @@ impl Cell {
             }
         }
 
+        // Every exposed node must be a declared internal signal, checked in declaration order against a
+        // running set so a duplicate is caught deterministically.
+        let mut expose_seen: BTreeSet<Symbol> = BTreeSet::new();
+        for node in &self.expose {
+            if !internal_set.contains(node) {
+                return Err(ModelError::ExposeNotInternal {
+                    cell: self.name[0].clone(),
+                    node: node.clone(),
+                });
+            }
+            if !expose_seen.insert(node.clone()) {
+                return Err(ModelError::DuplicateExpose {
+                    cell: self.name[0].clone(),
+                    node: node.clone(),
+                });
+            }
+        }
+
         // Signal order: outputs first, then internals. Feedback references are classified against it.
         let signal_names: Vec<Symbol> = output_names
             .iter()
@@ -626,6 +721,7 @@ impl Cell {
             inputs: self.inputs.clone(),
             outputs,
             internals,
+            exposed: self.expose.clone(),
             async_pins: self.async_pins.clone(),
             arcs: Vec::new(),
             hidden_arcs: Vec::new(),
@@ -641,6 +737,10 @@ impl Cell {
             unexplored: None,
             template: self.template.clone(),
             template_overrides: self.template_overrides.clone(),
+            voltages: LogicVoltages::from_options(
+                self.logic_low.as_deref(),
+                self.logic_high.as_deref(),
+            ),
         };
         Ok(analysed)
     }
@@ -1103,6 +1203,7 @@ Z = "A"
             inputs: vec![Symbol::from("A")],
             outputs,
             internal: IndexMap::new(),
+            expose: vec![],
             async_pins: vec![],
             clock: vec![],
             constraint_arcs: false,
@@ -1110,6 +1211,8 @@ Z = "A"
             when: ArcClasses::default(),
             template: None,
             template_overrides: IndexMap::new(),
+            logic_low: None,
+            logic_high: None,
         };
         let spec = Spec { cells: vec![cell] };
         let err = spec.analyse().unwrap_err();
@@ -1179,6 +1282,125 @@ Y = "!A"
 delay = "delay_template"
 "#;
         assert!(parse_spec(s).unwrap().cells[0].analyse().is_ok());
+    }
+
+    #[test]
+    fn expose_of_declared_internal_analyses_ok_with_order_preserved() {
+        let s = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+expose = ["QN", "M"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+QN = "!M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+        let cell = parse_spec(s).unwrap().cells.remove(0).analyse().unwrap();
+        assert_eq!(cell.exposed, vec![Symbol::from("QN"), Symbol::from("M")]);
+    }
+
+    #[test]
+    fn expose_of_output_is_rejected() {
+        let s = r#"
+[[cell]]
+name = "X"
+inputs = ["A"]
+expose = ["Y"]
+[cell.outputs]
+Y = "A"
+"#;
+        let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
+        assert!(matches!(err, ModelError::ExposeNotInternal { .. }));
+    }
+
+    #[test]
+    fn expose_of_input_is_rejected() {
+        let s = r#"
+[[cell]]
+name = "X"
+inputs = ["A"]
+expose = ["A"]
+[cell.outputs]
+Y = "A"
+"#;
+        let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
+        assert!(matches!(err, ModelError::ExposeNotInternal { .. }));
+    }
+
+    #[test]
+    fn expose_of_unknown_name_is_rejected() {
+        let s = r#"
+[[cell]]
+name = "X"
+inputs = ["A"]
+expose = ["Z"]
+[cell.outputs]
+Y = "A"
+"#;
+        let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
+        assert!(matches!(err, ModelError::ExposeNotInternal { .. }));
+    }
+
+    #[test]
+    fn duplicate_expose_is_rejected() {
+        let s = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+expose = ["M", "M"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+        let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
+        assert!(matches!(err, ModelError::DuplicateExpose { .. }));
+    }
+
+    #[test]
+    fn logic_voltages_default_is_0_and_vdd() {
+        let v = LogicVoltages::default();
+        assert_eq!(v.low, "0");
+        assert_eq!(v.high, "$VDD");
+    }
+
+    #[test]
+    fn logic_voltages_from_options_fills_each_side_independently() {
+        let v = LogicVoltages::from_options(Some("GND"), None);
+        assert_eq!(v.low, "GND");
+        assert_eq!(v.high, "$VDD");
+
+        let v = LogicVoltages::from_options(None, Some("$VDDH"));
+        assert_eq!(v.low, "0");
+        assert_eq!(v.high, "$VDDH");
+    }
+
+    #[test]
+    fn expose_and_logic_voltages_round_trip_through_toml() {
+        let s = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+expose = ["M"]
+logic_low = "GND"
+logic_high = "VDDH"
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+        let spec = parse_spec(s).unwrap();
+        let cell = &spec.cells[0];
+        assert_eq!(cell.expose, vec![Symbol::from("M")]);
+        assert_eq!(cell.logic_low.as_deref(), Some("GND"));
+        assert_eq!(cell.logic_high.as_deref(), Some("VDDH"));
+
+        let analysed = cell.analyse().unwrap();
+        assert_eq!(analysed.exposed, vec![Symbol::from("M")]);
+        assert_eq!(analysed.voltages.low, "GND");
+        assert_eq!(analysed.voltages.high, "VDDH");
     }
 
     #[test]

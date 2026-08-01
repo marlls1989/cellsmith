@@ -1545,9 +1545,10 @@ mod tests {
             let $builder = sync_bdd_builder!();
             let mut $bdds = crate::model::build_signal_bdds(&$analysed, &$builder);
             let order: Vec<Symbol> = $analysed.signals().map(|s| s.name.clone()).collect();
-            let output_set: BTreeSet<Symbol> =
-                $analysed.outputs.iter().map(|o| o.name.clone()).collect();
-            let min = crate::logic::minimise::minimise_state_space(&mut $bdds, &order, &output_set);
+            let preserved = crate::logic::minimise::Preserved::outputs(
+                $analysed.outputs.iter().map(|o| o.name.clone()).collect(),
+            );
+            let min = crate::logic::minimise::minimise_state_space(&mut $bdds, &order, &preserved);
             crate::model::recompute_signal_metadata(&mut $analysed, &$bdds, &min);
             let $m = crate::logic::analysis::Machine::build(
                 &$analysed,
@@ -2999,9 +3000,10 @@ GCLK = "CLK*EL"
         let builder = sync_bdd_builder!();
         let mut bdds = crate::model::build_signal_bdds(&analysed, &builder);
         let order: Vec<Symbol> = analysed.signals().map(|s| s.name.clone()).collect();
-        let output_set: BTreeSet<Symbol> =
-            analysed.outputs.iter().map(|o| o.name.clone()).collect();
-        let min = crate::logic::minimise::minimise_state_space(&mut bdds, &order, &output_set);
+        let preserved = crate::logic::minimise::Preserved::outputs(
+            analysed.outputs.iter().map(|o| o.name.clone()).collect(),
+        );
+        let min = crate::logic::minimise::minimise_state_space(&mut bdds, &order, &preserved);
         crate::model::recompute_signal_metadata(&mut analysed, &bdds, &min);
         assert!(
             crate::logic::analysis::Machine::build(

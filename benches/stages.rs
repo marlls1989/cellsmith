@@ -11,13 +11,12 @@ use cellsmith::emit::liberty::cell_liberty;
 use cellsmith::emit::verilog::cell_verilog;
 use cellsmith::logic::analysis::{analyse_machine, Machine};
 use cellsmith::logic::machine::ExplorationBudget;
-use cellsmith::logic::minimise::minimise_state_space;
+use cellsmith::logic::minimise::{minimise_state_space, Preserved};
 use cellsmith::logic::{arcs, confluence, leakage};
 use cellsmith::model::{build_signal_bdds, derive_regions};
 use espresso_logic::{sync_bdd_builder, Symbol};
 
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
-use std::collections::BTreeSet;
 
 /// Register one stage target across its thread sweep, in the uniform bench shape: iterate the point set
 /// [`common::sweep`] picks for `($parallel, $heavy)`, build the per-`n` rayon pool once per registration
@@ -41,10 +40,10 @@ fn bench_signal_stages(c: &mut Criterion) {
     let mut g = c.benchmark_group("signal");
     for cell in common::raw_cells() {
         let heavy = common::is_heavy(cell.name[0].as_str());
-        // Pre-minimise fixture, plus the signal order and output set the minimise pass needs.
+        // Pre-minimise fixture, plus the signal order and preserved set the minimise pass needs.
         let pre = cell.analyse_signals().unwrap();
         let order: Vec<Symbol> = pre.signals().map(|s| s.name.clone()).collect();
-        let outputs: BTreeSet<Symbol> = pre.outputs.iter().map(|o| o.name.clone()).collect();
+        let preserved = Preserved::outputs(pre.outputs.iter().map(|o| o.name.clone()).collect());
 
         // Re-parse and re-classify the cell's signals each iteration.
         sweep_bench!(g, "parse", cell.name[0], false, heavy, || cell
@@ -72,7 +71,7 @@ fn bench_signal_stages(c: &mut Criterion) {
                                 let builder = sync_bdd_builder!();
                                 build_signal_bdds(&pre, &builder)
                             },
-                            |mut m| minimise_state_space(&mut m, &order, &outputs),
+                            |mut m| minimise_state_space(&mut m, &order, &preserved),
                             BatchSize::SmallInput,
                         )
                     });
