@@ -78,17 +78,11 @@ pub struct ArcLevels {
 }
 
 impl ArcLevels {
-    /// The levels every output and exposed node of `m`'s cell holds at `node`. A single-state sample, so
-    /// every exposed level has `start == end`: the hazard probes in [`super::confluence::detect`]
-    /// characterise one state, not a transition out of it.
-    pub fn at<B: Brand, C: ManagerCell>(m: &Machine<B, C>, node: &Minterm<Symbol>) -> ArcLevels {
-        Self::across(m, node, node)
-    }
-
-    /// The levels across a measured transition: every output at `start_node`, the state the measurement
-    /// begins in, and every exposed node at both `start_node` and `settled`, the state the toggle settles
-    /// into. An exposed internal genuinely transitions during an arc that leaves every output alone — a
-    /// DFF's master follows D while Q holds — so its two ends are sampled separately.
+    /// The levels every output and exposed node of `m`'s cell holds at `node`: the sample of a single
+    /// state, so every exposed level has `start == end`. That is the whole of what the hazard probes in
+    /// [`super::confluence::detect`] characterise, and it is also the start half of every measurement made
+    /// from `node` — none of it depends on which input then moves — which [`Self::ending_at`] completes
+    /// into the levels across one such measurement.
     ///
     /// TOTAL, never partial: a level is read at a measurement site, and every measurement starts from a
     /// state `Machine::arc_eligible` admits — [`derive`] measures only eligible starts and
@@ -99,11 +93,7 @@ impl ArcLevels {
     /// is therefore either a state variable, which `arc_eligible` requires to be defined, or a
     /// combinational signal whose support lies within the inputs plus the state variables — resolved
     /// either way, as is every output.
-    pub fn across<B: Brand, C: ManagerCell>(
-        m: &Machine<B, C>,
-        start_node: &Minterm<Symbol>,
-        settled: &Minterm<Symbol>,
-    ) -> ArcLevels {
+    pub fn at<B: Brand, C: ManagerCell>(m: &Machine<B, C>, node: &Minterm<Symbol>) -> ArcLevels {
         ArcLevels {
             outputs: m
                 .cell
@@ -111,7 +101,7 @@ impl ArcLevels {
                 .iter()
                 .map(|o| {
                     let v = m
-                        .output_value(&o.name, start_node)
+                        .output_value(&o.name, node)
                         .expect("every output is defined at a fully-initialised probed state");
                     (o.name.clone(), v)
                 })
@@ -119,17 +109,42 @@ impl ArcLevels {
             exposed: m
                 .exposed
                 .iter()
-                .map(|node| {
-                    let level = |n: &Minterm<Symbol>| {
-                        m.exposed_value(node.as_str(), n).expect(
-                            "every exposed node is defined at a fully-initialised probed state",
-                        )
-                    };
+                .map(|exposed| {
+                    let level = m.exposed_value(exposed.as_str(), node).expect(
+                        "every exposed node is defined at a fully-initialised probed state",
+                    );
                     ExposedLevel {
-                        node: node.clone(),
-                        start: level(start_node),
-                        end: level(settled),
+                        node: exposed.clone(),
+                        start: level,
+                        end: level,
                     }
+                })
+                .collect(),
+        }
+    }
+
+    /// This start sample carried across a measured transition into `settled`, the state the toggle settles
+    /// in: each exposed node's end level is read there, while the output levels and the exposed start
+    /// levels are properties of the start state and stand as sampled. An exposed internal genuinely
+    /// transitions during an arc that leaves every output alone — a DFF's master follows D while Q holds —
+    /// so its end is read separately. Total wherever [`Self::at`] is: settling from an eligible start
+    /// leaves every state column determinate.
+    pub fn ending_at<B: Brand, C: ManagerCell>(
+        &self,
+        m: &Machine<B, C>,
+        settled: &Minterm<Symbol>,
+    ) -> ArcLevels {
+        ArcLevels {
+            outputs: self.outputs.clone(),
+            exposed: self
+                .exposed
+                .iter()
+                .map(|e| ExposedLevel {
+                    node: e.node.clone(),
+                    start: e.start,
+                    end: m.exposed_value(e.node.as_str(), settled).expect(
+                        "every exposed node is defined at a fully-initialised probed state",
+                    ),
                 })
                 .collect(),
         }
@@ -212,21 +227,25 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
                 if !m.arc_eligible(node) {
                     return acc;
                 }
+                // The start levels and the prevector reaching them belong to this state alone, so every
+                // toggle out of it measures from the same ones: both are taken once, here.
+                let start_levels = ArcLevels::at(m, node);
+                let prevector = ex.path_to(node, inputs);
                 for related in inputs {
                     // Toggle one input, hold the (partial) state, and let the state settle.
                     let toggled = machine::toggle(node, &[related.as_str()]);
                     let Some(np) = machine::settle(deltas, &toggled) else {
                         continue;
                     };
-                    // The levels of this toggle — the outputs at the start, the exposed nodes at both
-                    // ends — sampled once and cloned per arc derived from it. Both paths below take the
-                    // same sample: an exposed node can move across a toggle every output holds through.
-                    let levels = ArcLevels::across(m, node, &np);
+                    // The start levels completed with where this toggle leaves the exposed nodes — the one
+                    // part of the sample the toggle decides — cloned per arc derived from it. Both paths
+                    // below take the same sample: an exposed node can move across a toggle every output
+                    // holds through.
+                    let levels = start_levels.ending_at(m, &np);
                     // An arc for every output that is defined at both ends and flips across this input toggle.
                     // The end is projected onto the inputs — it is what the `-vector` and `-when` render from —
                     // while the start keeps the full machine node, the arc's context.
                     let end = np.project_to(inputs);
-                    let prevector = ex.path_to(node, inputs);
                     // Collect each output's (before, after) once so both the transition and hidden paths read it.
                     let vals: Vec<(&AnalysedOutput, Option<bool>, Option<bool>)> = cell
                         .outputs

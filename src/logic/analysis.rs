@@ -201,7 +201,7 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
     /// undefined).
     ///
     /// This `Option` is the RAW read. Every SAMPLING site instead wraps it in `.expect()` on the
-    /// determinacy invariant, which holds there: see [`super::arcs::ArcLevels::across`].
+    /// determinacy invariant, which holds there: see [`super::arcs::ArcLevels::at`].
     pub(crate) fn exposed_value(&self, name: &str, node: &Minterm<Symbol>) -> Option<bool> {
         if self.state_set.contains(name) {
             node.value_of(name)
