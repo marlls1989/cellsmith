@@ -63,13 +63,16 @@ Three properties follow from this construction:
 - **related pins are always primary inputs** — outputs and internal nodes are never arc sources
   (naming one cross-coupled output as the related pin of another would be invalid); they are established
   *indirectly* by the prevector, whose input sequence drives every state variable — internal ones
-  included — into the measured edge's start state (e.g. a flop's `CLK→Q` prevector first drives `D` to
-  load the master);
+  included — to its value at the arc's start state, in cellsmith's own model (e.g. a flop's `CLK→Q`
+  prevector first drives `D` to load the master);
 - **impossible arcs are never generated** — a mutex's colliding states oscillate (an oscillation
   hazard) instead of settling, so the search drops them, and no arc between its two grants is produced;
 - **input-forced transitions cascade through settling** — in a settable cross-coupled pair, toggling a
   set input flips both the output it forces (rise) and, through the coupling, that output's partner
-  (fall); the search discovers both.
+  (fall); the search discovers both;
+- **a state-holding cell's arcs carry `-ic`**, the start-state voltage of every `-pinlist` entry.
+  Liberate discards the `-prevector` simulation instead of carrying its settled values into the measured
+  vector, so `-ic` states the start condition directly. A purely combinational cell carries no `-ic`.
 
 A cross-coupled cell is also **bistable**: under some input condition (`A·B` for a mutex) the
 joint next-state has two stable states, and the physical cell picks one non-deterministically instead
@@ -187,6 +190,33 @@ NOT > AND > XOR > OR. Identifiers are a letter or `_` followed by letters, digit
 names like `M1`, `P2`, and `Q` are fine. Every variable in a function must be a declared input, an
 output, or an internal signal of the cell.
 
+### Exposing internal nodes
+
+`expose` names an ordered list of `[cell.internal]` nodes to carry into the emitted Liberate arcs. Each
+listed node gains its own `-pinlist`, `-vector` and `-ic` column, positioned between the inputs and the
+outputs in declared order, so the arcs can state its level across a measured transition, and is
+preserved through the state-space minimisation that would otherwise fold it away. An exposed node is
+never a `-related_pin` or a `-pin` — arc sources and targets remain primary inputs. The Liberty, Verilog,
+statetable and `define_cell` artifacts are unaffected: they render from the fully minimised model, so the
+same cell with and without `expose` produces identical files there.
+
+```toml
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+expose = ["M"]                 # carry the master latch into the arcs' -pinlist/-vector/-ic
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+```
+
+`logic_low` and `logic_high` name the voltage expressions a cell's `-ic` line renders for the two logic
+levels, defaulting to `0` and `$VDD`. Either is written into the emitted Tcl verbatim, so a Tcl variable
+works as well as a literal; a cell's own key wins over the `--logic-low`/`--logic-high` command-line
+value.
+
 ### Characterisation templates
 
 `[cell.template]` names the characterisation templates the `<name>_cells.tcl` artifact's
@@ -269,10 +299,27 @@ Options:
                           opt in with `constraint_arcs = true`)
       --no-edge-collapse  Suppress the behavioural edge-register annotation (on by default); a cell can
                           opt out individually with `no_edge_collapse = true`
+      --logic-low <VOLTAGE>   Override the low-logic-level (`0`) voltage expression an exposed node's
+                          `-ic` renders, applied to every cell that doesn't declare its own `logic_low`
+                          (default: `0`). Written into the emitted Tcl verbatim, so a Tcl variable works
+                          as well as a literal
+      --logic-high <VOLTAGE>  Override the high-logic-level (`1`) voltage expression, mirroring
+                          `--logic-low` (default: `$VDD`)
       --stdout            Write all four artifacts to stdout (with banners) instead of writing files
+      --max-candidates <N>    Ceiling on the seed minterms a cell's exploration may pool as
+                          initialisation candidates: a forced cover cube expands to 2^d of them for its d
+                          unconstrained input columns [default: 4194304]
+      --max-states <N>        Ceiling on the reachable stable states a cell's exploration may record;
+                          every one of them is re-walked by the arc derivation and the hazard probes
+                          [default: 1048576]
   -h, --help              Print help
   -V, --version           Print version
 ```
+
+Exceeding either exploration ceiling is a hard error: cellsmith names every cell whose exploration
+stopped there and exits without writing any artifacts, rather than presenting an unexplored cell's
+absent arcs and hazards as if that were its behaviour. Raise a ceiling for a run with
+`--max-candidates`/`--max-states`.
 
 Examples:
 
@@ -396,8 +443,9 @@ The **state-machine** arc engine supports state-holding cells of these shapes: s
 C-elements and latches, cross-coupled SR pairs, mutexes / arbiters, and cells with **internal state
 nodes** (a master/slave flip-flop). Arcs are found by exploring the settled state machine, so related
 pins are always primary inputs, impossible arcs are never reached, input-forced transitions cascade
-through settling, and a prevector drives every state variable (internal ones included) into the
-measured start state.
+through settling, and a prevector drives every state variable (internal ones included) to its value at
+the arc's start state; a state-holding cell's `-ic` line carries that start condition into the measured
+vector.
 
 The engine detects two kinds of hazard: an **order-dependent** hazard (non-confluence — the settled
 state depends on which of a racing input pair's edges lands first; seen on C-elements, DFFs and SR

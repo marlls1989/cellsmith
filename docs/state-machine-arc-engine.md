@@ -331,10 +331,13 @@ variable's δ and each combinational output's δ are **direct lookups** into tha
 **one** exploration BFS seeded from all of them. The same shared machine yields **both** the arcs and the
 detected hazards.
 
-A combinatorial blow-up guard gates the whole shared pass: building the machine returns nothing — leaving
-the cell unexplored, so arcs *and* hazards come back empty — when `inputs + state variables` exceeds a
-fixed machine-width ceiling, currently 22; the width is the **minimised** state count, so folded relays
-no longer count against the budget.
+Two exploration budgets gate the whole shared pass, each charged against work the pass actually performs
+rather than the cell's declared shape (a cell is not turned away for having many inputs or many state
+variables): the **candidate** budget bounds the seed minterms the candidate pool expands the signals'
+forced on/off covers into, before ranking and seeding the BFS; the **state** budget bounds the reachable
+stable states the BFS records in `Explored::order`. Exceeding either leaves the cell unexplored — arcs
+*and* hazards come back empty for it — and is reported as a hard error naming the cell; each budget is
+raised for a run with its own flag, `--max-candidates` or `--max-states`.
 
 ## 7. Worked example: discovering `B↓ → Qa↑` on the mutex
 

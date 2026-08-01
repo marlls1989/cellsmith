@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`expose` names internal nodes to carry into the Liberate arcs.** Each node listed, in declared
+  order, gains its own `-pinlist`, `-vector` and `-ic` column, positioned between the inputs and the
+  outputs, and is preserved through the state-space minimisation so the arcs can state its level. An
+  exposed node is never a `-related_pin` or a `-pin`; the Liberty, Verilog, statetable and `define_cell`
+  artifacts render from the fully minimised model and are unaffected.
+- **A state-holding cell's `define_arc`, hidden-arc and constraint blocks carry `-ic`, the start-state
+  voltage of every `-pinlist` entry.** Liberate discards the `-prevector` simulation instead of carrying
+  its settled values into the measured vector, so `-ic` states the start condition directly. Purely
+  combinational cells carry no `-ic`.
+- **`logic_low`/`logic_high` (per cell) and `--logic-low`/`--logic-high` (per run) name the voltage
+  expressions `-ic` renders for the two logic levels**, defaulting to `0` and `$VDD` and written into the
+  emitted Tcl verbatim; a cell's own key wins over the command-line value.
+- **`--max-candidates` and `--max-states` bound a cell's exploration**, charged against the seed
+  minterms pooled as initialisation candidates and the reachable stable states the search records — the
+  work actually performed, not the cell's declared width. Exceeding either is a hard error naming every
+  offending cell; no arcs, hazards, leakage states or constraints are written for it.
+
+### Fixed
+
+- **Hazards and constraints are now detected only from fully-initialised states.** A probe drawn from a
+  state that still carries an absent (uninitialised) column is excluded before confluence detection
+  runs, so no hazard or constraint is concluded from a value the machine never actually resolved.
+
 ## [0.3.3] - 2026-07-28
 
 ### Changed

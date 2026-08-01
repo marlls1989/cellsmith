@@ -16,8 +16,11 @@
 //!      fixpoint and are dropped, so no impossible arc is produced.
 //!   3. Wherever a single input toggle flips an **output**, emit an arc: the toggled input is the
 //!      `related` pin (arcs are only ever sourced by primary inputs — never an output or internal),
-//!      and the prevector is the BFS path — each node projected onto the inputs — that drives every
-//!      state variable (internal ones included) into the measured edge's start state.
+//!      and the prevector is the BFS path — each node projected onto the inputs — that reaches the
+//!      arc's start state in cellsmith's own model, driving every state variable (internal ones
+//!      included) to its value there. Liberate discards that `-prevector` simulation instead of
+//!      carrying its settled values into the measurement, so the start condition reaches it through
+//!      `-ic` instead, which names the level of every `-pinlist` entry.
 
 use std::collections::HashSet;
 use std::hash::Hash;
