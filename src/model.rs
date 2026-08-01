@@ -1488,6 +1488,78 @@ Q = "!QN"
     }
 
     #[test]
+    fn the_model_view_carries_its_own_coordinates() {
+        // The C-element's coordinate MOVES NAME between the views: the arc view holds QN as its
+        // self-holding machine coordinate (kept alive by the exposure), while releasing the exposure
+        // lets Q self-hold instead. So a model-view arc's start must be read against the model view's
+        // OWN coordinates, never the arc view's — projecting onto the wrong view's names is exactly
+        // what this guards against.
+        let cell = analyse_one(&c_element_src(r#"expose = ["QN"]"#));
+        assert!(!cell.arcs.is_empty(), "the model view emits arcs");
+        for a in &cell.arcs {
+            assert!(
+                a.start.value_of("Q").is_some(),
+                "a model-view arc's start must define its own coordinate Q: {:?}",
+                a.start
+            );
+            assert!(
+                a.start.value_of("QN").is_none(),
+                "a model-view arc's start must not carry the arc view's QN column: {:?}",
+                a.start
+            );
+        }
+
+        let arc = cell.arc_view();
+        assert!(!arc.arcs.is_empty(), "the arc view emits arcs");
+        assert!(
+            arc.arcs.iter().all(|a| a.start.value_of("QN").is_some()),
+            "an arc-view arc's start must carry QN as its own coordinate"
+        );
+    }
+
+    #[test]
+    fn every_arc_carries_the_prevector_that_reaches_it() {
+        // Every arc, hidden arc and constraint of BOTH views must carry a real prevector: non-empty,
+        // and ending at the record's own start state projected onto the inputs (the pattern at
+        // arcs.rs:618). A rebuilt `prev` that breaks `path_to` either empties the prevector — panicking
+        // the `.expect` at confluence.rs:114 — or misaligns the chain, corrupting the `prevector.len()`
+        // constraint-dedup tie-break at confluence.rs:407.
+        let cell = analyse_one(&c_element_src(r#"expose = ["QN"]"#));
+        for view in [cell.arc_view(), &cell] {
+            assert!(!view.arcs.is_empty(), "the view emits arcs");
+            for a in &view.arcs {
+                assert!(
+                    !a.prevector.is_empty(),
+                    "arc {a:?} carries an empty prevector"
+                );
+                assert_eq!(
+                    a.prevector.last().unwrap(),
+                    &a.start.project_to(&view.inputs),
+                    "arc {a:?}: the prevector must end at its own start"
+                );
+            }
+            assert!(!view.hidden_arcs.is_empty(), "the view emits hidden arcs");
+            for h in &view.hidden_arcs {
+                assert!(
+                    !h.prevector.is_empty(),
+                    "hidden arc {h:?} carries an empty prevector"
+                );
+                assert_eq!(
+                    h.prevector.last().unwrap(),
+                    &h.start.project_to(&view.inputs),
+                    "hidden arc {h:?}: the prevector must end at its own start"
+                );
+            }
+            for c in &view.constraints {
+                assert!(
+                    !c.prevector.is_empty(),
+                    "constraint {c:?} carries an empty prevector"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn the_model_view_is_what_an_expose_free_analysis_yields() {
         // Exposure is arcs-only: the view the Liberty, Verilog and statetable emitters read must be the
         // fully-minimised model, signal for signal, expression for expression and record for record.
