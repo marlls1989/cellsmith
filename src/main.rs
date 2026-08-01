@@ -205,10 +205,17 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
 
     // A cell whose exploration stopped at a budget ceiling has no arcs, hazards, leakage states or
     // constraints — emitting its artifacts anyway would present that silence as the cell's behaviour, so
-    // this is an error and nothing is written. Every offending cell is named, not just the first.
+    // this is an error and nothing is written. Every offending cell is named, not just the first. A cell
+    // that exposes internal nodes runs a second exploration for its arc view (`AnalysedCell::arc_view`),
+    // under the same budget but with no verdict merge between the two — so both are consulted here, since
+    // the arcs file renders from the arc view even when the model view's own exploration completed.
     let unexplored: Vec<(&AnalysedCell, ExplorationLimit)> = cells
         .iter()
-        .filter_map(|c| c.unexplored.map(|limit| (c, limit)))
+        .filter_map(|c| {
+            c.unexplored
+                .or(c.arc_view().unexplored)
+                .map(|limit| (c, limit))
+        })
         .collect();
     if !unexplored.is_empty() {
         for (c, limit) in unexplored {
