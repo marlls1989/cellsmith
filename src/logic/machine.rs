@@ -501,11 +501,13 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
             .flat_map_iter(|node| {
                 input_names.iter().filter_map(move |related| {
                     let toggled = toggle(node, &[related.as_str()]);
-                    // Metastable toggles (no fixpoint) are dropped.
-                    settle(deltas, &toggled).map(|np| (np, node.clone()))
+                    // Metastable toggles (no fixpoint) are dropped, and so are the states already
+                    // walked — asking `prev` here rather than downstream means the parent is only
+                    // cloned for a toggle that reached somewhere new.
+                    let np = settle(deltas, &toggled)?;
+                    (!visited.contains_key(&np)).then(|| (np, node.clone()))
                 })
             })
-            .filter(|(np, _)| !visited.contains_key(np))
             .collect();
         // Record the level. `prev` grows here, which is the one step that stands outside the pipeline.
         frontier = claimed
