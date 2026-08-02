@@ -596,9 +596,18 @@ Q = "CLK*M + !CLK*Q"
             mp.combinational.is_empty() && me.combinational.is_empty(),
             "both of this cell's signals hold memory, so neither view has a combinational coordinate",
         );
+        // As sets: the walk records a level's states in whatever order its workers claimed them, so
+        // two runs of the same cell agree on WHICH states are reached without agreeing on the sequence.
         assert_eq!(
-            mp.explored.order, me.explored.order,
-            "exposing a node does not change which states are reached, nor in which order",
+            mp.explored
+                .order
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            me.explored
+                .order
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            "exposing a node does not change which states are reached",
         );
     }
 

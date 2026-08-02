@@ -43,7 +43,7 @@
 //!   [`super::confluence::detect`] at O(|order| · inputs²), so a machine that explores unboundedly many
 //!   states is one whose hazard detection does not finish.
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
@@ -462,7 +462,7 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     // seeds (no fixpoint) are dropped. Sequential: the Vacant-insertion order into `prev` fixes the order
     // seeds are pushed onto the BFS queue.
     let mut prev: HashMap<Minterm<Symbol>, Option<Minterm<Symbol>>> = HashMap::new();
-    let mut queue: VecDeque<Minterm<Symbol>> = VecDeque::new();
+    let mut frontier: Vec<Minterm<Symbol>> = Vec::new();
     for (x, _) in &ranked {
         let seed = x.project_to(&full_names);
         let Some(st) = settle(&stepped, &seed) else {
@@ -470,31 +470,53 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
         };
         if let std::collections::hash_map::Entry::Vacant(e) = prev.entry(st.clone()) {
             e.insert(None);
-            queue.push_back(st);
+            frontier.push(st);
         }
     }
 
-    // BFS: from each node toggle one input at a time, hold the state, and settle. Metastable toggles
-    // (no fixpoint) are dropped. Sequential: `queue`/`prev`/`order` and every prevector's shape are
-    // derived from discovery order.
+    // BFS one level at a time: every toggle of the current frontier is settled in parallel, then the
+    // level's discoveries are folded in sequentially. Settling a toggle is the whole cost here — the
+    // fold is a hash insert — and the toggles of one level are independent, so the level is the unit of
+    // work. A node's LEVEL is its distance from a seed, which is what `path_to` reports as the prevector
+    // and what the constraint dedup reads as `prevector.len()`; taking the frontier whole assigns the
+    // same distance a node-at-a-time walk assigns. Which node inside a level is recorded first, and
+    // which of several same-level parents a node is credited to, are free choices.
     let mut order: Vec<Minterm<Symbol>> = Vec::new();
-    while let Some(node) = queue.pop_front() {
-        order.push(node.clone());
-        // `order` holds every state the exploration has recorded, seeds included (a seed enters here
-        // when it is dequeued), so its length is the state counter.
+    while !frontier.is_empty() {
+        // `order` holds every state the exploration has recorded, seeds included, so its length is the
+        // state counter — charged a level at a time.
+        order.extend(frontier.iter().cloned());
         if order.len() > budget.states {
             return Err(ExplorationLimit::States(budget.states));
         }
-        for related in input_names {
-            let toggled = toggle(&node, &[related.as_str()]);
-            let Some(np) = settle(&stepped, &toggled) else {
-                continue;
-            };
-            if let std::collections::hash_map::Entry::Vacant(e) = prev.entry(np.clone()) {
-                e.insert(Some(node.clone()));
-                queue.push_back(np);
-            }
-        }
+        // Settle every toggle of the level and claim the states it reaches, in one pipeline. Settling
+        // is the whole cost; `prev` — the visited set of every level before this one — is only read
+        // here, so those lookups ride alongside the settles they filter. The level collects into a map
+        // keyed by the state reached, which is what settles the several toggles that land on one state
+        // down to a single entry. Which toggle's parent that entry keeps is a free choice.
+        let deltas = &stepped;
+        let visited = &prev;
+        let claimed: HashMap<Minterm<Symbol>, Minterm<Symbol>> = frontier
+            .par_iter()
+            .flat_map_iter(|node| {
+                input_names.iter().filter_map(move |related| {
+                    let toggled = toggle(node, &[related.as_str()]);
+                    // Metastable toggles (no fixpoint) are dropped, and so are the states already
+                    // walked — asking `prev` here rather than downstream means the parent is only
+                    // cloned for a toggle that reached somewhere new.
+                    let np = settle(deltas, &toggled)?;
+                    (!visited.contains_key(&np)).then(|| (np, node.clone()))
+                })
+            })
+            .collect();
+        // Record the level. `prev` grows here, which is the one step that stands outside the pipeline.
+        frontier = claimed
+            .into_iter()
+            .map(|(np, parent)| {
+                prev.insert(np.clone(), Some(parent));
+                np
+            })
+            .collect();
     }
 
     Ok(Explored { order, prev })

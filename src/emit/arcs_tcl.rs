@@ -1296,6 +1296,40 @@ Y = "A*B"
 
     /// [`blocks`], sorted — for comparing two code paths on the same input by the arcs they emit,
     /// independent of emission order.
+    /// A block reduced to what it characterises: the arc kind, the pins it names, and which columns
+    /// transition in which direction. The `-prevector`, the `-ic` levels and the vector's held `0`/`1`
+    /// digits all name the state the run measured the arc at — a representative of that arc's context,
+    /// and a walk free to claim a level in any order may reach one representative before another. Two
+    /// runs emitting the same arcs need not agree on those.
+    fn arc_shape(block: &str) -> String {
+        let mut parts: Vec<String> = block
+            .lines()
+            .map(|l| l.trim().trim_end_matches('\\').trim_end())
+            .filter_map(|l| {
+                if let Some(v) = l.strip_prefix("-vector ") {
+                    Some(format!("-vector {}", v.replace(['0', '1'], "_")))
+                } else if l.starts_with("-type ")
+                    || l.starts_with("-pin ")
+                    || l.starts_with("-related_pin ")
+                {
+                    Some(l.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        parts.sort();
+        parts.join(" ")
+    }
+
+    /// Every block's [`arc_shape`], sorted — the set of arcs a run emits, blind to which state each was
+    /// measured at.
+    fn shaped_blocks(tcl: &str) -> Vec<String> {
+        let mut b: Vec<String> = blocks(tcl).iter().map(|x| arc_shape(x)).collect();
+        b.sort();
+        b
+    }
+
     fn sorted_blocks(tcl: &str) -> Vec<String> {
         let mut b = blocks(tcl);
         b.sort();
@@ -3559,7 +3593,7 @@ Q = "CLK*M + !CLK*Q"
             let tcl_forced = cell_arcs_tcl(&forced, ArcsTclOptions::default());
             assert_eq!(tcl_default.matches("-type edge").count(), 0);
             assert_eq!(tcl_forced.matches("-type edge").count(), 0);
-            assert_eq!(sorted_blocks(&tcl_default), sorted_blocks(&tcl_forced));
+            assert_eq!(shaped_blocks(&tcl_default), shaped_blocks(&tcl_forced));
         }
     }
 
@@ -3727,6 +3761,6 @@ Q = "CLK*M + !CLK*Q"
             assert_eq!(tcl.matches("-type edge").count(), 0);
             assert!(tcl.contains("-pin Q"));
         }
-        assert_eq!(sorted_blocks(&tcl_direct), sorted_blocks(&tcl_via_flag));
+        assert_eq!(shaped_blocks(&tcl_direct), shaped_blocks(&tcl_via_flag));
     }
 }

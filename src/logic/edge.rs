@@ -3083,13 +3083,105 @@ GCLK = "CLK*EL"
             unchanged!(outputs);
             unchanged!(internals);
             unchanged!(async_pins);
-            unchanged!(arcs);
-            unchanged!(hidden_arcs);
+            // Arcs and hidden arcs by what they characterise — the pins and the direction — rather
+            // than by the state the run measured them at. `start`, `end`, `prevector` and `levels`
+            // name a representative of that arc's context, and a walk that claims a level in parallel
+            // is free to reach one representative before another.
+            let arc_shapes = |c: &crate::model::AnalysedCell| {
+                let mut v: Vec<String> = c
+                    .arcs
+                    .iter()
+                    .map(|a| format!("{:?} {} {} {}", a.edge, a.output, a.related, a.is_async))
+                    .collect();
+                v.sort();
+                v
+            };
+            let hidden_shapes = |c: &crate::model::AnalysedCell| {
+                let mut v: Vec<String> = c
+                    .hidden_arcs
+                    .iter()
+                    .map(|h| format!("{:?} {}", h.edge, h.pin))
+                    .collect();
+                v.sort();
+                v
+            };
+            assert_eq!(
+                arc_shapes(&off),
+                arc_shapes(&on),
+                "edge classification changed which arcs AnalysedCell::arcs holds",
+            );
+            assert_eq!(
+                hidden_shapes(&off),
+                hidden_shapes(&on),
+                "edge classification changed which arcs AnalysedCell::hidden_arcs holds",
+            );
             unchanged!(leakage);
-            unchanged!(order_dependence);
-            unchanged!(oscillation);
+            // Hazards and constraints likewise, by what they identify. `prevector` and `levels` are
+            // sampled at the probed state and name the same free representative the arcs do, and
+            // `condition` is a FULL input assignment, so it carries the inputs outside the race at
+            // whatever the probed state held them — the racing pins and their edges are what the
+            // hazard is. `stable` is a group-projected set the detector sorts, so it stays.
+            let race_shapes = |c: &crate::model::AnalysedCell| {
+                let mut v: Vec<String> = c
+                    .order_dependence
+                    .iter()
+                    .map(|o| {
+                        format!(
+                            "{} {:?} {} {:?} {:?} {:?}",
+                            o.x, o.x_edge, o.y, o.y_edge, o.group, o.stable
+                        )
+                    })
+                    .collect();
+                v.sort();
+                v
+            };
+            let osc_shapes = |c: &crate::model::AnalysedCell| {
+                let mut v: Vec<String> = c
+                    .oscillation
+                    .iter()
+                    .map(|o| {
+                        let mut r: Vec<String> = o
+                            .races
+                            .iter()
+                            .map(|r| format!("{} {:?} {} {:?}", r.x, r.x_edge, r.y, r.y_edge))
+                            .collect();
+                        r.sort();
+                        format!("{:?} {:?} {:?}", o.group, o.stable, r)
+                    })
+                    .collect();
+                v.sort();
+                v
+            };
+            let constraint_shapes = |c: &crate::model::AnalysedCell| {
+                let mut v: Vec<String> = c
+                    .constraints
+                    .iter()
+                    .map(|k| {
+                        format!(
+                            "{:?} {} {:?} {} {:?}",
+                            k.kind, k.related, k.related_edge, k.pin, k.pin_edge
+                        )
+                    })
+                    .collect();
+                v.sort();
+                v
+            };
+            assert_eq!(
+                race_shapes(&off),
+                race_shapes(&on),
+                "edge classification changed AnalysedCell::order_dependence",
+            );
+            assert_eq!(
+                osc_shapes(&off),
+                osc_shapes(&on),
+                "edge classification changed AnalysedCell::oscillation",
+            );
             unchanged!(clock_pins);
-            unchanged!(constraints);
+            assert_eq!(
+                constraint_shapes(&off),
+                constraint_shapes(&on),
+                "edge classification changed AnalysedCell::constraints",
+            );
             unchanged!(constraint_arcs_declared);
             unchanged!(regions);
 
