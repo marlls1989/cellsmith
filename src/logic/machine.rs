@@ -491,10 +491,9 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
         }
         // Settle every toggle of the level and claim the states it reaches, in one pipeline. Settling
         // is the whole cost; `prev` — the visited set of every level before this one — is only read
-        // here, so those lookups ride alongside the settles they filter. Each worker claims into a map
-        // of its own, and collecting those maps into one merges them, so a state two workers reached
-        // is settled as they are folded together. Which toggle's parent a state keeps is a free
-        // choice.
+        // here, so those lookups ride alongside the settles they filter. The level collects into a map
+        // keyed by the state reached, which is what settles the several toggles that land on one state
+        // down to a single entry. Which toggle's parent that entry keeps is a free choice.
         let deltas = &stepped;
         let visited = &prev;
         let claimed: HashMap<Minterm<Symbol>, Minterm<Symbol>> = frontier
@@ -507,11 +506,6 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
                 })
             })
             .filter(|(np, _)| !visited.contains_key(np))
-            .fold(HashMap::new, |mut m, (np, parent)| {
-                m.entry(np).or_insert(parent);
-                m
-            })
-            .flatten_iter()
             .collect();
         // Record the level. `prev` grows here, which is the one step that stands outside the pipeline.
         frontier = claimed
