@@ -5,6 +5,20 @@ All notable changes to cellsmith are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [Unreleased]
+
+### Changed
+
+- **A cell's state machine is explored one BFS level at a time, with the level settled in parallel.**
+  Settling a toggle is the whole cost of the walk, and the toggles of one frontier are independent, so
+  the level is the unit of work: every toggle of every node in it settles at once and the states it
+  reaches are collected into one map. On the ICM example this is 149 ms against 184 ms at eight threads
+  and 174 ms against 223 ms at four. A node's distance from a seed is unchanged, so every prevector is
+  the same length it was. Which of several toggles reaching one state supplies its predecessor is a
+  free choice made afresh each run, so an arc may be measured from a different start state — and carry
+  a different `-prevector`, `-ic` and `-vector` — between two runs over the same spec. The arcs
+  themselves, and the Liberty, Verilog and `define_cell` artifacts, are unaffected.
+
 ## [0.4.0] - 2026-08-02
 
 ### Added
