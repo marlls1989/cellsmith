@@ -11,10 +11,12 @@ use rayon::prelude::*;
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::logic::analysis::Exploration;
 use crate::logic::arcs::{Arc, HiddenArc};
 use crate::logic::confluence::Constraint;
 use crate::logic::hazard::{OrderDependence, Oscillation};
 use crate::logic::leakage::LeakageState;
+use crate::logic::machine::{ExplorationBudget, Explored};
 
 /// The whole input file: a list of `[[cell]]` tables.
 #[derive(Debug, Deserialize)]
@@ -51,6 +53,12 @@ pub struct Cell {
     /// table), but emits **no** external output pin and is never an arc source or target.
     #[serde(default, deserialize_with = "de_symbol_expr_map")]
     pub internal: IndexMap<Symbol, BoolExpr>,
+    /// Optional: the internal nodes listed in the Liberate arcs' `-pinlist`, in declared order (the
+    /// declared order fixes their pinlist position). Each is preserved through the state-space
+    /// minimisation so the arcs can drive it (`-ic`) and observe it (`-vector`). Spec-only: like
+    /// `template`/`template_overrides` above, there is no CLI counterpart.
+    #[serde(default, deserialize_with = "de_symbol_vec")]
+    pub expose: Vec<Symbol>,
     /// Optional: input pins that force the output regardless of held state (async set/reset),
     /// so their arcs are emitted as `-type async` rather than combinational.
     #[serde(rename = "async", default, deserialize_with = "de_symbol_vec")]
@@ -87,6 +95,15 @@ pub struct Cell {
     /// validated against the cell's declared names at analyse time.
     #[serde(default, deserialize_with = "de_template_overrides")]
     pub template_overrides: IndexMap<Symbol, TemplateSpec>,
+    /// Optional: override the low-logic-level (`0`) voltage expression the exposed nodes' `-ic` renders.
+    /// Falls back to the `--logic-low` CLI default, then to [`LogicVoltages::default`]'s `"0"`. A Tcl
+    /// variable is as good as a literal: the arcs emitter renders the value as one `-ic` column.
+    #[serde(default)]
+    pub logic_low: Option<String>,
+    /// Optional: override the high-logic-level (`1`) voltage expression, mirroring `logic_low`. Falls
+    /// back to the `--logic-high` CLI default, then to [`LogicVoltages::default`]'s `"$VDD"`.
+    #[serde(default)]
+    pub logic_high: Option<String>,
 }
 
 /// The characterisation-template references for a cell (or a drive-strength alias override): the
@@ -101,6 +118,47 @@ pub struct TemplateSpec {
     pub power: Option<Symbol>,
     #[serde(default, deserialize_with = "de_opt_symbol")]
     pub constrain: Option<Symbol>,
+}
+
+/// The voltage expressions the Liberate arcs' `-ic` renders for the two logic levels (`low` for `0`,
+/// `high` for `1`). A Tcl variable (`$VDD`) is as good as a literal (`0`) — these are user-supplied Tcl
+/// VALUE fragments, not name fields, so this holds `String` rather than the `Symbol` the rest of the
+/// model uses for names. Each is carried here exactly as written; making it one `-ic` column is the arcs
+/// emitter's job, that being a question about the Tcl line it renders rather than about the cell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogicVoltages {
+    pub low: String,
+    pub high: String,
+}
+
+impl Default for LogicVoltages {
+    /// The Liberate defaults: `0` for low, `$VDD` for high.
+    fn default() -> Self {
+        Self {
+            low: "0".to_owned(),
+            high: "$VDD".to_owned(),
+        }
+    }
+}
+
+impl LogicVoltages {
+    /// The voltage expression for `level` (`false` → low, `true` → high).
+    pub fn of(&self, level: bool) -> &str {
+        if level {
+            &self.high
+        } else {
+            &self.low
+        }
+    }
+
+    /// Fill each side from its optional override, falling back to [`Default`] where absent.
+    fn from_options(low: Option<&str>, high: Option<&str>) -> Self {
+        let default = Self::default();
+        Self {
+            low: low.map(str::to_owned).unwrap_or(default.low),
+            high: high.map(str::to_owned).unwrap_or(default.high),
+        }
+    }
 }
 
 /// A class of emitted arc, the granularity at which `-when` arcs are opted into. The `clap::ValueEnum`
@@ -315,6 +373,10 @@ pub enum ModelError {
     ClockNotInput { cell: Symbol, pin: Symbol },
     #[error("cell {cell:?}: template override alias {alias:?} is not a declared cell name")]
     UnknownTemplateOverride { cell: Symbol, alias: Symbol },
+    #[error("cell {cell:?}: exposed node {node:?} is not a declared internal signal")]
+    ExposeNotInternal { cell: Symbol, node: Symbol },
+    #[error("cell {cell:?}: duplicate exposed node {node:?}")]
+    DuplicateExpose { cell: Symbol, node: Symbol },
 }
 
 /// A signal (output **or** internal) after analysis: its function, the variables it references, and
@@ -341,6 +403,10 @@ pub struct AnalysedCell {
     /// function; never an arc source or target. Relay/alias internals are folded away by the
     /// state-space minimisation in [`Cell::analyse`], so only genuine-memory internals survive here.
     pub internals: Vec<AnalysedOutput>,
+    /// The internal nodes named in the spec's `expose` list, in declared order, carried verbatim from
+    /// `Cell::expose` (validated to be declared internal signals). Some may later be folded away by the
+    /// state-space minimisation — see [`AnalysedCell::exposed_signals`] for the survivors in this view.
+    pub exposed: Vec<Symbol>,
     pub async_pins: Vec<Symbol>,
     /// The transition arcs derived for the cell's outputs, precomputed once by the shared machine pass
     /// ([`crate::logic::analysis::analyse_machine`]) and consumed by the arcs emitter.
@@ -377,6 +443,13 @@ pub struct AnalysedCell {
     /// Each signal's state-table regions, precomputed once and cached in `signals()` order (outputs
     /// then internals), so emitters don't rebuild the BDDs per call site.
     pub regions: Vec<crate::logic::regions::StateRegions>,
+    /// Whether the cell holds state: at least one of its minimised signals is a state variable — a
+    /// signal on a dependency cycle ([`crate::logic::resolve::state_variables`]). The Liberate arc
+    /// emitter gates the `-ic` initial condition on it: Liberate discards the `-prevector` simulation
+    /// instead of carrying its settled values into the measured vector, so a cell with memory starts
+    /// that vector from state the prevector was supposed to establish and did not, and `-ic` states the
+    /// start condition outright. A combinational cell has no state to lose and gets no `-ic`.
+    pub state_holding: bool,
     /// The cell's behavioural edge classification ([`crate::logic::edge::EdgeArcs`]): the per-node edge
     /// seams (`captures`), the per-arc `-type edge` labels (`labels`) — the field the Liberate arc emitter
     /// reads to type each arc — the cell-level set of internal non-seam master nodes folded away
@@ -385,6 +458,11 @@ pub struct AnalysedCell {
     /// internal node. Default (empty) when the cell opted out (`no_edge_collapse`). Computed purely from
     /// the already-explored machine — it never alters the exploration.
     pub edge: crate::logic::edge::EdgeArcs,
+    /// The exploration budget counter that stopped the machine pass, or `None` when the machine was
+    /// explored in full. Set ⇒ nothing was derived from the machine: `arcs`, `hidden_arcs`, `leakage`,
+    /// `order_dependence`, `oscillation` and `constraints` are all empty and `edge` is the default, so
+    /// the CLI reports the cell instead of emitting arc-free artifacts for it.
+    pub unexplored: Option<crate::logic::machine::ExplorationLimit>,
     /// The cell-wide characterisation-template references (delay/power/constrain) carried verbatim from
     /// the spec for the `define_cell` emitter. `None` when the cell declares no `template`. Raw carry —
     /// analysis never reads or synthesises it.
@@ -393,6 +471,31 @@ pub struct AnalysedCell {
     /// from `name`. Merged per-field over `template` by the `define_cell` emitter. Keys are validated
     /// against the declared names in [`Cell::analyse_signals`]; raw carry otherwise.
     pub template_overrides: IndexMap<Symbol, TemplateSpec>,
+    /// The voltage expressions the Liberate arcs' `-ic` renders for the two logic levels, resolved from
+    /// the cell's `logic_low`/`logic_high` overrides (falling back to [`LogicVoltages::default`]). Raw
+    /// carry — analysis never reads it, like `template`.
+    pub voltages: LogicVoltages,
+    /// The arc view of this cell: the same cell analysed with its exposed nodes preserved as model
+    /// coordinates, so an arc can drive one (`-ic`) and observe it (`-vector`). Present only when the
+    /// cell exposes something, and itself never carrying a further view.
+    ///
+    /// Exposure is arcs-only. The cell holding this field is the MODEL view — minimised to the outputs
+    /// alone, exactly as a cell that exposes nothing — and it is the one the Liberty, Verilog,
+    /// statetable and `define_cell` emitters render, so those artifacts are unaffected by what a cell
+    /// exposes. Only the Liberate arc emitter reads the view here, through
+    /// [`AnalysedCell::arc_view`].
+    ///
+    /// The cell explores once, in the arc view; the model view's machine is that same exploration
+    /// projected onto the coordinates surviving the outputs-only minimisation
+    /// ([`crate::logic::analysis::Exploration`]). The two views' derivations then differ because their
+    /// machines carry different coordinates: the arc view's `arcs`, `hidden_arcs` and `edge.labels` are
+    /// keyed on ITS `arc.start` minterms — carrying a column per exposed node, which is what the arcs
+    /// emitter's arc identity reads — while the model view's own derivations feed
+    /// [`crate::emit::liberty`], [`crate::emit::statetable`] and [`crate::emit::verilog`] over the
+    /// minimised coordinates. The model view's machine sees only the exposed nodes that survived its own
+    /// minimisation ([`AnalysedCell::exposed_signals`], empty in the usual case where the release retires
+    /// them), which costs it nothing: it never emits an exposure.
+    pub exposed_view: Option<Box<AnalysedCell>>,
 }
 
 impl AnalysedCell {
@@ -405,6 +508,21 @@ impl AnalysedCell {
     /// Every state-bearing signal: outputs first, then internals, in declaration order.
     pub fn signals(&self) -> impl Iterator<Item = &AnalysedOutput> {
         self.outputs.iter().chain(self.internals.iter())
+    }
+
+    /// The view the Liberate arcs are emitted from: [`AnalysedCell::exposed_view`] where the cell
+    /// exposes internal nodes, else the cell itself. Every other emitter reads the cell directly.
+    pub fn arc_view(&self) -> &AnalysedCell {
+        self.exposed_view.as_deref().unwrap_or(self)
+    }
+
+    /// The exposed nodes surviving in this view, in declared order. `exposed` keeps every declared
+    /// node (they are preserved through the state-space minimisation), while this keeps only those that
+    /// also survive the outputs-only minimisation reflected in `internals`.
+    pub fn exposed_signals(&self) -> impl Iterator<Item = &Symbol> {
+        self.exposed
+            .iter()
+            .filter(|e| self.internals.iter().any(|s| s.name == **e))
     }
 
     /// Each signal paired with its cached state-table regions, in `signals()` order (outputs then
@@ -425,6 +543,15 @@ impl Spec {
     /// collisions (an alias colliding with another cell's name included). The per-cell analyses then run
     /// in parallel, matching the single machine pass minted per cell in [`Cell::analyse`].
     pub fn analyse(&self) -> Result<Vec<AnalysedCell>, ModelError> {
+        self.analyse_with(&ExplorationBudget::default())
+    }
+
+    /// [`Spec::analyse`] with an explicit exploration budget for every cell — the CLI's entry point,
+    /// carrying the `--max-candidates` / `--max-states` ceilings.
+    pub fn analyse_with(
+        &self,
+        budget: &ExplorationBudget,
+    ) -> Result<Vec<AnalysedCell>, ModelError> {
         let mut seen: BTreeSet<Symbol> = BTreeSet::new();
         for cell in &self.cells {
             for name in &cell.name {
@@ -433,15 +560,26 @@ impl Spec {
                 }
             }
         }
-        self.cells.par_iter().map(|c| c.analyse()).collect()
+        self.cells
+            .par_iter()
+            .map(|c| c.analyse_with(budget))
+            .collect()
     }
 }
 
 impl Cell {
     /// Validate the cell and parse its functions, classifying each referenced variable as a primary
-    /// input, an output, or an internal signal (feedback/state = a signal-name reference).
+    /// input, an output, or an internal signal (feedback/state = a signal-name reference). The machine
+    /// is explored under the default [`ExplorationBudget`].
     pub fn analyse(&self) -> Result<AnalysedCell, ModelError> {
-        let mut analysed = self.analyse_signals()?;
+        self.analyse_with(&ExplorationBudget::default())
+    }
+
+    /// [`Cell::analyse`] with an explicit exploration budget: the ceilings bound the machine pass, and
+    /// an exploration stopped by one of them leaves every machine-derived field empty with the counter
+    /// recorded in [`AnalysedCell::unexplored`].
+    pub fn analyse_with(&self, budget: &ExplorationBudget) -> Result<AnalysedCell, ModelError> {
+        let analysed = self.analyse_signals()?;
 
         // One-shot state-space rewrite: mint the cell's single builder, build every signal's BDD once,
         // and run the minimisation (identical-δ dedup + guarded relay/alias fold, alternated to a
@@ -451,11 +589,84 @@ impl Cell {
         let builder = sync_bdd_builder!();
         let mut bdds = build_signal_bdds(&analysed, &builder);
         let order: Vec<Symbol> = analysed.signals().map(|s| s.name.clone()).collect();
-        let output_set: BTreeSet<Symbol> =
-            analysed.outputs.iter().map(|o| o.name.clone()).collect();
-        let min = crate::logic::minimise::minimise_state_space(&mut bdds, &order, &output_set);
+        let outputs: BTreeSet<Symbol> = analysed.outputs.iter().map(|o| o.name.clone()).collect();
+        // An exposed node must keep its name to be addressable by the arcs, so it joins the outputs in
+        // the set the minimisation may not remove.
+        let preserved = if self.expose.is_empty() {
+            crate::logic::minimise::Preserved::outputs(outputs.clone())
+        } else {
+            crate::logic::minimise::Preserved::with_exposed(
+                outputs.clone(),
+                self.expose.iter().cloned().collect(),
+            )
+        };
+        let min = crate::logic::minimise::minimise_state_space(&mut bdds, &order, &preserved);
 
-        recompute_signal_metadata(&mut analysed, &bdds, &min);
+        // Nothing exposed: the minimised map already IS the model, and the cell carries a single view.
+        if self.expose.is_empty() {
+            return Ok(self
+                .finish_view(analysed, &bdds, &min, Exploration::Fresh(budget))
+                .0);
+        }
+
+        // The exposed nodes survived the run above, so this view carries them as machine coordinates:
+        // the arc view (see `AnalysedCell::exposed_view`). Only plain data — arcs, hazards, regions,
+        // the explored states — comes back out of the map, so the map is free to be minimised further
+        // beneath it. This is the cell's one exploration; the model view below reads it.
+        let (arc_view, explored) =
+            self.finish_view(analysed, &bdds, &min, Exploration::Fresh(budget));
+
+        // Release the exposure and carry the SAME map on to the outputs-only fixpoint. The composition
+        // reaches the reduced system a single outputs-only run reaches, save for which member of a
+        // collapsed group of equal-valued coordinates supplies the surviving name: protecting a member
+        // through the first run leaves that one the representative, and the second run has no remaining
+        // member of the group to reconsider. Which name survives carries no meaning — the group holds
+        // one value. The model view is re-derived from a fresh parse against the twice-minimised map,
+        // under the composition of the two runs, so its display expressions are those of an
+        // exposure-free analysis.
+        let released = crate::logic::minimise::minimise_state_space(
+            &mut bdds,
+            &order,
+            &crate::logic::minimise::Preserved::outputs(outputs),
+        );
+        // The model view reads the arc view's exploration, carried onto its own coordinates rather than
+        // discovered again. A ceiling that stopped that one exploration is mirrored here, so the stopped
+        // verdict reaches both views.
+        let reused = Exploration::Reused(match &explored {
+            Some(e) => Ok(e),
+            None => Err(arc_view.unexplored.expect(
+                "a view that explored and handed nothing back was stopped by a budget ceiling",
+            )),
+        });
+        let (mut model, _) =
+            self.finish_view(self.analyse_signals()?, &bdds, &min.then(released), reused);
+        debug_assert!(
+            arc_view.exposed_view.is_none(),
+            "the arc view is analysed with the exposure already applied and never carries a view of its own"
+        );
+        model.exposed_view = Some(Box::new(arc_view));
+        Ok(model)
+    }
+
+    /// Complete one view of the cell over `bdds` — the minimised map `min` reports the rewrite of, back
+    /// to `view`'s parse-time functions. Recomputes each surviving signal's metadata, builds the machine
+    /// over `exploration` and copies its derivations in, then caches the region view and the
+    /// state-holding verdict.
+    ///
+    /// This is everything downstream of the minimisation, and it runs once PER VIEW over that view's own
+    /// signals: a cell that exposes internal nodes carries two of them (see
+    /// [`AnalysedCell::exposed_view`]), whose machines differ in their coordinates. The exploration
+    /// itself is per CELL — the second element of the result is the states this view explored, for the
+    /// other view to project onto its own coordinates, and is `None` when this view reused an
+    /// exploration or a budget ceiling stopped one.
+    fn finish_view<B: Brand, C: ManagerCell + Send + Sync>(
+        &self,
+        mut view: AnalysedCell,
+        bdds: &BTreeMap<Symbol, Bdd<B, C>>,
+        min: &crate::logic::minimise::Minimised,
+        exploration: Exploration<'_>,
+    ) -> (AnalysedCell, Option<Explored>) {
+        recompute_signal_metadata(&mut view, bdds, min);
 
         // Build the cell's state machine once and derive both its transition arcs and its hazards from
         // the shared exploration over the minimised model: the two detected hazards (order-dependence,
@@ -463,21 +674,29 @@ impl Cell {
         // suppression and emission gating are applied downstream.
         // The opt-out (`no_edge_collapse`, also set for every cell by the global `--no-edge-collapse`)
         // gates the classify() call itself, not just its result — no wasted work when collapse is off.
-        let analysis =
-            crate::logic::analysis::analyse_machine(&analysed, &bdds, !self.no_edge_collapse);
-        analysed.arcs = analysis.arcs;
-        analysed.hidden_arcs = analysis.hidden_arcs;
-        analysed.leakage = analysis.leakage;
-        analysed.constraints = analysis.constraints;
-        analysed.order_dependence = analysis.order_dependence;
-        analysed.oscillation = analysis.oscillation;
-        analysed.edge = analysis.edge;
+        let analysis = crate::logic::analysis::analyse_machine(
+            &view,
+            bdds,
+            !self.no_edge_collapse,
+            exploration,
+        );
+        view.arcs = analysis.arcs;
+        view.hidden_arcs = analysis.hidden_arcs;
+        view.leakage = analysis.leakage;
+        view.constraints = analysis.constraints;
+        view.order_dependence = analysis.order_dependence;
+        view.oscillation = analysis.oscillation;
+        view.edge = analysis.edge;
+        view.unexplored = analysis.unexplored;
+        let explored = analysis.explored;
 
         // Cache each signal's state-table regions once, in `signals()` order, from the shared folded
-        // BDDs, so downstream emitters don't rebuild the BDDs per call site.
-        analysed.regions = derive_regions(&analysed, &bdds);
+        // BDDs, so downstream emitters don't rebuild the BDDs per call site, and record whether the
+        // minimised model holds any state at all — both read the same cyclic classifier.
+        view.regions = derive_regions(&view, bdds);
+        view.state_holding = holds_state(&view);
 
-        Ok(analysed)
+        (view, explored)
     }
 
     /// Validate the cell and parse its functions into the pre-minimise [`AnalysedCell`]: every signal's
@@ -552,6 +771,29 @@ impl Cell {
             }
         }
 
+        // Every exposed node must be a declared internal signal, checked in declaration order against a
+        // running set so a duplicate is caught deterministically.
+        let mut expose_seen: BTreeSet<Symbol> = BTreeSet::new();
+        for node in &self.expose {
+            if !internal_set.contains(node) {
+                return Err(ModelError::ExposeNotInternal {
+                    cell: self.name[0].clone(),
+                    node: node.clone(),
+                });
+            }
+            if !expose_seen.insert(node.clone()) {
+                return Err(ModelError::DuplicateExpose {
+                    cell: self.name[0].clone(),
+                    node: node.clone(),
+                });
+            }
+        }
+
+        // A `--logic-low`/`--logic-high` value reaches analysis as a spec key: `main` folds the
+        // command-line defaults into the cell's own keys, which win where both are set.
+        let voltages =
+            LogicVoltages::from_options(self.logic_low.as_deref(), self.logic_high.as_deref());
+
         // Signal order: outputs first, then internals. Feedback references are classified against it.
         let signal_names: Vec<Symbol> = output_names
             .iter()
@@ -595,6 +837,7 @@ impl Cell {
             inputs: self.inputs.clone(),
             outputs,
             internals,
+            exposed: self.expose.clone(),
             async_pins: self.async_pins.clone(),
             arcs: Vec::new(),
             hidden_arcs: Vec::new(),
@@ -606,9 +849,13 @@ impl Cell {
             constraint_arcs_declared: self.constraint_arcs,
             when: self.when,
             regions: Vec::new(),
+            state_holding: false,
             edge: Default::default(),
+            unexplored: None,
             template: self.template.clone(),
             template_overrides: self.template_overrides.clone(),
+            voltages,
+            exposed_view: None,
         };
         Ok(analysed)
     }
@@ -681,6 +928,14 @@ pub fn derive_regions<B: Brand, C: ManagerCell>(
         .collect()
 }
 
+/// Whether the minimised model holds state: at least one signal is a state variable — one on a
+/// dependency cycle, as classified by [`crate::logic::resolve::state_variables`] over the recomputed
+/// feedback — the same pure-graph classifier [`derive_regions`] reads to mark a region hysteretic.
+fn holds_state(cell: &AnalysedCell) -> bool {
+    let signals: Vec<&AnalysedOutput> = cell.signals().collect();
+    !crate::logic::resolve::state_variables(&signals).is_empty()
+}
+
 /// Parse a TOML spec into a [`Spec`].
 pub fn parse_spec(toml_src: &str) -> Result<Spec, ModelError> {
     Ok(toml::from_str(toml_src)?)
@@ -696,7 +951,9 @@ pub(crate) fn analyse_one(src: &str) -> AnalysedCell {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use espresso_logic::{bdd_builder, expr};
+    use crate::logic::arcs::Edge;
+    use crate::logic::confluence::ConstraintKind;
+    use espresso_logic::{bdd_builder, expr, Minterm};
 
     const SAMPLE: &str = r#"
 [[cell]]
@@ -1071,6 +1328,7 @@ Z = "A"
             inputs: vec![Symbol::from("A")],
             outputs,
             internal: IndexMap::new(),
+            expose: vec![],
             async_pins: vec![],
             clock: vec![],
             constraint_arcs: false,
@@ -1078,6 +1336,8 @@ Z = "A"
             when: ArcClasses::default(),
             template: None,
             template_overrides: IndexMap::new(),
+            logic_low: None,
+            logic_high: None,
         };
         let spec = Spec { cells: vec![cell] };
         let err = spec.analyse().unwrap_err();
@@ -1147,6 +1407,656 @@ Y = "!A"
 delay = "delay_template"
 "#;
         assert!(parse_spec(s).unwrap().cells[0].analyse().is_ok());
+    }
+
+    #[test]
+    fn expose_of_declared_internal_analyses_ok_with_order_preserved() {
+        let s = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+expose = ["QN", "M"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+QN = "!M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+        let cell = parse_spec(s).unwrap().cells.remove(0).analyse().unwrap();
+        assert_eq!(cell.exposed, vec![Symbol::from("QN"), Symbol::from("M")]);
+    }
+
+    /// The worked C-element `QN = !(A*B + Q*(A+B))`, `Q = !QN`, in the two spellings the view split is
+    /// read against: `{expose}` is the `expose = ["QN"]` line, or nothing at all.
+    fn c_element_src(expose: &str) -> String {
+        format!(
+            r#"
+[[cell]]
+name = "C2"
+inputs = ["A", "B"]
+{expose}
+[cell.internal]
+QN = "!(A*B + Q*(A+B))"
+[cell.outputs]
+Q = "!QN"
+"#
+        )
+    }
+
+    #[test]
+    fn a_cell_exposing_nothing_carries_a_single_view() {
+        // With nothing exposed there is one minimisation, one machine pass and one view: `arc_view`
+        // hands back the cell itself, so every emitter reads the same analysis.
+        let cell = analyse_one(&c_element_src(""));
+        assert!(cell.exposed_view.is_none());
+        assert!(std::ptr::eq(cell.arc_view(), &cell));
+        assert!(cell.exposed.is_empty());
+        // The C-element's coordinate lands on its output pin: QN folds away and Q self-holds.
+        assert!(cell.internals.is_empty());
+        assert!(!cell.arcs.is_empty());
+    }
+
+    #[test]
+    fn exposing_an_internal_node_yields_an_arc_view_beside_the_model_view() {
+        let cell = analyse_one(&c_element_src(r#"expose = ["QN"]"#));
+
+        // The model view is minimised to the output alone, so QN is folded away — though `exposed`
+        // still names it, as the spec's declared list is carried verbatim into both views.
+        assert!(
+            cell.internals.is_empty(),
+            "the model view keeps only genuine-memory coordinates: {:?}",
+            cell.internals.iter().map(|s| &s.name).collect::<Vec<_>>(),
+        );
+        assert_eq!(cell.exposed, vec![Symbol::from("QN")]);
+        assert_eq!(cell.exposed_signals().count(), 0);
+
+        // The arc view keeps QN as a machine coordinate, so every measured start state carries a QN
+        // column for the arcs to drive (`-ic`) and observe (`-vector`).
+        let arc = cell.arc_view();
+        assert!(!std::ptr::eq(arc, &cell), "the arc view is a distinct cell");
+        assert!(arc.internals.iter().any(|s| s.name == "QN"));
+        assert_eq!(
+            arc.exposed_signals().collect::<Vec<_>>(),
+            [&Symbol::from("QN")],
+        );
+        assert!(!arc.arcs.is_empty());
+        assert!(
+            arc.arcs.iter().all(|a| a.start.value_of("QN").is_some()),
+            "an exposed node is a state column of every arc's start state",
+        );
+        assert!(
+            arc.exposed_view.is_none(),
+            "the arc view never carries a view of its own"
+        );
+    }
+
+    #[test]
+    fn the_model_view_carries_its_own_coordinates() {
+        // The C-element's coordinate MOVES NAME between the views: the arc view holds QN as its
+        // self-holding machine coordinate (kept alive by the exposure), while releasing the exposure
+        // lets Q self-hold instead. So a model-view arc's start must be read against the model view's
+        // OWN coordinates, never the arc view's — projecting onto the wrong view's names is exactly
+        // what this guards against.
+        let cell = analyse_one(&c_element_src(r#"expose = ["QN"]"#));
+        assert!(!cell.arcs.is_empty(), "the model view emits arcs");
+        for a in &cell.arcs {
+            assert!(
+                a.start.value_of("Q").is_some(),
+                "a model-view arc's start must define its own coordinate Q: {:?}",
+                a.start
+            );
+            assert!(
+                a.start.value_of("QN").is_none(),
+                "a model-view arc's start must not carry the arc view's QN column: {:?}",
+                a.start
+            );
+        }
+
+        let arc = cell.arc_view();
+        assert!(!arc.arcs.is_empty(), "the arc view emits arcs");
+        assert!(
+            arc.arcs.iter().all(|a| a.start.value_of("QN").is_some()),
+            "an arc-view arc's start must carry QN as its own coordinate"
+        );
+    }
+
+    #[test]
+    fn every_arc_carries_the_prevector_that_reaches_it() {
+        // Every arc, hidden arc and constraint of BOTH views must carry a real prevector: non-empty,
+        // and ending at the record's own start state projected onto the inputs (the pattern at
+        // arcs.rs:618). A rebuilt `prev` that breaks `path_to` either empties the prevector — panicking
+        // the `.expect` at confluence.rs:114 — or misaligns the chain, corrupting the `prevector.len()`
+        // constraint-dedup tie-break at confluence.rs:407.
+        let cell = analyse_one(&c_element_src(r#"expose = ["QN"]"#));
+        for view in [cell.arc_view(), &cell] {
+            assert!(!view.arcs.is_empty(), "the view emits arcs");
+            for a in &view.arcs {
+                assert!(
+                    !a.prevector.is_empty(),
+                    "arc {a:?} carries an empty prevector"
+                );
+                assert_eq!(
+                    a.prevector.last().unwrap(),
+                    &a.start.project_to(&view.inputs),
+                    "arc {a:?}: the prevector must end at its own start"
+                );
+            }
+            assert!(!view.hidden_arcs.is_empty(), "the view emits hidden arcs");
+            for h in &view.hidden_arcs {
+                assert!(
+                    !h.prevector.is_empty(),
+                    "hidden arc {h:?} carries an empty prevector"
+                );
+                assert_eq!(
+                    h.prevector.last().unwrap(),
+                    &h.start.project_to(&view.inputs),
+                    "hidden arc {h:?}: the prevector must end at its own start"
+                );
+            }
+            for c in &view.constraints {
+                assert!(
+                    !c.prevector.is_empty(),
+                    "constraint {c:?} carries an empty prevector"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_model_view_is_what_an_expose_free_analysis_yields() {
+        // Exposure is arcs-only: the view the Liberty, Verilog and statetable emitters read must be the
+        // fully-minimised model, signal for signal, expression for expression and record for record.
+        // The model view carries the arc view's exploration onto its own coordinates instead of
+        // exploring for itself, so this also holds that projection to what a plain analysis discovers —
+        // across the C-element, where releasing the exposure moves the coordinate from `QN` to `Q`, and
+        // the DFF, where the exposed master survives both views.
+        for (with, without, _) in exposure_pairs() {
+            let exposed = analyse_one(&with);
+            let plain = analyse_one(&without);
+            let cell = exposed.repr_name();
+
+            let names = |c: &AnalysedCell| c.signals().map(|s| s.name.clone()).collect::<Vec<_>>();
+            assert_eq!(names(&exposed), names(&plain), "cell {cell}: signals");
+            for (a, b) in exposed.signals().zip(plain.signals()) {
+                assert_eq!(
+                    a.expr, b.expr,
+                    "cell {cell}: signal {} display expression",
+                    a.name
+                );
+                assert_eq!(a.vars, b.vars, "cell {cell}: signal {} support", a.name);
+                assert_eq!(
+                    a.feedback, b.feedback,
+                    "cell {cell}: signal {} feedback",
+                    a.name
+                );
+            }
+            assert_eq!(
+                exposed.state_holding, plain.state_holding,
+                "cell {cell}: state_holding"
+            );
+            assert_same_cell_records(&exposed, &plain);
+        }
+    }
+
+    /// A master-slave DFF, in the two spellings the view split is read against: `{expose}` is the
+    /// `expose = ["M"]` line, or nothing at all. Unlike the C-element the master survives the
+    /// outputs-only minimisation, so it is the shape where an exposed node is still a signal of the
+    /// MODEL view — the one an artifact could leak it into.
+    fn dff_src(expose: &str) -> String {
+        format!(
+            r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+{expose}
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#
+        )
+    }
+
+    /// The two exposing fixtures paired with their exposure-free spelling, and the node each exposes.
+    fn exposure_pairs() -> Vec<(String, String, &'static str)> {
+        vec![
+            (c_element_src(r#"expose = ["QN"]"#), c_element_src(""), "QN"),
+            (dff_src(r#"expose = ["M"]"#), dff_src(""), "M"),
+        ]
+    }
+
+    /// One transition arc reduced to the identity [`crate::logic::arcs::derive`] keys it on. The rest of
+    /// an arc follows from that identity — its end state and levels are read off the start state, and its
+    /// prevector is one path into it.
+    #[derive(Debug, PartialEq, Eq)]
+    struct ArcRecord {
+        output: Symbol,
+        related: Symbol,
+        edge: Edge,
+        start: Minterm<Symbol>,
+    }
+
+    /// One internal-power ('hidden') arc reduced to its identity: the toggled pin, its direction and the
+    /// state the toggle is measured from.
+    #[derive(Debug, PartialEq, Eq)]
+    struct HiddenArcRecord {
+        pin: Symbol,
+        edge: Edge,
+        start: Minterm<Symbol>,
+    }
+
+    /// One generated constraint by its identity: the kind and the two pins with their edges.
+    #[derive(Debug, PartialEq, Eq)]
+    struct ConstraintRecord {
+        kind: ConstraintKind,
+        related: Symbol,
+        related_edge: Edge,
+        pin: Symbol,
+        pin_edge: Edge,
+    }
+
+    /// The two racing pins and their edges of one hazard observation.
+    #[derive(Debug, PartialEq, Eq)]
+    struct HazardPins {
+        x: Symbol,
+        x_edge: Edge,
+        y: Symbol,
+        y_edge: Edge,
+    }
+
+    /// One detected hazard: the input condition it occurs under, the state variables that diverge and the
+    /// competing settled states, plus the pins raced to observe it. An [`OrderDependence`] always names a
+    /// pin pair; an [`Oscillation`] names one per pair-probe [`crate::logic::hazard::Race`], and none at
+    /// all when a single input toggle drove it.
+    #[derive(Debug, PartialEq, Eq)]
+    struct HazardRecord {
+        pins: Option<HazardPins>,
+        condition: Minterm<Symbol>,
+        group: Vec<Symbol>,
+        stable: Vec<Minterm<Symbol>>,
+    }
+
+    /// The behavioural edge classification reduced to the node names it carries: the folded masters, the
+    /// nodes holding an edge capture, and the derived registers.
+    #[derive(Debug, PartialEq, Eq)]
+    struct EdgeRecord {
+        folded: BTreeSet<Symbol>,
+        captures: BTreeSet<Symbol>,
+        derived: BTreeSet<Symbol>,
+    }
+
+    /// Everything one analysed view emits, each record reduced to what identifies it. Two views agreeing
+    /// here emit the same arcs, hazards and constraints.
+    ///
+    /// A record's prevector, the levels sampled alongside it and its exploration-order index are left
+    /// out. Each names WHICH of several equally-good reachable states the pipeline chose to observe the
+    /// record from, and that choice follows the BFS order — a representative, not behaviour.
+    #[derive(Debug)]
+    struct CellRecords {
+        arcs: Vec<ArcRecord>,
+        hidden_arcs: Vec<HiddenArcRecord>,
+        leakage: Vec<LeakageState>,
+        constraints: Vec<ConstraintRecord>,
+        order_dependence: Vec<HazardRecord>,
+        oscillation: Vec<HazardRecord>,
+        edge: EdgeRecord,
+    }
+
+    /// Reduce a view to [`CellRecords`]. Takes the whole shipped [`AnalysedCell`] rather than any piece
+    /// of the analysis, so a view routed to the wrong place reads back as a record-set difference.
+    fn records(cell: &AnalysedCell) -> CellRecords {
+        let pins = |x: &Symbol, x_edge, y: &Symbol, y_edge| HazardPins {
+            x: x.clone(),
+            x_edge,
+            y: y.clone(),
+            y_edge,
+        };
+        let mut oscillation = Vec::new();
+        for osc in &cell.oscillation {
+            let observed = osc
+                .races
+                .iter()
+                .map(|r| Some(pins(&r.x, r.x_edge, &r.y, r.y_edge)));
+            for raced in observed.chain(osc.races.is_empty().then_some(None)) {
+                oscillation.push(HazardRecord {
+                    pins: raced,
+                    condition: osc.condition.clone(),
+                    group: osc.group.clone(),
+                    stable: osc.stable.clone(),
+                });
+            }
+        }
+        CellRecords {
+            arcs: cell
+                .arcs
+                .iter()
+                .map(|a| ArcRecord {
+                    output: a.output.clone(),
+                    related: a.related.clone(),
+                    edge: a.edge,
+                    start: a.start.clone(),
+                })
+                .collect(),
+            hidden_arcs: cell
+                .hidden_arcs
+                .iter()
+                .map(|h| HiddenArcRecord {
+                    pin: h.pin.clone(),
+                    edge: h.edge,
+                    start: h.start.clone(),
+                })
+                .collect(),
+            leakage: cell.leakage.clone(),
+            constraints: cell
+                .constraints
+                .iter()
+                .map(|c| ConstraintRecord {
+                    kind: c.kind,
+                    related: c.related.clone(),
+                    related_edge: c.related_edge,
+                    pin: c.pin.clone(),
+                    pin_edge: c.pin_edge,
+                })
+                .collect(),
+            order_dependence: cell
+                .order_dependence
+                .iter()
+                .map(|od| HazardRecord {
+                    pins: Some(pins(&od.x, od.x_edge, &od.y, od.y_edge)),
+                    condition: od.condition.clone(),
+                    group: od.group.clone(),
+                    stable: od.stable.clone(),
+                })
+                .collect(),
+            oscillation,
+            edge: EdgeRecord {
+                folded: cell.edge.folded.iter().cloned().collect(),
+                captures: cell.edge.captures.iter().map(|c| c.node.clone()).collect(),
+                derived: cell.edge.derived.iter().map(|d| d.name.clone()).collect(),
+            },
+        }
+    }
+
+    /// Assert two runs emitted the same records of one kind, in any order. A record carries `Eq` and not
+    /// `Ord`, so membership is a scan — free at fixture size, and a mismatch names the record itself
+    /// rather than the position it sits at.
+    fn assert_same_records<T: PartialEq + std::fmt::Debug>(
+        exposing: &[T],
+        plain: &[T],
+        what: &str,
+    ) {
+        for r in exposing {
+            assert!(
+                plain.contains(r),
+                "{what}: only the exposing run emits {r:?}"
+            );
+        }
+        for r in plain {
+            assert!(
+                exposing.contains(r),
+                "{what}: only the exposure-free run emits {r:?}"
+            );
+        }
+        assert_eq!(exposing.len(), plain.len(), "{what}: record counts differ");
+    }
+
+    /// Assert an exposing cell's model view and an exposure-free analysis of the same cell emit the same
+    /// records — the whole of what exposure is not allowed to reach.
+    fn assert_same_cell_records(exposing: &AnalysedCell, plain: &AnalysedCell) {
+        let cell = exposing.repr_name();
+        let (a, b) = (records(exposing), records(plain));
+        assert_same_records(&a.arcs, &b.arcs, &format!("cell {cell}: arcs"));
+        assert_same_records(
+            &a.hidden_arcs,
+            &b.hidden_arcs,
+            &format!("cell {cell}: hidden arcs"),
+        );
+        assert_same_records(&a.leakage, &b.leakage, &format!("cell {cell}: leakage"));
+        assert_same_records(
+            &a.constraints,
+            &b.constraints,
+            &format!("cell {cell}: constraints"),
+        );
+        assert_same_records(
+            &a.order_dependence,
+            &b.order_dependence,
+            &format!("cell {cell}: order dependence"),
+        );
+        assert_same_records(
+            &a.oscillation,
+            &b.oscillation,
+            &format!("cell {cell}: oscillation"),
+        );
+        assert_eq!(a.edge, b.edge, "cell {cell}: edge classification");
+    }
+
+    #[test]
+    fn exposure_changes_the_arcs_and_nothing_else() {
+        // The arcs-only claim, as an invariance of THIS binary rather than against a recorded baseline:
+        // analyse each fixture twice, once exposing and once not, and the model view every emitter but
+        // the arcs one reads emits the same records either way. The arcs are where the difference lands,
+        // as the exposed node's own column.
+        for (with, without, node) in exposure_pairs() {
+            let exposed = analyse_one(&with);
+            let plain = analyse_one(&without);
+            assert_eq!(exposed.exposed, [Symbol::from(node)]);
+            assert!(plain.exposed.is_empty());
+
+            let cell = exposed.repr_name();
+            assert_same_cell_records(&exposed, &plain);
+
+            // The arcs differ in exactly one way: every block of the exposing run lists the node among
+            // its columns, and no block of the other run does.
+            let opts = crate::emit::arcs_tcl::ArcsTclOptions::default();
+            let arcs = |c| crate::emit::arcs_tcl::cell_arcs_tcl(c, opts);
+            let pinlists = |tcl: String| -> Vec<String> {
+                tcl.lines()
+                    .map(str::trim)
+                    .filter(|l| l.starts_with("-pinlist "))
+                    .map(str::to_owned)
+                    .collect()
+            };
+            let (with_node, without_node) = (pinlists(arcs(&exposed)), pinlists(arcs(&plain)));
+            assert!(!with_node.is_empty(), "cell {cell}: the fixture emits arcs");
+            let names = |l: &str| {
+                l.split_whitespace()
+                    .any(|t| t.trim_matches(['{', '}']) == node)
+            };
+            assert!(
+                with_node.iter().all(|l| names(l)),
+                "cell {cell}: every exposing block lists {node}: {with_node:?}"
+            );
+            assert!(
+                !without_node.iter().any(|l| names(l)),
+                "cell {cell}: no exposure-free block lists {node}: {without_node:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn define_cell_never_declares_an_exposed_node() {
+        // `define_cell` declares the cell's PINS, and an exposed internal is not one however many arc
+        // columns it earns — including the DFF's master, which survives the model view as a signal.
+        for (with, _, node) in exposure_pairs() {
+            let cell = analyse_one(&with);
+            let tcl = crate::emit::define_cell::cell_define_cell(&cell);
+            assert!(
+                !tcl.split_whitespace().any(|t| t == node),
+                "define_cell declared the exposed {node}:\n{tcl}"
+            );
+        }
+    }
+
+    #[test]
+    fn both_views_agree_on_state_holding() {
+        // Minimisation re-labels where a cell's memory lives; it never creates or destroys it. So the
+        // view that keeps the exposed nodes as coordinates holds state exactly when the model view does
+        // — including for a cell whose exposed node is plain combinational logic and has none.
+        let combinational = r#"
+[[cell]]
+name = "AN2"
+inputs = ["A", "B"]
+expose = ["W"]
+[cell.internal]
+W = "A*B"
+[cell.outputs]
+Y = "!W"
+"#;
+        let mut holding = 0;
+        for src in [
+            c_element_src(r#"expose = ["QN"]"#),
+            dff_src(r#"expose = ["M"]"#),
+            combinational.to_owned(),
+        ] {
+            let cell = analyse_one(&src);
+            assert_eq!(
+                cell.state_holding,
+                cell.arc_view().state_holding,
+                "cell {}: the two views disagree on state_holding",
+                cell.repr_name(),
+            );
+            holding += usize::from(cell.state_holding);
+        }
+        assert_eq!(holding, 2, "the fixtures cover both verdicts");
+    }
+
+    #[test]
+    fn expose_of_output_is_rejected() {
+        let s = r#"
+[[cell]]
+name = "X"
+inputs = ["A"]
+expose = ["Y"]
+[cell.outputs]
+Y = "A"
+"#;
+        let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
+        assert!(matches!(err, ModelError::ExposeNotInternal { .. }));
+    }
+
+    #[test]
+    fn expose_of_input_is_rejected() {
+        let s = r#"
+[[cell]]
+name = "X"
+inputs = ["A"]
+expose = ["A"]
+[cell.outputs]
+Y = "A"
+"#;
+        let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
+        assert!(matches!(err, ModelError::ExposeNotInternal { .. }));
+    }
+
+    #[test]
+    fn expose_of_unknown_name_is_rejected() {
+        let s = r#"
+[[cell]]
+name = "X"
+inputs = ["A"]
+expose = ["Z"]
+[cell.outputs]
+Y = "A"
+"#;
+        let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
+        assert!(matches!(err, ModelError::ExposeNotInternal { .. }));
+    }
+
+    #[test]
+    fn duplicate_expose_is_rejected() {
+        let s = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+expose = ["M", "M"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+        let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
+        assert!(matches!(err, ModelError::DuplicateExpose { .. }));
+    }
+
+    #[test]
+    fn logic_voltages_default_is_0_and_vdd() {
+        let v = LogicVoltages::default();
+        assert_eq!(v.low, "0");
+        assert_eq!(v.high, "$VDD");
+    }
+
+    #[test]
+    fn logic_voltages_from_options_fills_each_side_independently() {
+        let v = LogicVoltages::from_options(Some("GND"), None);
+        assert_eq!(v.low, "GND");
+        assert_eq!(v.high, "$VDD");
+
+        let v = LogicVoltages::from_options(None, Some("$VDDH"));
+        assert_eq!(v.low, "0");
+        assert_eq!(v.high, "$VDDH");
+    }
+
+    /// A cell carrying `low`/`high` verbatim, for the analysis of the resolved voltages.
+    fn cell_with_voltages(low: &str, high: &str) -> Cell {
+        let s = format!(
+            r#"
+[[cell]]
+name = "X"
+inputs = ["A"]
+logic_low = {low:?}
+logic_high = {high:?}
+[cell.outputs]
+Q = "A"
+"#
+        );
+        parse_spec(&s).unwrap().cells.remove(0)
+    }
+
+    #[test]
+    fn any_logic_voltage_is_carried_through_analysis() {
+        // Analysis turns no voltage expression away and rewrites none of them: whatever the spec says
+        // reaches the arcs emitter as written, which is where it is rendered into one `-ic` column.
+        for value in [
+            "$VDD * 0.9",
+            "[expr $VDD*0.9]",
+            "{$VDD * 0.9}",
+            "",
+            "$V\"X",
+            "{$VDD",
+        ] {
+            let cell = cell_with_voltages("0", value)
+                .analyse()
+                .unwrap_or_else(|e| panic!("expected {value:?} to analyse, got {e}"));
+            assert_eq!(cell.voltages.high, value);
+            assert_eq!(cell.voltages.low, "0");
+        }
+    }
+
+    #[test]
+    fn expose_and_logic_voltages_round_trip_through_toml() {
+        let s = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+expose = ["M"]
+logic_low = "GND"
+logic_high = "VDDH"
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+        let spec = parse_spec(s).unwrap();
+        let cell = &spec.cells[0];
+        assert_eq!(cell.expose, vec![Symbol::from("M")]);
+        assert_eq!(cell.logic_low.as_deref(), Some("GND"));
+        assert_eq!(cell.logic_high.as_deref(), Some("VDDH"));
+
+        let analysed = cell.analyse().unwrap();
+        assert_eq!(analysed.exposed, vec![Symbol::from("M")]);
+        assert_eq!(analysed.voltages.low, "GND");
+        assert_eq!(analysed.voltages.high, "VDDH");
     }
 
     #[test]

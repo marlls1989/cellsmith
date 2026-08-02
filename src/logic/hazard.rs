@@ -13,9 +13,10 @@
 //!   the state into a periodic, non-settling cycle rather than a fixpoint. Detected when
 //!   [`super::machine::settle_or_cycle`] returns the cycle instead of settling.
 //!
-//! Both are *detected* during the state-space exploration in [`super::confluence`]; an undefined state
-//! variable simply means uninitialised. Metastability is the shared physical risk both create — the
-//! reason a constraint is generated. This module carries only the resulting report types.
+//! Both are *detected* during the state-space exploration in [`super::confluence`]. An uninitialised
+//! state variable is at an UNKNOWN state — not a value, and not a third one — so no detection runs from a
+//! state carrying one. Metastability is the shared physical risk both create — the reason a constraint is
+//! generated. This module carries only the resulting report types.
 //!
 //! **Implementation note:** deduplication is handled by [`super::confluence`].
 //! [`OrderDependence`] is keyed by the unordered `(pin,edge)|(pin,edge)` pair, keeping the min
@@ -28,7 +29,7 @@
 
 use espresso_logic::{Minterm, Symbol};
 
-use crate::logic::arcs::Edge;
+use crate::logic::arcs::{ArcLevels, Edge};
 
 /// One detected **oscillation hazard** of a cell: the oscillating state variables, the primary-input
 /// condition under which they oscillate, and the competing order-of-arrival outcomes (if any).
@@ -59,6 +60,9 @@ pub struct Race {
     /// The prevector: the input-assignment path that drives every state variable into the probed state
     /// (each node projected onto the inputs).
     pub prevector: Vec<Minterm<Symbol>>,
+    /// The levels the cell's outputs hold at the probed state — sampled at the SAME state as
+    /// `prevector`, so the pair the constraint carries is consistent.
+    pub levels: ArcLevels,
     /// Index of the probed state in `ex.order` (the sequential BFS exploration order).
     pub discovered: usize,
 }
@@ -80,6 +84,9 @@ pub struct OrderDependence {
     pub stable: Vec<Minterm<Symbol>>,
     /// The prevector: the input-assignment path that drives every state variable into the probed state.
     pub prevector: Vec<Minterm<Symbol>>,
+    /// The levels the cell's outputs hold at the probed state — sampled at the SAME state as
+    /// `prevector`, so the pair the constraint carries is consistent.
+    pub levels: ArcLevels,
     /// Index of the probed state in `ex.order` (the sequential BFS exploration order) — the secondary
     /// tie-break key: on equal `prevector.len`, the earlier-discovered representative is kept.
     pub discovered: usize,
@@ -102,11 +109,13 @@ fn render_path(prevector: &[Minterm<Symbol>]) -> String {
 }
 
 /// The pre-hazard state: the reachable stable state the probe toggles from — the prevector's last input
-/// state (empty braces if the prevector is somehow empty, which `path_to` never produces).
+/// state.
 fn render_pre_state(prevector: &[Minterm<Symbol>]) -> String {
-    prevector
-        .last()
-        .map_or_else(|| "{}".to_owned(), render_state)
+    render_state(
+        prevector
+            .last()
+            .expect("path_to seeds its chain with the probed node itself"),
+    )
 }
 
 impl Oscillation {

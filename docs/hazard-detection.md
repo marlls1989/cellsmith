@@ -32,8 +32,9 @@ otherwise (§6). Detection names the situation; the constraint quantifies the se
 
 Two things are deliberately **not** hazards:
 
-- An **undefined state variable is simply uninitialised** — a value not yet driven to a defined level,
-  carrying none of the metastability risk a genuine hazard does.
+- An **undefined state variable is simply uninitialised** — a bistable at an *unknown* state, not a value
+  and not a third logic level, carrying none of the metastability risk a genuine hazard does. Such a state
+  seeds traversal only: nothing is concluded from it, so no probe starts there (§2).
 - **Ordinary order-dependence of an arbiter's grants** is its *function*, not its fault: a mutual-exclusion
   element is supposed to grant whichever request arrived first. Its hazard is the oscillation when the
   requests tie — which is why the two hazards must be told apart rather than lumped together as "the
@@ -42,13 +43,19 @@ Two things are deliberately **not** hazards:
 ## 2. Everything starts from the reachable states
 
 Detection does not run the exploration itself — it re-walks the *shared* exploration, the same one the
-arc discovery uses, built once with the same on/off cover seeding and the same single-input-toggle edges. It probes hazards **only from the reachable stable states**.
+arc discovery uses, built once with the same on/off cover seeding and the same single-input-toggle edges. It probes hazards **only from the fully-initialised reachable stable states** — the same measurement
+eligibility the arc derivation applies: every state column determinate, no don't-care.
 
-That anchoring is the load-bearing design decision. Held state is the product of the cell's own
-sequential behaviour; the only joint assignments that mean anything are the ones the dynamics can
-actually produce. Reachability here is intrinsic: every probe starts only from a state the exploration
-actually reached, so state variables are never coerced to fabricated values and no hazard is manufactured
-on a state the cell can never occupy.
+That anchoring is the load-bearing design decision, and it has two halves. Held state is the product of
+the cell's own sequential behaviour; the only joint assignments that mean anything are the ones the
+dynamics can actually produce. Reachability here is intrinsic: every probe starts only from a state the
+exploration actually reached, so state variables are never coerced to fabricated values and no hazard is
+manufactured on a state the cell can never occupy. Determinacy is the other half: a race or an
+oscillation is a property of a valid, fully-initialised machine, and a state carrying an uninitialised
+bistable does not describe one — it is unknown, so nothing follows from it either way. Such a state stays
+in the explored order as a traversal seed; it is simply never a probe's starting point. From an eligible
+start the whole probe stays determinate: settling evaluates each δ over concrete inputs and state values,
+so a total state steps to a total state and every outcome the probes compare is a value.
 
 The exploration itself, however, never *reports* metastability: when a toggle fails to settle it silently
 drops that transition (no impossible arc is fabricated) and moves on. More importantly, it never presents
@@ -143,9 +150,8 @@ A simultaneous settle that returns a **cycle** — a finite, deterministic trans
 non-fixpoint state, so periodic forever after — is an **oscillation hazard**: the cell never settles,
 which is where the metastability risk arises. From the cycle the report is assembled:
 
-- **group** — the state variables that actually oscillate: those whose value differs between any two nodes
-  of the cycle (an undefined-vs-defined difference counts). Variables that happen to sit still through the
-  cycle are not blamed.
+- **group** — the state variables that actually oscillate: those whose *value* differs between any two
+  nodes of the cycle. Variables that happen to sit still through the cycle are not blamed.
 - **condition** — the primary-input assignment of the probe (the toggled state projected onto the inputs),
   rendered as a literal product, e.g. A·B.
 - **stable outcomes** — the competing outcomes the oscillation is torn between: the settled results of the
@@ -220,8 +226,16 @@ hazard, with a deterministic tie-break so the generated set is reproducible.
 - Cells with fewer than two inputs, or with no state variables, have no hazards by construction (a hazard
   relates two inputs; with nothing latched, every input order is confluent); detection returns an empty
   result at those early-outs before probing anything.
-- A blow-up guard on total machine width (inputs plus state variables) gates the whole machine pass, so a
-  pathologically wide cell is never explored and yields neither arcs nor hazards.
+- Within a cell that clears those early-outs, the probed population is filtered per state: only a
+  fully-initialised reachable stable state is probed from (§2). The filter is applied after the states are
+  numbered, so a hazard's `discovered` index — the dedup tie-break — remains its position in exploration
+  order.
+- Two budgets bound the machine pass, each charged against work the exploration actually performs rather
+  than against the cell's declared shape: the seed minterms pooled as initialisation candidates (a forced
+  cover cube contributes `2^d` of them for its `d` unconstrained input columns) and the reachable stable
+  states the exploration records. A cell that passes either ceiling is left unexplored — it yields neither
+  arcs nor hazards — and the run stops with an error naming the cell and the flag that raises that
+  ceiling (`--max-candidates`, `--max-states`).
 - All containers are ordered, so reports come out in a deterministic order.
 - The probes never mutate the exploration: they settle *copies* with inputs toggled, so the reachable
   graph the arcs were derived from is exactly the graph the hazards were probed from.

@@ -146,6 +146,12 @@ pub struct EdgeArcs {
     /// already-transparent latch. Membership is PER FIRING, so two firings of one
     /// `(output, clock, direction)` that differ only in internal state can type differently. Every reader
     /// asks the set whether an identity is a member, so it is a [`HashSet`].
+    ///
+    /// The start minterm is the machine's own node, so it is as wide as the machine's coordinates — a
+    /// column per state variable and per combinational survivor. That width never has to be matched by
+    /// hand at the reading end: the probe is the same `arc.start` of the same derived arc, and a
+    /// [`Minterm`] compares and hashes by label-aligned value, an absent column reading as the don't-care
+    /// it would carry anyway. Widening the coordinates therefore widens key and probe together.
     pub labels: HashSet<(Symbol, Symbol, Edge, Minterm<Symbol>)>,
     /// The read-gate factorisations recognised across the cell's outputs (see [`DerivedRegister`]). Empty
     /// for every cell that carries no read-gated register output. Each entry names a state-holding register
@@ -246,12 +252,13 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
 
     let cell = m.cell;
     let inputs = &cell.inputs;
-    let deltas = &m.deltas;
     let ex = &m.explored;
 
-    // The scan context: the transition table, the per-state arc eligibility and the declared clock set,
-    // all node-independent, built once and indexed into by every scan below.
+    // The scan context: the coordinate δ set, the transition table, the per-state arc eligibility and the
+    // declared clock set, all node-independent, built once and indexed into by every scan below.
     let scan = Scan::new(m);
+    // What every re-walk below settles over (see `coordinate_deltas`).
+    let stepped = &scan.stepped[..];
 
     // Candidates: every output (value read via `Machine::output_value`, so combinational outputs are
     // included) plus every internal state variable (the state-machine coordinates that are not outputs).
@@ -281,7 +288,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         }
         for related in inputs {
             let toggled = machine::toggle(node, &[related.as_str()]);
-            let Some(np) = machine::settle(deltas, &toggled) else {
+            let Some(np) = machine::settle(stepped, &toggled) else {
                 continue;
             };
             let is_clock = scan.clock_set.contains(related.as_str());
@@ -312,6 +319,9 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         out
     };
 
+    // The raw explored order — `per_node` gates on eligibility itself, contributing nothing from an
+    // ineligible state. The walk keeps every state so its index space stays aligned with `scan.next`
+    // and `scan.eligible`, which every later scan indexes by state position.
     let aggs: Vec<CandAgg> = ex.order.par_iter().map(per_node).reduce(
         || vec![CandAgg::default(); candidates.len()],
         |mut a, b| {
@@ -333,12 +343,14 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
 
     // Every candidate's raw function δ (state δ then combinational-output δ), for the output CONE
     // (`support(δ_node)` state variables), the propagation walk and the fold's surviving-signal reference
-    // check.
+    // check. This is the CANDIDATE half of the coordinates, not the whole of them: an exposed
+    // combinational coordinate is not a candidate, so it carries no entry here and no cone, propagation
+    // or liveness question is ever asked of it.
     let mut fn_of: BTreeMap<&str, &Bdd<B, C>> = BTreeMap::new();
-    for (n, d) in deltas {
+    for (n, d) in &m.deltas {
         fn_of.insert(n.as_str(), d);
     }
-    for (n, d) in &m.out_deltas {
+    for (n, d) in m.combinational_outputs() {
         fn_of.insert(n.as_str(), d);
     }
 
@@ -492,14 +504,16 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // THE PER-ARC LABELS: each derived delay arc whose related pin is a declared clock is an edge arc iff it
     // TYPES EDGE at its own firing's post-arc stable state. Membership is the identity itself, so two
     // firings of one `(output, clock, direction)` can type differently, and an unobserved edge — masked in
-    // `arcs::derive`, or from an ineligible start — has no identity to add.
+    // `arcs::derive`, or from an ineligible start — has no identity to add. The start minterm keyed on is
+    // `a.start` VERBATIM, which is what makes the key line up with the emitter's probe whatever the
+    // machine's coordinates are (see [`EdgeArcs::labels`]).
     let mut labels: HashSet<(Symbol, Symbol, Edge, Minterm<Symbol>)> = HashSet::new();
     for a in delay_arcs {
         if !scan.clock_set.contains(a.related.as_str()) || !scan.is_eligible(&a.start) {
             continue;
         }
         let is_rise = a.end.value_of(a.related.as_str()) == Some(true);
-        let Some(sp) = machine::settle(deltas, &machine::toggle(&a.start, &[a.related.as_str()]))
+        let Some(sp) = machine::settle(stepped, &machine::toggle(&a.start, &[a.related.as_str()]))
         else {
             continue;
         };
@@ -866,20 +880,24 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     }
 }
 
-/// The classifier's scan context over one machine: the single-input transition table across the reachable
-/// stable states, those states' ARC ELIGIBILITY, and the declared clock set. All three are
-/// NODE-INDEPENDENT — they describe the cell's state machine, not any one candidate — so they are read
-/// once per cell and every seam, phase and forcing scan indexes into them rather than re-settling.
+/// The classifier's scan context over one machine: the machine's coordinate δ set, the single-input
+/// transition table across the reachable stable states, those states' ARC ELIGIBILITY, and the declared
+/// clock set. All of them are NODE-INDEPENDENT — they describe the cell's state machine, not any one
+/// candidate — so they are read once per cell and every seam, phase and forcing scan indexes into them
+/// rather than re-settling.
 struct Scan<'a, B: Brand, C: ManagerCell> {
     /// The machine every scan reads.
     m: &'a Machine<'a, B, C>,
+    /// The machine's coordinate δ set ([`Machine::coordinate_deltas`]), which every settle in this
+    /// module — this context's own `next` table included — steps over.
+    stepped: Vec<machine::Delta<B, C>>,
     /// The reachable stable states: the index space `next` and `eligible` are aligned with.
     order: &'a [Minterm<Symbol>],
     /// `next[s][x]` is the index of the stable state reached by toggling input `x` — the machine's own
     /// input order — in `order[s]` and settling. `None` when that toggle oscillates, or lands outside the
     /// explored set.
     next: Vec<Vec<Option<usize>>>,
-    /// Each state's arc eligibility ([`arc_eligible`]).
+    /// Each state's measurement eligibility ([`Machine::arc_eligible`]).
     eligible: Vec<bool>,
     /// The declared clocks, for membership tests. Every declared clock is a candidate edge key; whether a
     /// clock keeps edge arcs on a given node is decided behaviourally, not by input-class routing.
@@ -889,6 +907,7 @@ struct Scan<'a, B: Brand, C: ManagerCell> {
 impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
     fn new(m: &'a Machine<'a, B, C>) -> Self {
         let order = &m.explored.order[..];
+        let stepped = m.coordinate_deltas();
         let index: HashMap<&Minterm<Symbol>, usize> =
             order.iter().enumerate().map(|(i, s)| (s, i)).collect();
         let next: Vec<Vec<Option<usize>>> = order
@@ -898,7 +917,7 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
                     .inputs
                     .iter()
                     .map(|x| {
-                        machine::settle(&m.deltas, &machine::toggle(s, &[x.as_str()]))
+                        machine::settle(&stepped, &machine::toggle(s, &[x.as_str()]))
                             .and_then(|np| index.get(&np).copied())
                     })
                     .collect()
@@ -906,17 +925,18 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
             .collect();
         Scan {
             m,
+            stepped,
             order,
             next,
-            eligible: order.iter().map(|s| arc_eligible(m, s)).collect(),
+            eligible: order.iter().map(|s| m.arc_eligible(s)).collect(),
             clock_set: m.cell.clock_pins.iter().map(Symbol::as_str).collect(),
         }
     }
 
-    /// Is `s` arc-eligible (see [`arc_eligible`])? The measurement gate for a state reached during a walk;
-    /// `eligible` answers the same question for a state already in `order`.
+    /// Is `s` eligible to be measured from (see [`Machine::arc_eligible`])? The measurement gate for a
+    /// state reached during a walk; `eligible` answers the same question for a state already in `order`.
     fn is_eligible(&self, s: &Minterm<Symbol>) -> bool {
-        arc_eligible(self.m, s)
+        self.m.arc_eligible(s)
     }
 
     /// The LIVE dependency graph among the state variables at every reachable stable state. `live_succ[i]`
@@ -1116,16 +1136,6 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
             }
         }
     }
-}
-
-/// ARC ELIGIBILITY: a reachable stable state is arc-eligible iff every STATE column is determinate — no
-/// don't-care. A don't-care is a MISSING variable, never coerced to 0/1, so an ineligible start would read
-/// an uninitialised latch as though it held a value. Traversal is untouched — a partial state stays a seed
-/// in the explored order — but no measurement quantifies over one.
-fn arc_eligible<B: Brand, C: ManagerCell>(m: &Machine<'_, B, C>, s: &Minterm<Symbol>) -> bool {
-    m.state_vars
-        .iter()
-        .all(|w| s.value_of(w.as_str()).is_some())
 }
 
 /// Does `f`, once every variable of its support EXCEPT `freed` is fixed to `state`'s values, still depend
@@ -1552,11 +1562,19 @@ mod tests {
             let $builder = sync_bdd_builder!();
             let mut $bdds = crate::model::build_signal_bdds(&$analysed, &$builder);
             let order: Vec<Symbol> = $analysed.signals().map(|s| s.name.clone()).collect();
-            let output_set: BTreeSet<Symbol> =
-                $analysed.outputs.iter().map(|o| o.name.clone()).collect();
-            let min = crate::logic::minimise::minimise_state_space(&mut $bdds, &order, &output_set);
+            let preserved = crate::logic::minimise::Preserved::outputs(
+                $analysed.outputs.iter().map(|o| o.name.clone()).collect(),
+            );
+            let min = crate::logic::minimise::minimise_state_space(&mut $bdds, &order, &preserved);
             crate::model::recompute_signal_metadata(&mut $analysed, &$bdds, &min);
-            let $m = crate::logic::analysis::Machine::build(&$analysed, &$bdds).unwrap();
+            let $m = crate::logic::analysis::Machine::build(
+                &$analysed,
+                &$bdds,
+                crate::logic::analysis::Exploration::Fresh(
+                    &crate::logic::machine::ExplorationBudget::default(),
+                ),
+            )
+            .unwrap();
             $body
         }};
     }
@@ -1917,7 +1935,7 @@ mod tests {
         for (n, d) in &m.deltas {
             fn_of.insert(n.as_str(), d);
         }
-        for (n, d) in &m.out_deltas {
+        for (n, d) in m.combinational_outputs() {
             fn_of.insert(n.as_str(), d);
         }
         let candidates = output_names
@@ -2508,14 +2526,11 @@ L3 = "!K3*L2 + K3*L3"
             // along the dependency chain, hop by hop from `L2` up to `L3`.
             let direct = |n: &str| -> Vec<String> {
                 let f = m
-                    .out_deltas
-                    .get(&Symbol::from(n))
-                    .or_else(|| {
-                        m.deltas
-                            .iter()
-                            .find(|(s, _)| s.as_str() == n)
-                            .map(|(_, d)| d)
-                    })
+                    .combinational
+                    .iter()
+                    .chain(&m.deltas)
+                    .find(|(s, _)| s.as_str() == n)
+                    .map(|(_, d)| d)
                     .expect("a delta for the queried node");
                 f.variables()
                     .filter(|v| m.state_set.contains(v))
@@ -2771,9 +2786,10 @@ T = "M*!M2 + !M*M2"
             // D is preserved as a live data dependency: some reachable state where toggling D moves T.
             // Typing T as a register keyed off CLK would drop D while the run still emits D→T data arcs, so
             // T correctly stays level and D survives in T's function.
+            let stepped = m.coordinate_deltas();
             let d_drives_t = m.explored.order.iter().any(|node| {
                 let before = m.output_value("T", node);
-                let Some(np) = machine::settle(&m.deltas, &machine::toggle(node, &["D"])) else {
+                let Some(np) = machine::settle(&stepped, &machine::toggle(node, &["D"])) else {
                     return false;
                 };
                 matches!((before, m.output_value("T", &np)), (Some(b0), Some(b1)) if b0 != b1)
@@ -2979,12 +2995,13 @@ GCLK = "CLK*EL"
         });
     }
 
-    // === Blow-up guard ===
+    // === Exploration budget ===
 
     #[test]
-    fn edge_blowup_guard_yields_default() {
-        // A machine wider than MAX_MACHINE_VARS is never built ⇒ no Machine ⇒ default annotation.
-        let n = crate::logic::analysis::MAX_MACHINE_VARS + 1;
+    fn edge_budget_overrun_yields_default() {
+        // A cell whose exploration passes a budget ceiling has no Machine ⇒ default annotation. 24
+        // inputs put 2^23 seed minterms in each of Y's forced cover cubes, past the default ceiling.
+        let n = 24;
         let list = (0..n)
             .map(|i| format!("\"I{i}\""))
             .collect::<Vec<_>>()
@@ -3000,13 +3017,21 @@ GCLK = "CLK*EL"
         let builder = sync_bdd_builder!();
         let mut bdds = crate::model::build_signal_bdds(&analysed, &builder);
         let order: Vec<Symbol> = analysed.signals().map(|s| s.name.clone()).collect();
-        let output_set: BTreeSet<Symbol> =
-            analysed.outputs.iter().map(|o| o.name.clone()).collect();
-        let min = crate::logic::minimise::minimise_state_space(&mut bdds, &order, &output_set);
+        let preserved = crate::logic::minimise::Preserved::outputs(
+            analysed.outputs.iter().map(|o| o.name.clone()).collect(),
+        );
+        let min = crate::logic::minimise::minimise_state_space(&mut bdds, &order, &preserved);
         crate::model::recompute_signal_metadata(&mut analysed, &bdds, &min);
         assert!(
-            crate::logic::analysis::Machine::build(&analysed, &bdds).is_none(),
-            "wide cell trips the guard ⇒ default EdgeArcs"
+            crate::logic::analysis::Machine::build(
+                &analysed,
+                &bdds,
+                crate::logic::analysis::Exploration::Fresh(
+                    &crate::logic::machine::ExplorationBudget::default(),
+                ),
+            )
+            .is_err(),
+            "wide cell passes the candidate budget ⇒ default EdgeArcs"
         );
         assert!(EdgeArcs::default().captures.is_empty());
     }

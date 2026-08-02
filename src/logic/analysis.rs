@@ -2,14 +2,18 @@
 //! its transition arcs ([`super::arcs`]) and its confluence hazards ([`super::confluence`]) from the
 //! same exploration.
 //!
-//! A cell is a state machine over `inputs × state-variables` (see [`machine`] and [`resolve`]). The
+//! A cell is a state machine over `inputs × coordinates` — every signal surviving the minimisation, the
+//! state variables and the combinational survivors alike (see [`machine`] and [`resolve`]). The
 //! signals' BDDs are built and minimised once in [`crate::model::Cell::analyse`]; this pass reads that
-//! shared map. After the fold every state variable's next-state δ **is** its entry in the map — a direct
-//! lookup, no per-signal composition — and the combinational outputs' δ likewise. Only the one
+//! shared map. After the fold every coordinate's next-state δ **is** its entry in the map — a direct
+//! lookup, no per-signal composition. Only the one
 //! [`machine::explore`] BFS is set up here, and it is the same setup for both derivations, so it is done
-//! **once** and shared through [`Machine`]. Only plain data ([`Arc`]; the detected [`OrderDependence`]
-//! and [`Oscillation`] hazards; the generated [`Constraint`]s) escapes into [`MachineAnalysis`]; the live
-//! BDD handles never leave this pass.
+//! **once** and shared through [`Machine`]. It is done once per CELL rather than once per view: a cell
+//! that exposes internal nodes is analysed as two views, and the second one takes the first's explored
+//! states projected onto its own coordinates ([`Exploration`]) instead of exploring again. Only plain
+//! data ([`Arc`]; the detected [`OrderDependence`] and [`Oscillation`] hazards; the generated
+//! [`Constraint`]s; the explored states themselves, which are minterms and carry no BDD handle) escapes
+//! into [`MachineAnalysis`]; the live BDD handles never leave this pass.
 //!
 //! The BDD brand is a **generic type parameter** `<B, C>` carried by [`Machine`]: the builder is minted
 //! once per cell in [`crate::model::Cell::analyse`] (a fresh brand each cell, so handles from two cells
@@ -31,8 +35,9 @@ use crate::logic::{machine, resolve};
 use crate::model::AnalysedCell;
 
 /// The plain-data outcome of the shared machine pass: the transition arcs, the two detected hazards
-/// (order-dependent and oscillation), and the constraints generated to avoid them. Empty when the cell
-/// is not explored (the combinatorial blow-up guard, see `MAX_MACHINE_VARS`).
+/// (order-dependent and oscillation), and the constraints generated to avoid them. Everything is empty
+/// when the exploration passed a budget ceiling, and `unexplored` then names the counter that stopped it
+/// (see [`machine::ExplorationBudget`]).
 ///
 /// `MachineAnalysis` itself never escapes this module: [`analyse_machine`]'s result is copied field-for-
 /// field into the matching [`crate::model::AnalysedCell`] fields by `Cell::analyse` (see `model.rs`).
@@ -45,18 +50,31 @@ pub struct MachineAnalysis {
     pub oscillation: Vec<Oscillation>,
     pub leakage: Vec<LeakageState>,
     pub edge: crate::logic::edge::EdgeArcs,
+    /// The budget counter that stopped the exploration, or `None` when the machine was explored in
+    /// full. Set ⇒ every field above is empty, because nothing was derived.
+    ///
+    /// A [`Exploration::Reused`] view cannot itself be stopped — the exploration it reads already ran
+    /// to completion in the view that performed it — so this is set only for a view that explored
+    /// ([`Exploration::Fresh`]) or for one mirroring the ceiling that stopped the exploration it would
+    /// have reused.
+    pub unexplored: Option<machine::ExplorationLimit>,
+    /// The exploration this pass performed, handed back so a second view of the same cell projects it
+    /// onto its own coordinates instead of repeating it. `None` when the pass reused an exploration, and
+    /// when a budget ceiling stopped one.
+    pub explored: Option<machine::Explored>,
 }
 
-/// The single home for the combinatorial blow-up guard: a cell whose machine width (inputs + state
-/// variables) exceeds this bound is not explored at all — both arcs and hazards come back empty.
+/// Where a view's explored states come from.
 ///
-/// The bound is on `inputs + state variables`, and 22 is a deliberate memory/time ceiling: exploration
-/// materialises candidate pools by expanding the signals' input-projected FR covers (`cover_over_fr`)
-/// into full input minterms (via [`Cover::maximize`](espresso_logic::Cover::maximize)), so a machine of
-/// width `w` can seed on the order of `2^w` minterms. At 22 that worst case is ~4M candidates — the
-/// largest pool we accept — and each extra variable *doubles* it, so raising the constant grows the pool
-/// (and the exploration cost) exponentially.
-pub(crate) const MAX_MACHINE_VARS: usize = 22;
+/// A cell explores once. The view that owns the exploration is `Fresh` and performs it under the
+/// budget; a second view of the same cell is `Reused` and carries that exploration's outcome — the
+/// explored states themselves, or the ceiling that stopped them.
+pub enum Exploration<'e> {
+    /// This view performs the exploration, bounded by this budget.
+    Fresh(&'e machine::ExplorationBudget),
+    /// This view reuses the outcome the cell's other view already reached.
+    Reused(Result<&'e machine::Explored, machine::ExplorationLimit>),
+}
 
 /// A cell's asynchronous state machine, built once and shared by the arc and confluence derivations. The
 /// BDD brand is a generic parameter scoped to the builder that minted these handles.
@@ -69,26 +87,39 @@ pub struct Machine<'c, B: Brand, C: ManagerCell> {
     /// Each state variable's next-state function δ (over inputs + state variables), read directly from
     /// the minimised model: after the fold a state variable's map entry **is** its δ.
     pub(crate) deltas: Vec<machine::Delta<B, C>>,
-    /// The combinational outputs' δ, read directly from the minimised map (an output's value at a node is
-    /// read from its δ; a state output instead reads its own state field).
-    pub(crate) out_deltas: BTreeMap<Symbol, Bdd<B, C>>,
-    /// The reachable stable states, discovered by one [`machine::explore`] BFS.
+    /// The δ of every signal surviving the minimisation that is *not* a state variable — the
+    /// combinational half of the machine's [`machine::Coordinates`], in signal order (outputs first, then
+    /// internals). These are the outputs and exposed internals the minimisation kept because something
+    /// addresses them by name; each is a node column of its own, stepped with the state variables.
+    pub(crate) combinational: Vec<machine::Delta<B, C>>,
+    /// The cell's exposed internal nodes — the internals the spec lists in `expose`, in declared order,
+    /// which is the order [`super::arcs::ArcLevels`] fills its exposed levels in.
+    ///
+    /// Exposure is read only to SAMPLE levels: these names are absent from the exploration's
+    /// `seed_funcs` below, so exposing a node cannot change which states are reached. That is what makes
+    /// the change an arcs-only one — the machine explores the same state space either way.
+    pub(crate) exposed: Vec<Symbol>,
+    /// The reachable stable states over THIS view's coordinates, from the cell's one
+    /// [`machine::explore`] BFS — run here, or carried onto these coordinates from the view that ran it
+    /// (see [`Exploration`]).
     pub(crate) explored: machine::Explored,
 }
 
 impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
     /// Build the shared machine for `cell` from the minimised `bdds` map (built once in
-    /// [`crate::model::Cell::analyse`]). Returns `None` — leaving the cell unexplored — when the machine
-    /// width would exceed `MAX_MACHINE_VARS` (the combinatorial blow-up guard).
+    /// [`crate::model::Cell::analyse`]), taking its explored states from `exploration` — discovered here
+    /// under a budget, or carried over from the cell's other view. That is the only fallible step: the
+    /// exploration stops, leaving the cell unexplored, when one of the budget's two counters passes its
+    /// ceiling, and that counter comes back as the error whichever view it stopped.
     pub fn build(
         cell: &'c AnalysedCell,
         bdds: &BTreeMap<Symbol, Bdd<B, C>>,
-    ) -> Option<Machine<'c, B, C>>
+        exploration: Exploration<'_>,
+    ) -> Result<Machine<'c, B, C>, machine::ExplorationLimit>
     where
         C: Send + Sync,
     {
         let inputs = &cell.inputs;
-        let n = inputs.len();
 
         let signals: Vec<&crate::model::AnalysedOutput> = cell.signals().collect();
         // Feedback was recomputed post-fold, so this classifier is now exact: every surviving state
@@ -100,12 +131,6 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             .map(|s| s.name.clone())
             .filter(|nm| state_set.contains(nm))
             .collect();
-        let k = state_vars.len();
-
-        // Guard against a combinatorial blow-up on pathologically wide cells (now on the minimised width).
-        if n + k > MAX_MACHINE_VARS {
-            return None;
-        }
 
         // The minimise fixpoint invariant (I3): every signal's signal-name support is a subset of the
         // state variables, so a state variable's next-state δ and a combinational output's δ are both a
@@ -119,70 +144,148 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             "analyse_machine: a signal's support escapes the state set — minimise invariant I3 broken"
         );
 
-        // δ of each state variable (the machine's transition functions) and of each *combinational*
-        // output are read directly from the minimised map — the arc derivation reads an output's value
-        // from its δ, and both derivations seed exploration from them.
+        // The machine's coordinates, both halves read directly from the minimised map: the state
+        // variables' δ (the transition functions), and the δ of every other surviving signal. I3 leaves
+        // a surviving signal either self-reaching or preserved with no consumers, so the second half is
+        // exactly the cell's combinational outputs plus its surviving combinational exposures — every
+        // other internal was folded away and is not in `signals()` at all.
         let deltas: Vec<machine::Delta<B, C>> = state_vars
             .iter()
             .map(|v| (v.clone(), bdds[v].clone()))
             .collect();
-        let out_deltas: BTreeMap<Symbol, Bdd<B, C>> = cell
-            .outputs
+        let combinational: Vec<machine::Delta<B, C>> = signals
             .iter()
-            .filter(|o| !state_set.contains(&o.name))
-            .map(|o| (o.name.clone(), bdds[&o.name].clone()))
+            .map(|s| &s.name)
+            .filter(|nm| !state_set.contains(*nm))
+            .map(|nm| (nm.clone(), bdds[nm].clone()))
             .collect();
+        // The exposed nodes surviving in this view. A combinational exposure is one of the coordinates
+        // above; a state-variable exposure is one of the state columns.
+        let exposed: Vec<Symbol> = cell.exposed_signals().cloned().collect();
 
-        // Explore the reachable stable states once. Candidates are seeded from the on/off covers of every
-        // signal function (state δ plus the combinational outputs, so combinational cells seed too);
-        // [`machine::explore`] records the visitation order and predecessors, shared by both derivations.
-        let seed_funcs: Vec<_> = deltas
-            .iter()
-            .map(|(_, d)| d.clone())
-            .chain(out_deltas.values().cloned())
-            .collect();
-        let explored = machine::explore(&deltas, &seed_funcs, inputs, &state_vars);
+        let coords = machine::Coordinates {
+            state: &deltas,
+            combinational: &combinational,
+        };
+        let explored = match exploration {
+            // Explore the reachable stable states. Candidates are seeded from the on/off covers of every
+            // signal function (state δ plus the combinational OUTPUTS, so combinational cells seed too,
+            // while an exposed internal stays out of the pool and cannot move the exploration);
+            // [`machine::explore`] records the visitation order and predecessors, shared by both
+            // derivations.
+            Exploration::Fresh(budget) => {
+                let output_names: BTreeSet<&Symbol> =
+                    cell.outputs.iter().map(|o| &o.name).collect();
+                let seed_funcs: Vec<_> = deltas
+                    .iter()
+                    .chain(
+                        combinational
+                            .iter()
+                            .filter(|(n, _)| output_names.contains(n)),
+                    )
+                    .map(|(_, d)| d.clone())
+                    .collect();
+                machine::explore(coords, &seed_funcs, inputs, budget)?
+            }
+            // The cell's other view already explored these states, so they are carried onto THIS view's
+            // node columns — the inputs followed by this view's coordinates, in `machine::explore`'s own
+            // column order. The target names are computed here and never passed in, so a projection onto
+            // the wrong view's coordinates cannot be written.
+            Exploration::Reused(Ok(e)) => {
+                let full_names: Vec<Symbol> =
+                    inputs.iter().cloned().chain(coords.names()).collect();
+                e.project_to(&full_names)
+            }
+            // One exploration, one verdict: the ceiling that stopped it stops this view too.
+            Exploration::Reused(Err(limit)) => return Err(limit),
+        };
 
-        Some(Machine {
+        Ok(Machine {
             cell,
             state_vars,
             state_set,
             deltas,
-            out_deltas,
+            combinational,
+            exposed,
             explored,
         })
     }
 
-    /// The value of `name` at a node, or `None` when the node does not define it: a state output reads
-    /// its state field (absent ⇒ undefined); a combinational output is its δ evaluated at the node
-    /// (`Err` ⇒ still depends on absent state ⇒ undefined). An arc is only measured where the output is
-    /// defined at both ends.
-    pub(crate) fn output_value(&self, name: &str, node: &Minterm<Symbol>) -> Option<bool> {
-        if self.state_set.contains(name) {
-            node.value_of(name)
-        } else {
-            // Every non-state output has a δ in `out_deltas` (one is computed for each of `cell.outputs`
-            // when the machine is built), so this lookup cannot miss.
-            debug_assert!(
-                self.out_deltas.contains_key(name),
-                "output_value: output {name:?} has no entry in out_deltas"
-            );
-            self.out_deltas[name].evaluate_fast(node)
+    /// MEASUREMENT ELIGIBILITY: a reachable stable state is measurement-eligible iff every STATE column
+    /// is determinate — no don't-care. A don't-care is a MISSING variable, never coerced to 0/1, so an
+    /// ineligible start would read an uninitialised latch as though it held a value. Traversal is
+    /// untouched — a partial state stays a seed in the explored order — but no measurement quantifies
+    /// over one: the arc derivation, the behavioural edge classification and the hazard probes all gate
+    /// on this one predicate.
+    pub(crate) fn arc_eligible(&self, s: &Minterm<Symbol>) -> bool {
+        self.state_vars
+            .iter()
+            .all(|w| s.value_of(w.as_str()).is_some())
+    }
+
+    /// The combinational coordinates that carry an external output pin, in signal order — the half of
+    /// [`machine::Coordinates::combinational`] the exploration seeds from and the edge classification
+    /// takes its candidate functions from. The rest are exposed internals, which no such quantity reads.
+    pub(crate) fn combinational_outputs(&self) -> impl Iterator<Item = &machine::Delta<B, C>> {
+        self.combinational
+            .iter()
+            .filter(|(n, _)| self.cell.outputs.iter().any(|o| o.name == *n))
+    }
+
+    /// The machine's coordinate δ set, in [`machine::Coordinates`] order — the state variables followed
+    /// by the combinational survivors — which is the set one [`machine::step`] writes and the set
+    /// [`machine::explore`] settled the reachable states over. Every re-walk settles over all of them: a
+    /// narrower set leaves a combinational coordinate's column holding its pre-toggle value, so the node
+    /// would read back stale and would not match the explored state it belongs to.
+    pub(crate) fn coordinate_deltas(&self) -> Vec<machine::Delta<B, C>> {
+        machine::Coordinates {
+            state: &self.deltas,
+            combinational: &self.combinational,
         }
+        .stepped()
+    }
+
+    /// The value of `name` at a node, or `None` when the node does not define it. Every output is a
+    /// coordinate of the machine — a state variable or a combinational survivor — so the value is that
+    /// node column, absent where the node leaves it undetermined. An arc is only measured where the
+    /// output is defined at both ends. The `Option` survives because [`leakage::derive`] reads the
+    /// exploration's seeds, which are not eligibility-gated: a seed's unforced columns stay absent, and
+    /// an output that does not resolve there is dropped from that leakage state by design.
+    pub(crate) fn output_value(&self, name: &str, node: &Minterm<Symbol>) -> Option<bool> {
+        node.value_of(name)
+    }
+
+    /// The value an exposed node holds at a node, read as [`Self::output_value`] is: an exposure is a
+    /// coordinate either way — a state variable or a combinational survivor — so its level is that node
+    /// column, absent where the node leaves it undetermined.
+    ///
+    /// This `Option` is the RAW read. Every SAMPLING site instead wraps it in `.expect()` on the
+    /// determinacy invariant, which holds there: see [`super::arcs::ArcLevels::at`].
+    pub(crate) fn exposed_value(&self, name: &str, node: &Minterm<Symbol>) -> Option<bool> {
+        node.value_of(name)
     }
 }
 
 /// Build the cell's state machine from the minimised `bdds` map and derive its arcs and hazards from the
-/// shared exploration. The builder was minted once in [`crate::model::Cell::analyse`]; this pass only
-/// reads the shared map. Returns an empty [`MachineAnalysis`] when the cell is not explored (the blow-up
-/// guard).
+/// shared exploration, which `exploration` either budgets or supplies. The builder was minted once in
+/// [`crate::model::Cell::analyse`]; this pass only reads the shared map. An exploration stopped by one of
+/// the budget's counters yields an otherwise-empty [`MachineAnalysis`] carrying that counter in
+/// `unexplored`: nothing was derived, and the caller reports it.
 pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     cell: &AnalysedCell,
     bdds: &BTreeMap<Symbol, Bdd<B, C>>,
     collapse: bool,
+    exploration: Exploration<'_>,
 ) -> MachineAnalysis {
-    let Some(m) = Machine::build(cell, bdds) else {
-        return MachineAnalysis::default();
+    let reused = matches!(exploration, Exploration::Reused(_));
+    let m = match Machine::build(cell, bdds, exploration) {
+        Ok(m) => m,
+        Err(limit) => {
+            return MachineAnalysis {
+                unexplored: Some(limit),
+                ..Default::default()
+            }
+        }
     };
     let (arcs, hidden_arcs) = arcs::derive(&m);
     // Detect the hazards, then generate the constraints that avoid them — two separate stages.
@@ -206,62 +309,181 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     } else {
         crate::logic::edge::EdgeArcs::default()
     };
+    let leakage = leakage::derive(&m);
     MachineAnalysis {
         arcs,
         hidden_arcs,
         constraints,
         order_dependence: detected.order_dependence,
         oscillation: detected.oscillation,
-        leakage: leakage::derive(&m),
+        leakage,
         edge,
+        unexplored: None,
+        // Handed back only by the view that performed the exploration: the derivations above are the
+        // whole of what a reusing view owes its caller.
+        explored: (!reused).then_some(m.explored),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::MAX_MACHINE_VARS;
     use crate::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
     use crate::emit::liberty::cell_liberty;
     use crate::emit::verilog::cell_verilog;
+    use crate::logic::machine::ExplorationLimit;
+    use crate::logic::resolve;
     use crate::model::analyse_one;
 
     #[test]
-    fn oversized_cell_trips_the_blowup_guard() {
-        // inputs + state variables > MAX_MACHINE_VARS ⇒ the machine is left unexplored, so arcs,
-        // constraints and both detected hazards all come back empty (the MachineAnalysis::default path)
-        // — yet the emitters must still run without panicking.
-        let n = MAX_MACHINE_VARS + 1; // 23 primary inputs, 0 state variables ⇒ machine width 23 > 22
+    fn oversized_cell_trips_the_candidate_budget() {
+        // 24 inputs, so each forced cover cube of Y carries 23 don't-care input columns and expands to
+        // 2^23 seed minterms — past the default candidate ceiling. The exploration stops there, so arcs,
+        // constraints and both detected hazards all come back empty (the unexplored path) — yet the
+        // emitters must still run without panicking.
+        let n = 24;
         let list = (0..n)
             .map(|i| format!("\"I{i}\""))
             .collect::<Vec<_>>()
             .join(", ");
-        // Opt in to constraints so the empty result below is the *guard* suppressing generation
-        // (MachineAnalysis::default), not merely the per-cell gate leaving `constraints` untouched.
+        // Opt in to constraints so the empty result below is the stopped exploration suppressing
+        // generation, not merely the per-cell gate leaving `constraints` untouched.
         let src = format!(
             "[[cell]]\nname = \"WIDE\"\nconstraint_arcs = true\ninputs = [{list}]\n[cell.outputs]\nY = \"I0\"\n"
         );
         let cell = analyse_one(&src);
-        assert!(cell.arcs.is_empty(), "guard must suppress arcs");
+        assert!(
+            matches!(cell.unexplored, Some(ExplorationLimit::Candidates(_))),
+            "the candidate counter is the one that stopped it, got {:?}",
+            cell.unexplored,
+        );
+        assert!(cell.arcs.is_empty(), "an unexplored cell has no arcs");
         assert!(
             cell.constraints.is_empty(),
-            "guard must suppress constraints"
+            "an unexplored cell has no constraints"
         );
         assert!(
             cell.oscillation.is_empty(),
-            "guard must suppress oscillation"
+            "an unexplored cell has no oscillation"
         );
         assert!(
             cell.order_dependence.is_empty(),
-            "guard must suppress order-dependent hazards"
+            "an unexplored cell has no order-dependent hazards"
         );
         assert!(
             cell.leakage.is_empty(),
-            "guard must suppress leakage states"
+            "an unexplored cell has no leakage states"
         );
         // Emission still succeeds (no panic); the artifacts are simply arc-free.
         let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         let _ = cell_verilog(&cell);
         let _ = cell_liberty(&cell);
+    }
+
+    #[test]
+    fn an_exposing_cell_over_budget_reports_one_verdict_on_both_views() {
+        // The same over-budget shape, exposing an internal node so the cell carries two views. The cell
+        // explores once, in the arc view, and the ceiling that stopped it reaches the model view too:
+        // both views carry the verdict and neither derives anything. That is what lets `main`'s
+        // `c.unexplored.or(c.arc_view().unexplored)` name an offending cell exactly once, whichever view
+        // the exploration belonged to.
+        let n = 24;
+        let list = (0..n)
+            .map(|i| format!("\"I{i}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        // Y is the only seed function (an exposed internal stays out of the pool), and each cube of its
+        // forced cover carries 23 don't-care input columns, so the first cube alone is charged at 2^23 —
+        // past the ceiling. That keeps the fixture cheap as well as over budget: a cube charged past the
+        // ceiling is never expanded.
+        let src = format!(
+            "[[cell]]\nname = \"WIDEX\"\nconstraint_arcs = true\nexpose = [\"M\"]\ninputs = [{list}]\n[cell.internal]\nM = \"I0\"\n[cell.outputs]\nY = \"M\"\n"
+        );
+        let cell = analyse_one(&src);
+        assert!(
+            cell.exposed_view.is_some(),
+            "the exposure gives the cell an arc view beside the model view",
+        );
+        for (which, view) in [("model view", &cell), ("arc view", cell.arc_view())] {
+            assert!(
+                matches!(view.unexplored, Some(ExplorationLimit::Candidates(_))),
+                "the {which} carries the candidate counter that stopped the cell, got {:?}",
+                view.unexplored,
+            );
+            assert!(view.arcs.is_empty(), "the unexplored {which} has no arcs");
+            assert!(
+                view.hidden_arcs.is_empty(),
+                "the unexplored {which} has no hidden arcs"
+            );
+            assert!(
+                view.constraints.is_empty(),
+                "the unexplored {which} has no constraints"
+            );
+            assert!(
+                view.oscillation.is_empty(),
+                "the unexplored {which} has no oscillation"
+            );
+            assert!(
+                view.order_dependence.is_empty(),
+                "the unexplored {which} has no order-dependent hazards"
+            );
+            assert!(
+                view.leakage.is_empty(),
+                "the unexplored {which} has no leakage states"
+            );
+            assert!(
+                view.edge.labels.is_empty()
+                    && view.edge.captures.is_empty()
+                    && view.edge.folded.is_empty()
+                    && view.edge.derived.is_empty(),
+                "the unexplored {which} carries the default edge classification"
+            );
+        }
+        // Emission still succeeds (no panic); the artifacts are simply arc-free.
+        let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        let _ = cell_verilog(&cell);
+        let _ = cell_liberty(&cell);
+    }
+
+    #[test]
+    fn wide_machine_with_a_narrow_pool_is_analysed() {
+        // A machine 24 coordinates wide — 6 inputs and 18 state variables — is analysed in full: the
+        // candidate counter reads the input columns alone (6 of them, so no cube expands past 2^6 seed
+        // minterms) and the state counter reads the states actually discovered, so a cell carrying many
+        // state variables is no longer turned away for its width.
+        //
+        // Each `Qj` is set at one input vector, holds at the complementary vector and clears everywhere
+        // else: genuine memory (under the hold vector its δ reads `Qj`), a distinct δ per `j` so the
+        // minimisation dedups none of them, and one hold vector each so the explored set stays close to
+        // the 2^6 input vectors.
+        let (n, k) = (6, 18);
+        let literal = |i: usize, v: bool| if v { format!("I{i}") } else { format!("!I{i}") };
+        let vector = |bits: usize, invert: bool| {
+            (0..n)
+                .map(|i| literal(i, ((bits >> i) & 1 == 1) != invert))
+                .collect::<Vec<_>>()
+                .join("*")
+        };
+        let inputs = (0..n)
+            .map(|i| format!("\"I{i}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let outputs = (0..k)
+            .map(|j| format!("Q{j} = \"{} + Q{j}*{}\"", vector(j, true), vector(j, false)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let cell = analyse_one(&format!(
+            "[[cell]]\nname = \"WIDESTATE\"\ninputs = [{inputs}]\n[cell.outputs]\n{outputs}\n"
+        ));
+
+        let signals: Vec<&crate::model::AnalysedOutput> = cell.signals().collect();
+        let state_vars = resolve::state_variables(&signals);
+        assert_eq!(state_vars.len(), k, "every output is a state variable");
+        assert_eq!(cell.inputs.len() + state_vars.len(), 24, "machine width");
+        assert_eq!(cell.unexplored, None, "the exploration ran to completion");
+        assert!(
+            !cell.arcs.is_empty(),
+            "a fully explored machine yields arcs"
+        );
     }
 
     #[test]
@@ -330,5 +552,181 @@ Q = "!R*(CLK*M + !CLK*Q)"
         );
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         assert!(tcl.contains("define_arc"));
+    }
+
+    #[test]
+    fn exposure_leaves_the_exploration_untouched() {
+        // Exposed nodes are read to sample levels and never seed the exploration, so the same cell
+        // explores the same states in the same order whether or not it exposes its master — and an
+        // exposure-free cell carries no exposed nodes and no δ for them at all.
+        let dff = |expose: &str| {
+            format!(
+                r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+{expose}[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#
+            )
+        };
+        let budget = crate::logic::machine::ExplorationBudget::default();
+        let plain = analyse_one(&dff(""));
+        let plain_builder = espresso_logic::sync_bdd_builder!();
+        let plain_bdds = crate::model::build_signal_bdds(&plain, &plain_builder);
+        let mp = super::Machine::build(&plain, &plain_bdds, super::Exploration::Fresh(&budget))
+            .expect("fixture is explored");
+
+        let exposed = analyse_one(&dff("expose = [\"M\"]\n"));
+        let exposed_builder = espresso_logic::sync_bdd_builder!();
+        let exposed_bdds = crate::model::build_signal_bdds(&exposed, &exposed_builder);
+        let me = super::Machine::build(&exposed, &exposed_bdds, super::Exploration::Fresh(&budget))
+            .expect("fixture is explored");
+
+        assert!(mp.exposed.is_empty(), "nothing is exposed");
+        assert_eq!(me.exposed, ["M"]);
+        assert!(
+            me.state_set.contains("M"),
+            "the master holds memory, so exposing it names a state coordinate",
+        );
+        assert!(
+            mp.combinational.is_empty() && me.combinational.is_empty(),
+            "both of this cell's signals hold memory, so neither view has a combinational coordinate",
+        );
+        assert_eq!(
+            mp.explored.order, me.explored.order,
+            "exposing a node does not change which states are reached, nor in which order",
+        );
+    }
+
+    /// The wave-1 coordinate fixture, built once per test: the keeper `Q` — a state variable — beside
+    /// the exposed combinational node `W`, so one cell carries both kinds of coordinate. The
+    /// minimisation runs with `W` preserved (`Preserved::with_exposed`), which is what keeps a
+    /// combinational exposure in the model at all.
+    const COORDINATE_FIXTURE: &str = r#"
+[[cell]]
+name = "C2X"
+inputs = ["A", "B"]
+expose = ["W"]
+[cell.internal]
+W = "A*B"
+[cell.outputs]
+Q = "W + Q*(A+B)"
+"#;
+
+    /// `COORDINATE_FIXTURE` minimised with its exposure preserved, ready for [`super::Machine::build`].
+    fn coordinate_fixture() -> crate::model::AnalysedCell {
+        let mut cell = crate::model::parse_spec(COORDINATE_FIXTURE)
+            .unwrap()
+            .cells
+            .remove(0)
+            .analyse_signals()
+            .unwrap();
+        let builder = espresso_logic::sync_bdd_builder!();
+        let mut bdds = crate::model::build_signal_bdds(&cell, &builder);
+        let order: Vec<espresso_logic::Symbol> = cell.signals().map(|s| s.name.clone()).collect();
+        let preserved = crate::logic::minimise::Preserved::with_exposed(
+            cell.outputs.iter().map(|o| o.name.clone()).collect(),
+            cell.exposed.iter().cloned().collect(),
+        );
+        let min = crate::logic::minimise::minimise_state_space(&mut bdds, &order, &preserved);
+        crate::model::recompute_signal_metadata(&mut cell, &bdds, &min);
+        cell
+    }
+
+    #[test]
+    fn every_explored_node_carries_a_column_per_coordinate() {
+        // What promoting the combinational survivors to coordinates establishes: each one is a column
+        // of every explored node, carrying exactly what its δ evaluates to there — the same relation a
+        // state variable's column already stood in. Read over both halves at once, so a coordinate that
+        // was left out of the node's columns, or left holding a value its δ contradicts, fails here.
+        let cell = coordinate_fixture();
+        let builder = espresso_logic::sync_bdd_builder!();
+        let bdds = crate::model::build_signal_bdds(&cell, &builder);
+        let m = super::Machine::build(
+            &cell,
+            &bdds,
+            super::Exploration::Fresh(&crate::logic::machine::ExplorationBudget::default()),
+        )
+        .expect("fixture is explored");
+
+        assert_eq!(m.state_vars, ["Q"], "the keeper is the state coordinate");
+        assert_eq!(
+            m.combinational
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>(),
+            ["W"],
+            "the exposed combinational node is the other coordinate",
+        );
+        assert!(
+            !m.explored.order.is_empty(),
+            "the fixture explores at least one state"
+        );
+        for node in &m.explored.order {
+            for (name, delta) in m.deltas.iter().chain(&m.combinational) {
+                assert!(
+                    node.vars().iter().any(|v| v == name),
+                    "coordinate {name} has no column at {node:?}",
+                );
+                assert_eq!(
+                    node.value_of(name.as_str()),
+                    delta.evaluate_fast(node),
+                    "coordinate {name}'s column disagrees with its δ at {node:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_field_readers_return_the_coordinate_columns() {
+        // `output_value` and `exposed_value` read a coordinate's column whichever half it belongs to.
+        // Pinned over the fixture's whole explored set as `(A, B, Q, W)`: the keeper holds through the
+        // two single-input vectors — hence each of them twice, once per held value — is set at `A·B`
+        // and cleared at neither input, while the exposure tracks `A·B`.
+        let cell = coordinate_fixture();
+        let builder = espresso_logic::sync_bdd_builder!();
+        let bdds = crate::model::build_signal_bdds(&cell, &builder);
+        let m = super::Machine::build(
+            &cell,
+            &bdds,
+            super::Exploration::Fresh(&crate::logic::machine::ExplorationBudget::default()),
+        )
+        .expect("fixture is explored");
+
+        let mut read: Vec<(bool, bool, bool, bool)> = m
+            .explored
+            .order
+            .iter()
+            .map(|node| {
+                let of = |pin: &str| {
+                    node.value_of(pin)
+                        .expect("every input is fixed in an explored state")
+                };
+                (
+                    of("A"),
+                    of("B"),
+                    m.output_value("Q", node)
+                        .expect("the keeper resolves at every explored state"),
+                    m.exposed_value("W", node)
+                        .expect("the exposure resolves at every explored state"),
+                )
+            })
+            .collect();
+        read.sort();
+        assert_eq!(
+            read,
+            [
+                (false, false, false, false),
+                (false, true, false, false),
+                (false, true, true, false),
+                (true, false, false, false),
+                (true, false, true, false),
+                (true, true, true, true),
+            ],
+        );
     }
 }

@@ -16,6 +16,7 @@ use cellsmith::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
 use cellsmith::emit::define_cell::cell_define_cell;
 use cellsmith::emit::liberty::library_liberty;
 use cellsmith::emit::verilog::cell_verilog;
+use cellsmith::logic::machine::{ExplorationBudget, ExplorationLimit};
 use cellsmith::model::{parse_spec, AnalysedCell, ArcClass, ArcClasses};
 
 /// Generate Cadence Liberate transition arcs (with prevectors), a behavioural Verilog model and a
@@ -62,9 +63,33 @@ struct Cli {
     #[arg(long)]
     no_edge_collapse: bool,
 
+    /// Override the low-logic-level (`0`) voltage expression a state-holding cell's `-ic` renders —
+    /// every entry on its transition, hidden and constraint blocks, whether an input, an exposed
+    /// internal node or an output — applied to every cell that doesn't declare its own `logic_low`
+    /// (default: `0`). Recognised simple forms are emitted as written; any other value is escaped
+    /// and wrapped so it occupies exactly one `-ic` column.
+    #[arg(long, value_name = "VOLTAGE")]
+    logic_low: Option<String>,
+
+    /// Override the high-logic-level (`1`) voltage expression, mirroring `--logic-low` (default: `$VDD`).
+    /// Recognised simple forms are emitted as written; any other value is escaped and wrapped so it
+    /// occupies exactly one `-ic` column.
+    #[arg(long, value_name = "VOLTAGE")]
+    logic_high: Option<String>,
+
     /// Write all four artifacts to stdout (with banners) instead of writing files.
     #[arg(long)]
     stdout: bool,
+
+    /// Ceiling on the seed minterms a cell's exploration may pool as initialisation candidates: a
+    /// forced cover cube expands to 2^d of them for its d unconstrained input columns.
+    #[arg(long, value_name = "N", default_value_t = ExplorationBudget::default().candidates)]
+    max_candidates: usize,
+
+    /// Ceiling on the reachable stable states a cell's exploration may record; every one of them is
+    /// re-walked by the arc derivation and the hazard probes.
+    #[arg(long, value_name = "N", default_value_t = ExplorationBudget::default().states)]
+    max_states: usize,
 }
 
 /// The `--when` flag, resolved to the set of arc classes it selects. Every occurrence of the flag is
@@ -162,16 +187,72 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     for c in &mut spec.cells {
         c.when = c.when.union(cli.when.classes);
     }
-    let cells: Vec<AnalysedCell> = spec.analyse()?;
+    // `--logic-low`/`--logic-high` are per-field CLI defaults: a cell's own key wins, so the CLI value
+    // only fills in where the cell left its own key unset.
+    if let Some(v) = &cli.logic_low {
+        for c in &mut spec.cells {
+            c.logic_low.get_or_insert_with(|| v.clone());
+        }
+    }
+    if let Some(v) = &cli.logic_high {
+        for c in &mut spec.cells {
+            c.logic_high.get_or_insert_with(|| v.clone());
+        }
+    }
+    let budget = ExplorationBudget {
+        candidates: cli.max_candidates,
+        states: cli.max_states,
+    };
+    let cells: Vec<AnalysedCell> = spec.analyse_with(&budget)?;
+
+    // A cell whose exploration stopped at a budget ceiling has no arcs, hazards, leakage states or
+    // constraints — emitting its artifacts anyway would present that silence as the cell's behaviour, so
+    // this is an error and nothing is written. Every offending cell is named, not just the first. A cell
+    // explores once, however many views it carries (`AnalysedCell::arc_view`), and a ceiling that stopped
+    // that exploration is carried by every view of the cell, so consulting both fields names each
+    // offending cell exactly once.
+    let unexplored: Vec<(&AnalysedCell, ExplorationLimit)> = cells
+        .iter()
+        .filter_map(|c| {
+            c.unexplored
+                .or(c.arc_view().unexplored)
+                .map(|limit| (c, limit))
+        })
+        .collect();
+    if !unexplored.is_empty() {
+        for (c, limit) in unexplored {
+            let (stopped_at, flag) = match limit {
+                ExplorationLimit::Candidates(n) => (
+                    format!("the candidate budget ({n} seed minterms)"),
+                    "--max-candidates",
+                ),
+                ExplorationLimit::States(n) => (
+                    format!("the state budget ({n} explored states)"),
+                    "--max-states",
+                ),
+            };
+            eprintln!(
+                "cellsmith: error: cell {:?}: exploration stopped at {stopped_at}; no arcs, hazards, \
+                 leakage states or constraints are derived — raise it with {flag}",
+                c.repr_name(),
+            );
+        }
+        // Each cell's diagnostic is already complete on stderr, so there is no error value left for
+        // `main` to print: leave with the failing status before any artifact is rendered.
+        std::process::exit(1);
+    }
 
     // Diagnose detected oscillation hazards: a periodic, non-settling cycle rather than a fixpoint,
     // naming the nodes (outputs or internals) that oscillate — the user should know, as this is never
     // expressed as deterministic timing.
     // Each warning is one contiguous block of lines (a header plus its indented detail fields);
     // distinct warnings are separated by a single blank line when printed, so a block reads as a unit.
+    // Both hazard loops read the ARC VIEW, the same analysis `cell_arcs_tcl` renders: it is that view's
+    // hazards the emitted constraint arcs come from, so reporting the other view's would describe arcs
+    // the run never wrote.
     let mut warnings: Vec<String> = Vec::new();
     for c in &cells {
-        for a in &c.oscillation {
+        for a in &c.arc_view().oscillation {
             // The condition leads the sub-block as `when` (as in the race warning). How the machine
             // reached it — path into the pre-hazard state and the simultaneous toggle that triggers the
             // oscillation — comes from the representative pair-probe race (min by `(prevector.len,
@@ -207,7 +288,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     type RacePairs<'a> = BTreeMap<(&'a str, &'a str), Vec<Vec<String>>>;
     for c in &cells {
         let mut pairs: RacePairs = BTreeMap::new();
-        for od in &c.order_dependence {
+        for od in &c.arc_view().order_dependence {
             let (x, y) = (od.x.as_str(), od.y.as_str());
             let key = if x <= y { (x, y) } else { (y, x) };
             pairs.entry(key).or_default().push(subblock(&[
@@ -385,6 +466,28 @@ mod tests {
     fn when_does_not_take_a_spaced_value() {
         // `require_equals`: the spaced token is the positional `<SPEC>`, so a second one is unexpected.
         assert!(Cli::try_parse_from(["cellsmith", "--when", "hidden", "s.toml"]).is_err());
+    }
+
+    #[test]
+    fn cell_logic_high_key_wins_over_cli_default() {
+        let mut spec = parse_spec(
+            r#"
+[[cell]]
+name = "X"
+inputs = ["A"]
+logic_high = "$VDDH"
+[cell.outputs]
+Y = "A"
+"#,
+        )
+        .unwrap();
+        let cli = Cli::try_parse_from(["cellsmith", "--logic-high=$VDD", "s.toml"]).unwrap();
+        if let Some(v) = &cli.logic_high {
+            for c in &mut spec.cells {
+                c.logic_high.get_or_insert_with(|| v.clone());
+            }
+        }
+        assert_eq!(spec.cells[0].logic_high.as_deref(), Some("$VDDH"));
     }
 
     #[test]

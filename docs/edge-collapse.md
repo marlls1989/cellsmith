@@ -287,9 +287,10 @@ self-referential set that reaches no output may be collapsed even though minimis
 - **Declared clocks only.** A cell with no declared clock carries no edge arc.
 - **Never-changing ⇒ no arc.** A direction that never changes the node presents no arc to type.
 - **Surviving non-state internals** are not candidates.
-- **Explored machine required.** Classification needs an explored machine, so a cell wider than
-  `MAX_MACHINE_VARS` (= 22) gets no annotation. Lifting the 22-variable cap is a separate, tool-wide
-  change.
+- **Explored machine required.** Classification needs an explored machine, so a cell whose exploration
+  passes one of the two budget ceilings — the pooled seed minterms or the recorded stable states — gets no
+  annotation. Both ceilings are raised from the command line (`--max-candidates`, `--max-states`), and a
+  cell that passes one is reported as an error rather than annotated.
 
 ## 10. The exploration is unchanged
 

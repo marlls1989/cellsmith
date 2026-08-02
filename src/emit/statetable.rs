@@ -1631,8 +1631,14 @@ Q = "!R*(CLK*M + !CLK*Q)"
         // is pure over the folded `expr`s, so this reproduces the machine `analyse` explored.
         let builder = sync_bdd_builder!();
         let bdds = crate::model::build_signal_bdds(&cell, &builder);
-        let machine =
-            crate::logic::analysis::Machine::build(&cell, &bdds).expect("fixture is explored");
+        let machine = crate::logic::analysis::Machine::build(
+            &cell,
+            &bdds,
+            crate::logic::analysis::Exploration::Fresh(
+                &crate::logic::machine::ExplorationBudget::default(),
+            ),
+        )
+        .expect("fixture is explored");
 
         // Per-node async-forcing covers (the off-edge set/clear), used below to detect a node whose async
         // force lapses between the start and destination state. A node with no edge-register entry (a
@@ -1674,13 +1680,17 @@ Q = "!R*(CLK*M + !CLK*Q)"
                 .all(|w| s.value_of(w.as_str()).is_some())
         };
 
+        // Both coordinate halves, stepped together: a narrower settle would leave a combinational
+        // coordinate's column at its stale pre-toggle value, so the replayed destination would not
+        // match the state the rendered rows are checked against.
+        let deltas = machine.coordinate_deltas();
         for s in &machine.explored.order {
             if !eligible(s) {
                 continue;
             }
             for x in &cell.inputs {
                 let toggled = crate::logic::machine::toggle(s, &[x.as_str()]);
-                let Some(dest) = crate::logic::machine::settle(&machine.deltas, &toggled) else {
+                let Some(dest) = crate::logic::machine::settle(&deltas, &toggled) else {
                     continue; // the toggle oscillates ⇒ not a measurable transition
                 };
                 if !eligible(&dest) {

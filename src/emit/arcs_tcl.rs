@@ -10,13 +10,25 @@
 //! unlabelled arc — a data change propagating through an already-transparent latch, or a clock acting by
 //! its level rather than being held — stays `-type combinational`, and a declared-async related pin
 //! takes precedence with `-type async`.
+//!
+//! Every block of a state-holding cell — transition, hidden and constraint alike — also carries an
+//! `-ic` line giving each `-pinlist` pin the voltage it starts the measured vector at (see [`ic_str`]).
+//! Liberate discards the `-prevector` simulation instead of carrying its settled values into the
+//! vector, so a cell with memory would otherwise begin measuring from state nothing established.
+//!
+//! A cell that exposes internal nodes (`expose = [...]`) is rendered from its ARC VIEW
+//! ([`crate::model::AnalysedCell::arc_view`]), the analysis that keeps those nodes as model coordinates.
+//! An exposed node is not a pin, so it earns a `-pinlist` column of its own (see [`arc_pinlist_str`])
+//! between the inputs and the outputs, which `-vector` and `-ic` line up with. Only the arc emitter
+//! reads that view — the `define_cell` pinlist ([`pinlist_str`]) and every other artifact keep to the
+//! cell's actual pins.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::Hash;
 
 use espresso_logic::Symbol;
 
-use crate::logic::arcs::{Arc, Edge, HiddenArc};
+use crate::logic::arcs::{Arc, ArcLevels, Edge, ExposedLevel, HiddenArc};
 use crate::logic::assignment;
 use crate::logic::confluence::{Constraint, ConstraintKind};
 use crate::logic::hazard::Oscillation;
@@ -52,6 +64,10 @@ impl Default for ArcsTclOptions {
 /// constraint arcs (setup/hold, non_seq) the cell opted into — its `constraint_arcs` was set, so
 /// generation populated `cell.constraints` — follow the delay arcs.
 pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
+    // Everything below renders the arc view: for a cell that exposes internal nodes that is the analysis
+    // carrying them as model coordinates, so its arcs, hazards and leakage states are the ones an
+    // exposed column can be read off; for every other cell it IS the cell.
+    let cell = cell.arc_view();
     let mut out = oscillation_comment(cell);
     // Each arc class is emitted in two passes. The GENERAL pass comes out ALWAYS: one representative per
     // transition — a related pin's edge driving an output pin's edge — rendered with no `-when` line, so
@@ -289,7 +305,13 @@ fn constraint_block(cell: &AnalysedCell, c: &Constraint, arc_type: &str) -> Stri
         "\t-prevector {{{}}} \\\n",
         prevector_str(cell, &c.prevector)
     ));
-    s.push_str(&format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell)));
+    s.push_str(&format!("\t-pinlist {{{}}} \\\n", arc_pinlist_str(cell)));
+    if cell.state_holding {
+        s.push_str(&format!(
+            "\t-ic \"{}\" \\\n",
+            ic_str(cell, &c.prevector, &c.levels)
+        ));
+    }
     s.push_str(&format!(
         "\t-vector {{{}}} \\\n",
         constraint_vector_str(cell, c)
@@ -301,11 +323,19 @@ fn constraint_block(cell: &AnalysedCell, c: &Constraint, arc_type: &str) -> Stri
     s
 }
 
-/// The full constraint vector over `pinlist_str` order (inputs then outputs): the related and pin pins
-/// as their `R`/`F` edges, every other input at its held value in the pre-toggle state (the prevector's
-/// last step), and every output as `X` (a constraint arc measures no output transition).
+/// The full constraint vector over [`arc_pinlist_str`] order: the related and pin pins as their `R`/`F`
+/// edges, every other input at its held value in the pre-toggle state (the prevector's last step), and
+/// every output as `X` (a constraint arc measures no output transition). An exposed node reads `X`
+/// alongside them: the block constrains WHEN the two input edges may land relative to each other and
+/// measures nothing the cell does in response, so the same column that leaves the outputs unstated
+/// leaves the internals unstated too. The node's start level still reaches Liberate — the `-ic` line
+/// below carries it, as it does for the outputs.
 fn constraint_vector_str(cell: &AnalysedCell, c: &Constraint) -> String {
-    let held = c.prevector.last().map(assignment).unwrap_or_default();
+    let held = assignment(
+        c.prevector
+            .last()
+            .expect("path_to seeds its chain with the probed node itself"),
+    );
     vector(
         cell,
         |input| {
@@ -325,6 +355,7 @@ fn constraint_vector_str(cell: &AnalysedCell, c: &Constraint) -> String {
                 .to_string()
             }
         },
+        |_| "X".to_string(),
         |_| "X".to_string(),
     )
 }
@@ -372,7 +403,18 @@ fn format_arc(cell: &AnalysedCell, arc: &Arc, with_when: bool) -> String {
         "\t-prevector {{{}}} \\\n",
         prevector_str(cell, &arc.prevector)
     );
-    let pinlist = format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell));
+    let pinlist = format!("\t-pinlist {{{}}} \\\n", arc_pinlist_str(cell));
+    // The `-ic` VALUES are one double-quoted word, never a braced one: Tcl substitutes no variable
+    // inside braces, so a braced `$VDD` would reach Liberate as that literal text instead of the supply
+    // voltage. A single column within the word carries braces of its own where [`ic_column`] wraps it.
+    let ic = if cell.state_holding {
+        format!(
+            "\t-ic \"{}\" \\\n",
+            ic_str(cell, &arc.prevector, &arc.levels)
+        )
+    } else {
+        String::new()
+    };
     let vector = format!("\t-vector {{{}}} \\\n", vector_str(cell, arc));
     let when = match (with_when, when_str(&arc.end, &arc.related)) {
         (true, Some(w)) => format!("\t-when \"{w}\" \\\n"),
@@ -397,6 +439,7 @@ fn format_arc(cell: &AnalysedCell, arc: &Arc, with_when: bool) -> String {
         }
     }
     s.push_str(&pinlist);
+    s.push_str(&ic);
     s.push_str(&vector);
     s.push_str(&when);
     s.push_str(&related);
@@ -408,10 +451,18 @@ fn format_arc(cell: &AnalysedCell, arc: &Arc, with_when: bool) -> String {
 
 /// The measured hidden-arc vector: the toggled `pin` as its `R`/`F` edge, every other input at its held
 /// `1`/`0` value in the end state, and every output pinned at its held `1`/`0` value (never `X` — a hidden
-/// arc measures no output transition). Mirrors [`vector_str`] for [`Arc`], and is the ONE source of
-/// `format_hidden_arc`'s `-vector` line.
+/// arc measures no output transition). An exposed node is the one column that CAN move here: no output
+/// changes across a hidden toggle, but an internal one does — a DFF's master follows D while Q holds —
+/// so it renders its edge or its held level like any measured arc (see [`exposed_vector_sym`]). Mirrors
+/// [`vector_str`] for [`Arc`], and is the ONE source of `format_hidden_arc`'s `-vector` line.
 fn hidden_vector_str(cell: &AnalysedCell, h: &HiddenArc) -> String {
-    let held: BTreeMap<&str, bool> = h.outputs.iter().map(|(s, b)| (s.as_str(), *b)).collect();
+    let held: BTreeMap<&str, bool> = h
+        .levels
+        .outputs
+        .iter()
+        .map(|(s, b)| (s.as_str(), *b))
+        .collect();
+    let exposed = exposed_levels(&h.levels);
     let end = assignment(&h.end);
     vector(
         cell,
@@ -429,6 +480,13 @@ fn hidden_vector_str(cell: &AnalysedCell, h: &HiddenArc) -> String {
                 }
                 .to_string()
             }
+        },
+        |node| {
+            exposed_vector_sym(
+                exposed
+                    .get(node)
+                    .expect("the hidden arc's levels define every exposed node"),
+            )
         },
         |name| {
             if *held.get(name).expect("hidden arc defines every output") {
@@ -464,7 +522,13 @@ fn format_hidden_arc(cell: &AnalysedCell, h: &HiddenArc, with_when: bool) -> Str
         "\t-prevector {{{}}} \\\n",
         prevector_str(cell, &h.prevector)
     ));
-    s.push_str(&format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell)));
+    s.push_str(&format!("\t-pinlist {{{}}} \\\n", arc_pinlist_str(cell)));
+    if cell.state_holding {
+        s.push_str(&format!(
+            "\t-ic \"{}\" \\\n",
+            ic_str(cell, &h.prevector, &h.levels)
+        ));
+    }
     s.push_str(&format!("\t-vector {{{vec}}} \\\n"));
     if let (true, Some(w)) = (with_when, hidden_when_str(h)) {
         s.push_str(&format!("\t-when \"{w}\" \\\n"));
@@ -475,8 +539,21 @@ fn format_hidden_arc(cell: &AnalysedCell, h: &HiddenArc, with_when: bool) -> Str
     s
 }
 
+/// The cell's pins: inputs then outputs, in declaration order. This is what `define_cell` declares the
+/// cell by, so it names PINS only — an exposed internal node has no pin and never appears here.
 pub(crate) fn pinlist_str(cell: &AnalysedCell) -> String {
     let mut pins = cell.inputs.clone();
+    pins.extend(cell.outputs.iter().map(|o| o.name.clone()));
+    pins.join(" ")
+}
+
+/// The `-pinlist` of a measured block: the inputs, then the exposed internal nodes in declared order,
+/// then the outputs. A `-vector` cannot address a node with no column and an `-ic` cannot initialise
+/// one, which is what an exposed internal needs a column FOR; it is still no pin of the cell, so it
+/// stays out of [`pinlist_str`] and hence out of `define_cell`.
+fn arc_pinlist_str(cell: &AnalysedCell) -> String {
+    let mut pins = cell.inputs.clone();
+    pins.extend(cell.exposed.iter().cloned());
     pins.extend(cell.outputs.iter().map(|o| o.name.clone()));
     pins.join(" ")
 }
@@ -508,15 +585,22 @@ fn prevector_str(
         .join(" ")
 }
 
-/// One symbol per input (cell.inputs order), then one per output (cell.outputs order), joined by " ".
+/// One symbol per input (cell.inputs order), then one per exposed internal node (declared order), then
+/// one per output (cell.outputs order), joined by " ". This walk is [`arc_pinlist_str`]'s order, and
+/// every line whose columns Liberate reads against the pinlist — `-vector` and `-ic` — comes through it,
+/// so the three agree by construction rather than by three renderers happening to walk alike.
 fn vector(
     cell: &AnalysedCell,
     input_sym: impl Fn(&str) -> String,
+    exposed_sym: impl Fn(&str) -> String,
     output_sym: impl Fn(&str) -> String,
 ) -> String {
-    let mut parts = Vec::with_capacity(cell.inputs.len() + cell.outputs.len());
+    let mut parts = Vec::with_capacity(cell.inputs.len() + cell.exposed.len() + cell.outputs.len());
     for input in &cell.inputs {
         parts.push(input_sym(input));
+    }
+    for node in &cell.exposed {
+        parts.push(exposed_sym(node));
     }
     for output in &cell.outputs {
         parts.push(output_sym(&output.name));
@@ -524,10 +608,272 @@ fn vector(
     parts.join(" ")
 }
 
+/// The exposed levels of one measured block, by node name — the lookup the `-vector` and `-ic`
+/// renderers index as [`vector`] walks `cell.exposed`.
+fn exposed_levels(levels: &ArcLevels) -> BTreeMap<&str, &ExposedLevel> {
+    levels
+        .exposed
+        .iter()
+        .map(|e| (e.node.as_str(), e))
+        .collect()
+}
+
+/// An exposed node's `-vector` column: `R`/`F` where the node moves across the measured arc, else the
+/// `0`/`1` it holds through it. Never `X` — stating the node's behaviour is what exposing it is for.
+fn exposed_vector_sym(level: &ExposedLevel) -> String {
+    if level.start == level.end {
+        if level.end { "1" } else { "0" }.to_string()
+    } else {
+        if level.end { Edge::Rise } else { Edge::Fall }
+            .rf()
+            .to_string()
+    }
+}
+
+/// One `-ic` column: a `logic_low`/`logic_high` expression rendered so Liberate reads it as a single
+/// list element.
+///
+/// The `-ic` values leave as one double-quoted Tcl word, so Tcl runs command, variable and backslash
+/// substitution over them and Liberate splits the SUBSTITUTED text into columns by the Tcl list rules:
+/// whitespace separates the elements, and an element opening with a brace runs to the matching close
+/// brace whatever lies between. An expression that is already one element is written as it stands — a
+/// bare word (`GND`), a number (`0.99`), a variable reference in either form (`$VDD`, `${VDD}`), or a
+/// value the spec itself wrote as one balanced brace group. Anything else is wrapped in a brace pair,
+/// which makes it one element whatever whitespace the substitution leaves in it: `$VDD * 0.9` reaches
+/// Liberate as the single column `1.08 * 0.9`, and `[expr $VDD*0.9]` as the one its command
+/// substitution resolves to. What that column then means to Liberate is the spec author's affair — the
+/// wrap is here to keep the columns aligned with the `-pinlist`.
+///
+/// The characters that would end the word or shift the split are escaped by [`escape_ic`], so every
+/// expression — whatever it holds — comes out as exactly one column of a parseable line.
+fn ic_column(value: &str) -> String {
+    // The form is recognised in the expression as written; the escaping is about the word it is
+    // emitted into, so it applies to a recognised expression and a wrapped one alike.
+    let escaped = escape_ic(value);
+    if is_one_list_element(value) {
+        escaped
+    } else {
+        format!("{{{escaped}}}")
+    }
+}
+
+/// One expression's own characters, escaped for the two stages its text crosses: Tcl's backslash
+/// substitution as the double-quoted `-ic` word is read, and then the list split Liberate applies to the
+/// substituted result. An escape meant for the second stage has to survive the first, so it goes out
+/// doubled — `\\{` leaves the word as `\{`, which the list parser reads as a quoted brace and does not
+/// count (Tcl(n), "Braces": a brace quoted with a backslash is not counted in locating the matching
+/// close brace).
+///
+/// - A double quote ends the `-ic` word wherever it sits — braces are ordinary characters to the word
+///   parser, so a wrap is no shield — and each one therefore goes out as `\"`. Substitution turns it
+///   back into a quote before the list is read.
+/// - A backslash goes out as `\\\\`, which the substitution halves into the `\\` the list then reads as
+///   one quoted backslash. Spending both stages on it is what makes it inert: to the list parser a lone
+///   backslash quotes whatever follows — the wrap's own closing brace where the expression ends in one,
+///   or a brace whose partner sits elsewhere — so doubling every backslash is what lets each brace be
+///   counted whatever precedes it. Left unescaped it would be spent on the first stage instead, either
+///   substituting (a `\n` becoming the newline that splits the column in two) or quoting the character
+///   after it (the `\` of `$V\"X` consuming the escape that was to tame the quote, and the live quote
+///   then ending the word). The consequence is that a backslash sequence in a `logic_low`/`logic_high`
+///   expression is literal text rather than the character it names.
+/// - A brace with no match — a close brace reached at depth zero, an open brace never closed — goes out
+///   as `\\}`/`\\{`, so the list parser passes over it and the wrap still closes on its own brace.
+///   `{$VDD` would otherwise leave a group with nothing to close it, and Liberate would reject the line
+///   (`unmatched open brace in list`) instead of reading a column count that has shifted. A matched
+///   pair is left as it stands: braces are how Tcl groups, and a group written inside a command
+///   substitution or a spaced variable reference (`${a b}`) has to reach the first stage intact.
+/// - An open bracket that no close bracket reaches goes out as `\[`, a single backslash and not a
+///   doubled one: a bracket means nothing to the list parser, so the escape is spent entirely on the
+///   first stage, where it stops the command substitution that would otherwise run past the end of the
+///   word (`missing close-bracket`). It reaches Liberate as the bracket alone, no backslash beside it. A
+///   bracket that does close is left as it stands, command substitution being how an expression such as
+///   `[expr $VDD*0.9]` names its level; and a close bracket standing on its own needs nothing, starting
+///   no substitution to run away with.
+///
+/// An escape made here reaches Liberate carrying its backslash, the list parser performing no
+/// substitution inside a braced element: the expression `a{b` arrives as the column `a\{b`, and a
+/// backslash as the pair it was doubled into. The columns stay aligned and the line parses, which is
+/// what the escaping is for; what the column then holds is the spec author's affair.
+fn escape_ic(value: &str) -> String {
+    // The braces and brackets are decided over the expression as written, before anything is emitted,
+    // so the one pass that builds the text reads only its input and never re-escapes its own output.
+    let unmatched = unmatched_braces(value);
+    let unclosed = unclosed_brackets(value);
+    let mut escaped = String::with_capacity(value.len());
+    for (i, c) in value.char_indices() {
+        match c {
+            '\\' => escaped.push_str("\\\\\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '{' | '}' if unmatched.contains(&i) => {
+                escaped.push_str("\\\\");
+                escaped.push(c);
+            }
+            '[' if unclosed.contains(&i) => escaped.push_str("\\["),
+            _ => escaped.push(c),
+        }
+    }
+    escaped
+}
+
+/// The byte offsets of the braces in `value` that have no partner: a close brace reached at depth zero,
+/// and every open brace still standing at the end. Each brace counts whatever precedes it, because
+/// [`escape_ic`] escapes every backslash and so leaves none quoting the brace that follows.
+fn unmatched_braces(value: &str) -> HashSet<usize> {
+    // Each open brace waits on the stack for the close brace that takes it off again; a close brace
+    // arriving with the stack empty has none to take, and whatever is still waiting at the end never
+    // found one.
+    let mut open = Vec::new();
+    let mut unmatched = HashSet::new();
+    for (i, c) in value.char_indices() {
+        if c == '{' {
+            open.push(i);
+        } else if c == '}' && open.pop().is_none() {
+            unmatched.insert(i);
+        }
+    }
+    unmatched.extend(open);
+    unmatched
+}
+
+/// The byte offsets of the open brackets in `value` that no close bracket ever reaches. A close bracket
+/// standing on its own is not among them: it is only the opening one that starts a command
+/// substitution, and one left running off the end of the word is what the word parser refuses.
+fn unclosed_brackets(value: &str) -> HashSet<usize> {
+    let mut open = Vec::new();
+    for (i, c) in value.char_indices() {
+        if c == '[' {
+            open.push(i);
+        } else if c == ']' {
+            open.pop();
+        }
+    }
+    open.into_iter().collect()
+}
+
+/// Whether the expression already reaches Liberate as one list element: a bare word, a number, a
+/// variable reference (`$VDD` or `${VDD}`), or one balanced brace group. A reference whose name falls
+/// outside the ordinary character set — Tcl(n) allows the braced form any character but a close brace —
+/// is left to the wrap, which carries it just as well.
+fn is_one_list_element(value: &str) -> bool {
+    if let Some(reference) = value.strip_prefix('$') {
+        let name = reference
+            .strip_prefix('{')
+            .and_then(|n| n.strip_suffix('}'))
+            .unwrap_or(reference);
+        return is_bare_word(name);
+    }
+    is_bare_word(value) || value.parse::<f64>().is_ok() || is_one_brace_group(value)
+}
+
+/// Whether `s` is a run of Tcl's variable-name characters: ASCII letters, digits and underscore, plus
+/// namespace separators of two or more colons (Tcl(n), "Variable substitution"). Such a run names the
+/// variable of a `$` reference, and standing alone it is a literal holding nothing for Tcl to
+/// substitute, group or split.
+fn is_bare_word(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    // A single colon separates nothing — it takes two to make a namespace separator.
+    let mut colons = 0usize;
+    for c in s.chars() {
+        match c {
+            ':' => colons += 1,
+            _ if c.is_ascii_alphanumeric() || c == '_' => {
+                if colons == 1 {
+                    return false;
+                }
+                colons = 0;
+            }
+            _ => return false,
+        }
+    }
+    colons != 1
+}
+
+/// Whether the whole value is one balanced brace group — it opens with a brace whose match is its last
+/// character. `{a} {b}` is not: its group closes early, leaving two elements. Every brace counts,
+/// backslash or no backslash, matching how [`escape_ic`] doubles each backslash and so leaves none
+/// quoting the brace that follows it.
+fn is_one_brace_group(value: &str) -> bool {
+    if !value.starts_with('{') {
+        return false;
+    }
+    let mut depth = 0usize;
+    for (i, c) in value.char_indices() {
+        match c {
+            '{' => depth += 1,
+            // The depth reaches zero at the opening brace's match and the scan returns there, so this
+            // never runs at depth zero.
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return i + 1 == value.len();
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// The `-ic` initial condition over [`arc_pinlist_str`] order: each column's starting voltage, written
+/// as the cell's `logic_low`/`logic_high` expression for the level it starts at (through
+/// [`ic_column`]). Inputs start where the
+/// prevector leaves them (its last step); outputs and exposed nodes start at the levels measured at the
+/// arc's start state. Liberate discards the `-prevector` simulation rather than carrying its settled
+/// values forward, so this is what actually establishes a state-holding cell's start condition — and
+/// the exposed columns are the reason it can establish an internal one at all, an internal node having
+/// no pin to drive it through. Every block kind renders every column, the constraint block included,
+/// where `-vector` states no behaviour but the start level is real all the same. Rendered through the
+/// same [`vector`] helper as `-pinlist` and `-vector`, so the three lines' columns line up by
+/// construction.
+fn ic_str(
+    cell: &AnalysedCell,
+    prevector: &[espresso_logic::Minterm<espresso_logic::Symbol>],
+    levels: &ArcLevels,
+) -> String {
+    let held = assignment(
+        prevector
+            .last()
+            .expect("path_to seeds its chain with the probed node itself"),
+    );
+    let start: BTreeMap<&str, bool> = levels
+        .outputs
+        .iter()
+        .map(|(s, b)| (s.as_str(), *b))
+        .collect();
+    let exposed = exposed_levels(levels);
+    let column = |level: bool| ic_column(cell.voltages.of(level));
+    vector(
+        cell,
+        |input| {
+            let level = *held
+                .get(input)
+                .expect("every input has a held value in the arc's prevector");
+            column(level)
+        },
+        |node| {
+            let level = exposed
+                .get(node)
+                .expect("the arc's levels define every exposed node")
+                .start;
+            column(level)
+        },
+        |name| {
+            let level = *start
+                .get(name)
+                .expect("the arc's levels define every output");
+            column(level)
+        },
+    )
+}
+
 /// The measured vector: the related input pin and the measured output as `R`/`F`, the other inputs
-/// as their `1`/`0` value in the end state, and the other outputs as `X`.
+/// as their `1`/`0` value in the end state, each exposed node as the edge it makes or the level it
+/// holds (see [`exposed_vector_sym`]), and the other outputs as `X`.
 fn vector_str(cell: &AnalysedCell, arc: &Arc) -> String {
     let end = assignment(&arc.end);
+    let exposed = exposed_levels(&arc.levels);
     vector(
         cell,
         |input| {
@@ -541,6 +887,13 @@ fn vector_str(cell: &AnalysedCell, arc: &Arc) -> String {
             } else {
                 if value { "1" } else { "0" }.to_string()
             }
+        },
+        |node| {
+            exposed_vector_sym(
+                exposed
+                    .get(node)
+                    .expect("the arc's levels define every exposed node"),
+            )
         },
         |name| {
             if name == arc.output {
@@ -578,7 +931,7 @@ fn hidden_when_str(h: &HiddenArc) -> Option<String> {
         .into_iter()
         .filter(|(k, _)| *k != h.pin.as_str())
         .collect();
-    lits.extend(h.outputs.iter().map(|(s, v)| (s.clone(), *v)));
+    lits.extend(h.levels.outputs.iter().map(|(s, v)| (s.clone(), *v)));
     if lits.is_empty() {
         return None;
     }
@@ -1786,6 +2139,691 @@ Q = "CLK*M + !CLK*Q"
         assert!(on.contains("-related_pin CLK"));
         assert!(on.contains("-pin D"));
         assert!(!on.contains("non_seq"));
+    }
+
+    /// A rising-edge DFF opting into constraint arcs: one state-holding cell emitting all three block
+    /// kinds — transition, hidden and constraint — so one pass over its blocks covers every `-ic`
+    /// emission site.
+    const IC_DFF: &str = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+constraint_arcs = true
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+
+    /// The columns on a block's `-ic` line, or `None` when the block renders no `-ic`. The word between
+    /// the line's double quotes is split the way Liberate reads it — by the Tcl list rules, so
+    /// whitespace inside a brace group belongs to its element rather than separating two — and each
+    /// column comes back as the text emitted for it, braces and all. The double quoting is asserted
+    /// here: bracing the word instead would stop Tcl substituting a `$VDD`-style expression.
+    fn ic_values(block: &str) -> Option<Vec<&str>> {
+        let line = block.lines().find(|l| l.trim_start().starts_with("-ic "))?;
+        let open = line.find('"').expect("-ic values are double-quoted");
+        let close = line.rfind('"').expect("-ic renders a closing quote");
+        assert!(open < close, "-ic renders a pair of quotes: {line}");
+        let word = &line[open + 1..close];
+        let mut columns = Vec::new();
+        let mut depth = 0usize;
+        let mut start = None;
+        for (i, c) in word.char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => depth = depth.saturating_sub(1),
+                _ if c.is_whitespace() && depth == 0 => {
+                    if let Some(s) = start.take() {
+                        columns.push(&word[s..i]);
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            start.get_or_insert(i);
+        }
+        if let Some(s) = start {
+            columns.push(&word[s..]);
+        }
+        Some(columns)
+    }
+
+    /// The pins on a block's `-pinlist` line, in column order.
+    fn pinlist_of(block: &str) -> Vec<&str> {
+        braced(block, "-pinlist")
+            .expect("every block renders a -pinlist")
+            .split_whitespace()
+            .collect()
+    }
+
+    /// The text between the braces on the block's `-<tag>` line.
+    fn braced<'a>(block: &'a str, tag: &str) -> Option<&'a str> {
+        let line = block
+            .lines()
+            .find(|l| l.trim_start().starts_with(&format!("{tag} ")))?;
+        let open = line.find('{')?;
+        let close = line.rfind('}')?;
+        Some(&line[open + 1..close])
+    }
+
+    #[test]
+    fn state_holding_blocks_carry_a_pinlist_aligned_ic() {
+        // Every block a state-holding cell emits states its start condition: one voltage per `-pinlist`
+        // pin, in the same column order. The input columns are read back against the prevector's last
+        // step — the state the cell is in when the measured vector begins — which is what pins the
+        // alignment rather than merely the count.
+        let cell = analyse(IC_DFF);
+        assert!(cell.state_holding);
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        let voltage = |level: bool| cell.voltages.of(level);
+        let (mut transitions, mut hidden, mut constraints) = (0, 0, 0);
+        for block in blocks(&tcl) {
+            let pins = pinlist_of(&block);
+            let ic = ic_values(&block)
+                .unwrap_or_else(|| panic!("a state-holding cell's block carries an -ic:\n{block}"));
+            assert_eq!(ic.len(), pins.len(), "one -ic entry per pin:\n{block}");
+            let last = braced(&block, "-prevector")
+                .expect("every block renders a -prevector")
+                .split_whitespace()
+                .last()
+                .expect("a prevector has at least one step")
+                .to_owned();
+            assert_eq!(last.len(), cell.inputs.len());
+            for (i, step) in last.chars().enumerate() {
+                assert_eq!(
+                    ic[i],
+                    voltage(step == '1'),
+                    "{} starts where the prevector leaves it:\n{block}",
+                    pins[i]
+                );
+            }
+            for entry in &ic[cell.inputs.len()..] {
+                assert!(
+                    [voltage(false), voltage(true)].contains(entry),
+                    "an output starts at a logic voltage:\n{block}"
+                );
+            }
+            if block.contains("-type hidden") {
+                hidden += 1;
+            } else if block.contains("-type setup") || block.contains("-type hold") {
+                constraints += 1;
+            } else {
+                transitions += 1;
+            }
+        }
+        assert!(
+            transitions > 0 && hidden > 0 && constraints > 0,
+            "the fixture covers all three block kinds, got {transitions}/{hidden}/{constraints}"
+        );
+    }
+
+    #[test]
+    fn combinational_cell_emits_no_ic() {
+        // A cell with no state loses nothing when Liberate discards the prevector simulation, so no
+        // block states a start condition.
+        for src in [
+            AND2,
+            r#"
+[[cell]]
+name = "INV"
+inputs = ["A"]
+[cell.outputs]
+Y = "!A"
+"#,
+        ] {
+            let cell = analyse(src);
+            assert!(!cell.state_holding);
+            let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+            assert!(
+                !tcl.contains("-ic"),
+                "combinational cell emitted -ic:\n{tcl}"
+            );
+        }
+    }
+
+    #[test]
+    fn ic_is_the_only_line_the_gate_adds() {
+        // `-ic` is purely additive: dropping the `-ic` lines from a state-holding cell's blocks yields
+        // exactly what the same cell renders with the gate clear, line for line.
+        let mut cell = analyse(IC_DFF);
+        let gated = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        cell.state_holding = false;
+        let ungated = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        assert!(gated.contains("-ic \""));
+        assert!(!ungated.contains("-ic"));
+        let stripped: String = gated
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("-ic "))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        assert_eq!(stripped, ungated);
+    }
+
+    #[test]
+    fn logic_voltage_overrides_reach_the_ic_text() {
+        // The level expressions are written into `-ic` verbatim — they are Tcl value fragments, so a
+        // variable reference reaches Liberate as one.
+        let cell = analyse(&IC_DFF.replace(
+            "constraint_arcs = true",
+            "constraint_arcs = true\nlogic_low = \"GND\"\nlogic_high = \"$VDDH\"",
+        ));
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        let mut entries: BTreeSet<String> = BTreeSet::new();
+        for block in blocks(&tcl) {
+            let ic = ic_values(&block).expect("a state-holding cell's block carries an -ic");
+            entries.extend(ic.into_iter().map(str::to_owned));
+        }
+        assert_eq!(
+            entries,
+            BTreeSet::from(["GND".to_owned(), "$VDDH".to_owned()])
+        );
+    }
+
+    #[test]
+    fn a_one_element_logic_voltage_is_written_as_it_stands() {
+        // The forms Liberate's list split already reads as one column: a bare word, a number in either
+        // notation, a variable reference either way round, a namespaced one, and a value the spec wrote
+        // as one balanced brace group. `0` and `$VDD` are the defaults, so this is also what keeps every
+        // emitted artifact free of braces it never had.
+        for value in [
+            "0",
+            "0.99",
+            "-0.5",
+            "1e-3",
+            "GND",
+            "VDD_H",
+            "$VDD",
+            "${VDD}",
+            "$::VDD",
+            "{$VDD * 0.9}",
+            "{}",
+        ] {
+            assert_eq!(ic_column(value), value, "{value:?} is already one column");
+        }
+    }
+
+    #[test]
+    fn any_other_logic_voltage_is_wrapped_into_one_element() {
+        // Whitespace splits the column, a bracket resolves to whatever the command returns, two groups
+        // are two elements and an empty value is none: the wrap makes each of them exactly one.
+        for (value, column) in [
+            ("$VDD * 0.9", "{$VDD * 0.9}"),
+            ("$VDD\t0.9", "{$VDD\t0.9}"),
+            ("[expr $VDD*0.9]", "{[expr $VDD*0.9]}"),
+            ("{a} {b}", "{{a} {b}}"),
+            ("${a b}", "{${a b}}"),
+            ("", "{}"),
+        ] {
+            assert_eq!(ic_column(value), column, "{value:?} is wrapped");
+        }
+    }
+
+    #[test]
+    fn a_double_quote_in_a_logic_voltage_is_escaped() {
+        // A quote would close the `-ic` word wherever it sat, so it goes out escaped — inside the wrap
+        // where the expression's own text goes, and inside a group the spec braced itself.
+        assert_eq!(ic_column("a\"b"), "{a\\\"b}");
+        assert_eq!(ic_column("{a\"b}"), "{a\\\"b}");
+        let cell = analyse(&IC_DFF.replace(
+            "constraint_arcs = true",
+            "constraint_arcs = true\nlogic_high = \"a\\\"b\"",
+        ));
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        for block in blocks(&tcl) {
+            let line = block
+                .lines()
+                .map(str::trim)
+                .find(|l| l.starts_with("-ic "))
+                .unwrap_or_else(|| panic!("a state-holding cell's block carries an -ic:\n{block}"));
+            assert_eq!(
+                line.matches('"').count() - line.matches("\\\"").count(),
+                2,
+                "the escaped quotes leave the word its own pair:\n{line}"
+            );
+        }
+    }
+
+    /// The expressions that need more than the wrap to hold their column, each with the text the
+    /// emitter writes between the `-ic` quotes. Every one of them is read back through real Tcl by
+    /// [`tclsh_reads_an_awkward_logic_voltage_as_one_column_per_pin`], which is where the doubling was
+    /// established; the pairs here pin it without an interpreter to hand.
+    const AWKWARD_VOLTAGES: [(&str, &str); 17] = [
+        // The backslash the word's substitution would otherwise spend on the quote after it.
+        (r#"$V\"X"#, r#"{$V\\\\\"X}"#),
+        // A brace with nothing to close it, either way round, alone or amid text.
+        (r"{$VDD", r"{\\{$VDD}"),
+        (r"$VDD}", r"{$VDD\\}}"),
+        (r"{", r"{\\{}"),
+        (r"}", r"{\\}}"),
+        (r"{{{", r"{\\{\\{\\{}"),
+        (r"}{", r"{\\}\\{}"),
+        // A matched pair stands: only the stray close brace is escaped.
+        (r"{a}}", r"{{a}\\}}"),
+        // A backslash of the expression's own, before a brace and standing alone.
+        (r"a\{b", r"{a\\\\\\{b}"),
+        (r"\", r"{\\\\}"),
+        // The escape reaching the column as text: `\n` is a backslash and an `n`, not a newline.
+        (r"x\ny", r"{x\\\\ny}"),
+        // Braces and nothing else, balanced: one empty element, written as it stands.
+        (r"{}", r"{}"),
+        // A command substitution with nothing to close it, alone and amid text: one backslash, the
+        // bracket reaching the column on its own.
+        (r"[expr", r"{\[expr}"),
+        (r"a[b", r"{a\[b}"),
+        (r"[[", r"{\[\[}"),
+        // The close bracket starts nothing, so it stands as written.
+        (r"a]b", r"{a]b}"),
+        // A substitution that does close is how an expression names its level: left alone.
+        (r"[expr $VDD*0.9]", r"{[expr $VDD*0.9]}"),
+    ];
+
+    #[test]
+    fn an_awkward_logic_voltage_is_escaped_into_one_element() {
+        for (value, column) in AWKWARD_VOLTAGES {
+            assert_eq!(ic_column(value), column, "{value:?} holds its column");
+        }
+    }
+
+    /// Run `script` through `tclsh`, or `None` where the interpreter is not installed.
+    fn tclsh(script: &str) -> Option<std::process::Output> {
+        let mut child = match std::process::Command::new("tclsh")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(e) => panic!("spawn tclsh: {e}"),
+        };
+        use std::io::Write;
+        child
+            .stdin
+            .as_mut()
+            .expect("piped stdin")
+            .write_all(script.as_bytes())
+            .expect("feed tclsh its script");
+        Some(child.wait_with_output().expect("tclsh runs to completion"))
+    }
+
+    #[test]
+    fn tclsh_reads_an_awkward_logic_voltage_as_one_column_per_pin() {
+        // The emitter's own output, read the way Liberate reads it: Tcl parses the `define_arc` command
+        // — substituting the word, which is where an unescaped quote or backslash ends the line early —
+        // and the stub then splits the `-ic` argument by the list rules that decide the columns. Both
+        // logic levels carry the awkward expression, so every column is one of the cases under test.
+        // The run is skipped where `tclsh` is not installed, `an_awkward_logic_voltage_is_escaped_into_
+        // one_element` pinning the emitted text there.
+        //
+        // The verdict is read off the interpreter's own output rather than its exit status: a script fed
+        // through stdin leaves tclsh exiting zero whether or not a command in it failed. Anything on
+        // stderr is a Tcl complaint, and the closing `end` marker is what says the whole script ran.
+        for (value, _) in AWKWARD_VOLTAGES {
+            let cell = analyse(&IC_DFF.replace(
+                "constraint_arcs = true",
+                &format!("constraint_arcs = true\nlogic_low = {value:?}\nlogic_high = {value:?}"),
+            ));
+            let script = format!(
+                "set VDD 1.08\n\
+                 set V 0.5\n\
+                 proc define_arc args {{\n\
+                 \x20   set ic [lindex $args [expr {{[lsearch -exact $args -ic] + 1}}]]\n\
+                 \x20   set pins [lindex $args [expr {{[lsearch -exact $args -pinlist] + 1}}]]\n\
+                 \x20   puts \"[llength $ic] [llength $pins]\"\n\
+                 }}\n\
+                 proc unknown args {{ return }}\n\
+                 {}\n\
+                 puts end\n",
+                cell_arcs_tcl(&cell, ArcsTclOptions::default())
+            );
+            let Some(out) = tclsh(&script) else {
+                eprintln!("tclsh is not installed: skipping the Tcl read-back");
+                return;
+            };
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                stderr.is_empty(),
+                "Tcl reads the {value:?} line: {stderr}\n{script}"
+            );
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let counts = stdout
+                .strip_suffix("end\n")
+                .unwrap_or_else(|| panic!("the {value:?} script runs to its end:\n{stdout}"));
+            let mut arcs = 0;
+            for line in counts.lines() {
+                let (ic, pins) = line.split_once(' ').expect("one count pair per arc");
+                assert_eq!(
+                    ic, pins,
+                    "{value:?} leaves one -ic column per pin:\n{script}"
+                );
+                arcs += 1;
+            }
+            assert!(arcs > 0, "the fixture emits arcs to read back:\n{script}");
+        }
+    }
+
+    #[test]
+    fn a_wrapped_logic_voltage_still_leaves_one_column_per_pin() {
+        // The point of the wrap, on the cell that has the most columns to shift: an exposed node sits
+        // between the inputs and the outputs, so a voltage that split would move it off its pin.
+        let cell = analyse(&C2_EXPOSED.replace(
+            "constraint_arcs = true",
+            "constraint_arcs = true\nlogic_high = \"$VDD * 0.9\"",
+        ));
+        let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{tcl}");
+        let mut wrapped = 0;
+        for block in blocks(&tcl) {
+            let ic = ic_values(&block).expect("a state-holding cell's block carries an -ic");
+            assert_eq!(
+                ic.len(),
+                pinlist_of(&block).len(),
+                "one -ic column per pin:\n{block}"
+            );
+            wrapped += ic.iter().filter(|c| **c == "{$VDD * 0.9}").count();
+        }
+        assert!(wrapped > 0, "the high level reaches the -ic lines:\n{tcl}");
+    }
+
+    // ---- Exposed internal nodes: their own pinlist column, and what each block kind puts in it ----
+
+    /// The worked C-element written around its internal node — `QN = !(A*B + Q*(A+B))`, `Q = !QN` — with
+    /// `QN` exposed and constraint arcs opted into, so one fixture emits all three block kinds. The
+    /// output inverts the exposed node, so every measured arc moves it.
+    const C2_EXPOSED: &str = r#"
+[[cell]]
+name = "C2EXP"
+inputs = ["A", "B"]
+expose = ["QN"]
+constraint_arcs = true
+[cell.internal]
+QN = "!(A*B + Q*(A+B))"
+[cell.outputs]
+Q = "!QN"
+"#;
+
+    /// A master-slave DFF exposing its master latch `M`, with constraint arcs opted into. `M` is the
+    /// case an output column cannot stand in for: with the clock low the master is transparent, so a `D`
+    /// toggle moves it while `Q` holds.
+    const DFF_EXPOSED_MASTER: &str = r#"
+[[cell]]
+name = "DFFM"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+constraint_arcs = true
+expose = ["M"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+
+    /// An AND term exposed on its way to an inverter — `W = A*B`, `Y = !W` — holding no state, so `W`
+    /// is evaluated fresh on every arc rather than read off a state column.
+    const AN2_EXPOSED: &str = r#"
+[[cell]]
+name = "AN2"
+inputs = ["A", "B"]
+expose = ["W"]
+[cell.internal]
+W = "A*B"
+[cell.outputs]
+Y = "!W"
+"#;
+
+    /// The column `pin` occupies in the block's `-pinlist` — the shared position `-vector` and `-ic` are
+    /// read at, all three lines being one walk over the same order.
+    fn column_of(block: &str, pin: &str) -> usize {
+        pinlist_of(block)
+            .iter()
+            .position(|p| *p == pin)
+            .unwrap_or_else(|| panic!("{pin} appears in the block's -pinlist:\n{block}"))
+    }
+
+    /// The block's `-vector` symbols, in column order.
+    fn vector_values(block: &str) -> Vec<&str> {
+        braced(block, "-vector")
+            .expect("every block renders a -vector")
+            .split_whitespace()
+            .collect()
+    }
+
+    #[test]
+    fn an_exposed_node_renders_its_own_pinlist_vector_and_ic_columns() {
+        // The authoritative form: `B` rising out of `{A=1, B=0}` drives `Q` up, `QN` falls with it, and
+        // the four columns state where each of them starts.
+        let cell = analyse(C2_EXPOSED);
+        let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{tcl}");
+        let block = blocks(&tcl)
+            .into_iter()
+            .find(|b| {
+                !b.contains("-type hidden")
+                    && b.contains("-related_pin B")
+                    && b.contains("-pin Q")
+                    && vector_values(b)[column_of(b, "B")] == "R"
+            })
+            .expect("the B-rise → Q-rise block");
+        assert_eq!(pinlist_of(&block), ["A", "B", "QN", "Q"]);
+        assert_eq!(vector_values(&block), ["1", "R", "F", "R"]);
+        assert_eq!(
+            ic_values(&block).expect("a state-holding cell's block carries an -ic"),
+            ["$VDD", "0", "$VDD", "0"],
+        );
+        assert!(block.contains("-prevector {00 10}"));
+    }
+
+    #[test]
+    fn a_combinational_exposed_node_renders_its_pinlist_column_with_no_ic() {
+        // AN2 holds no state, so its exposed AND term is evaluated fresh on every arc rather than read
+        // off a state column — the machinery a state-variable exposed node never exercises. Held at
+        // A=1, B rising drives the AND term up with it and the inverted output down.
+        let cell = analyse(AN2_EXPOSED);
+        assert!(!cell.state_holding, "AN2 is plain combinational logic");
+        let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{tcl}");
+        let block = blocks(&tcl)
+            .into_iter()
+            .find(|b| {
+                b.contains("-related_pin B")
+                    && b.contains("-pin Y")
+                    && vector_values(b)[column_of(b, "B")] == "R"
+            })
+            .expect("the B-rise → Y-fall block");
+        assert_eq!(pinlist_of(&block), ["A", "B", "W", "Y"]);
+        assert_eq!(vector_values(&block), ["1", "R", "R", "F"]);
+        assert!(
+            ic_values(&block).is_none(),
+            "a cell holding no state renders no -ic:\n{block}"
+        );
+    }
+
+    #[test]
+    fn an_exposed_master_moves_across_a_hidden_arc_while_the_outputs_hold() {
+        // A hidden arc is one no output follows, so the exposed column is the only one that can move in
+        // it — and the transparent master does, tracking `D` while the clock is low. The general pass
+        // keeps one representative per toggle event, whichever context it was measured from, so the
+        // hidden class is selected to bring every measured firing out.
+        let cell = analyse(&when_variant(DFF_EXPOSED_MASTER, "\"hidden\""));
+        let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{tcl}");
+        let moving: Vec<String> = blocks(&tcl)
+            .into_iter()
+            .filter(|b| {
+                b.contains("-type hidden")
+                    && ["R", "F"].contains(&vector_values(b)[column_of(b, "M")])
+            })
+            .collect();
+        assert!(
+            !moving.is_empty(),
+            "a D toggle with the clock low moves the exposed master:\n{tcl}"
+        );
+        for block in &moving {
+            assert!(
+                ["0", "1"].contains(&vector_values(block)[column_of(block, "Q")]),
+                "every output stays pinned at its held level across a hidden arc:\n{block}"
+            );
+            // The moving column's own `-ic` is the level it starts at, so it is the end of the edge that
+            // differs from it.
+            let i = column_of(block, "M");
+            let start = ic_values(block).expect("a state-holding cell's block carries an -ic")[i];
+            let rf = if start == cell.voltages.of(false) {
+                "R"
+            } else {
+                "F"
+            };
+            assert_eq!(
+                vector_values(block)[i],
+                rf,
+                "the exposed edge leaves the level -ic starts it at:\n{block}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_constraint_block_leaves_the_exposed_column_unstated_and_still_initialises_it() {
+        // A constraint block measures nothing the cell does in response to its two edges, so it renders
+        // the exposed column the same `X` it renders every output — while `-ic` carries the level the
+        // node actually starts at, which is what Liberate needs to prepare the cell either way.
+        let cell = analyse(C2_EXPOSED);
+        let arc = cell.arc_view();
+        assert!(
+            !arc.constraints.is_empty(),
+            "premise: the C-element's racing inputs are constrained"
+        );
+        let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{tcl}");
+        for c in &arc.constraints {
+            let rendered = format_constraint(arc, c);
+            assert!(
+                tcl.contains(&rendered),
+                "the emitted Tcl carries this constraint's blocks:\n{rendered}"
+            );
+            let level = c
+                .levels
+                .exposed
+                .iter()
+                .find(|e| e.node == "QN")
+                .expect("the constraint's levels define the exposed node");
+            for block in blocks(&rendered) {
+                let i = column_of(&block, "QN");
+                assert_eq!(
+                    vector_values(&block)[i],
+                    "X",
+                    "the exposed column is unstated:\n{block}"
+                );
+                assert_eq!(
+                    ic_values(&block).expect("a state-holding cell's block carries an -ic")[i],
+                    cell.voltages.of(level.start),
+                    "the exposed column starts at its measured level:\n{block}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_block_kind_aligns_its_vector_and_ic_with_the_exposed_pinlist() {
+        // `-pinlist`, `-vector` and `-ic` are one walk over one order, so each block of each kind renders
+        // exactly as many symbols and voltages as it lists columns, the exposed ones included.
+        for src in [C2_EXPOSED, DFF_EXPOSED_MASTER] {
+            let cell = analyse(src);
+            assert!(
+                cell.state_holding,
+                "the fixture holds state, so it emits -ic"
+            );
+            let exposed: Vec<&str> = cell.exposed.iter().map(Symbol::as_str).collect();
+            let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+            eprintln!("{tcl}");
+            let (mut transitions, mut hidden, mut constraints) = (0, 0, 0);
+            for block in blocks(&tcl) {
+                let pins = pinlist_of(&block);
+                assert_eq!(
+                    pins.len(),
+                    cell.inputs.len() + exposed.len() + cell.outputs.len(),
+                    "the pinlist is inputs, exposed nodes and outputs:\n{block}"
+                );
+                for node in &exposed {
+                    assert!(pins.contains(node), "{node} has a column:\n{block}");
+                }
+                assert_eq!(
+                    vector_values(&block).len(),
+                    pins.len(),
+                    "one -vector symbol per column:\n{block}"
+                );
+                assert_eq!(
+                    ic_values(&block)
+                        .unwrap_or_else(|| panic!("every block carries an -ic:\n{block}"))
+                        .len(),
+                    pins.len(),
+                    "one -ic voltage per column:\n{block}"
+                );
+                if block.contains("-type hidden") {
+                    hidden += 1;
+                } else if ["setup", "hold"]
+                    .iter()
+                    .any(|k| block.contains(&format!("-type {k} ")))
+                    || block.contains("non_seq")
+                {
+                    constraints += 1;
+                } else {
+                    transitions += 1;
+                }
+            }
+            assert!(
+                transitions > 0 && hidden > 0 && constraints > 0,
+                "the fixture covers all three block kinds, got {transitions}/{hidden}/{constraints}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cell_exposing_nothing_keeps_a_pin_only_pinlist() {
+        // Nothing exposed, nothing added: the arc pinlist is the cell's pins, so every rendered block
+        // keeps the shape it had before exposed columns existed.
+        for src in [AND2, MAJ3, TWO, OA22, IC_DFF] {
+            let cell = analyse(src);
+            assert!(cell.exposed.is_empty());
+            assert_eq!(arc_pinlist_str(&cell), pinlist_str(&cell));
+            let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+            for block in blocks(&tcl) {
+                assert_eq!(
+                    pinlist_of(&block).len(),
+                    cell.inputs.len() + cell.outputs.len(),
+                    "an exposure-free block lists the cell's pins and nothing else:\n{block}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_exposed_node_is_never_an_arc_source_or_target() {
+        // `-related_pin` and `-pin` are drawn from the primary inputs and the output pins alone, so an
+        // exposed internal cannot appear in either however many columns it earns.
+        for src in [C2_EXPOSED, DFF_EXPOSED_MASTER] {
+            let cell = analyse(src);
+            let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+            for line in tcl.lines().map(str::trim) {
+                let Some(rest) = line
+                    .strip_prefix("-related_pin ")
+                    .or_else(|| line.strip_prefix("-pin "))
+                else {
+                    continue;
+                };
+                let name = rest
+                    .split_whitespace()
+                    .next()
+                    .expect("the field names a pin");
+                assert!(
+                    !cell.exposed.iter().any(|e| e == name),
+                    "an exposed node reached {line:?}"
+                );
+            }
+        }
     }
 
     /// The same two-latch DFF, with edge collapse explicitly suppressed (`no_edge_collapse = true`) —

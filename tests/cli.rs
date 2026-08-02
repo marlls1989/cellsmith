@@ -366,23 +366,52 @@ fn tag_of(block: &str, tag: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The block's `-vector` column for `pin`, indexed through its own `-pinlist` line.
-fn vector_column(block: &str, pin: &str) -> String {
-    let pinlist = block
+/// The block's `-pinlist` columns, in order.
+fn pinlist_of(block: &str) -> Vec<&str> {
+    block
         .lines()
         .map(str::trim)
         .find(|l| l.starts_with("-pinlist {"))
         .and_then(|l| l.split('{').nth(1))
         .and_then(|l| l.split('}').next())
-        .expect("a block renders a -pinlist");
-    let idx = pinlist
+        .expect("a block renders a -pinlist")
         .split_whitespace()
-        .position(|p| p == pin)
-        .expect("the pin appears in the block's -pinlist");
+        .collect()
+}
+
+/// The column `pin` occupies in the block's `-pinlist` — the position both `-vector` and `-ic` are read
+/// at, the three lines sharing one order.
+fn pinlist_index(block: &str, pin: &str) -> usize {
+    pinlist_of(block)
+        .iter()
+        .position(|p| *p == pin)
+        .expect("the pin appears in the block's -pinlist")
+}
+
+/// The block's `-vector` column for `pin`, indexed through its own `-pinlist` line.
+fn vector_column(block: &str, pin: &str) -> String {
     vector_of(block)
         .split_whitespace()
-        .nth(idx)
+        .nth(pinlist_index(block, pin))
         .expect("the -vector has a column per pin")
+        .to_string()
+}
+
+/// The block's `-ic` column for `pin`, indexed through its own `-pinlist` line. The `-ic` values are
+/// double-quoted rather than braced, so Tcl substitutes a `$VDD`-style expression before Liberate sees
+/// it.
+fn ic_column(block: &str, pin: &str) -> String {
+    let line = block
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("-ic "))
+        .expect("a state-holding cell's block renders an -ic");
+    line.split('"')
+        .nth(1)
+        .expect("-ic values are double-quoted")
+        .split_whitespace()
+        .nth(pinlist_index(block, pin))
+        .expect("the -ic has a column per pin")
         .to_string()
 }
 
@@ -443,6 +472,103 @@ fn default_run_emits_no_arc_when_lines() {
         "default emits strictly fewer define_arc blocks than --when: {} not < {}",
         define_arcs(&out),
         define_arcs(&when_out),
+    );
+}
+
+/// `--logic-low`/`--logic-high` name the voltage expressions the `-ic` initial condition starts each
+/// pin at. They are Tcl value fragments written verbatim, so a variable reference reaches Liberate as
+/// one — which is also why `-ic` quotes its values instead of bracing them. Every cell in `MULTI` holds
+/// state, so every block carries an `-ic` and no entry can be anything but the two overrides.
+#[test]
+fn logic_level_overrides_reach_the_ic_lines() {
+    let out = run_spec(
+        "multi_logic_levels",
+        MULTI,
+        &["--constraints", "--logic-low=GND", "--logic-high=$VDDH"],
+    );
+    let arcs = arcs_section(&out);
+    let ic_lines: Vec<&str> = arcs
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("-ic "))
+        .collect();
+    assert_eq!(
+        ic_lines.len(),
+        arcs.matches("define_arc").count(),
+        "every block of a state-holding cell carries an -ic:\n{arcs}"
+    );
+    for line in ic_lines {
+        let values = line
+            .split('"')
+            .nth(1)
+            .unwrap_or_else(|| panic!("-ic values are double-quoted: {line}"));
+        for v in values.split_whitespace() {
+            assert!(
+                v == "GND" || v == "$VDDH",
+                "the overrides are the only -ic levels, got {v:?} in: {line}"
+            );
+        }
+    }
+}
+
+/// The worked C-element written around its internal node, with that node exposed: `QN` is no pin of the
+/// cell, so the arcs are the only place its behaviour can be stated — a `-pinlist` column of its own,
+/// the voltage it starts the measured vector at in `-ic`, and the edge it makes in `-vector`.
+const EXPOSED: &str = r#"
+[[cell]]
+name = "C2EXP"
+inputs = ["A", "B"]
+expose = ["QN"]
+[cell.internal]
+QN = "!(A*B + Q*(A+B))"
+[cell.outputs]
+Q = "!QN"
+"#;
+
+#[test]
+fn an_exposed_internal_node_reaches_the_pinlist_vector_and_ic() {
+    let out = run_spec("c2_exposed", EXPOSED, &[]);
+    let arcs = arcs_section(&out);
+    let blocks = arc_blocks(arcs);
+    assert!(!blocks.is_empty(), "the spec emits arcs:\n{arcs}");
+    for b in &blocks {
+        assert_eq!(
+            pinlist_of(b),
+            ["A", "B", "QN", "Q"],
+            "the exposed node takes a column between the inputs and the outputs:\n{b}"
+        );
+    }
+
+    // `B` rising out of `{A=1, B=0}` drives `Q` up and takes `QN` down with it, from a start condition
+    // that gives the internal node its own voltage.
+    let rise = blocks
+        .iter()
+        .find(|b| {
+            tag_of(b, "-related_pin").as_deref() == Some("B")
+                && tag_of(b, "-pin").as_deref() == Some("Q")
+                && vector_column(b, "B") == "R"
+        })
+        .unwrap_or_else(|| panic!("the B-rise → Q-rise block:\n{arcs}"));
+    assert_eq!(vector_column(rise, "QN"), "F");
+    assert_eq!(vector_column(rise, "Q"), "R");
+    assert_eq!(ic_column(rise, "QN"), "$VDD");
+
+    // `--logic-high` renames the high level, and the exposed column's start condition is written in the
+    // new name like every other column's.
+    let overridden = run_spec("c2_exposed_high", EXPOSED, &["--logic-high=$VDDH"]);
+    let high = arcs_section(&overridden);
+    let rise = arc_blocks(high)
+        .into_iter()
+        .find(|b| {
+            tag_of(b, "-related_pin").as_deref() == Some("B")
+                && tag_of(b, "-pin").as_deref() == Some("Q")
+                && vector_column(b, "B") == "R"
+        })
+        .unwrap_or_else(|| panic!("the B-rise → Q-rise block:\n{high}"));
+    assert_eq!(ic_column(rise, "QN"), "$VDDH");
+    assert!(
+        !high.contains("$VDD "),
+        "the override is the only high level in the emitted arcs:\n{high}"
     );
 }
 
@@ -632,6 +758,82 @@ fn when_output_contains_every_default_arc_block() {
             "the --when output should contain every default define_arc block:\n{block}"
         );
     }
+}
+
+/// A cell whose forced covers expand past the candidate ceiling: 10 inputs put 2^9 seed minterms in
+/// each of Y's two cover cubes, so `--max-candidates 512` stops the exploration and a raised ceiling
+/// lets the same cell through.
+const WIDE: &str = r#"
+[[cell]]
+name = "WIDE"
+inputs = ["I0", "I1", "I2", "I3", "I4", "I5", "I6", "I7", "I8", "I9"]
+[cell.outputs]
+Y = "I0"
+"#;
+
+#[test]
+fn candidate_budget_overrun_errors_and_writes_nothing() {
+    let dir = scratch_dir("budget");
+    let spec = dir.join("wide.toml");
+    std::fs::write(&spec, WIDE).unwrap();
+    let outdir = dir.join("out");
+
+    let out = Command::new(BIN)
+        .arg("--outdir")
+        .arg(&outdir)
+        .arg("--max-candidates")
+        .arg("512")
+        .arg(&spec)
+        .output()
+        .expect("run cellsmith");
+    assert!(
+        !out.status.success(),
+        "an exploration stopped at a budget is an error, not a warning"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains(
+            "cellsmith: error: cell \"WIDE\": exploration stopped at the candidate budget \
+             (512 seed minterms); no arcs, hazards, leakage states or constraints are derived — \
+             raise it with --max-candidates"
+        ),
+        "missing the budget diagnostic:\n{stderr}"
+    );
+    // Nothing is emitted for a spec that could not be analysed: an arc-free artifact would read as
+    // the cell's behaviour.
+    let written: Vec<_> = std::fs::read_dir(&outdir)
+        .map(|d| d.map(|e| e.unwrap().path()).collect())
+        .unwrap_or_default();
+    assert!(written.is_empty(), "artifacts written anyway: {written:?}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn raising_the_candidate_budget_analyses_the_same_cell() {
+    let dir = scratch_dir("budget_raised");
+    let spec = dir.join("wide.toml");
+    std::fs::write(&spec, WIDE).unwrap();
+
+    let out = Command::new(BIN)
+        .arg("--stdout")
+        .arg("--max-candidates")
+        .arg("4096")
+        .arg(&spec)
+        .output()
+        .expect("run cellsmith");
+    assert!(out.status.success(), "exit: {:?}", out.status);
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout.contains("WIDE"),
+        "cell missing from stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("define_arc"),
+        "the raised ceiling must let the arcs be derived:\n{stdout}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]

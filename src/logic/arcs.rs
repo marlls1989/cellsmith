@@ -4,7 +4,8 @@
 //! internal state node; see [`resolve`](super::resolve)). A node is a [`Minterm<Symbol>`] over
 //! `inputs…, state_vars…` ([`machine`]); traversal states may be partial — an uninitialised latch
 //! leaves its state column a don't-care — but every MEASURED arc comes only from a fully-initialised
-//! (determinate) state, per the eligibility filter below. Arcs are derived by exploring it:
+//! (determinate) state, per the shared `Machine::arc_eligible` predicate. Arcs are derived by
+//! exploring it:
 //!
 //!   1. Each state variable's δ comes directly from the cell's minimised signal functions; [`machine::settle`] applies them
 //!      via [`Bdd::evaluate`](espresso_logic::bdd::Bdd::evaluate) until the state stops changing.
@@ -15,8 +16,11 @@
 //!      fixpoint and are dropped, so no impossible arc is produced.
 //!   3. Wherever a single input toggle flips an **output**, emit an arc: the toggled input is the
 //!      `related` pin (arcs are only ever sourced by primary inputs — never an output or internal),
-//!      and the prevector is the BFS path — each node projected onto the inputs — that drives every
-//!      state variable (internal ones included) into the measured edge's start state.
+//!      and the prevector is the BFS path — each node projected onto the inputs — that reaches the
+//!      arc's start state in cellsmith's own model, driving every state variable (internal ones
+//!      included) to its value there. Liberate discards that `-prevector` simulation instead of
+//!      carrying its settled values into the measurement, so the start condition reaches it through
+//!      `-ic` instead, which names the level of every `-pinlist` entry.
 
 use std::collections::HashSet;
 use std::hash::Hash;
@@ -52,6 +56,101 @@ impl Edge {
     }
 }
 
+/// One exposed internal node across a measured arc: the level it holds before the measured edge and the
+/// level it holds after. Equal levels render the held `0`/`1`; a change renders `R`/`F`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExposedLevel {
+    pub node: Symbol,
+    pub start: bool,
+    pub end: bool,
+}
+
+/// What the cell's non-input columns hold across a measured arc: each output pin's level at the arc's
+/// start state, in `cell.outputs` order, and each exposed internal node's levels at both ends of the
+/// measurement, in the machine's exposure order. Liberate reads the start levels as the arc's `-ic`
+/// initial condition — the voltage each column starts the measured vector at — while an exposed node,
+/// which the measurement observes as well as initialises, needs its end level too: it can move across an
+/// arc whose outputs all hold.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ArcLevels {
+    pub outputs: Vec<(Symbol, bool)>,
+    pub exposed: Vec<ExposedLevel>,
+}
+
+impl ArcLevels {
+    /// The levels every output and exposed node of `m`'s cell holds at `node`: the sample of a single
+    /// state, so every exposed level has `start == end`. That is the whole of what the hazard probes in
+    /// [`super::confluence::detect`] characterise, and it is also the start half of every measurement made
+    /// from `node` — none of it depends on which input then moves — which [`Self::ending_at`] completes
+    /// into the levels across one such measurement.
+    ///
+    /// TOTAL, never partial: a level is read at a measurement site, and every measurement starts from a
+    /// state `Machine::arc_eligible` admits — [`derive`] measures only eligible starts and
+    /// [`super::confluence::detect`] probes only eligible states. At such a node every state column is
+    /// determinate, and settling from it leaves every state column determinate, so both ends are total.
+    /// A combinational output's or exposed node's δ is in turn bounded by the inputs plus the state
+    /// variables (minimise invariant I3, asserted in `Machine::build` at `analysis.rs`). An exposed node
+    /// is therefore either a state variable, which `arc_eligible` requires to be defined, or a
+    /// combinational signal whose support lies within the inputs plus the state variables — resolved
+    /// either way, as is every output.
+    pub fn at<B: Brand, C: ManagerCell>(m: &Machine<B, C>, node: &Minterm<Symbol>) -> ArcLevels {
+        ArcLevels {
+            outputs: m
+                .cell
+                .outputs
+                .iter()
+                .map(|o| {
+                    let v = m
+                        .output_value(&o.name, node)
+                        .expect("every output is defined at a fully-initialised probed state");
+                    (o.name.clone(), v)
+                })
+                .collect(),
+            exposed: m
+                .exposed
+                .iter()
+                .map(|exposed| {
+                    let level = m.exposed_value(exposed.as_str(), node).expect(
+                        "every exposed node is defined at a fully-initialised probed state",
+                    );
+                    ExposedLevel {
+                        node: exposed.clone(),
+                        start: level,
+                        end: level,
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    /// This start sample carried across a measured transition into `settled`, the state the toggle settles
+    /// in: each exposed node's end level is read there, while the output levels and the exposed start
+    /// levels are properties of the start state and stand as sampled. An exposed internal genuinely
+    /// transitions during an arc that leaves every output alone — a DFF's master follows D while Q holds —
+    /// so its end is read separately. Total wherever [`Self::at`] is: settling from an eligible start
+    /// leaves every state column determinate.
+    pub fn ending_at<B: Brand, C: ManagerCell>(
+        &self,
+        m: &Machine<B, C>,
+        settled: &Minterm<Symbol>,
+    ) -> ArcLevels {
+        ArcLevels {
+            outputs: self.outputs.clone(),
+            exposed: self
+                .exposed
+                .iter()
+                .map(|e| ExposedLevel {
+                    node: e.node.clone(),
+                    start: e.start,
+                    end: m.exposed_value(e.node.as_str(), settled).expect(
+                        "every exposed node is defined at a fully-initialised probed state",
+                    ),
+                })
+                .collect(),
+        }
+    }
+}
+
 /// One characterization arc: an input edge on `related` driving `output` in direction `edge`. The
 /// related pin is **always a primary input** — outputs and internal state variables are never arc
 /// sources; they are established indirectly by the prevector.
@@ -69,6 +168,8 @@ pub struct Arc {
     pub end: Minterm<Symbol>,
     /// The prevector: the input-assignment sequence that drives every state variable into `start`.
     pub prevector: Vec<Minterm<Symbol>>,
+    /// The levels the cell's outputs hold at `start` — the arc's `-ic` initial condition.
+    pub levels: ArcLevels,
     pub is_async: bool,
 }
 
@@ -83,13 +184,15 @@ pub struct HiddenArc {
     pub start: Minterm<Symbol>,
     pub end: Minterm<Symbol>, // input vector after the toggle
     pub prevector: Vec<Minterm<Symbol>>,
-    pub outputs: Vec<(Symbol, bool)>, // each output's HELD logic value, in cell.outputs order
+    /// Each output's HELD logic value, in `cell.outputs` order. Every output is defined at both ends of
+    /// the toggle and none of them changes across it, so the values held ARE the levels at `start`.
+    pub levels: ArcLevels,
 }
 
 /// Derive transition arcs for every output of a cell by re-walking its shared asynchronous state machine
 /// (see [`machine`] and [`Machine`]). A machine node is a [`Minterm<Symbol>`] over
 /// `[inputs…, state_vars…]`; traversal states may be partial, but each arc is measured only from a
-/// fully-initialised (determinate) state (see the eligibility check below). Also derives the
+/// fully-initialised (determinate) state (see `Machine::arc_eligible`). Also derives the
 /// whole-cell internal-power ('hidden') arcs — single input toggles that settle but leave every
 /// output unchanged.
 pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
@@ -97,7 +200,11 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
 ) -> (Vec<Arc>, Vec<HiddenArc>) {
     let cell = m.cell;
     let inputs = &cell.inputs;
-    let deltas = &m.deltas;
+    // Both coordinate halves, stepped together: a re-walk toggle must recompute a combinational
+    // survivor's column fresh, exactly as the original exploration did — settling on the state
+    // variables alone would leave a combinational output's or exposure's column at its stale pre-toggle
+    // value, which `output_value`/`exposed_value` would then read as though it were current.
+    let deltas: Vec<machine::Delta<B, C>> = m.coordinate_deltas();
     let ex = &m.explored;
 
     let async_set: HashSet<&str> = cell.async_pins.iter().map(|s| s.as_str()).collect();
@@ -118,27 +225,31 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
         .fold(
             || (Vec::new(), Vec::new()),
             |mut acc, node| {
-                // ELIGIBILITY: only measure from a FULLY-DETERMINATE start — every state column concrete. A
-                // partially-fixed start carries an uninitialised (don't-care) latch that must not be read as a
-                // held value, so it seeds traversal but is never an arc context (see `logic::edge`).
-                if !m
-                    .state_vars
-                    .iter()
-                    .all(|w| node.value_of(w.as_str()).is_some())
-                {
+                // ELIGIBILITY: only measure from a FULLY-DETERMINATE start — a partially-fixed start
+                // carries an uninitialised latch that must not be read as a held value, so it seeds
+                // traversal but is never an arc context (see `Machine::arc_eligible`).
+                if !m.arc_eligible(node) {
                     return acc;
                 }
+                // The start levels and the prevector reaching them belong to this state alone, so every
+                // toggle out of it measures from the same ones: both are taken once, here.
+                let start_levels = ArcLevels::at(m, node);
+                let prevector = ex.path_to(node, inputs);
                 for related in inputs {
                     // Toggle one input, hold the (partial) state, and let the state settle.
                     let toggled = machine::toggle(node, &[related.as_str()]);
-                    let Some(np) = machine::settle(deltas, &toggled) else {
+                    let Some(np) = machine::settle(&deltas, &toggled) else {
                         continue;
                     };
+                    // The start levels completed with where this toggle leaves the exposed nodes — the one
+                    // part of the sample the toggle decides — cloned per arc derived from it. Both paths
+                    // below take the same sample: an exposed node can move across a toggle every output
+                    // holds through.
+                    let levels = start_levels.ending_at(m, &np);
                     // An arc for every output that is defined at both ends and flips across this input toggle.
                     // The end is projected onto the inputs — it is what the `-vector` and `-when` render from —
                     // while the start keeps the full machine node, the arc's context.
                     let end = np.project_to(inputs);
-                    let prevector = ex.path_to(node, inputs);
                     // Collect each output's (before, after) once so both the transition and hidden paths read it.
                     let vals: Vec<(&AnalysedOutput, Option<bool>, Option<bool>)> = cell
                         .outputs
@@ -166,6 +277,7 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
                             start: node.clone(),
                             end: end.clone(),
                             prevector: prevector.clone(),
+                            levels: levels.clone(),
                             is_async: async_set.contains(related.as_str()),
                         });
                     }
@@ -180,17 +292,13 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
                         let rose = end
                             .value_of(related.as_str())
                             .expect("toggled input is fully fixed in the settled end state");
-                        let outputs: Vec<(Symbol, bool)> = vals
-                            .iter()
-                            .map(|(o, _, a)| (o.name.clone(), a.unwrap()))
-                            .collect();
                         acc.1.push(HiddenArc {
                             pin: related.clone(),
                             edge: if rose { Edge::Rise } else { Edge::Fall },
                             start: node.clone(),
                             end: end.clone(),
                             prevector: prevector.clone(),
-                            outputs,
+                            levels: levels.clone(),
                         });
                     }
                 }
@@ -271,6 +379,198 @@ Q = "A*B + Q*(A+B)"
     }
 
     #[test]
+    fn arc_levels_read_every_output_at_a_probed_state() {
+        // Q is a state output (its level is its own state column) and QN a combinational one (its level
+        // is its δ evaluated at the node): `at` must agree with `output_value` on both, at every
+        // measurement-eligible state, and name the outputs in declaration order.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "C2N"
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+QN = "!Q"
+"#,
+        );
+        let builder = espresso_logic::sync_bdd_builder!();
+        let bdds = crate::model::build_signal_bdds(&cell, &builder);
+        let m = crate::logic::analysis::Machine::build(
+            &cell,
+            &bdds,
+            crate::logic::analysis::Exploration::Fresh(
+                &crate::logic::machine::ExplorationBudget::default(),
+            ),
+        )
+        .expect("fixture is explored");
+        let names: Vec<&str> = cell.outputs.iter().map(|o| o.name.as_str()).collect();
+        let mut eligible = 0;
+        for node in m.explored.order.iter().filter(|n| m.arc_eligible(n)) {
+            let levels = ArcLevels::at(&m, node);
+            assert_eq!(
+                levels
+                    .outputs
+                    .iter()
+                    .map(|(n, _)| n.as_str())
+                    .collect::<Vec<_>>(),
+                names
+            );
+            for (name, value) in &levels.outputs {
+                assert_eq!(Some(*value), m.output_value(name, node));
+            }
+            eligible += 1;
+        }
+        assert!(eligible > 0, "the fixture has measurement-eligible states");
+    }
+
+    #[test]
+    fn exposed_master_moves_across_a_hidden_arc() {
+        // Master-slave DFF with the master M exposed. With the clock low the master is transparent, so a
+        // D toggle moves M while Q holds — a hidden (internal-power) arc, which by construction is one
+        // where every output is unchanged — and the exposed levels must record that move at both ends.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+expose = ["M"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#,
+        );
+        assert_eq!(
+            cell.exposed_signals().collect::<Vec<_>>(),
+            [&Symbol::from("M")],
+            "the master survives the minimisation as an exposed node",
+        );
+        // Every measured arc, transition or hidden, carries one level per exposed node.
+        for levels in cell
+            .arcs
+            .iter()
+            .map(|a| &a.levels)
+            .chain(cell.hidden_arcs.iter().map(|h| &h.levels))
+        {
+            assert_eq!(levels.exposed.len(), 1);
+            assert_eq!(levels.exposed[0].node, "M");
+        }
+        let moved: Vec<&HiddenArc> = cell
+            .hidden_arcs
+            .iter()
+            .filter(|h| h.levels.exposed.iter().any(|e| e.start != e.end))
+            .collect();
+        assert!(
+            moved.iter().any(|h| h.pin == "D"),
+            "a D toggle with the clock low moves the exposed master while Q holds",
+        );
+    }
+
+    #[test]
+    fn combinational_exposure_is_sampled_through_its_delta() {
+        // An exposed node that is NOT a state variable — the combinational internal W = A*B — is a
+        // coordinate like any other, its level read from its own column as a combinational output's is.
+        // The minimisation runs here with W
+        // preserved (`Preserved::with_exposed`), which is what keeps a combinational exposure in the
+        // model at all; the fold composes it into Y regardless, so W keeps a δ over the inputs alone.
+        let mut cell = crate::model::parse_spec(
+            r#"
+[[cell]]
+name = "AOI21"
+inputs = ["A", "B", "C"]
+expose = ["W"]
+[cell.internal]
+W = "A*B"
+[cell.outputs]
+Y = "!(W + C)"
+"#,
+        )
+        .unwrap()
+        .cells
+        .remove(0)
+        .analyse_signals()
+        .unwrap();
+        let builder = espresso_logic::sync_bdd_builder!();
+        let mut bdds = crate::model::build_signal_bdds(&cell, &builder);
+        let order: Vec<Symbol> = cell.signals().map(|s| s.name.clone()).collect();
+        let preserved = crate::logic::minimise::Preserved::with_exposed(
+            cell.outputs.iter().map(|o| o.name.clone()).collect(),
+            cell.exposed.iter().cloned().collect(),
+        );
+        let min = crate::logic::minimise::minimise_state_space(&mut bdds, &order, &preserved);
+        crate::model::recompute_signal_metadata(&mut cell, &bdds, &min);
+        let m = crate::logic::analysis::Machine::build(
+            &cell,
+            &bdds,
+            crate::logic::analysis::Exploration::Fresh(
+                &crate::logic::machine::ExplorationBudget::default(),
+            ),
+        )
+        .expect("fixture is explored");
+        assert_eq!(m.exposed, ["W"]);
+        assert!(
+            !m.state_set.contains(&Symbol::from("W"))
+                && m.combinational.iter().any(|(n, _)| n.as_str() == "W"),
+            "a combinational exposure is a combinational coordinate, not a state one",
+        );
+
+        // At each explored state the sampled level is A*B there, and a single-state sample leaves the
+        // two ends equal — the shape the constraint sampling site reads.
+        let mut sampled = 0;
+        for node in &m.explored.order {
+            let levels = ArcLevels::at(&m, node);
+            let of = |pin: &str| {
+                node.value_of(pin)
+                    .expect("every input is fixed in an explored state")
+            };
+            assert_eq!(levels.exposed[0].start, of("A") && of("B"));
+            assert_eq!(levels.exposed[0].start, levels.exposed[0].end);
+            sampled += 1;
+        }
+        assert!(sampled > 0, "the fixture explores at least one state");
+
+        // Across a measured arc the two ends differ wherever the toggled input moves W.
+        let (arcs, _) = derive(&m);
+        assert!(
+            arcs.iter()
+                .any(|a| a.levels.exposed[0].start != a.levels.exposed[0].end),
+            "an A or B edge that flips Y moves the exposed W with it",
+        );
+    }
+
+    #[test]
+    fn c2_arc_levels_hold_the_pre_edge_output_value() {
+        // An arc's levels are read at its START state, so the measured output sits at the value the edge
+        // leaves: low before a rise, high before a fall.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "C2"
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+"#,
+        );
+        assert!(!cell.arcs.is_empty());
+        for a in &cell.arcs {
+            let (_, level) = a
+                .levels
+                .outputs
+                .iter()
+                .find(|(n, _)| *n == a.output)
+                .expect("the measured output carries a level");
+            assert_eq!(
+                *level,
+                a.edge == Edge::Fall,
+                "{} {:?} must start at its pre-edge value",
+                a.output,
+                a.edge
+            );
+        }
+    }
+
+    #[test]
     fn c2_arc_and_hidden_prevector_walk_depths() {
         // multiset of prevector lengths, one entry per derived arc — pins the walk depth each context
         // costs. C2's only state variable is the output itself, so no two contexts share an identity:
@@ -310,12 +610,12 @@ Y = "A*B"
         assert!(cell.hidden_arcs.iter().any(|h| {
             h.pin.as_str() == "A"
                 && h.edge == Edge::Fall
-                && h.outputs.len() == 1
-                && h.outputs[0].0.as_str() == "Y"
-                && !h.outputs[0].1
+                && h.levels.outputs.len() == 1
+                && h.levels.outputs[0].0.as_str() == "Y"
+                && !h.levels.outputs[0].1
         }));
         // Single-output cell: every hidden arc holds exactly one output value.
-        assert!(cell.hidden_arcs.iter().all(|h| h.outputs.len() == 1));
+        assert!(cell.hidden_arcs.iter().all(|h| h.levels.outputs.len() == 1));
         // Every hidden arc's prevector is a real single-step walk into its start state, projected onto
         // the inputs.
         for h in &cell.hidden_arcs {
@@ -351,7 +651,8 @@ Q = "E*D + !E*Q"
             d_rise.len()
         );
         let q_val = |h: &HiddenArc| {
-            h.outputs
+            h.levels
+                .outputs
                 .iter()
                 .find(|(s, _)| s.as_str() == "Q")
                 .map(|(_, v)| *v)
@@ -420,7 +721,7 @@ Y = "K + S*L"
         // so two hidden arcs, though their input vectors and held output values coincide.
         let cell = analyse(MASKED_PAIR);
         let at = [("E", false), ("D", true), ("S", false), ("C", false)];
-        let held_low = |h: &HiddenArc| h.outputs.iter().all(|(o, v)| o == "Y" && !v);
+        let held_low = |h: &HiddenArc| h.levels.outputs.iter().all(|(o, v)| o == "Y" && !v);
         let contexts = masked_values(
             cell.hidden_arcs
                 .iter()
