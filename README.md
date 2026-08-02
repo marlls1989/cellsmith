@@ -194,8 +194,10 @@ output, or an internal signal of the cell.
 
 `expose` names an ordered list of `[cell.internal]` nodes to carry into the emitted Liberate arcs. Each
 listed node gains its own `-pinlist`, `-vector` and `-ic` column, positioned between the inputs and the
-outputs in declared order, so the arcs can state its level across a measured transition, and is
-preserved through the state-space minimisation that would otherwise fold it away. An exposed node is
+outputs in declared order, so the arcs can state the level it starts from, and is preserved through the
+state-space minimisation that would otherwise fold it away. Its `-vector` column reads `X` throughout:
+that line is the stimulus Liberate holds each named node to, and an internal node the cell drives must
+be free to follow the cell rather than be forced against it. `-ic` is where its start level is stated. An exposed node is
 never a `-related_pin` or a `-pin` — arc sources and targets remain primary inputs. The Liberty, Verilog,
 statetable and `define_cell` artifacts render from the fully minimised model, so exposure does not change
 the behaviour they describe. Where the minimisation collapses a group of coordinates that hold the same
@@ -207,7 +209,7 @@ node and the `state_function` that reads it may be written under a different nam
 name = "DFF"
 inputs = ["CLK", "D"]
 clock = ["CLK"]
-expose = ["M"]                 # carry the master latch into the arcs' -pinlist/-vector/-ic
+expose = ["M"]                 # carry the master latch into the arcs' -pinlist and -ic
 [cell.internal]
 M = "!CLK*D + CLK*M"
 [cell.outputs]

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **An exposed internal node's `-vector` column reads `X` in every arc block.** The line is the stimulus
+  Liberate holds each named node to for the measurement, so stating a level or an edge there forces a
+  node the cell itself drives, against the behaviour the arc exists to measure. The node keeps its
+  `-pinlist` column and its `-ic` entry, which is where the level it starts from is stated. Transition
+  and hidden arcs previously rendered the edge the node made or the level it held; constraint blocks
+  already read `X`.
+
 - **A cell's state machine is explored one BFS level at a time, with the level settled in parallel.**
   Settling a toggle is the whole cost of the walk, and the toggles of one frontier are independent, so
   the level is the unit of work: every toggle of every node in it settles at once and the states it

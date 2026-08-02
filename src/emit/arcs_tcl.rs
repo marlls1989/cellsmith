@@ -19,7 +19,9 @@
 //! A cell that exposes internal nodes (`expose = [...]`) is rendered from its ARC VIEW
 //! ([`crate::model::AnalysedCell::arc_view`]), the analysis that keeps those nodes as model coordinates.
 //! An exposed node is not a pin, so it earns a `-pinlist` column of its own (see [`arc_pinlist_str`])
-//! between the inputs and the outputs, which `-vector` and `-ic` line up with. Only the arc emitter
+//! between the inputs and the outputs, which `-vector` and `-ic` line up with. That column reads `X` in
+//! every `-vector`: the vector is stimulus, and a node the cell drives cannot be forced without
+//! overriding the behaviour being measured — `-ic` carries its start level instead. Only the arc emitter
 //! reads that view — the `define_cell` pinlist ([`pinlist_str`]) and every other artifact keep to the
 //! cell's actual pins.
 
@@ -451,10 +453,10 @@ fn format_arc(cell: &AnalysedCell, arc: &Arc, with_when: bool) -> String {
 
 /// The measured hidden-arc vector: the toggled `pin` as its `R`/`F` edge, every other input at its held
 /// `1`/`0` value in the end state, and every output pinned at its held `1`/`0` value (never `X` — a hidden
-/// arc measures no output transition). An exposed node is the one column that CAN move here: no output
-/// changes across a hidden toggle, but an internal one does — a DFF's master follows D while Q holds —
-/// so it renders its edge or its held level like any measured arc (see [`exposed_vector_sym`]). Mirrors
-/// [`vector_str`] for [`Arc`], and is the ONE source of `format_hidden_arc`'s `-vector` line.
+/// arc measures no output transition). An exposed node reads `X`: a `-vector` column FORCES its value
+/// for the measurement, and an internal node driven by the cell must be left to follow the cell. Its
+/// start level reaches Liberate through `-ic` instead. Mirrors [`vector_str`] for [`Arc`], and is the
+/// ONE source of `format_hidden_arc`'s `-vector` line.
 fn hidden_vector_str(cell: &AnalysedCell, h: &HiddenArc) -> String {
     let held: BTreeMap<&str, bool> = h
         .levels
@@ -462,7 +464,7 @@ fn hidden_vector_str(cell: &AnalysedCell, h: &HiddenArc) -> String {
         .iter()
         .map(|(s, b)| (s.as_str(), *b))
         .collect();
-    let exposed = exposed_levels(&h.levels);
+
     let end = assignment(&h.end);
     vector(
         cell,
@@ -481,13 +483,7 @@ fn hidden_vector_str(cell: &AnalysedCell, h: &HiddenArc) -> String {
                 .to_string()
             }
         },
-        |node| {
-            exposed_vector_sym(
-                exposed
-                    .get(node)
-                    .expect("the hidden arc's levels define every exposed node"),
-            )
-        },
+        |_| "X".to_string(),
         |name| {
             if *held.get(name).expect("hidden arc defines every output") {
                 "1"
@@ -616,18 +612,6 @@ fn exposed_levels(levels: &ArcLevels) -> BTreeMap<&str, &ExposedLevel> {
         .iter()
         .map(|e| (e.node.as_str(), e))
         .collect()
-}
-
-/// An exposed node's `-vector` column: `R`/`F` where the node moves across the measured arc, else the
-/// `0`/`1` it holds through it. Never `X` — stating the node's behaviour is what exposing it is for.
-fn exposed_vector_sym(level: &ExposedLevel) -> String {
-    if level.start == level.end {
-        if level.end { "1" } else { "0" }.to_string()
-    } else {
-        if level.end { Edge::Rise } else { Edge::Fall }
-            .rf()
-            .to_string()
-    }
 }
 
 /// One `-ic` column: a `logic_low`/`logic_high` expression rendered so Liberate reads it as a single
@@ -869,11 +853,12 @@ fn ic_str(
 }
 
 /// The measured vector: the related input pin and the measured output as `R`/`F`, the other inputs
-/// as their `1`/`0` value in the end state, each exposed node as the edge it makes or the level it
-/// holds (see [`exposed_vector_sym`]), and the other outputs as `X`.
+/// as their `1`/`0` value in the end state, and every exposed node and other output as `X`. A column
+/// here is a stimulus Liberate holds the node to, so an exposed internal — which the cell drives — is
+/// left unstated and starts from its `-ic` level.
 fn vector_str(cell: &AnalysedCell, arc: &Arc) -> String {
     let end = assignment(&arc.end);
-    let exposed = exposed_levels(&arc.levels);
+
     vector(
         cell,
         |input| {
@@ -888,13 +873,7 @@ fn vector_str(cell: &AnalysedCell, arc: &Arc) -> String {
                 if value { "1" } else { "0" }.to_string()
             }
         },
-        |node| {
-            exposed_vector_sym(
-                exposed
-                    .get(node)
-                    .expect("the arc's levels define every exposed node"),
-            )
-        },
+        |_| "X".to_string(),
         |name| {
             if name == arc.output {
                 arc.edge.rf().to_string()
@@ -2629,8 +2608,9 @@ Y = "!W"
 
     #[test]
     fn an_exposed_node_renders_its_own_pinlist_vector_and_ic_columns() {
-        // The authoritative form: `B` rising out of `{A=1, B=0}` drives `Q` up, `QN` falls with it, and
-        // the four columns state where each of them starts.
+        // The authoritative form: `B` rising out of `{A=1, B=0}` drives `Q` up. `QN` falls with it in
+        // the cell, but its `-vector` column is `X` — a column there forces the node, and the cell is
+        // what drives it — while `-ic` states the level it starts from.
         let cell = analyse(C2_EXPOSED);
         let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
         eprintln!("{tcl}");
@@ -2644,7 +2624,7 @@ Y = "!W"
             })
             .expect("the B-rise → Q-rise block");
         assert_eq!(pinlist_of(&block), ["A", "B", "QN", "Q"]);
-        assert_eq!(vector_values(&block), ["1", "R", "F", "R"]);
+        assert_eq!(vector_values(&block), ["1", "R", "X", "R"]);
         assert_eq!(
             ic_values(&block).expect("a state-holding cell's block carries an -ic"),
             ["$VDD", "0", "$VDD", "0"],
@@ -2656,7 +2636,8 @@ Y = "!W"
     fn a_combinational_exposed_node_renders_its_pinlist_column_with_no_ic() {
         // AN2 holds no state, so its exposed AND term is evaluated fresh on every arc rather than read
         // off a state column — the machinery a state-variable exposed node never exercises. Held at
-        // A=1, B rising drives the AND term up with it and the inverted output down.
+        // A=1, B rising drives the AND term up with it and the inverted output down; the AND term's own
+        // column is `X` all the same, the cell being what drives it.
         let cell = analyse(AN2_EXPOSED);
         assert!(!cell.state_holding, "AN2 is plain combinational logic");
         let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
@@ -2670,7 +2651,7 @@ Y = "!W"
             })
             .expect("the B-rise → Y-fall block");
         assert_eq!(pinlist_of(&block), ["A", "B", "W", "Y"]);
-        assert_eq!(vector_values(&block), ["1", "R", "R", "F"]);
+        assert_eq!(vector_values(&block), ["1", "R", "X", "F"]);
         assert!(
             ic_values(&block).is_none(),
             "a cell holding no state renders no -ic:\n{block}"
@@ -2678,43 +2659,35 @@ Y = "!W"
     }
 
     #[test]
-    fn an_exposed_master_moves_across_a_hidden_arc_while_the_outputs_hold() {
-        // A hidden arc is one no output follows, so the exposed column is the only one that can move in
-        // it — and the transparent master does, tracking `D` while the clock is low. The general pass
-        // keeps one representative per toggle event, whichever context it was measured from, so the
-        // hidden class is selected to bring every measured firing out.
+    fn a_hidden_arc_leaves_the_exposed_master_unstated_and_still_initialises_it() {
+        // A hidden arc is one no output follows. The transparent master DOES move across it, tracking
+        // `D` while the clock is low — but a `-vector` column forces the node it names, and forcing an
+        // internal one would override the behaviour the arc exists to measure. So the column reads `X`
+        // and `-ic` carries the level the master starts from. The general pass keeps one representative
+        // per toggle event, so the hidden class is selected to bring every measured firing out.
         let cell = analyse(&when_variant(DFF_EXPOSED_MASTER, "\"hidden\""));
         let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
         eprintln!("{tcl}");
-        let moving: Vec<String> = blocks(&tcl)
+        let hidden: Vec<String> = blocks(&tcl)
             .into_iter()
-            .filter(|b| {
-                b.contains("-type hidden")
-                    && ["R", "F"].contains(&vector_values(b)[column_of(b, "M")])
-            })
+            .filter(|b| b.contains("-type hidden"))
             .collect();
-        assert!(
-            !moving.is_empty(),
-            "a D toggle with the clock low moves the exposed master:\n{tcl}"
-        );
-        for block in &moving {
+        assert!(!hidden.is_empty(), "the fixture emits hidden arcs:\n{tcl}");
+        for block in &hidden {
+            assert_eq!(
+                vector_values(block)[column_of(block, "M")],
+                "X",
+                "the exposed master is never forced by the vector:\n{block}"
+            );
             assert!(
                 ["0", "1"].contains(&vector_values(block)[column_of(block, "Q")]),
                 "every output stays pinned at its held level across a hidden arc:\n{block}"
             );
-            // The moving column's own `-ic` is the level it starts at, so it is the end of the edge that
-            // differs from it.
-            let i = column_of(block, "M");
-            let start = ic_values(block).expect("a state-holding cell's block carries an -ic")[i];
-            let rf = if start == cell.voltages.of(false) {
-                "R"
-            } else {
-                "F"
-            };
-            assert_eq!(
-                vector_values(block)[i],
-                rf,
-                "the exposed edge leaves the level -ic starts it at:\n{block}"
+            let start = ic_values(block).expect("a state-holding cell's block carries an -ic")
+                [column_of(block, "M")];
+            assert!(
+                [cell.voltages.of(false), cell.voltages.of(true)].contains(&start),
+                "the unstated column still starts at a stated level:\n{block}"
             );
         }
     }
