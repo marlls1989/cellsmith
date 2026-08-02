@@ -539,8 +539,9 @@ fn an_exposed_internal_node_reaches_the_pinlist_vector_and_ic() {
         );
     }
 
-    // `B` rising out of `{A=1, B=0}` drives `Q` up and takes `QN` down with it, from a start condition
-    // that gives the internal node its own voltage.
+    // `B` rising out of `{A=1, B=0}` drives `Q` up and takes `QN` down with it in the cell — but the
+    // vector never forces the internal node, so its column reads `X` and `-ic` gives it its own start
+    // voltage.
     let rise = blocks
         .iter()
         .find(|b| {
@@ -549,7 +550,7 @@ fn an_exposed_internal_node_reaches_the_pinlist_vector_and_ic() {
                 && vector_column(b, "B") == "R"
         })
         .unwrap_or_else(|| panic!("the B-rise → Q-rise block:\n{arcs}"));
-    assert_eq!(vector_column(rise, "QN"), "F");
+    assert_eq!(vector_column(rise, "QN"), "X");
     assert_eq!(vector_column(rise, "Q"), "R");
     assert_eq!(ic_column(rise, "QN"), "$VDD");
 

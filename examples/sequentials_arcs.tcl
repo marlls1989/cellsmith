@@ -1,15 +1,4 @@
 define_arc \
-	-type edge \
-	-prevector_pinlist {CLK D} \
-	-prevector {00 10 11 01} \
-	-pinlist {CLK D Q} \
-	-ic "0 $VDD 0" \
-	-vector {R 1 R} \
-	-related_pin CLK \
-	-pin Q \
-	{ DFF }
-
-define_arc \
 	-prevector_pinlist {CLK D} \
 	-prevector {01 11 10 00} \
 	-type edge \
@@ -21,23 +10,24 @@ define_arc \
 	{ DFF }
 
 define_arc \
-	-type hidden \
+	-type edge \
 	-prevector_pinlist {CLK D} \
-	-prevector {01 11} \
+	-prevector {00 10 11 01} \
 	-pinlist {CLK D Q} \
-	-ic "$VDD $VDD $VDD" \
-	-vector {F 1 1} \
-	-pin CLK \
+	-ic "0 $VDD 0" \
+	-vector {R 1 R} \
+	-related_pin CLK \
+	-pin Q \
 	{ DFF }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D} \
-	-prevector {01 11} \
+	-prevector {00 10} \
 	-pinlist {CLK D Q} \
-	-ic "$VDD $VDD $VDD" \
-	-vector {1 F 1} \
-	-pin D \
+	-ic "$VDD 0 0" \
+	-vector {F 0 0} \
+	-pin CLK \
 	{ DFF }
 
 define_arc \
@@ -53,26 +43,25 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D} \
-	-prevector {00 10 00} \
+	-prevector {01 11} \
 	-pinlist {CLK D Q} \
-	-ic "0 0 0" \
-	-vector {R 0 0} \
+	-ic "$VDD $VDD $VDD" \
+	-vector {1 F 1} \
+	-pin D \
+	{ DFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D} \
+	-prevector {01 11 01} \
+	-pinlist {CLK D Q} \
+	-ic "0 $VDD $VDD" \
+	-vector {R 1 1} \
 	-pin CLK \
 	{ DFF }
 
 define_leakage -when "!CLK*!D" { DFF }
 define_leakage -when "!CLK*D" { DFF }
-define_arc \
-	-type combinational \
-	-prevector_pinlist {CLK D} \
-	-prevector {00 10 11 01} \
-	-pinlist {CLK D Q} \
-	-ic "0 $VDD 0" \
-	-vector {R 1 R} \
-	-related_pin CLK \
-	-pin Q \
-	{ DFF_NOCOLLAPSE }
-
 define_arc \
 	-prevector_pinlist {CLK D} \
 	-prevector {01 11 01 00} \
@@ -80,6 +69,17 @@ define_arc \
 	-pinlist {CLK D Q} \
 	-ic "0 0 $VDD" \
 	-vector {R 0 F} \
+	-related_pin CLK \
+	-pin Q \
+	{ DFF_NOCOLLAPSE }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {CLK D} \
+	-prevector {00 10 11 01} \
+	-pinlist {CLK D Q} \
+	-ic "0 $VDD 0" \
+	-vector {R 1 R} \
 	-related_pin CLK \
 	-pin Q \
 	{ DFF_NOCOLLAPSE }
@@ -128,7 +128,7 @@ define_leakage -when "!CLK*!D" { DFF_NOCOLLAPSE }
 define_leakage -when "!CLK*D" { DFF_NOCOLLAPSE }
 define_arc \
 	-prevector_pinlist {CLK D} \
-	-prevector {01 11 10 00} \
+	-prevector {01 11 01 00} \
 	-type combinational \
 	-pinlist {CLK D Q} \
 	-ic "0 0 $VDD" \
@@ -151,21 +151,11 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D} \
-	-prevector {01 11} \
+	-prevector {00 10} \
 	-pinlist {CLK D Q} \
-	-ic "$VDD $VDD $VDD" \
-	-vector {F 1 1} \
+	-ic "$VDD 0 0" \
+	-vector {F 0 0} \
 	-pin CLK \
-	{ UCDFF }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D} \
-	-prevector {01 11} \
-	-pinlist {CLK D Q} \
-	-ic "$VDD $VDD $VDD" \
-	-vector {1 F 1} \
-	-pin D \
 	{ UCDFF }
 
 define_arc \
@@ -175,6 +165,16 @@ define_arc \
 	-pinlist {CLK D Q} \
 	-ic "$VDD 0 0" \
 	-vector {1 R 0} \
+	-pin D \
+	{ UCDFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D} \
+	-prevector {01 11} \
+	-pinlist {CLK D Q} \
+	-ic "$VDD $VDD $VDD" \
+	-vector {1 F 1} \
 	-pin D \
 	{ UCDFF }
 
@@ -202,6 +202,17 @@ define_arc \
 	{ EMDFF }
 
 define_arc \
+	-type combinational \
+	-prevector_pinlist {CLK D} \
+	-prevector {00 10 00} \
+	-pinlist {CLK D M Q} \
+	-ic "0 0 0 0" \
+	-vector {0 R R X} \
+	-related_pin D \
+	-pin M \
+	{ EMDFF }
+
+define_arc \
 	-type edge \
 	-prevector_pinlist {CLK D} \
 	-prevector {00 10 11} \
@@ -224,20 +235,9 @@ define_arc \
 	{ EMDFF }
 
 define_arc \
-	-type combinational \
-	-prevector_pinlist {CLK D} \
-	-prevector {00 10 00} \
-	-pinlist {CLK D M Q} \
-	-ic "0 0 0 0" \
-	-vector {0 R R X} \
-	-related_pin D \
-	-pin M \
-	{ EMDFF }
-
-define_arc \
 	-type edge \
 	-prevector_pinlist {CLK D} \
-	-prevector {00 10 00 01} \
+	-prevector {00 10 11 01} \
 	-pinlist {CLK D M Q} \
 	-ic "0 $VDD $VDD 0" \
 	-vector {R 1 X R} \
@@ -310,23 +310,23 @@ define_arc \
 	{ TAPDFF }
 
 define_arc \
-	-prevector_pinlist {CLK D} \
-	-prevector {01 11 10} \
-	-type edge \
-	-pinlist {CLK D Q T} \
-	-ic "$VDD 0 $VDD $VDD" \
-	-vector {F 0 X F} \
-	-related_pin CLK \
-	-pin T \
-	{ TAPDFF }
-
-define_arc \
 	-type edge \
 	-prevector_pinlist {CLK D} \
 	-prevector {00 10 11} \
 	-pinlist {CLK D Q T} \
 	-ic "$VDD $VDD 0 0" \
 	-vector {F 1 X R} \
+	-related_pin CLK \
+	-pin T \
+	{ TAPDFF }
+
+define_arc \
+	-prevector_pinlist {CLK D} \
+	-prevector {01 11 10} \
+	-type edge \
+	-pinlist {CLK D Q T} \
+	-ic "$VDD 0 $VDD $VDD" \
+	-vector {F 0 X F} \
 	-related_pin CLK \
 	-pin T \
 	{ TAPDFF }
@@ -367,21 +367,11 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D} \
-	-prevector {01 11} \
+	-prevector {00 10} \
 	-pinlist {CLK D Q T} \
-	-ic "$VDD $VDD $VDD $VDD" \
-	-vector {F 1 1 1} \
+	-ic "$VDD 0 0 0" \
+	-vector {F 0 0 0} \
 	-pin CLK \
-	{ TAPDFF }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D} \
-	-prevector {01 11} \
-	-pinlist {CLK D Q T} \
-	-ic "$VDD $VDD $VDD $VDD" \
-	-vector {1 F 1 1} \
-	-pin D \
 	{ TAPDFF }
 
 define_arc \
@@ -391,6 +381,16 @@ define_arc \
 	-pinlist {CLK D Q T} \
 	-ic "$VDD 0 0 0" \
 	-vector {1 R 0 0} \
+	-pin D \
+	{ TAPDFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D} \
+	-prevector {01 11} \
+	-pinlist {CLK D Q T} \
+	-ic "$VDD $VDD $VDD $VDD" \
+	-vector {1 F 1 1} \
 	-pin D \
 	{ TAPDFF }
 
@@ -420,7 +420,7 @@ define_arc \
 define_arc \
 	-type edge \
 	-prevector_pinlist {CLK D} \
-	-prevector {01 11 01 00} \
+	-prevector {01 11 10 00} \
 	-pinlist {CLK D Q} \
 	-ic "0 0 0" \
 	-vector {R 0 R} \
@@ -431,21 +431,11 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D} \
-	-prevector {01 11} \
+	-prevector {00 10} \
 	-pinlist {CLK D Q} \
-	-ic "$VDD $VDD 0" \
-	-vector {F 1 0} \
+	-ic "$VDD 0 $VDD" \
+	-vector {F 0 1} \
 	-pin CLK \
-	{ IDFF }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D} \
-	-prevector {01 11} \
-	-pinlist {CLK D Q} \
-	-ic "$VDD $VDD 0" \
-	-vector {1 F 0} \
-	-pin D \
 	{ IDFF }
 
 define_arc \
@@ -461,6 +451,16 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D} \
+	-prevector {01 11} \
+	-pinlist {CLK D Q} \
+	-ic "$VDD $VDD 0" \
+	-vector {1 F 0} \
+	-pin D \
+	{ IDFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D} \
 	-prevector {00 10 00} \
 	-pinlist {CLK D Q} \
 	-ic "0 0 $VDD" \
@@ -470,28 +470,6 @@ define_arc \
 
 define_leakage -when "!CLK*!D" { IDFF }
 define_leakage -when "!CLK*D" { IDFF }
-define_arc \
-	-type edge \
-	-prevector_pinlist {CLK D} \
-	-prevector {00 10 00 01} \
-	-pinlist {CLK D Q Qn} \
-	-ic "0 $VDD 0 $VDD" \
-	-vector {R 1 R X} \
-	-related_pin CLK \
-	-pin Q \
-	{ XN }
-
-define_arc \
-	-prevector_pinlist {CLK D} \
-	-prevector {00 10 00 01} \
-	-type edge \
-	-pinlist {CLK D Q Qn} \
-	-ic "0 $VDD 0 $VDD" \
-	-vector {R 1 X F} \
-	-related_pin CLK \
-	-pin Qn \
-	{ XN }
-
 define_arc \
 	-prevector_pinlist {CLK D} \
 	-prevector {01 11 10 00} \
@@ -510,6 +488,28 @@ define_arc \
 	-pinlist {CLK D Q Qn} \
 	-ic "0 0 $VDD 0" \
 	-vector {R 0 X R} \
+	-related_pin CLK \
+	-pin Qn \
+	{ XN }
+
+define_arc \
+	-type edge \
+	-prevector_pinlist {CLK D} \
+	-prevector {00 10 11 01} \
+	-pinlist {CLK D Q Qn} \
+	-ic "0 $VDD 0 $VDD" \
+	-vector {R 1 R X} \
+	-related_pin CLK \
+	-pin Q \
+	{ XN }
+
+define_arc \
+	-prevector_pinlist {CLK D} \
+	-prevector {00 10 11 01} \
+	-type edge \
+	-pinlist {CLK D Q Qn} \
+	-ic "0 $VDD 0 $VDD" \
+	-vector {R 1 X F} \
 	-related_pin CLK \
 	-pin Qn \
 	{ XN }
@@ -547,10 +547,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D} \
-	-prevector {01 11 01} \
+	-prevector {00 10 00} \
 	-pinlist {CLK D Q Qn} \
-	-ic "0 $VDD $VDD 0" \
-	-vector {R 1 1 0} \
+	-ic "0 0 0 $VDD" \
+	-vector {R 0 0 1} \
 	-pin CLK \
 	{ XN }
 
@@ -622,26 +622,15 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK R} \
-	-prevector {11 10} \
+	-prevector {01 00} \
 	-pinlist {CLK R Q} \
-	-ic "$VDD 0 0" \
-	-vector {1 R 0} \
+	-ic "0 0 0" \
+	-vector {0 R 0} \
 	-pin R \
 	{ TFF }
 
 define_leakage -when "!CLK*!Q*R" { TFF }
 define_leakage -when "CLK*!Q*R" { TFF }
-define_arc \
-	-prevector_pinlist {CLK D} \
-	-prevector {11 01 00} \
-	-type edge \
-	-pinlist {CLK D Q} \
-	-ic "0 0 $VDD" \
-	-vector {R 0 F} \
-	-related_pin CLK \
-	-pin Q \
-	{ DET }
-
 define_arc \
 	-prevector_pinlist {CLK D} \
 	-prevector {01 11 10} \
@@ -676,33 +665,14 @@ define_arc \
 	{ DET }
 
 define_arc \
-	-type hidden \
 	-prevector_pinlist {CLK D} \
-	-prevector {01 11} \
+	-prevector {11 01 00} \
+	-type edge \
 	-pinlist {CLK D Q} \
-	-ic "$VDD $VDD $VDD" \
-	-vector {F 1 1} \
-	-pin CLK \
-	{ DET }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D} \
-	-prevector {01 11} \
-	-pinlist {CLK D Q} \
-	-ic "$VDD $VDD $VDD" \
-	-vector {1 F 1} \
-	-pin D \
-	{ DET }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D} \
-	-prevector {00 10} \
-	-pinlist {CLK D Q} \
-	-ic "$VDD 0 0" \
-	-vector {1 R 0} \
-	-pin D \
+	-ic "0 0 $VDD" \
+	-vector {R 0 F} \
+	-related_pin CLK \
+	-pin Q \
 	{ DET }
 
 define_arc \
@@ -712,6 +682,36 @@ define_arc \
 	-pinlist {CLK D Q} \
 	-ic "0 0 0" \
 	-vector {R 0 0} \
+	-pin CLK \
+	{ DET }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D} \
+	-prevector {10 00} \
+	-pinlist {CLK D Q} \
+	-ic "0 0 0" \
+	-vector {0 R 0} \
+	-pin D \
+	{ DET }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D} \
+	-prevector {11 01} \
+	-pinlist {CLK D Q} \
+	-ic "0 $VDD $VDD" \
+	-vector {0 F 1} \
+	-pin D \
+	{ DET }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D} \
+	-prevector {01 11} \
+	-pinlist {CLK D Q} \
+	-ic "$VDD $VDD $VDD" \
+	-vector {F 1 1} \
 	-pin CLK \
 	{ DET }
 
@@ -805,10 +805,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {111 110} \
+	-prevector {101 100} \
 	-pinlist {CLK D R Q} \
-	-ic "$VDD $VDD 0 0" \
-	-vector {1 1 R 0} \
+	-ic "$VDD 0 0 0" \
+	-vector {1 0 R 0} \
 	-pin R \
 	{ MOR }
 
@@ -832,7 +832,7 @@ define_arc \
 define_arc \
 	-type edge \
 	-prevector_pinlist {CLK D R} \
-	-prevector {111 011 010} \
+	-prevector {111 110 010} \
 	-pinlist {CLK D R Q} \
 	-ic "0 $VDD 0 0" \
 	-vector {R 1 0 R} \
@@ -842,11 +842,11 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110 100 000} \
+	-prevector {010 110 010 011} \
 	-type edge \
 	-pinlist {CLK D R Q} \
-	-ic "0 0 0 $VDD" \
-	-vector {R 0 0 F} \
+	-ic "0 $VDD $VDD $VDD" \
+	-vector {R 1 1 F} \
 	-related_pin CLK \
 	-pin Q \
 	{ MORA }
@@ -894,10 +894,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {111 110} \
+	-prevector {101 100} \
 	-pinlist {CLK D R Q} \
-	-ic "$VDD $VDD 0 0" \
-	-vector {1 1 R 0} \
+	-ic "$VDD 0 0 0" \
+	-vector {1 0 R 0} \
 	-pin R \
 	{ MORA }
 
@@ -941,7 +941,7 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLK D R} \
-	-prevector {010 110 010 000} \
+	-prevector {010 110 100 000} \
 	-type edge \
 	-pinlist {CLK D R Q} \
 	-ic "0 0 0 $VDD" \
@@ -1102,10 +1102,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R} \
-	-prevector {000 100} \
+	-prevector {111 110} \
 	-pinlist {CLK D R Q} \
-	-ic "$VDD 0 0 0" \
-	-vector {1 0 R 0} \
+	-ic "$VDD $VDD 0 0" \
+	-vector {1 1 R 0} \
 	-pin R \
 	{ SYNCR }
 
@@ -1254,17 +1254,6 @@ define_leakage -when "CLK*D*!G*!Q*R" { SYNCRG }
 define_leakage -when "CLK*D*G*!Q*!R" { SYNCRG }
 define_leakage -when "CLK*D*G*!Q*R" { SYNCRG }
 define_arc \
-	-type edge \
-	-prevector_pinlist {CLK D R G} \
-	-prevector {0111 0110} \
-	-pinlist {CLK D R G Q} \
-	-ic "0 $VDD $VDD 0 0" \
-	-vector {R 1 1 0 R} \
-	-related_pin CLK \
-	-pin Q \
-	{ GATEDR }
-
-define_arc \
 	-prevector_pinlist {CLK D R G} \
 	-prevector {0101 1101} \
 	-type combinational \
@@ -1287,12 +1276,23 @@ define_arc \
 	{ GATEDR }
 
 define_arc \
+	-type edge \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100 1000 0000} \
+	-prevector {0111 0101} \
+	-pinlist {CLK D R G Q} \
+	-ic "0 $VDD 0 $VDD 0" \
+	-vector {R 1 0 1 R} \
+	-related_pin CLK \
+	-pin Q \
+	{ GATEDR }
+
+define_arc \
+	-prevector_pinlist {CLK D R G} \
+	-prevector {0101 1101 1001 0001} \
 	-type edge \
 	-pinlist {CLK D R G Q} \
-	-ic "0 0 0 0 $VDD" \
-	-vector {R 0 0 0 F} \
+	-ic "0 0 0 $VDD $VDD" \
+	-vector {R 0 0 1 F} \
 	-related_pin CLK \
 	-pin Q \
 	{ GATEDR }
@@ -1360,20 +1360,20 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0001 1001} \
+	-prevector {0000 1000} \
 	-pinlist {CLK D R G Q} \
-	-ic "$VDD 0 0 $VDD 0" \
-	-vector {1 0 R 1 0} \
+	-ic "$VDD 0 0 0 0" \
+	-vector {1 0 R 0 0} \
 	-pin R \
 	{ GATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0100 1100} \
+	-prevector {0000 1000} \
 	-pinlist {CLK D R G Q} \
-	-ic "$VDD $VDD 0 0 $VDD" \
-	-vector {1 1 0 R 1} \
+	-ic "$VDD 0 0 0 0" \
+	-vector {1 0 0 R 0} \
 	-pin G \
 	{ GATEDR }
 
@@ -1400,23 +1400,23 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0110 1110} \
-	-type async \
-	-pinlist {CLK D R G Q} \
-	-ic "$VDD $VDD $VDD 0 $VDD" \
-	-vector {1 1 1 R F} \
-	-related_pin G \
-	-pin Q \
-	{ AGATEDR }
-
-define_arc \
-	-prevector_pinlist {CLK D R G} \
 	-prevector {0101 1101} \
 	-type async \
 	-pinlist {CLK D R G Q} \
 	-ic "$VDD $VDD 0 $VDD $VDD" \
 	-vector {1 1 R 1 F} \
 	-related_pin R \
+	-pin Q \
+	{ AGATEDR }
+
+define_arc \
+	-prevector_pinlist {CLK D R G} \
+	-prevector {0110 1110} \
+	-type async \
+	-pinlist {CLK D R G Q} \
+	-ic "$VDD $VDD $VDD 0 $VDD" \
+	-vector {1 1 1 R F} \
+	-related_pin G \
 	-pin Q \
 	{ AGATEDR }
 
@@ -1494,21 +1494,21 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0000 1000} \
+	-prevector {0010 1010} \
 	-pinlist {CLK D R G Q} \
-	-ic "$VDD 0 0 0 0" \
-	-vector {1 0 R 0 0} \
-	-pin R \
+	-ic "$VDD 0 $VDD 0 0" \
+	-vector {1 0 1 R 0} \
+	-pin G \
 	{ AGATEDR }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D R G} \
-	-prevector {0000 1000} \
+	-prevector {0111 0101} \
 	-pinlist {CLK D R G Q} \
-	-ic "$VDD 0 0 0 0" \
-	-vector {1 0 0 R 0} \
-	-pin G \
+	-ic "0 $VDD 0 $VDD 0" \
+	-vector {0 1 R 1 0} \
+	-pin R \
 	{ AGATEDR }
 
 define_leakage -when "!CLK*!D*!G*!R" { AGATEDR }
@@ -1643,17 +1643,6 @@ define_arc \
 	{ COEX }
 
 define_arc \
-	-type combinational \
-	-prevector_pinlist {CLK D B R} \
-	-prevector {1101 1100} \
-	-pinlist {CLK D B R Q} \
-	-ic "$VDD $VDD 0 0 0" \
-	-vector {1 1 R 0 R} \
-	-related_pin B \
-	-pin Q \
-	{ COEX }
-
-define_arc \
 	-prevector_pinlist {CLK D B R} \
 	-prevector {0010 0000} \
 	-type edge \
@@ -1661,6 +1650,17 @@ define_arc \
 	-ic "0 0 0 0 $VDD" \
 	-vector {R 0 0 0 F} \
 	-related_pin CLK \
+	-pin Q \
+	{ COEX }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {CLK D B R} \
+	-prevector {0001 0000} \
+	-pinlist {CLK D B R Q} \
+	-ic "0 0 0 0 0" \
+	-vector {0 0 R 0 R} \
+	-related_pin B \
 	-pin Q \
 	{ COEX }
 
@@ -1748,10 +1748,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D B R} \
-	-prevector {1101 1100} \
+	-prevector {0001 0000} \
 	-pinlist {CLK D B R Q} \
-	-ic "$VDD $VDD 0 0 0" \
-	-vector {1 1 0 R 0} \
+	-ic "0 0 0 0 0" \
+	-vector {0 0 0 R 0} \
 	-pin R \
 	{ COEX }
 
@@ -1792,6 +1792,17 @@ define_arc \
 	{ CAFF }
 
 define_arc \
+	-type async \
+	-prevector_pinlist {CLK D PRE CLR} \
+	-prevector {1101 1100} \
+	-pinlist {CLK D PRE CLR Q} \
+	-ic "$VDD $VDD 0 0 0" \
+	-vector {1 1 R 0 R} \
+	-related_pin PRE \
+	-pin Q \
+	{ CAFF }
+
+define_arc \
 	-prevector_pinlist {CLK D PRE CLR} \
 	-prevector {0010 0000} \
 	-type edge \
@@ -1810,17 +1821,6 @@ define_arc \
 	-ic "0 $VDD 0 0 0" \
 	-vector {R 1 0 0 R} \
 	-related_pin CLK \
-	-pin Q \
-	{ CAFF }
-
-define_arc \
-	-type async \
-	-prevector_pinlist {CLK D PRE CLR} \
-	-prevector {0101 0100} \
-	-pinlist {CLK D PRE CLR Q} \
-	-ic "0 $VDD 0 0 0" \
-	-vector {0 1 R 0 R} \
-	-related_pin PRE \
 	-pin Q \
 	{ CAFF }
 
@@ -1897,10 +1897,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D PRE CLR} \
-	-prevector {0101 0100} \
+	-prevector {1101 1100} \
 	-pinlist {CLK D PRE CLR Q} \
-	-ic "0 $VDD 0 0 0" \
-	-vector {0 1 0 R 0} \
+	-ic "$VDD $VDD 0 0 0" \
+	-vector {1 1 0 R 0} \
 	-pin CLR \
 	{ CAFF }
 
@@ -1941,23 +1941,23 @@ define_arc \
 	{ DLAT }
 
 define_arc \
-	-prevector_pinlist {CLK D} \
-	-prevector {11 01 00} \
-	-type edge \
-	-pinlist {CLK D Q} \
-	-ic "0 0 $VDD" \
-	-vector {R 0 F} \
-	-related_pin CLK \
-	-pin Q \
-	{ DLAT }
-
-define_arc \
 	-type edge \
 	-prevector_pinlist {CLK D} \
 	-prevector {10 00 01} \
 	-pinlist {CLK D Q} \
 	-ic "0 $VDD 0" \
 	-vector {R 1 R} \
+	-related_pin CLK \
+	-pin Q \
+	{ DLAT }
+
+define_arc \
+	-prevector_pinlist {CLK D} \
+	-prevector {11 01 00} \
+	-type edge \
+	-pinlist {CLK D Q} \
+	-ic "0 0 $VDD" \
+	-vector {R 0 F} \
 	-related_pin CLK \
 	-pin Q \
 	{ DLAT }
@@ -2027,23 +2027,23 @@ define_arc \
 	{ DLAT_EN }
 
 define_arc \
-	-prevector_pinlist {EN D} \
-	-prevector {11 01 00} \
-	-type edge \
-	-pinlist {EN D Q} \
-	-ic "0 0 $VDD" \
-	-vector {R 0 F} \
-	-related_pin EN \
-	-pin Q \
-	{ DLAT_EN }
-
-define_arc \
 	-type edge \
 	-prevector_pinlist {EN D} \
 	-prevector {10 00 01} \
 	-pinlist {EN D Q} \
 	-ic "0 $VDD 0" \
 	-vector {R 1 R} \
+	-related_pin EN \
+	-pin Q \
+	{ DLAT_EN }
+
+define_arc \
+	-prevector_pinlist {EN D} \
+	-prevector {11 01 00} \
+	-type edge \
+	-pinlist {EN D Q} \
+	-ic "0 0 $VDD" \
+	-vector {R 0 F} \
 	-related_pin EN \
 	-pin Q \
 	{ DLAT_EN }
@@ -2199,21 +2199,21 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D} \
-	-prevector {11 10} \
-	-pinlist {CLK D Q} \
-	-ic "$VDD 0 $VDD" \
-	-vector {1 R 1} \
-	-pin D \
-	{ GLAT }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLK D} \
 	-prevector {11 01} \
 	-pinlist {CLK D Q} \
 	-ic "0 $VDD $VDD" \
 	-vector {R 1 1} \
 	-pin CLK \
+	{ GLAT }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLK D} \
+	-prevector {11 10} \
+	-pinlist {CLK D Q} \
+	-ic "$VDD 0 $VDD" \
+	-vector {1 R 1} \
+	-pin D \
 	{ GLAT }
 
 define_leakage -when "CLK*D*Q" { GLAT }
@@ -2438,21 +2438,31 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB D} \
-	-prevector {010 000} \
+	-prevector {010 110} \
 	-pinlist {CLKA CLKB D Q} \
-	-ic "0 0 0 0" \
-	-vector {0 R 0 0} \
-	-pin CLKB \
+	-ic "$VDD $VDD 0 0" \
+	-vector {F 1 0 0} \
+	-pin CLKA \
 	{ MCDFF }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB D} \
-	-prevector {010 000} \
+	-prevector {010 110} \
 	-pinlist {CLKA CLKB D Q} \
-	-ic "0 0 0 0" \
-	-vector {0 0 R 0} \
+	-ic "$VDD $VDD 0 0" \
+	-vector {1 1 R 0} \
 	-pin D \
+	{ MCDFF }
+
+define_arc \
+	-type hidden \
+	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {011 001} \
+	-pinlist {CLKA CLKB D Q} \
+	-ic "0 0 $VDD $VDD" \
+	-vector {0 R 1 1} \
+	-pin CLKB \
 	{ MCDFF }
 
 define_arc \
@@ -2463,16 +2473,6 @@ define_arc \
 	-ic "0 0 $VDD $VDD" \
 	-vector {0 0 F 1} \
 	-pin D \
-	{ MCDFF }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {CLKA CLKB D} \
-	-prevector {010 110} \
-	-pinlist {CLKA CLKB D Q} \
-	-ic "$VDD $VDD 0 0" \
-	-vector {F 1 0 0} \
-	-pin CLKA \
 	{ MCDFF }
 
 define_leakage -when "!CLKA*!CLKB*!D" { MCDFF }
@@ -2622,11 +2622,11 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {CLK D} \
-	-prevector {11 01 00} \
+	-prevector {01 11 10} \
 	-type combinational \
 	-pinlist {CLK D T} \
-	-ic "0 0 $VDD" \
-	-vector {0 R F} \
+	-ic "$VDD 0 $VDD" \
+	-vector {1 R F} \
 	-related_pin D \
 	-pin T \
 	{ XLAT }
@@ -2644,10 +2644,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLK D} \
-	-prevector {10 00} \
+	-prevector {11 01} \
 	-pinlist {CLK D T} \
-	-ic "0 0 0" \
-	-vector {R 0 0} \
+	-ic "0 $VDD 0" \
+	-vector {R 1 0} \
 	-pin CLK \
 	{ XLAT }
 
@@ -2655,6 +2655,17 @@ define_leakage -when "!CLK*!D" { XLAT }
 define_leakage -when "!CLK*D" { XLAT }
 define_leakage -when "CLK*!D" { XLAT }
 define_leakage -when "CLK*D" { XLAT }
+define_arc \
+	-type edge \
+	-prevector_pinlist {CLKA CLKB D} \
+	-prevector {000 100 000 001} \
+	-pinlist {CLKA CLKB D Q} \
+	-ic "0 0 $VDD 0" \
+	-vector {R 0 1 R} \
+	-related_pin CLKA \
+	-pin Q \
+	{ HPIPE }
+
 define_arc \
 	-prevector_pinlist {CLKA CLKB D} \
 	-prevector {001 101 001 000} \
@@ -2667,19 +2678,8 @@ define_arc \
 	{ HPIPE }
 
 define_arc \
-	-type edge \
 	-prevector_pinlist {CLKA CLKB D} \
-	-prevector {000 100 101 001} \
-	-pinlist {CLKA CLKB D Q} \
-	-ic "0 0 $VDD 0" \
-	-vector {R 0 1 R} \
-	-related_pin CLKA \
-	-pin Q \
-	{ HPIPE }
-
-define_arc \
-	-prevector_pinlist {CLKA CLKB D} \
-	-prevector {001 101 001 000 010 110} \
+	-prevector {001 101 100 110 010 110} \
 	-type edge \
 	-pinlist {CLKA CLKB D Q} \
 	-ic "$VDD $VDD 0 $VDD" \
@@ -2691,7 +2691,7 @@ define_arc \
 define_arc \
 	-type edge \
 	-prevector_pinlist {CLKA CLKB D} \
-	-prevector {000 100 101 001 011 111} \
+	-prevector {000 100 110 010 011 111} \
 	-pinlist {CLKA CLKB D Q} \
 	-ic "$VDD $VDD $VDD 0" \
 	-vector {1 F 1 R} \
@@ -2752,10 +2752,10 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB D} \
-	-prevector {000 100 110} \
+	-prevector {001 101 111} \
 	-pinlist {CLKA CLKB D Q} \
-	-ic "$VDD $VDD 0 0" \
-	-vector {1 F 0 0} \
+	-ic "$VDD $VDD $VDD $VDD" \
+	-vector {1 F 1 1} \
 	-pin CLKB \
 	{ HPIPE }
 
@@ -2763,17 +2763,6 @@ define_leakage -when "!CLKA*!CLKB*!D" { HPIPE }
 define_leakage -when "!CLKA*!CLKB*D" { HPIPE }
 define_leakage -when "!CLKA*CLKB*!D" { HPIPE }
 define_leakage -when "!CLKA*CLKB*D" { HPIPE }
-define_arc \
-	-type edge \
-	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {0010 0110} \
-	-pinlist {CLKA CLKB DA DB Q} \
-	-ic "0 $VDD $VDD 0 0" \
-	-vector {R 1 1 0 R} \
-	-related_pin CLKA \
-	-pin Q \
-	{ DCMUX }
-
 define_arc \
 	-type edge \
 	-prevector_pinlist {CLKA CLKB DA DB} \
@@ -2786,23 +2775,12 @@ define_arc \
 	{ DCMUX }
 
 define_arc \
+	-type edge \
 	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {0001 1001 1101} \
-	-type combinational \
+	-prevector {0010 0110} \
 	-pinlist {CLKA CLKB DA DB Q} \
-	-ic "$VDD $VDD 0 $VDD $VDD" \
-	-vector {1 F 0 1 F} \
-	-related_pin CLKB \
-	-pin Q \
-	{ DCMUX }
-
-define_arc \
-	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {0010 1010 1110} \
-	-type combinational \
-	-pinlist {CLKA CLKB DA DB Q} \
-	-ic "$VDD $VDD $VDD 0 $VDD" \
-	-vector {F 1 1 0 F} \
+	-ic "0 $VDD $VDD 0 0" \
+	-vector {R 1 1 0 R} \
 	-related_pin CLKA \
 	-pin Q \
 	{ DCMUX }
@@ -2814,6 +2792,28 @@ define_arc \
 	-pinlist {CLKA CLKB DA DB Q} \
 	-ic "0 0 $VDD 0 $VDD" \
 	-vector {0 R 1 0 F} \
+	-related_pin CLKB \
+	-pin Q \
+	{ DCMUX }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0010 0110 1110} \
+	-type combinational \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-ic "$VDD $VDD $VDD 0 $VDD" \
+	-vector {F 1 1 0 F} \
+	-related_pin CLKA \
+	-pin Q \
+	{ DCMUX }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB DA DB} \
+	-prevector {0001 0101 1101} \
+	-type combinational \
+	-pinlist {CLKA CLKB DA DB Q} \
+	-ic "$VDD $VDD 0 $VDD $VDD" \
+	-vector {1 F 0 1 F} \
 	-related_pin CLKB \
 	-pin Q \
 	{ DCMUX }
@@ -2892,21 +2892,21 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {0010 0110} \
+	-prevector {0001 1001} \
 	-pinlist {CLKA CLKB DA DB Q} \
-	-ic "0 $VDD $VDD 0 0" \
-	-vector {0 1 1 R 0} \
-	-pin DB \
+	-ic "$VDD 0 0 $VDD 0" \
+	-vector {1 0 R 1 0} \
+	-pin DA \
 	{ DCMUX }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB DA DB} \
-	-prevector {0001 0101} \
+	-prevector {0000 0100} \
 	-pinlist {CLKA CLKB DA DB Q} \
-	-ic "0 $VDD 0 $VDD $VDD" \
-	-vector {0 1 R 1 1} \
-	-pin DA \
+	-ic "0 $VDD 0 0 0" \
+	-vector {0 1 0 R 0} \
+	-pin DB \
 	{ DCMUX }
 
 define_leakage -when "!CLKA*!CLKB*!DA*!DB" { DCMUX }
@@ -2988,10 +2988,10 @@ define_leakage -when "!CLK*EN*!GCLK" { ICG }
 define_arc \
 	-type combinational \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00101 01101 00101} \
+	-prevector {10101 11101 10101} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "0 0 $VDD 0 $VDD 0" \
-	-vector {0 R 1 0 1 R} \
+	-ic "$VDD 0 $VDD 0 $VDD 0" \
+	-vector {1 R 1 0 1 R} \
 	-related_pin CLKB \
 	-pin GCLK \
 	{ ICM }
@@ -3004,28 +3004,6 @@ define_arc \
 	-ic "0 0 0 $VDD 0 0" \
 	-vector {R 0 0 1 0 R} \
 	-related_pin CLKA \
-	-pin GCLK \
-	{ ICM }
-
-define_arc \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10101 11101 10101 11101} \
-	-type combinational \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "$VDD $VDD $VDD 0 $VDD $VDD" \
-	-vector {1 F 1 0 1 F} \
-	-related_pin CLKB \
-	-pin GCLK \
-	{ ICM }
-
-define_arc \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10101 11101 10101 11101} \
-	-type combinational \
-	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "$VDD $VDD $VDD 0 $VDD $VDD" \
-	-vector {1 1 1 R 1 F} \
-	-related_pin RB \
 	-pin GCLK \
 	{ ICM }
 
@@ -3048,6 +3026,28 @@ define_arc \
 	-ic "$VDD $VDD 0 $VDD 0 $VDD" \
 	-vector {1 1 R 1 0 F} \
 	-related_pin RA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 01101} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-ic "0 $VDD $VDD 0 $VDD $VDD" \
+	-vector {0 F 1 0 1 F} \
+	-related_pin CLKB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 01101} \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S GCLK} \
+	-ic "0 $VDD $VDD 0 $VDD $VDD" \
+	-vector {0 1 1 R 1 F} \
+	-related_pin RB \
 	-pin GCLK \
 	{ ICM }
 
@@ -3134,21 +3134,21 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10111 10101} \
+	-prevector {01110 01010} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "$VDD 0 $VDD 0 $VDD 0" \
-	-vector {1 0 1 R 1 0} \
-	-pin RB \
+	-ic "0 $VDD 0 $VDD 0 0" \
+	-vector {0 1 R 1 0 0} \
+	-pin RA \
 	{ ICM }
 
 define_arc \
 	-type hidden \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01111 01011} \
+	-prevector {01110 01100} \
 	-pinlist {CLKA CLKB RA RB S GCLK} \
-	-ic "0 $VDD 0 $VDD $VDD 0" \
-	-vector {0 1 R 1 1 0} \
-	-pin RA \
+	-ic "0 $VDD $VDD 0 0 0" \
+	-vector {0 1 1 R 0 0} \
+	-pin RB \
 	{ ICM }
 
 define_leakage -when "!CLKA*!CLKB*!GCLK*!RA*!RB*!S" { ICM }
@@ -3482,21 +3482,11 @@ define_arc \
 define_arc \
 	-type hidden \
 	-prevector_pinlist {C D E} \
-	-prevector {011 111} \
+	-prevector {001 101} \
 	-pinlist {C D E Z2} \
-	-ic "$VDD $VDD $VDD $VDD" \
-	-vector {F 1 1 1} \
+	-ic "$VDD 0 $VDD $VDD" \
+	-vector {F 0 1 1} \
 	-pin C \
-	{ TRW }
-
-define_arc \
-	-type hidden \
-	-prevector_pinlist {C D E} \
-	-prevector {011 111} \
-	-pinlist {C D E Z2} \
-	-ic "$VDD $VDD $VDD $VDD" \
-	-vector {1 1 F 1} \
-	-pin E \
 	{ TRW }
 
 define_arc \
@@ -3509,34 +3499,22 @@ define_arc \
 	-pin E \
 	{ TRW }
 
+define_arc \
+	-type hidden \
+	-prevector_pinlist {C D E} \
+	-prevector {011 111} \
+	-pinlist {C D E Z2} \
+	-ic "$VDD $VDD $VDD $VDD" \
+	-vector {1 1 F 1} \
+	-pin E \
+	{ TRW }
+
 define_leakage -when "!C*!D*!E*!Z2" { TRW }
 define_leakage -when "!C*!D*E*Z2" { TRW }
 define_leakage -when "!C*D*!E*!Z2" { TRW }
 define_leakage -when "!C*D*E*Z2" { TRW }
 define_leakage -when "C*!D*E*Z2" { TRW }
 define_leakage -when "C*D*E*Z2" { TRW }
-define_arc \
-	-type combinational \
-	-prevector_pinlist {A Q_st} \
-	-prevector {00 10} \
-	-pinlist {A Q_st Q} \
-	-ic "$VDD 0 0" \
-	-vector {1 R R} \
-	-related_pin Q_st \
-	-pin Q \
-	{ COLL }
-
-define_arc \
-	-prevector_pinlist {A Q_st} \
-	-prevector {11 01} \
-	-type combinational \
-	-pinlist {A Q_st Q} \
-	-ic "0 $VDD $VDD" \
-	-vector {0 F F} \
-	-related_pin Q_st \
-	-pin Q \
-	{ COLL }
-
 define_arc \
 	-prevector_pinlist {A Q_st} \
 	-prevector {11 10} \
@@ -3556,6 +3534,28 @@ define_arc \
 	-ic "0 $VDD 0" \
 	-vector {R 1 R} \
 	-related_pin A \
+	-pin Q \
+	{ COLL }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {A Q_st} \
+	-prevector {00 10} \
+	-pinlist {A Q_st Q} \
+	-ic "$VDD 0 0" \
+	-vector {1 R R} \
+	-related_pin Q_st \
+	-pin Q \
+	{ COLL }
+
+define_arc \
+	-prevector_pinlist {A Q_st} \
+	-prevector {11 01} \
+	-type combinational \
+	-pinlist {A Q_st Q} \
+	-ic "0 $VDD $VDD" \
+	-vector {0 F F} \
+	-related_pin Q_st \
 	-pin Q \
 	{ COLL }
 
@@ -3603,39 +3603,6 @@ define_leakage -when "!A*!Q*!Q_st" { COLL }
 define_leakage -when "A*Q*Q_st" { COLL }
 define_arc \
 	-prevector_pinlist {A B} \
-	-prevector {11 10} \
-	-type combinational \
-	-pinlist {A B Q Qc Qn} \
-	-ic "$VDD 0 $VDD $VDD 0" \
-	-vector {F 0 F X X} \
-	-related_pin A \
-	-pin Q \
-	{ C2P }
-
-define_arc \
-	-prevector_pinlist {A B} \
-	-prevector {11 10} \
-	-type combinational \
-	-pinlist {A B Q Qc Qn} \
-	-ic "$VDD 0 $VDD $VDD 0" \
-	-vector {F 0 X F X} \
-	-related_pin A \
-	-pin Qc \
-	{ C2P }
-
-define_arc \
-	-type combinational \
-	-prevector_pinlist {A B} \
-	-prevector {11 10} \
-	-pinlist {A B Q Qc Qn} \
-	-ic "$VDD 0 $VDD $VDD 0" \
-	-vector {F 0 X X R} \
-	-related_pin A \
-	-pin Qn \
-	{ C2P }
-
-define_arc \
-	-prevector_pinlist {A B} \
 	-prevector {11 01} \
 	-type combinational \
 	-pinlist {A B Q Qc Qn} \
@@ -3664,6 +3631,39 @@ define_arc \
 	-ic "0 $VDD $VDD $VDD 0" \
 	-vector {0 F X X R} \
 	-related_pin B \
+	-pin Qn \
+	{ C2P }
+
+define_arc \
+	-prevector_pinlist {A B} \
+	-prevector {11 10} \
+	-type combinational \
+	-pinlist {A B Q Qc Qn} \
+	-ic "$VDD 0 $VDD $VDD 0" \
+	-vector {F 0 F X X} \
+	-related_pin A \
+	-pin Q \
+	{ C2P }
+
+define_arc \
+	-prevector_pinlist {A B} \
+	-prevector {11 10} \
+	-type combinational \
+	-pinlist {A B Q Qc Qn} \
+	-ic "$VDD 0 $VDD $VDD 0" \
+	-vector {F 0 X F X} \
+	-related_pin A \
+	-pin Qc \
+	{ C2P }
+
+define_arc \
+	-type combinational \
+	-prevector_pinlist {A B} \
+	-prevector {11 10} \
+	-pinlist {A B Q Qc Qn} \
+	-ic "$VDD 0 $VDD $VDD 0" \
+	-vector {F 0 X X R} \
+	-related_pin A \
 	-pin Qn \
 	{ C2P }
 
@@ -3821,23 +3821,23 @@ define_arc \
 
 define_arc \
 	-prevector_pinlist {A B R} \
-	-prevector {110 010} \
-	-type combinational \
-	-pinlist {A B R Q} \
-	-ic "0 $VDD 0 $VDD" \
-	-vector {0 F 0 F} \
-	-related_pin B \
-	-pin Q \
-	{ RC2 }
-
-define_arc \
-	-prevector_pinlist {A B R} \
 	-prevector {110 100} \
 	-type combinational \
 	-pinlist {A B R Q} \
 	-ic "$VDD 0 0 $VDD" \
 	-vector {F 0 0 F} \
 	-related_pin A \
+	-pin Q \
+	{ RC2 }
+
+define_arc \
+	-prevector_pinlist {A B R} \
+	-prevector {110 010} \
+	-type combinational \
+	-pinlist {A B R Q} \
+	-ic "0 $VDD 0 $VDD" \
+	-vector {0 F 0 F} \
+	-related_pin B \
 	-pin Q \
 	{ RC2 }
 
