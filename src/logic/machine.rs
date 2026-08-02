@@ -489,25 +489,40 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
         if order.len() > budget.states {
             return Err(ExplorationLimit::States(budget.states));
         }
-        // Metastable toggles (no fixpoint) are dropped.
+        // Settle every toggle of the level and claim the states it reaches, in one pipeline. Settling
+        // is the whole cost; `prev` — the visited set of every level before this one — is only read
+        // here, so those lookups ride alongside the settles they filter. Each worker claims into a map
+        // of its own and `reduce` merges them pairwise, so a state two workers reached is resolved
+        // where they meet rather than at a barrier. Which toggle's parent a state keeps is a free
+        // choice.
         let deltas = &stepped;
-        let settled: Vec<(Minterm<Symbol>, Minterm<Symbol>)> = frontier
+        let visited = &prev;
+        let claimed: HashMap<Minterm<Symbol>, Minterm<Symbol>> = frontier
             .par_iter()
             .flat_map_iter(|node| {
                 input_names.iter().filter_map(move |related| {
                     let toggled = toggle(node, &[related.as_str()]);
+                    // Metastable toggles (no fixpoint) are dropped.
                     settle(deltas, &toggled).map(|np| (np, node.clone()))
                 })
             })
-            .collect();
-        frontier = settled
-            .into_iter()
-            .filter_map(|(np, parent)| match prev.entry(np.clone()) {
-                std::collections::hash_map::Entry::Vacant(e) => {
-                    e.insert(Some(parent));
-                    Some(np)
+            .filter(|(np, _)| !visited.contains_key(np))
+            .fold(HashMap::new, |mut m, (np, parent)| {
+                m.entry(np).or_insert(parent);
+                m
+            })
+            .reduce(HashMap::new, |mut a, b| {
+                for (np, parent) in b {
+                    a.entry(np).or_insert(parent);
                 }
-                std::collections::hash_map::Entry::Occupied(_) => None,
+                a
+            });
+        // Record the level. `prev` grows here, which is the one step that stands outside the pipeline.
+        frontier = claimed
+            .into_iter()
+            .map(|(np, parent)| {
+                prev.insert(np.clone(), Some(parent));
+                np
             })
             .collect();
     }
