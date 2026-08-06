@@ -3115,7 +3115,23 @@ GCLK = "CLK*EL"
                 hidden_shapes(&on),
                 "edge classification changed which arcs AnalysedCell::hidden_arcs holds",
             );
-            unchanged!(leakage);
+            // Leakage states by the rest state each records — the inputs held and every output's
+            // settled level — rather than by the prevector reaching it, which names one of several
+            // paths into that state and follows the same free BFS order the arcs' representatives do.
+            let leakage_shapes = |c: &crate::model::AnalysedCell| {
+                let mut v: Vec<String> = c
+                    .leakage
+                    .iter()
+                    .map(|l| format!("{:?} {:?}", l.inputs, l.outputs))
+                    .collect();
+                v.sort();
+                v
+            };
+            assert_eq!(
+                leakage_shapes(&off),
+                leakage_shapes(&on),
+                "edge classification changed which states AnalysedCell::leakage holds",
+            );
             // Hazards and constraints likewise, by what they identify. `prevector` and `levels` are
             // sampled at the probed state and name the same free representative the arcs do, and
             // `condition` is a FULL input assignment, so it carries the inputs outside the race at

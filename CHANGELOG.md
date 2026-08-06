@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`define_leakage` states every rest state the cell can hold, not just the settled seeds.** A cell
+  leaks differently in each state it rests in, and two rest states can share an input assignment while
+  differing in what the cell holds — a C-element at `A=1,B=0` with `Q` either way, a mutex at `A=B=1` in
+  whichever grant it arbitrated into — neither of which a seed-keyed derivation could express. Each block
+  now carries the `-prevector` walk that drives the cell into the state, priming the internal nodes and
+  so telling two states at the same inputs apart, and a `-vector` holding the cell's own pins at their
+  rest levels. An exposed internal node takes no column: the prevector has already placed it. Only
+  fully-initialised states are emitted — a state carrying an uninitialised latch is at an unknown state —
+  so a leakage state is never partial, where the previous derivation emitted seeds with unresolved
+  outputs dropped.
+
 - **`define_cell`'s characterisation-template flag is `-constraint`.** The emitted flag was
   `-constrain`. The spec key is `constraint` to match, and is also accepted spelled `constrain`.
 - **Condensed the `--help` text.** Each flag's help is now a single line; the behaviour behind the

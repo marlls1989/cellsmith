@@ -19,7 +19,7 @@ For every cell in the input spec, cellsmith emits four artifacts:
 
 | Artifact | File | Contents |
 |----------|------|----------|
-| Liberate arcs | `<name>_arcs.tcl` | `define_arc` blocks with prevector walks and `R/F/1/0/X` vectors, plus `define_leakage` blocks — one static leakage state per settled seed state (an input assignment that forces the cell into a defined state on its own), conditioned on inputs and settled outputs |
+| Liberate arcs | `<name>_arcs.tcl` | `define_arc` blocks with prevector walks and `R/F/1/0/X` vectors, plus `define_leakage` blocks — one static leakage state per fully-initialised reachable rest state, each with the prevector walk that primes it and a `-vector` holding the cell's pins at the levels it rests at |
 | Behavioural Verilog | `<name>.v` | one sequential UDP `primitive` per signal (outputs + internal state nodes — signals that hold memory — with a three-valued next-state table) + a `celldefine`d wrapper `module` (internals as internal `wire`s) with a `specify` block |
 | Liberty stub | `<name>.lib` | a self-contained `library (<name>) { ... }` file (Liberate can consume it directly) wrapping one `cell (...)` per cell: input `pin`s; a sequential cell gets one joint `statetable` whose columns live in their own namespace, separate from the pins: a state output **mints** its node (`Q` → `Q_st`, escalating past any real signal of that name), while a genuine internal node keeps its own name. Every node is anchored by a `direction : internal` pin carrying its `internal_node`. Each output pin is then classified against the table: an output that **is** a state node carries a `state_function` naming its minted node, an output that **depends on** state nodes carries a `state_function` over them, and an output over primary inputs alone carries a plain `function`. A cell with no state nodes gets a plain `function` per output and no `statetable` |
 | Liberate cell declaration | `<name>_cells.tcl` | `define_cell` blocks: the structural pin declaration (`-input`/`-clock`/`-async`/`-output`/`-pinlist`) and characterisation-template references (`-delay`/`-power`/`-constraint`) from `[cell.template]`/`[cell.template_overrides]` — no logic or timing; one block per distinct resolved `(delay, power, constraint)` triple, bundling the drive-strength aliases that share it. Suppressed by `--no-cells` |
@@ -89,6 +89,16 @@ warning for the same hazard, noting that the hazard is recorded as a comment ann
 hazard is derived from the functions themselves; there is no spec key to declare or silence it. The
 arbitration *choice* itself is a physical property Liberate characterises separately, outside
 cellsmith's deterministic timing arcs.
+
+The same exploration gives the **static leakage states**: one `define_leakage` per fully-initialised
+reachable state the cell can rest in. A cell leaks differently in each rest state, and two rest states
+can share an input assignment while differing in what the cell holds — a C-element resting at `A=1,B=0`
+with `Q` either high or low, a mutex resting at `A=B=1` in whichever grant it arbitrated into — so the
+state, not the input vector, is the unit. Each block carries the `-prevector` walk that drives the cell
+into that state, which is what primes the internal nodes and so what tells two states at the same
+inputs apart, and a `-vector` holding the cell's own pins (inputs then outputs, as in `define_cell`) at
+the levels they rest at. An exposed internal node earns no column there: the prevector has already put
+it where it belongs. A state carrying an uninitialised latch is at an unknown state and is not emitted.
 
 The Verilog UDP and Liberty `statetable` are both the **functional** view, but Liberty's spec forces a
 different shape. Verilog keeps one sequential UDP per signal, and an output's table may reference

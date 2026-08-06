@@ -247,10 +247,10 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
 
     /// The value of `name` at a node, or `None` when the node does not define it. Every output is a
     /// coordinate of the machine — a state variable or a combinational survivor — so the value is that
-    /// node column, absent where the node leaves it undetermined. An arc is only measured where the
-    /// output is defined at both ends. The `Option` survives because [`leakage::derive`] reads the
-    /// exploration's seeds, which are not eligibility-gated: a seed's unforced columns stay absent, and
-    /// an output that does not resolve there is dropped from that leakage state by design.
+    /// node column, absent where the node leaves it undetermined. The `Option` is what the traversal
+    /// needs: it walks partial states too, and a node it has not settled leaves columns absent. No
+    /// MEASUREMENT reads one — the arc derivation, the hazard probes and [`leakage::derive`] all gate on
+    /// [`Self::arc_eligible`] first, and at such a node every output resolves, so each unwraps.
     pub(crate) fn output_value(&self, name: &str, node: &Minterm<Symbol>) -> Option<bool> {
         node.value_of(name)
     }

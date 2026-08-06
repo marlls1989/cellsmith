@@ -1647,6 +1647,16 @@ Q = "CLK*M + !CLK*Q"
         start: Minterm<Symbol>,
     }
 
+    /// One static leakage state reduced to the rest state it records: the inputs held there and every
+    /// output's settled level. Its prevector is one path into that state, so it is left out with every
+    /// other representative — two rest states differing only in an internal node still reduce to two
+    /// records, which the record COUNT holds even where the two read alike.
+    #[derive(Debug, PartialEq, Eq)]
+    struct LeakageRecord {
+        inputs: Minterm<Symbol>,
+        outputs: Vec<(Symbol, bool)>,
+    }
+
     /// One generated constraint by its identity: the kind and the two pins with their edges.
     #[derive(Debug, PartialEq, Eq)]
     struct ConstraintRecord {
@@ -1697,7 +1707,7 @@ Q = "CLK*M + !CLK*Q"
     struct CellRecords {
         arcs: Vec<ArcRecord>,
         hidden_arcs: Vec<HiddenArcRecord>,
-        leakage: Vec<LeakageState>,
+        leakage: Vec<LeakageRecord>,
         constraints: Vec<ConstraintRecord>,
         order_dependence: Vec<HazardRecord>,
         oscillation: Vec<HazardRecord>,
@@ -1748,7 +1758,14 @@ Q = "CLK*M + !CLK*Q"
                     start: h.start.clone(),
                 })
                 .collect(),
-            leakage: cell.leakage.clone(),
+            leakage: cell
+                .leakage
+                .iter()
+                .map(|l| LeakageRecord {
+                    inputs: l.inputs.clone(),
+                    outputs: l.outputs.clone(),
+                })
+                .collect(),
             constraints: cell
                 .constraints
                 .iter()
@@ -1847,9 +1864,14 @@ Q = "CLK*M + !CLK*Q"
             let cell = exposed.repr_name();
             assert_same_cell_records(&exposed, &plain);
 
-            // The arcs differ in exactly one way: every block of the exposing run lists the node among
-            // its columns, and no block of the other run does.
-            let opts = crate::emit::arcs_tcl::ArcsTclOptions::default();
+            // The arcs differ in exactly one way: every ARC block of the exposing run lists the node
+            // among its columns, and no block of the other run does. Leakage is rendered separately
+            // below — its blocks state the cell's own pins, so an exposed node never earns a column
+            // there and they are no part of this claim.
+            let opts = crate::emit::arcs_tcl::ArcsTclOptions {
+                emit_leakage: false,
+                ..Default::default()
+            };
             let arcs = |c| crate::emit::arcs_tcl::cell_arcs_tcl(c, opts);
             let pinlists = |tcl: String| -> Vec<String> {
                 tcl.lines()
@@ -1872,6 +1894,28 @@ Q = "CLK*M + !CLK*Q"
                 !without_node.iter().any(|l| names(l)),
                 "cell {cell}: no exposure-free block lists {node}: {without_node:?}"
             );
+
+            // A leakage block states the cell's pins and holds them at the level it rests at; the
+            // exposed node is primed by the prevector instead, so it takes no column in EITHER run.
+            let all = crate::emit::arcs_tcl::ArcsTclOptions::default();
+            for c in [&exposed, &plain] {
+                let tcl = crate::emit::arcs_tcl::cell_arcs_tcl(c, all);
+                let leakage: Vec<String> = tcl
+                    .split("define_leakage")
+                    .skip(1)
+                    .map(|b| match b.find("\n\n") {
+                        Some(off) => b[..off].to_owned(),
+                        None => b.to_owned(),
+                    })
+                    .collect();
+                assert!(!leakage.is_empty(), "cell {cell}: the fixture leaks");
+                for block in &leakage {
+                    assert!(
+                        !pinlists(block.clone()).iter().any(|l| names(l)),
+                        "cell {cell}: no leakage block lists {node}: {block:?}"
+                    );
+                }
+            }
         }
     }
 

@@ -250,16 +250,37 @@ fn canonical(stdout: &str) -> String {
     )
 }
 
-/// Whether any arc `-when` line appears in the `arcs.tcl` section. An arc `-when` is its own indented
-/// continuation line (`\t-when "..." \`); a `define_leakage` `-when` is inline (`define_leakage -when
-/// "..." { NAME }`) and so is deliberately NOT matched by the `starts_with("-when")` discriminator.
+/// The `arcs.tcl` section with every `define_leakage` block cut away. A leakage block states the
+/// condition it rests at on its own `-when` continuation line, indistinguishable from an arc's by line
+/// shape, so the arc `-when` scans below read a text it is not in. Each cell emits its leakage after
+/// its own arcs, so the blocks are interleaved through a multi-cell run and every one is cut, not just
+/// a trailing section.
+fn without_leakage(arcs: &str) -> String {
+    let mut out = String::new();
+    let mut rest = arcs;
+    while let Some(off) = rest.find("define_leakage") {
+        out.push_str(&rest[..off]);
+        rest = match rest[off..].find("\n\n") {
+            Some(end) => &rest[off + end + 2..],
+            None => "",
+        };
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Whether any arc `-when` line appears in the `arcs.tcl` section — an arc `-when` is its own indented
+/// continuation line (`\t-when "..." \`).
 fn has_arc_when(arcs: &str) -> bool {
-    arcs.lines().any(|l| l.trim_start().starts_with("-when"))
+    without_leakage(arcs)
+        .lines()
+        .any(|l| l.trim_start().starts_with("-when"))
 }
 
 /// The number of `-type hidden` `define_arc` blocks carrying an arc `-when` line.
 fn hidden_when_count(arcs: &str) -> usize {
-    arcs.split("define_arc")
+    without_leakage(arcs)
+        .split("define_arc")
         .filter(|b| b.contains("-type hidden") && has_arc_when(b))
         .count()
 }
@@ -267,7 +288,8 @@ fn hidden_when_count(arcs: &str) -> usize {
 /// The number of non-hidden (transition) `define_arc` blocks carrying an arc `-when` line. The leading
 /// pre-first-block preamble is skipped; it carries no arc `-when` line regardless.
 fn transition_when_count(arcs: &str) -> usize {
-    arcs.split("define_arc")
+    without_leakage(arcs)
+        .split("define_arc")
         .skip(1)
         .filter(|b| !b.contains("-type hidden") && has_arc_when(b))
         .count()

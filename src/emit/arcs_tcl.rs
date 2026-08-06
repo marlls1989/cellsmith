@@ -918,20 +918,59 @@ fn hidden_when_str(h: &HiddenArc) -> Option<String> {
     Some(crate::logic::literal_product(&lits))
 }
 
-/// One-line `define_leakage` for a static leakage state: the stable condition over the cell's
-/// inputs and its settled (resolved) outputs.
+/// One `define_leakage` block for a static leakage state. The `-prevector` drives the cell into the
+/// state — priming the internal nodes, which is what distinguishes two rest states sharing an input
+/// assignment — and the `-vector` then holds every pin at the level it rests at. The pins are the cell's
+/// own, inputs then outputs ([`pinlist_str`]): an exposed internal is no pin of the cell and the
+/// prevector has already put it where it belongs, so it takes no column here.
 fn format_leakage(cell: &AnalysedCell, l: &LeakageState) -> String {
     let mut lits: Vec<(Symbol, bool)> = assignment(&l.inputs).into_iter().collect();
     lits.extend(l.outputs.iter().cloned());
-    if lits.is_empty() {
-        return String::new();
-    }
     lits.sort();
-    format!(
-        "define_leakage -when \"{}\" {}\n",
-        literal_product(&lits),
-        name_block(cell)
-    )
+
+    let mut s = String::from("define_leakage \\\n");
+    s.push_str(&format!(
+        "\t-prevector_pinlist {{{}}} \\\n",
+        cell.inputs.join(" ")
+    ));
+    s.push_str(&format!(
+        "\t-prevector {{{}}} \\\n",
+        prevector_str(cell, &l.prevector)
+    ));
+    s.push_str(&format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell)));
+    s.push_str(&format!(
+        "\t-vector {{{}}} \\\n",
+        leakage_vector_str(cell, l)
+    ));
+    if !lits.is_empty() {
+        s.push_str(&format!("\t-when \"{}\" \\\n", literal_product(&lits)));
+    }
+    s.push_str(&format!("\t{}\n", name_block(cell)));
+    s.push('\n');
+    s
+}
+
+/// The leakage `-vector` over [`pinlist_str`] order: every input and output at the constant level it
+/// holds in this rest state. A leakage state is static, so no column ever carries an edge.
+fn leakage_vector_str(cell: &AnalysedCell, l: &LeakageState) -> String {
+    let inputs = assignment(&l.inputs);
+    let outputs: BTreeMap<&str, bool> = l.outputs.iter().map(|(s, b)| (s.as_str(), *b)).collect();
+    let level = |v: bool| if v { "1" } else { "0" };
+
+    let mut parts = Vec::with_capacity(cell.inputs.len() + cell.outputs.len());
+    for input in &cell.inputs {
+        let v = *inputs
+            .get(input)
+            .expect("every input is assigned in a leakage state");
+        parts.push(level(v));
+    }
+    for output in &cell.outputs {
+        let v = *outputs
+            .get(output.name.as_str())
+            .expect("every output is defined at a fully-initialised leakage state");
+        parts.push(level(v));
+    }
+    parts.join(" ")
 }
 
 #[cfg(test)]
@@ -972,10 +1011,12 @@ Q = "A*B + Q*(A+B)"
             tcl.matches("-pin Q").count() + tcl.matches("-type hidden").count()
         );
         assert!(!tcl.contains("-type async"));
-        // The default emits the general arcs only, so no BLOCK carries a `-when` line. `define_leakage`
-        // is inherently `-when`-conditioned, so the discriminator is the line start: an arc's `-when` is
-        // its own indented line, a leakage `-when` rides on the `define_leakage` line.
-        assert!(!tcl.lines().any(|l| l.trim_start().starts_with("-when")));
+        // The default emits the general arcs only, so no ARC block carries a `-when` line — read off a
+        // leakage-free render, since `define_leakage` is inherently `-when`-conditioned.
+        let arcs_only = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        assert!(!arcs_only
+            .lines()
+            .any(|l| l.trim_start().starts_with("-when")));
     }
 
     #[test]
@@ -3306,9 +3347,25 @@ Q = "A*B + Q*(A+B)"
         );
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
-        assert_eq!(tcl.matches("define_leakage").count(), 2);
-        assert!(tcl.contains("define_leakage -when \"A*B*Q\" { C2 }"));
-        assert!(tcl.contains("define_leakage -when \"!A*!B*!Q\" { C2 }"));
+        // One block per rest state: the two forcing inputs, and the two hold inputs at BOTH Q levels.
+        assert_eq!(tcl.matches("define_leakage").count(), 6);
+        assert!(tcl.contains("-when \"A*B*Q\""));
+        assert!(tcl.contains("-when \"!A*!B*!Q\""));
+
+        // The pair that shares an input assignment and differs only in what the cell holds: same
+        // -pinlist, opposite Q column, and a prevector that walks in from the forcing input it kept.
+        let block = |needle: &str| {
+            tcl.split("define_leakage")
+                .find(|b| b.contains(needle))
+                .unwrap_or_else(|| panic!("no leakage block containing {needle:?} in:\n{tcl}"))
+        };
+        let high = block("-when \"A*!B*Q\"");
+        let low = block("-when \"A*!B*!Q\"");
+        assert!(high.contains("-pinlist {A B Q}") && low.contains("-pinlist {A B Q}"));
+        assert!(high.contains("-vector {1 0 1}"), "held high: {high}");
+        assert!(low.contains("-vector {1 0 0}"), "held low: {low}");
+        assert!(high.contains("-prevector {11 10}"), "held high: {high}");
+        assert!(low.contains("-prevector {00 10}"), "held low: {low}");
     }
 
     #[test]
@@ -3324,9 +3381,13 @@ Y = "A*B"
         );
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
+        // A combinational cell holds nothing, so its rest states are just the input square, each
+        // reached without a walk (a one-step prevector) and each stating every pin's level.
         assert_eq!(tcl.matches("define_leakage").count(), 4);
         assert!(tcl.contains("-when \"A*B*Y\""));
         assert!(tcl.contains("-when \"!A*!B*!Y\""));
+        assert!(tcl.contains("-prevector {11} \\\n\t-pinlist {A B Y} \\\n\t-vector {1 1 1} \\"));
+        assert!(tcl.contains("-prevector {00} \\\n\t-pinlist {A B Y} \\\n\t-vector {0 0 0} \\"));
     }
 
     #[test]
@@ -3396,7 +3457,8 @@ Q = "A*B + Q*(A+B)"
         assert!(tcl.contains("{ C2A C2B }"));
         assert!(!tcl.contains("{ C2A }"));
         assert!(!tcl.contains("{ C2B }"));
-        assert!(tcl.contains("define_leakage -when \"A*B*Q\" { C2A C2B }"));
+        // A leakage block fans the names into the same single trailer an arc block does.
+        assert!(tcl.contains("-when \"A*B*Q\" \\\n\t{ C2A C2B }"));
         // Same arc count regardless of how many names the cell carries — one arc per transition, a
         // single trailer names both.
         assert_eq!(
