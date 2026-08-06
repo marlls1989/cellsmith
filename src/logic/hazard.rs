@@ -19,13 +19,17 @@
 //! generated. This module carries only the resulting report types.
 //!
 //! **Implementation note:** deduplication is handled by [`super::confluence`].
-//! [`OrderDependence`] is keyed by the unordered `(pin,edge)|(pin,edge)` pair, keeping the min
+//! [`OrderDependence`] is keyed by the unordered `(pin,edge)|(pin,edge)` pair together with the nodes
+//! the hazard endangers — the same pins racing under different conditions can put different nodes at
+//! risk, and those are different hazards — keeping the min
 //! `(prevector.len, discovered)` representative; [`Oscillation`] is keyed by `group|condition`, keeping an
 //! arbitrary colliding representative (`group`/`condition`/`stable` coincide by key) with every colliding
 //! pair-probe [`Race`] appended rather than dropped. `discovered` (on both [`Race`] and [`OrderDependence`])
 //! is the probed state's index in exploration order — one half of the min `(prevector.len, discovered)`
 //! tie-break that fixes the surviving [`OrderDependence`] and, downstream,
 //! `confluence::constrain`'s own constraint dedup. See `hazard-detection.md` for the concept.
+
+use std::collections::BTreeMap;
 
 use espresso_logic::{Minterm, Symbol};
 
@@ -63,6 +67,10 @@ pub struct Race {
     /// The levels the cell's outputs hold at the probed state — sampled at the SAME state as
     /// `prevector`, so the pair the constraint carries is consistent.
     pub levels: ArcLevels,
+    /// The level each node the hazard names holds at the PROBED state, by name. Sampled at the same
+    /// state as `prevector` and `levels`, and covering every entry of the hazard's `group`, so the
+    /// constraint generated from this observation can state the start level of the node it protects.
+    pub node_levels: BTreeMap<Symbol, bool>,
     /// Index of the probed state in `ex.order` (the sequential BFS exploration order).
     pub discovered: usize,
 }
@@ -87,6 +95,10 @@ pub struct OrderDependence {
     /// The levels the cell's outputs hold at the probed state — sampled at the SAME state as
     /// `prevector`, so the pair the constraint carries is consistent.
     pub levels: ArcLevels,
+    /// The level each node the hazard names holds at the PROBED state, by name. Sampled at the same
+    /// state as `prevector` and `levels`, and covering every entry of the hazard's `group`, so the
+    /// constraint generated from this observation can state the start level of the node it protects.
+    pub node_levels: BTreeMap<Symbol, bool>,
     /// Index of the probed state in `ex.order` (the sequential BFS exploration order) — the secondary
     /// tie-break key: on equal `prevector.len`, the earlier-discovered representative is kept.
     pub discovered: usize,

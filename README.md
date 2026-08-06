@@ -496,6 +496,11 @@ otherwise a symmetric `non_seq`) to avoid it, gated by the `--constraints` flag 
 hazards, the order-dependent hazards (grouped per racing input pair, a pair's conditions joined), 
 and the constraints generated to avoid them.
 
+Each emitted constraint arc names the nodes it protects — the state variables whose settled value the
+hazard puts at risk — in a single `-probe`, so Liberate measures the node the constraint is about. A
+protected node with no pin of its own, such as a flop's master latch, is given a `-pinlist` column on
+that block alone, which its `-ic` states the start level through.
+
 ## Known issues
 
 Cells wide enough to panic the espresso-logic dependency during cover expansion are

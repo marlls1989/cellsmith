@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A constraint arc names the nodes it protects.** Each emitted setup/hold or non_seq block carries a
+  single `-probe` naming the state variables whose settled value the hazard puts at risk, so Liberate
+  measures the node the constraint is about — a flop's master latch, for the setup that separates its
+  clock from its data. A protected node with no pin of its own is given a `-pinlist` column on that
+  block alone, which its `-ic` states the start level through.
+
 - **`[cell.nodes]` says which netlist node an internal signal stands for.** A spec is written in names
   that read well in the behavioural model, while the netlist may hold that state on a node spelled
   otherwise; this hands Liberate the netlist's spelling and leaves the Verilog and Liberty artifacts in
@@ -17,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exposed node the arcs fan out into one set per group.
 
 ### Changed
+
+- **A cell's internal signals must resolve to distinct netlist nodes.** `[cell.nodes]` may not put two
+  signals on one node, nor a signal on a node named after one of the cell's pins: a netlist holds each
+  signal on a node of its own, and a signal sitting on a pin's net is that pin. Both are analyse-time
+  errors naming the drive strength they occur under. A spec mapping a signal onto a name already
+  spoken for is now rejected where it was previously accepted.
 
 - **`define_leakage` states every state the cell can rest in.** One block per fully-initialised
   reachable rest state, carrying the `-prevector` that primes the cell's internal nodes into it and a

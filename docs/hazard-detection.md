@@ -203,9 +203,21 @@ pair. Every constraint is built the same way, whichever hazard it came from:
   variable, hidden ones included, into the state where the hazard manifests. The rendered human-readable
   form is the two switching edges plus any other inputs held fixed, e.g. A↓ & B↑ with R=0.
 
-Constraints are deduplicated on a canonical key — directed (related, edge, pin, edge) for setup/hold,
-unordered for non-sequential — keeping the **shortest prevector** among the states that exhibit the
-hazard, with a deterministic tie-break so the generated set is reproducible.
+- **Protected nodes** are the state variables the hazard puts at risk — its `group`, the nodes whose
+  settled value depends on the arrival order, sampled with the level each holds at the probed state. A
+  constraint carries them because the arc it renders measures them: they are what the constraint is
+  about.
+
+A detected order dependence is identified by its racing pins and edges **and the nodes it endangers**:
+the same pair racing under a different condition can put different nodes at risk — where a side input
+holds an output still, an internal's divergence never reaches it — and that is a different hazard, with
+its own pre-hazard state to characterise from. Observations endangering the same nodes are one hazard
+reached along different walks.
+
+Constraints are then deduplicated on a canonical key — directed (related, edge, pin, edge) for
+setup/hold, unordered for non-sequential, and in both cases the nodes protected — keeping the
+**shortest prevector** among the states that exhibit the hazard, with a deterministic tie-break so the
+generated set is reproducible.
 
 ## 7. Reporting and emission
 
@@ -219,7 +231,10 @@ hazard, with a deterministic tie-break so the generated set is reproducible.
   separately — a setup and a hold arc for a directed clock↔data constraint, the two non-sequential sides
   for a symmetric one. The vector toggles the two racing pins along their recorded edges, holds every other
   input at its prevector value, and marks all outputs unknown (a constraint arc measures no output
-  transition).
+  transition). Each block names the nodes it protects in a single `-probe`, so the characterisation
+  measures them rather than inferring the violation from the pins; a protected node with no pin of its
+  own — a flop's master latch — is given a column on that block alone, which is what its `-ic` states
+  the start level through.
 
 ## 8. Guards and invariants
 

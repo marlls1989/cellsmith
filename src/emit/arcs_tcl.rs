@@ -97,10 +97,12 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     // blocks — the emitted form cannot express the internal state that makes them distinct arcs. Neither
     // repeat drops an arc or misstates timing; the duplication is harmless.
     //
-    // A measured block addresses its exposed columns by name, so the aliases it may name together are
-    // those whose netlist agrees on them — its [`Group`]. Every pass below therefore runs per group,
-    // each group's blocks contiguous. A cell that maps no node per alias has exactly one group holding
-    // every alias, and emits what it always did.
+    // A block addresses its columns by name, so the aliases it may name together are those whose
+    // netlist agrees on the columns IT carries — its [`Group`]. That is asked per block rather than per
+    // cell: a measured block carries the cell's exposures, a constraint block those plus the nodes it
+    // protects, and it is no business of a transition arc how some constraint's protected node is
+    // spelled. A cell that maps no node per alias has one group holding every alias throughout, and
+    // emits what it always did.
     let general = generalised(
         &cell.arcs,
         |arc| ArcIdentity::of(cell, arc),
@@ -109,8 +111,8 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     let general_hidden = generalised(&cell.hidden_arcs, ArcIdentity::of_hidden, |h| {
         h.prevector.len()
     });
-    let groups = groups(cell);
-    for group in &groups {
+    let measured = groups(cell, &[]);
+    for group in &measured {
         for (_, arc) in cell
             .arcs
             .iter()
@@ -164,8 +166,9 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     // Constraint arcs emit whatever generation produced: `cell.constraints` is populated only when the
     // cell opted in (per-cell `constraint_arcs`, or the global `--constraints` flag), and is empty
     // otherwise — so this loop is its own gate.
-    for group in &groups {
-        for c in &cell.constraints {
+    for c in &cell.constraints {
+        let protected: Vec<Symbol> = c.nodes.iter().map(|(node, _)| node.clone()).collect();
+        for group in &groups(cell, &protected) {
             out.push_str(&format_constraint(cell, group, c));
         }
     }
@@ -310,23 +313,62 @@ struct Group {
     names: Vec<Symbol>,
     /// What this group's exposed nodes are called in its netlist, in `cell.exposed` order.
     exposed: Vec<Symbol>,
+    /// What this group's netlist calls each node the BLOCK carries beyond the cell's exposures — the
+    /// nodes its own constraint protects, and nothing else. A block groups on the columns it carries,
+    /// so it holds names for those and no others.
+    probed: BTreeMap<Symbol, Symbol>,
 }
 
-/// The cell's alias groups, in first-appearance order — aliases bundled by the netlist nodes their
-/// exposed columns resolve to.
-fn groups(cell: &AnalysedCell) -> Vec<Group> {
-    let mut by_nodes: IndexMap<Vec<Symbol>, Vec<Symbol>> = IndexMap::new();
+impl Group {
+    /// What this group's netlist calls `node`, which a constraint protects. Every such node is resolved
+    /// when the groups are built — from the union of what the cell's constraints protect — and a block
+    /// only ever asks after its own constraint's nodes, so the lookup cannot miss. Falling back to the
+    /// spec's own name would hand Liberate a node its netlist does not have.
+    fn probed_name(&self, node: &Symbol) -> Symbol {
+        self.probed
+            .get(node)
+            .cloned()
+            .expect("a group resolves every node the cell's constraints protect")
+    }
+}
+
+/// The alias groups for a block carrying `extra` columns beyond the cell's exposures — the nodes its
+/// own constraint protects, or nothing for a measured block — in first-appearance order.
+///
+/// The grouping is per block, not per cell: a block may name every drive strength whose netlist agrees
+/// on the columns IT carries, and it is no business of a transition arc how some constraint's protected
+/// node is spelled. A cell mapping nothing per drive strength has one group holding every alias
+/// whatever it carries.
+fn groups(cell: &AnalysedCell, extra: &[Symbol]) -> Vec<Group> {
+    /// The netlist names one drive strength's block addresses, which is what decides whether two of
+    /// them can share it. Both halves are lists of netlist names, so they are named rather than
+    /// positional: transposing them would regroup the cell silently.
+    #[derive(PartialEq, Eq, Hash)]
+    struct Columns {
+        /// The cell's exposed nodes, in `cell.exposed` order — a column on every block.
+        exposed: Vec<Symbol>,
+        /// The columns this block carries beyond them, in `extra` order.
+        extra: Vec<Symbol>,
+    }
+
+    let mut by_nodes: IndexMap<Columns, Vec<Symbol>> = IndexMap::new();
     for alias in &cell.name {
-        let resolved: Vec<Symbol> = cell
-            .exposed
-            .iter()
-            .map(|node| cell.nodes.of(alias, node))
-            .collect();
-        by_nodes.entry(resolved).or_default().push(alias.clone());
+        let resolved = |names: &mut dyn Iterator<Item = &Symbol>| -> Vec<Symbol> {
+            names.map(|node| cell.nodes.of(alias, node)).collect()
+        };
+        let key = Columns {
+            exposed: resolved(&mut cell.exposed.iter()),
+            extra: resolved(&mut extra.iter()),
+        };
+        by_nodes.entry(key).or_default().push(alias.clone());
     }
     by_nodes
         .into_iter()
-        .map(|(exposed, names)| Group { names, exposed })
+        .map(|(columns, names)| Group {
+            names,
+            exposed: columns.exposed,
+            probed: extra.iter().cloned().zip(columns.extra).collect(),
+        })
         .collect()
 }
 
@@ -348,6 +390,28 @@ fn format_constraint(cell: &AnalysedCell, group: &Group, c: &Constraint) -> Stri
 /// drives the cell (inputs + internal state) into the pre-toggle state, and the full `-vector` carries
 /// the two switching pins as `R`/`F`, the other inputs at their held value, and the outputs as `X`.
 fn constraint_block(cell: &AnalysedCell, group: &Group, c: &Constraint, arc_type: &str) -> String {
+    // The nodes the constraint protects are measured, so each needs a column: one `-probe` names them
+    // all, and the columns are what `-ic` initialises them through. A node already has a column when
+    // the cell exposes it or when it is an output pin, and a second would misalign every column after
+    // it, so only the rest are added.
+    let mut model = cell.exposed.clone();
+    let mut listed = group.exposed.clone();
+    let mut probed: BTreeMap<Symbol, bool> = BTreeMap::new();
+    for (node, level) in &c.nodes {
+        if cell.exposed.contains(node) || cell.outputs.iter().any(|o| o.name == *node) {
+            continue;
+        }
+        model.push(node.clone());
+        listed.push(group.probed_name(node));
+        probed.insert(node.clone(), *level);
+    }
+    let probe_list = c
+        .nodes
+        .iter()
+        .map(|(node, _)| group.probed_name(node).to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+
     let mut s = String::from("define_arc \\\n");
     s.push_str(&format!("\t-type {arc_type} \\\n"));
     s.push_str(&format!(
@@ -360,20 +424,21 @@ fn constraint_block(cell: &AnalysedCell, group: &Group, c: &Constraint, arc_type
     ));
     s.push_str(&format!(
         "\t-pinlist {{{}}} \\\n",
-        arc_pinlist_str(cell, &group.exposed)
+        arc_pinlist_str(cell, &listed)
     ));
     if cell.state_holding {
         s.push_str(&format!(
             "\t-ic \"{}\" \\\n",
-            ic_str(cell, &c.prevector, &c.levels)
+            ic_str(cell, &model, &c.prevector, &c.levels, &probed)
         ));
     }
     s.push_str(&format!(
         "\t-vector {{{}}} \\\n",
-        constraint_vector_str(cell, c)
+        constraint_vector_str(cell, &model, c)
     ));
     s.push_str(&format!("\t-related_pin {} \\\n", c.related));
     s.push_str(&format!("\t-pin {} \\\n", c.pin));
+    s.push_str(&format!("\t-probe {{{probe_list}}} \\\n"));
     s.push_str(&format!("\t{}\n", name_block(&group.names)));
     s.push('\n');
     s
@@ -386,7 +451,7 @@ fn constraint_block(cell: &AnalysedCell, group: &Group, c: &Constraint, arc_type
 /// measures nothing the cell does in response, so the same column that leaves the outputs unstated
 /// leaves the internals unstated too. The node's start level still reaches Liberate — the `-ic` line
 /// below carries it, as it does for the outputs.
-fn constraint_vector_str(cell: &AnalysedCell, c: &Constraint) -> String {
+fn constraint_vector_str(cell: &AnalysedCell, exposed: &[Symbol], c: &Constraint) -> String {
     let held = assignment(
         c.prevector
             .last()
@@ -394,6 +459,7 @@ fn constraint_vector_str(cell: &AnalysedCell, c: &Constraint) -> String {
     );
     vector(
         cell,
+        exposed,
         |input| {
             if input == c.related {
                 c.related_edge.rf().to_string()
@@ -469,7 +535,13 @@ fn format_arc(cell: &AnalysedCell, group: &Group, arc: &Arc, with_when: bool) ->
     let ic = if cell.state_holding {
         format!(
             "\t-ic \"{}\" \\\n",
-            ic_str(cell, &arc.prevector, &arc.levels)
+            ic_str(
+                cell,
+                &cell.exposed,
+                &arc.prevector,
+                &arc.levels,
+                &BTreeMap::new()
+            )
         )
     } else {
         String::new()
@@ -525,6 +597,7 @@ fn hidden_vector_str(cell: &AnalysedCell, h: &HiddenArc) -> String {
     let end = assignment(&h.end);
     vector(
         cell,
+        &cell.exposed,
         |input| {
             if input == h.pin.as_str() {
                 h.edge.rf().to_string()
@@ -582,7 +655,13 @@ fn format_hidden_arc(cell: &AnalysedCell, group: &Group, h: &HiddenArc, with_whe
     if cell.state_holding {
         s.push_str(&format!(
             "\t-ic \"{}\" \\\n",
-            ic_str(cell, &h.prevector, &h.levels)
+            ic_str(
+                cell,
+                &cell.exposed,
+                &h.prevector,
+                &h.levels,
+                &BTreeMap::new()
+            )
         ));
     }
     s.push_str(&format!("\t-vector {{{vec}}} \\\n"));
@@ -651,15 +730,16 @@ fn prevector_str(
 /// so the three agree by construction rather than by three renderers happening to walk alike.
 fn vector(
     cell: &AnalysedCell,
+    exposed: &[Symbol],
     input_sym: impl Fn(&str) -> String,
     exposed_sym: impl Fn(&str) -> String,
     output_sym: impl Fn(&str) -> String,
 ) -> String {
-    let mut parts = Vec::with_capacity(cell.inputs.len() + cell.exposed.len() + cell.outputs.len());
+    let mut parts = Vec::with_capacity(cell.inputs.len() + exposed.len() + cell.outputs.len());
     for input in &cell.inputs {
         parts.push(input_sym(input));
     }
-    for node in &cell.exposed {
+    for node in exposed {
         parts.push(exposed_sym(node));
     }
     for output in &cell.outputs {
@@ -877,8 +957,10 @@ fn is_one_brace_group(value: &str) -> bool {
 /// construction.
 fn ic_str(
     cell: &AnalysedCell,
+    exposed: &[Symbol],
     prevector: &[espresso_logic::Minterm<espresso_logic::Symbol>],
     levels: &ArcLevels,
+    probed: &BTreeMap<Symbol, bool>,
 ) -> String {
     let held = assignment(
         prevector
@@ -890,10 +972,11 @@ fn ic_str(
         .iter()
         .map(|(s, b)| (s.as_str(), *b))
         .collect();
-    let exposed = exposed_levels(levels);
+    let exposed_start = exposed_levels(levels);
     let column = |level: bool| ic_column(cell.voltages.of(level));
     vector(
         cell,
+        exposed,
         |input| {
             let level = *held
                 .get(input)
@@ -901,7 +984,12 @@ fn ic_str(
             column(level)
         },
         |node| {
-            let level = exposed
+            // A constraint's protected node earns its column from the block rather than from the
+            // cell's exposures, so its level comes with it rather than from the sampled exposures.
+            if let Some(level) = probed.get(node) {
+                return column(*level);
+            }
+            let level = exposed_start
                 .get(node)
                 .expect("the arc's levels define every exposed node")
                 .start;
@@ -925,6 +1013,7 @@ fn vector_str(cell: &AnalysedCell, arc: &Arc) -> String {
 
     vector(
         cell,
+        &cell.exposed,
         |input| {
             let value = *end
                 .get(input)
@@ -1360,9 +1449,21 @@ Y = "A*B"
     }
 
     /// The cell as the single group it is when no node is mapped per alias: every alias named together,
-    /// every exposed node under its own name. Tests that render one block directly go through this.
+    /// every exposed node under its own name. Tests that render one measured block directly go through
+    /// this.
     fn whole(cell: &AnalysedCell) -> Group {
-        let mut g = groups(cell);
+        one_group(cell, &[])
+    }
+
+    /// The same, for a block that also carries the columns `c` protects — what a constraint block
+    /// groups on.
+    fn whole_for(cell: &AnalysedCell, c: &Constraint) -> Group {
+        let protected: Vec<Symbol> = c.nodes.iter().map(|(node, _)| node.clone()).collect();
+        one_group(cell, &protected)
+    }
+
+    fn one_group(cell: &AnalysedCell, extra: &[Symbol]) -> Group {
+        let mut g = groups(cell, extra);
         assert_eq!(g.len(), 1, "fixture has one alias group");
         g.remove(0)
     }
@@ -2822,7 +2923,7 @@ Y = "!W"
         let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
         eprintln!("{tcl}");
         for c in &arc.constraints {
-            let rendered = format_constraint(arc, &whole(arc), c);
+            let rendered = format_constraint(arc, &whole_for(arc, c), c);
             assert!(
                 tcl.contains(&rendered),
                 "the emitted Tcl carries this constraint's blocks:\n{rendered}"
@@ -2906,8 +3007,10 @@ Y = "!W"
 
     #[test]
     fn a_cell_exposing_nothing_keeps_a_pin_only_pinlist() {
-        // Nothing exposed, nothing added: the arc pinlist is the cell's pins, so every rendered block
-        // keeps the shape it had before exposed columns existed.
+        // Nothing exposed, nothing added: a MEASURED block's pinlist is the cell's pins, so it keeps
+        // the shape it had before exposed columns existed. A constraint block is the one kind that adds
+        // a column of its own — for a node it protects that has no pin — so it is checked against what
+        // it protects rather than against the pins alone.
         for src in [AND2, MAJ3, TWO, OA22, IC_DFF] {
             let cell = analyse(src);
             assert!(cell.exposed.is_empty());
@@ -2917,12 +3020,201 @@ Y = "!W"
             );
             let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
             for block in blocks(&tcl) {
+                let pins = cell.inputs.len() + cell.outputs.len();
+                let Some(probe) = braced(&block, "-probe") else {
+                    assert_eq!(
+                        pinlist_of(&block).len(),
+                        pins,
+                        "an exposure-free measured block lists the cell's pins and nothing else:\n{block}"
+                    );
+                    continue;
+                };
+                // Every protected node is named in the one `-probe`, and exactly those without a pin of
+                // their own are the columns the block added.
+                let probed: Vec<&str> = probe.split_whitespace().collect();
+                assert!(
+                    !probed.is_empty(),
+                    "a constraint block probes something:\n{block}"
+                );
+                let pinless = probed
+                    .iter()
+                    .filter(|n| !cell.outputs.iter().any(|o| o.name.as_str() == **n))
+                    .count();
                 assert_eq!(
                     pinlist_of(&block).len(),
-                    cell.inputs.len() + cell.outputs.len(),
-                    "an exposure-free block lists the cell's pins and nothing else:\n{block}"
+                    pins + pinless,
+                    "a constraint block adds a column for each protected node with no pin:\n{block}"
+                );
+                for node in &probed {
+                    assert!(
+                        pinlist_of(&block).contains(node),
+                        "a probed node has a column to be initialised through:\n{block}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The constraint blocks of `tcl`, each truncated at its own trailing blank line.
+    fn constraint_blocks(tcl: &str) -> Vec<String> {
+        blocks(tcl)
+            .into_iter()
+            .filter(|b| b.contains("-probe"))
+            .collect()
+    }
+
+    #[test]
+    fn a_constraint_probes_the_node_it_protects() {
+        // A flop's setup/hold pair protects the master latch: the node the hazard puts at risk is not a
+        // pin of the cell, so the block gives it a column of its own and names it in `-probe`. The
+        // column is what `-ic` initialises it through, and its `-vector` reads `X` — a node the cell
+        // drives is never forced.
+        let cell = analyse(IC_DFF);
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        let cblocks = constraint_blocks(&tcl);
+        assert!(
+            !cblocks.is_empty(),
+            "the flop generates constraints:\n{tcl}"
+        );
+        for block in &cblocks {
+            let probed = braced(block, "-probe").expect("a constraint block probes");
+            assert!(
+                probed.split_whitespace().any(|n| n == "M"),
+                "the master is what the constraint protects: {block}"
+            );
+            // The master has no pin, so the block adds its column between the inputs and the outputs.
+            assert_eq!(pinlist_of(block), ["CLK", "D", "M", "Q"], "{block}");
+            let ic = ic_values(block).expect("a state-holding block renders an -ic");
+            assert_eq!(ic.len(), 4, "one -ic column per pinlist column: {block}");
+            let vector = braced(block, "-vector").expect("a constraint block renders a -vector");
+            assert_eq!(
+                vector.split_whitespace().nth(2),
+                Some("X"),
+                "the probed master is never forced: {block}"
+            );
+        }
+    }
+
+    #[test]
+    fn one_block_probes_every_node_the_hazard_puts_at_risk() {
+        // A mutex's two grants diverge together, so they are one constraint protecting both — one block
+        // naming both in a single `-probe`, not a block each. Both are output pins, so neither earns a
+        // column and the pinlist is the cell's own.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "MUT"
+inputs = ["A", "B"]
+constraint_arcs = true
+[cell.outputs]
+Qa = "!Qb*A"
+Qb = "!Qa*B"
+"#,
+        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        let cblocks = constraint_blocks(&tcl);
+        assert_eq!(
+            cblocks.len(),
+            2,
+            "one constraint, rendered as its setup/hold pair:\n{tcl}"
+        );
+        for block in &cblocks {
+            let probed = braced(block, "-probe").expect("a constraint block probes");
+            assert_eq!(probed.split_whitespace().count(), 2, "{block}");
+            for grant in ["Qa", "Qb"] {
+                assert!(probed.split_whitespace().any(|n| n == grant), "{block}");
+            }
+            assert_eq!(pinlist_of(block), ["A", "B", "Qa", "Qb"], "{block}");
+        }
+    }
+
+    #[test]
+    fn a_probed_node_is_named_by_its_netlist_node() {
+        // What Liberate is handed is the netlist's spelling, for the probe as for the column — and a
+        // drive strength that spells it differently cannot share the block, so the constraints fan out
+        // with the rest.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = ["DFFX1", "DFFX4"]
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+constraint_arcs = true
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+[cell.nodes]
+M = "XI7/m"
+[cell.nodes.DFFX4]
+M = "XI4/m"
+"#,
+        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        for block in constraint_blocks(&tcl) {
+            let probed = braced(&block, "-probe").expect("a constraint block probes");
+            assert!(!probed.contains('M') || probed.contains("/m"), "{block}");
+            let node = if block.contains("{ DFFX1 }") {
+                "XI7/m"
+            } else {
+                "XI4/m"
+            };
+            if probed.split_whitespace().any(|n| n == node) {
+                assert!(
+                    pinlist_of(&block).contains(&node),
+                    "the probed node is listed under the same name: {block}"
                 );
             }
+            assert!(
+                !probed.split_whitespace().any(|n| n == "M"),
+                "the spec's own name is not what Liberate is handed: {block}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_blocks_carrying_a_disputed_column_fan_out() {
+        // Two drive strengths whose netlists spell the master differently. A block addresses its
+        // columns by name, so the ones CARRYING that column cannot name both — but a block that never
+        // lists it does not care how it is spelled, and still names both. The grouping is per block,
+        // not per cell.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = ["DFFX1", "DFFX4"]
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+constraint_arcs = true
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+[cell.nodes]
+M = "XI7/m"
+[cell.nodes.DFFX4]
+M = "XI4/m"
+"#,
+        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        let mut split = 0;
+        for block in blocks(&tcl) {
+            let carries = block.contains("/m");
+            let both = block.contains("{ DFFX1 DFFX4 }");
+            assert_eq!(
+                carries, !both,
+                "a block names both drive strengths exactly when it carries no disputed column:\n{block}"
+            );
+            split += usize::from(carries);
+        }
+        assert!(split > 0, "the constraint blocks do carry it:\n{tcl}");
+        // Leakage carries the cell's pins alone, so nothing divides it whatever the map says.
+        for block in tcl.split("define_leakage").skip(1) {
+            let block = block.split("\n\n").next().unwrap_or(block);
+            assert!(block.contains("{ DFFX1 DFFX4 }"), "{block}");
         }
     }
 

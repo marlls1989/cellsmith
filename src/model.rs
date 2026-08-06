@@ -483,13 +483,13 @@ pub enum ModelError {
     NodeNotInternal { cell: Symbol, signal: Symbol },
     #[error("cell {cell:?}: node mapping alias {alias:?} is not a declared cell name")]
     UnknownNodeAlias { cell: Symbol, alias: Symbol },
-    #[error("cell {cell:?}: two exposed nodes map onto {node:?} under {alias:?}")]
+    #[error("cell {cell:?}: two nodes resolve to {node:?} under {alias:?}")]
     DuplicateNode {
         cell: Symbol,
         alias: Symbol,
         node: Symbol,
     },
-    #[error("cell {cell:?}: an exposed node maps onto the pin {node:?} under {alias:?}")]
+    #[error("cell {cell:?}: a node resolves to the pin {node:?} under {alias:?}")]
     NodeClashesWithPin {
         cell: Symbol,
         alias: Symbol,
@@ -946,11 +946,17 @@ impl Cell {
             }
         }
 
-        // What an exposed node RESOLVES to is a `-pinlist` column, and the `-vector` and `-ic` columns
-        // are positional against that list, so two columns under one name shift every column after
-        // them. `expose` rejects that collision above, before resolution; a mapping can reintroduce it —
-        // two nodes onto one, or a node onto a pin — and does so per drive strength, so each alias is
-        // checked on the columns it actually emits.
+        // ONE NODE, ONE NAME. A netlist holds each signal on a node of its own, and a signal that sits
+        // on a pin's net IS that pin, so what the internals resolve to must be distinct from each other
+        // and from every pin the cell declares. The rule is the netlist's, and it is checked per drive
+        // strength, each having its own map and so its own names.
+        //
+        // Every declared internal is checked, mapped or not: an unmapped one stands for itself, which
+        // is a name another may not be mapped onto. This is also what keeps the emitted columns
+        // straight — `-vector` and `-ic` are positional against `-pinlist`, so two columns under one
+        // name shift every column after them — but the columns are the consequence, not the rule.
+        // Which internals earn one is not even known here: a constraint arc gives the node it protects
+        // a column of its own, and where the hazards are is settled only by exploring the machine.
         let pin_set: BTreeSet<Symbol> = self
             .inputs
             .iter()
@@ -959,7 +965,7 @@ impl Cell {
             .collect();
         for alias in &self.name {
             let mut resolved_seen: BTreeSet<Symbol> = BTreeSet::new();
-            for node in &self.expose {
+            for node in self.internal.keys() {
                 let resolved = self.nodes.of(alias, node);
                 if pin_set.contains(&resolved) {
                     return Err(ModelError::NodeClashesWithPin {
@@ -1695,7 +1701,7 @@ Q = "n"
     }
 
     #[test]
-    fn two_exposed_nodes_may_not_map_onto_one() {
+    fn two_nodes_may_not_resolve_to_one() {
         // The resolved names are `-pinlist` columns and the vector is positional against that list, so
         // two columns under one name shift every column after them. `expose` rejects the same collision
         // before resolution; the mapping may not reintroduce it.
@@ -1707,6 +1713,77 @@ Q = "n"
             .analyse()
             .unwrap_err();
         assert!(matches!(err, ModelError::DuplicateNode { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn two_mapped_nodes_may_not_share_a_name() {
+        // One node, one name: two internals mapped onto the same netlist node say the netlist holds
+        // both on one, which it does not — neither is exposed or protected here, so this is the rule
+        // itself rather than the columns it keeps straight.
+        let s = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+N = "CLK*M + !CLK*N"
+[cell.outputs]
+Q = "N"
+[cell.nodes]
+M = "xuxu"
+N = "xuxu"
+"#;
+        let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
+        assert!(matches!(err, ModelError::DuplicateNode { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn a_mapping_may_not_take_an_unmapped_node_s_name() {
+        // An unmapped internal stands for itself, so its own name is taken: mapping another onto it
+        // collides even though nothing in the spec mentions it twice.
+        let s = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+expose = ["N"]
+constraint_arcs = true
+[cell.internal]
+M = "!CLK*D + CLK*M"
+N = "CLK*M + !CLK*N"
+[cell.outputs]
+Q = "N"
+[cell.nodes]
+N = "M"
+"#;
+        let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
+        assert!(matches!(err, ModelError::DuplicateNode { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn an_unexposed_node_is_checked_for_collisions_too() {
+        // Which nodes take a column is not settled by `expose`: a constraint arc gives the node it
+        // protects one of its own, and that is known only after exploration. So every MAPPED node is
+        // checked, exposed or not — here a flop's master, protected by the setup/hold pair it earns.
+        let s = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+constraint_arcs = true
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+[cell.nodes]
+M = "CLK"
+"#;
+        let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
+        assert!(
+            matches!(err, ModelError::NodeClashesWithPin { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]
