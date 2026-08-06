@@ -27,7 +27,7 @@ Q = "CLK*M + !CLK*Q"
 [cell.template]
 delay = "dly_10x10"
 power = "pwr_10x10"
-constrain = "con_10x10"
+constraint = "con_10x10"
 
 # The same rising-edge flip-flop with the edge collapse opted out: it stays two level latches.
 [[cell]]

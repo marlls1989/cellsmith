@@ -5,7 +5,7 @@ define_cell \
 	-pinlist { CLK D Q } \
 	-delay dly_10x10 \
 	-power pwr_10x10 \
-	-constrain con_10x10 \
+	-constraint con_10x10 \
 	{ DFF }
 
 define_cell \

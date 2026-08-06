@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`define_cell`'s characterisation-template flag is `-constraint`.** The emitted flag was
+  `-constrain`. The spec key is `constraint` to match, and is also accepted spelled `constrain`.
+- **Condensed the `--help` text.** Each flag's help is now a single line; the behaviour behind the
+  flags is described in the README.
+
 ## [0.4.1] - 2026-08-02
 
 ### Changed

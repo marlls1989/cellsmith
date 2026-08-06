@@ -86,7 +86,7 @@ pub struct Cell {
     #[serde(default, deserialize_with = "de_when")]
     pub when: ArcClasses,
     /// Optional: the cell-wide characterisation-template references for the `define_cell` emitter
-    /// (delay/power/constrain). Structural only — the template names come from the spec, never
+    /// (delay/power/constraint). Structural only — the template names come from the spec, never
     /// generated. `None` fields carry through unset.
     #[serde(default)]
     pub template: Option<TemplateSpec>,
@@ -107,7 +107,7 @@ pub struct Cell {
 }
 
 /// The characterisation-template references for a cell (or a drive-strength alias override): the
-/// `delay`, `power` and `constrain` template names the `define_cell` emitter attaches. Structural
+/// `delay`, `power` and `constraint` template names the `define_cell` emitter attaches. Structural
 /// only — each name is taken verbatim from the spec, never generated; an absent field is `None`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -116,8 +116,9 @@ pub struct TemplateSpec {
     pub delay: Option<Symbol>,
     #[serde(default, deserialize_with = "de_opt_symbol")]
     pub power: Option<Symbol>,
-    #[serde(default, deserialize_with = "de_opt_symbol")]
-    pub constrain: Option<Symbol>,
+    /// Also accepted under the `constrain` spelling.
+    #[serde(default, alias = "constrain", deserialize_with = "de_opt_symbol")]
+    pub constraint: Option<Symbol>,
 }
 
 /// The voltage expressions the Liberate arcs' `-ic` renders for the two logic levels (`low` for `0`,
@@ -463,7 +464,7 @@ pub struct AnalysedCell {
     /// `order_dependence`, `oscillation` and `constraints` are all empty and `edge` is the default, so
     /// the CLI reports the cell instead of emitting arc-free artifacts for it.
     pub unexplored: Option<crate::logic::machine::ExplorationLimit>,
-    /// The cell-wide characterisation-template references (delay/power/constrain) carried verbatim from
+    /// The cell-wide characterisation-template references (delay/power/constraint) carried verbatim from
     /// the spec for the `define_cell` emitter. `None` when the cell declares no `template`. Raw carry —
     /// analysis never reads or synthesises it.
     pub template: Option<TemplateSpec>,
