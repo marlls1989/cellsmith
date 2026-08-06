@@ -292,7 +292,8 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
     // single toggle and every unordered input pair, filling this state's own dedup maps. Each state is
     // independent — the parallel unit — and the maps merge commutatively in the `reduce` below.
     //
-    // `order_dependence` deduplicates by its unordered `(pin,edge)|(pin,edge)` key, keeping the min
+    // `order_dependence` deduplicates by its unordered `(pin,edge)|(pin,edge)` key and the nodes the
+    // hazard endangers, keeping the min
     // `(prevector.len, discovered)` representative; `oscillation` deduplicates by `group|condition`,
     // keeping the incumbent representative while appending every colliding pair-probe [`Race`]. Both are
     // BTreeMaps, so the final iteration order is deterministic regardless of merge order.
@@ -598,7 +599,13 @@ fn record_order_dependence(map: &mut BTreeMap<String, OrderDependence>, od: Orde
     let a = format!("{}{}", od.x, od.x_edge.rf());
     let b = format!("{}{}", od.y, od.y_edge.rf());
     let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
-    let key = format!("{lo}|{hi}");
+    // The nodes are part of a hazard's identity: the same pair of edges racing under different
+    // conditions can endanger DIFFERENT nodes — where a side input holds an output still, an internal's
+    // divergence never reaches it — and those are different hazards, each with its own pre-hazard state
+    // to characterise from. Keying on the pins alone collapsed them onto whichever was found first.
+    // Observations endangering the SAME nodes are the same hazard reached along different walks, and
+    // there the shortest walk stands for all of them, as it does everywhere in this engine.
+    let key = format!("{lo}|{hi}|{}", od.group.join(","));
     // The `Option` read here is the incumbent — no entry yet, or one this candidate beats on
     // `(prevector.len, discovered)` — nothing to do with a state value's determinacy.
     if map
@@ -847,6 +854,41 @@ Q = "A*B + Q*(A+B)"
                     .iter()
                     .all(|p| *p == "A" || *p == "B")),
             "expected a non_seq constraint between A and B, got {cons:?}"
+        );
+    }
+
+    #[test]
+    fn a_pair_endangering_different_nodes_yields_a_constraint_each() {
+        // A dual-clock mux: `Q = CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q`. With CLKA high the A latch is
+        // transparent, so `MA = DA` reaches Q — and that decides whether MB's divergence does too.
+        // Racing CLKB against DB endangers MB alone where DA holds Q at 1, and both Q and MB where DA
+        // is 0. Same pins, same edges, different nodes at risk: two hazards, each characterised from
+        // its own pre-hazard state rather than collapsed onto whichever was reached first.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DCMUX"
+inputs = ["CLKA", "CLKB", "DA", "DB"]
+clock = ["CLKA", "CLKB"]
+constraint_arcs = true
+[cell.internal]
+MA = "!CLKA*DA + CLKA*MA"
+MB = "!CLKB*DB + CLKB*MB"
+[cell.outputs]
+Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
+"#,
+        );
+        let mut endangered: Vec<Vec<&str>> = cell
+            .constraints
+            .iter()
+            .filter(|c| c.related.as_str() == "CLKB" && c.pin.as_str() == "DB")
+            .map(|c| c.nodes.iter().map(|(n, _)| n.as_str()).collect())
+            .collect();
+        endangered.sort();
+        endangered.dedup();
+        assert!(
+            endangered.contains(&vec!["MB"]) && endangered.contains(&vec!["Q", "MB"]),
+            "both node sets are constrained, got {endangered:?}",
         );
     }
 

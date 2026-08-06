@@ -208,10 +208,16 @@ pair. Every constraint is built the same way, whichever hazard it came from:
   constraint carries them because the arc it renders measures them: they are what the constraint is
   about.
 
-Constraints are deduplicated on a canonical key — directed (related, edge, pin, edge) for setup/hold,
-unordered for non-sequential, and in both cases the nodes protected — keeping the **shortest prevector**
-among the states that exhibit the hazard, with a deterministic tie-break so the generated set is
-reproducible.
+A detected order dependence is identified by its racing pins and edges **and the nodes it endangers**:
+the same pair racing under a different condition can put different nodes at risk — where a side input
+holds an output still, an internal's divergence never reaches it — and that is a different hazard, with
+its own pre-hazard state to characterise from. Observations endangering the same nodes are one hazard
+reached along different walks.
+
+Constraints are then deduplicated on a canonical key — directed (related, edge, pin, edge) for
+setup/hold, unordered for non-sequential, and in both cases the nodes protected — keeping the
+**shortest prevector** among the states that exhibit the hazard, with a deterministic tie-break so the
+generated set is reproducible.
 
 ## 7. Reporting and emission
 

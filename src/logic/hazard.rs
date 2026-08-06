@@ -19,7 +19,9 @@
 //! generated. This module carries only the resulting report types.
 //!
 //! **Implementation note:** deduplication is handled by [`super::confluence`].
-//! [`OrderDependence`] is keyed by the unordered `(pin,edge)|(pin,edge)` pair, keeping the min
+//! [`OrderDependence`] is keyed by the unordered `(pin,edge)|(pin,edge)` pair together with the nodes
+//! the hazard endangers — the same pins racing under different conditions can put different nodes at
+//! risk, and those are different hazards — keeping the min
 //! `(prevector.len, discovered)` representative; [`Oscillation`] is keyed by `group|condition`, keeping an
 //! arbitrary colliding representative (`group`/`condition`/`stable` coincide by key) with every colliding
 //! pair-probe [`Race`] appended rather than dropped. `discovered` (on both [`Race`] and [`OrderDependence`])
