@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A cell's internal signals must resolve to distinct netlist nodes.** `[cell.nodes]` may not put two
+  signals on one node, nor a signal on a node named after one of the cell's pins: a netlist holds each
+  signal on a node of its own, and a signal sitting on a pin's net is that pin. Both are analyse-time
+  errors naming the drive strength they occur under. A spec mapping a signal onto a name already
+  spoken for is now rejected where it was previously accepted.
+
 - **`define_leakage` states every state the cell can rest in.** One block per fully-initialised
   reachable rest state, carrying the `-prevector` that primes the cell's internal nodes into it and a
   `-vector` holding the cell's pins at the levels they rest at. A cell leaks differently in each state
