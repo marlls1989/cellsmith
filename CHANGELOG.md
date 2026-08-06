@@ -15,11 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whichever grant it arbitrated into — neither of which a seed-keyed derivation could express. Each block
   now carries a `-vector` holding the cell's own pins at their rest levels, and a `-prevector` priming
   the internal nodes to what the state holds, which is what tells two states at the same inputs apart.
-  An exposed internal node takes no column in the vector: the prevector has already placed it. The
-  prevector carries the priming steps only — the walk's final step is the rest state itself, which the
-  vector states — so a state the inputs drive the cell into on their own trims to nothing and carries no
-  prevector: every rest state of a combinational cell, and the forced states of a state-holding one.
-  Only
+  An exposed internal node takes no column in the vector: the prevector has already placed it. A state
+  the inputs drive the cell into on their own is reached with no walk and has nothing to prime, so it
+  carries no prevector at all — every rest state of a combinational cell, and the forced states of a
+  state-holding one. Only
   fully-initialised states are emitted — a state carrying an uninitialised latch is at an unknown state —
   so a leakage state is never partial, where the previous derivation emitted seeds with unresolved
   outputs dropped.

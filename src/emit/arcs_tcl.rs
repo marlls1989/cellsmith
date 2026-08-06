@@ -924,30 +924,25 @@ fn hidden_when_str(h: &HiddenArc) -> Option<String> {
 /// own, inputs then outputs ([`pinlist_str`]): an exposed internal is no pin of the cell and the
 /// prevector has already put it where it belongs, so it takes no column here.
 ///
-/// The walk's LAST step is the state itself — `Explored::path_to` ends its chain there — and `-vector`
-/// already states that input assignment, so only the steps before it prime and only those are rendered.
-/// Trimmed to nothing, the prevector goes entirely: a state the inputs drive the cell into on their own
-/// has no internal state left to prime.
+/// The walk is rendered whole. Its last step is the state itself — `Explored::path_to` ends its chain
+/// there — and so restates the input assignment `-vector` carries, which is not redundancy to remove:
+/// Liberate requires a prevector to END at the vector's value. What a walk-free state has is no walk at
+/// all, its path being that single step, and there the prevector goes entirely: nothing is primed by
+/// stating where the cell already is.
 fn format_leakage(cell: &AnalysedCell, l: &LeakageState) -> String {
     let mut lits: Vec<(Symbol, bool)> = assignment(&l.inputs).into_iter().collect();
     lits.extend(l.outputs.iter().cloned());
     lits.sort();
 
-    let priming = l
-        .prevector
-        .split_last()
-        .expect("path_to ends its chain with the state itself")
-        .1;
-
     let mut s = String::from("define_leakage \\\n");
-    if !priming.is_empty() {
+    if l.prevector.len() > 1 {
         s.push_str(&format!(
             "\t-prevector_pinlist {{{}}} \\\n",
             cell.inputs.join(" ")
         ));
         s.push_str(&format!(
             "\t-prevector {{{}}} \\\n",
-            prevector_str(cell, priming)
+            prevector_str(cell, &l.prevector)
         ));
     }
     s.push_str(&format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell)));
@@ -3366,8 +3361,8 @@ Q = "A*B + Q*(A+B)"
         assert!(tcl.contains("-when \"!A*!B*!Q\""));
 
         // The pair that shares an input assignment and differs only in what the cell holds: same
-        // -pinlist, opposite Q column, and a prevector naming the forcing input that set Q — the walk
-        // trimmed of its last step, which is the rest state -vector already states.
+        // -pinlist, opposite Q column, and a prevector walking in from the forcing input that set Q.
+        // Each walk ends at the rest state, as Liberate requires of a prevector.
         let block = |needle: &str| {
             tcl.split("define_leakage")
                 .find(|b| b.contains(needle))
@@ -3378,8 +3373,8 @@ Q = "A*B + Q*(A+B)"
         assert!(high.contains("-pinlist {A B Q}") && low.contains("-pinlist {A B Q}"));
         assert!(high.contains("-vector {1 0 1}"), "held high: {high}");
         assert!(low.contains("-vector {1 0 0}"), "held low: {low}");
-        assert!(high.contains("-prevector {11} \\"), "held high: {high}");
-        assert!(low.contains("-prevector {00} \\"), "held low: {low}");
+        assert!(high.contains("-prevector {11 10}"), "held high: {high}");
+        assert!(low.contains("-prevector {00 10}"), "held low: {low}");
 
         // A forcing input drives the cell into its state on its own — no walk, so nothing to prime and
         // no prevector, unlike the hold states above.
@@ -3389,6 +3384,34 @@ Q = "A*B + Q*(A+B)"
                 !forced.contains("-prevector"),
                 "a forced rest state needs no priming: {forced}"
             );
+        }
+
+        // Liberate requires a prevector to END at the vector's value, so every rendered walk's last
+        // step is the rest state's own input assignment — the two inputs of the {A B Q} vector.
+        let field = |b: &str, tag: &str| -> String {
+            b.lines()
+                .find(|l| l.trim_start().starts_with(tag))
+                .and_then(|l| l.split('{').nth(1))
+                .and_then(|v| v.split('}').next())
+                .unwrap_or_else(|| panic!("block renders a {tag}: {b}"))
+                .to_string()
+        };
+        for b in tcl.split("define_leakage").skip(1) {
+            let b = b.split("\n\n").next().unwrap_or(b);
+            if !b.contains("-prevector ") {
+                continue;
+            }
+            let last = field(b, "-prevector ")
+                .split_whitespace()
+                .last()
+                .expect("a rendered prevector has a step")
+                .to_string();
+            let inputs: String = field(b, "-vector ")
+                .split_whitespace()
+                .take(2)
+                .collect::<Vec<_>>()
+                .concat();
+            assert_eq!(last, inputs, "the walk ends at the vector's value: {b}");
         }
     }
 
