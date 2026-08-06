@@ -333,28 +333,26 @@ terminal width, so wrapping and column positions legitimately differ from any gi
 cellsmith [OPTIONS] <SPEC>
 
 Arguments:
-  <SPEC>              TOML cell spec to read ("-" reads from stdin)
+  <SPEC>              TOML cell spec ("-" reads stdin)
 
 Options:
-  -o, --outdir <OUTDIR>   Directory for the generated files [default: .]
-  -n, --name <NAME>       Base name for the output files (default: the spec file stem)
-      --when[=<CLASS>]    Also emit the `-when`-conditioned arcs of an arc class; bare `--when` selects
-                          every class. Repeat to select several; a value must be attached with `=`
-                          [possible values: transition, hidden]
-      --no-internal       Suppress the hidden (internal-power) arcs
-      --no-leakage        Suppress the `define_leakage` blocks
-      --no-cells          Suppress the `<base>_cells.tcl` define_cell artifact
-      --constraints       Emit derived setup/hold & non_seq constraint arcs for every cell
-      --no-edge-collapse  Suppress the behavioural edge-register annotation
-      --logic-low <VOLTAGE>   Voltage expression the `-ic` lines render for logic `0` [default: 0]
-      --logic-high <VOLTAGE>  Voltage expression the `-ic` lines render for logic `1` [default: $VDD]
-      --stdout            Write the artifacts to stdout (with banners) instead of to files
-      --max-candidates <N>    Ceiling on the seed minterms a cell's exploration may pool as
-                          initialisation candidates [default: 4194304]
-      --max-states <N>        Ceiling on the reachable stable states a cell's exploration may record
-                          [default: 1048576]
-  -h, --help              Print help
-  -V, --version           Print version
+  -o, --outdir <OUTDIR>       Output directory [default: .]
+  -n, --name <NAME>           Output base name [default: the spec file stem]
+      --when[=<CLASS>]        Also emit the `-when`-conditioned arcs of a class; bare selects every
+                              class, repeat to select several (attach the value with `=`)
+                              [possible values: transition, hidden]
+      --no-internal           Suppress hidden (internal-power) arcs
+      --no-leakage            Suppress `define_leakage` blocks
+      --no-cells              Suppress the `<base>_cells.tcl` artifact
+      --constraints           Emit derived setup/hold & non_seq constraint arcs
+      --no-edge-collapse      Suppress the edge-register annotation
+      --logic-low <VOLTAGE>   Voltage for logic `0` [default: 0]
+      --logic-high <VOLTAGE>  Voltage for logic `1` [default: $VDD]
+      --stdout                Write the artifacts to stdout instead of to files
+      --max-candidates <N>    Ceiling on pooled seed minterms [default: 4194304]
+      --max-states <N>        Ceiling on recorded stable states [default: 1048576]
+  -h, --help                  Print help
+  -V, --version               Print version
 ```
 
 Exceeding either exploration ceiling is a hard error: cellsmith names every cell whose exploration

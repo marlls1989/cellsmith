@@ -24,14 +24,14 @@ use cellsmith::model::{parse_spec, AnalysedCell, ArcClass, ArcClasses};
 #[derive(Parser)]
 #[command(name = "cellsmith", version, about, long_about = None)]
 struct Cli {
-    /// TOML cell spec to read ("-" reads from stdin).
+    /// TOML cell spec ("-" reads stdin).
     spec: String,
 
-    /// Directory for the generated files.
+    /// Output directory.
     #[arg(short, long, default_value = ".")]
     outdir: PathBuf,
 
-    /// Base name for the output files (default: the spec file stem).
+    /// Output base name [default: the spec file stem].
     #[arg(short, long)]
     name: Option<String>,
 
@@ -40,43 +40,43 @@ struct Cli {
     #[command(flatten)]
     when: WhenArg,
 
-    /// Suppress the hidden (internal-power) arcs.
+    /// Suppress hidden (internal-power) arcs.
     #[arg(long)]
     no_internal: bool,
 
-    /// Suppress the `define_leakage` blocks.
+    /// Suppress `define_leakage` blocks.
     #[arg(long)]
     no_leakage: bool,
 
-    /// Suppress the `<base>_cells.tcl` define_cell artifact.
+    /// Suppress the `<base>_cells.tcl` artifact.
     #[arg(long)]
     no_cells: bool,
 
-    /// Emit derived setup/hold & non_seq constraint arcs for every cell.
+    /// Emit derived setup/hold & non_seq constraint arcs.
     #[arg(long)]
     constraints: bool,
 
-    /// Suppress the behavioural edge-register annotation.
+    /// Suppress the edge-register annotation.
     #[arg(long)]
     no_edge_collapse: bool,
 
-    /// Voltage expression the `-ic` lines render for logic `0` [default: 0].
+    /// Voltage for logic `0` [default: 0].
     #[arg(long, value_name = "VOLTAGE")]
     logic_low: Option<String>,
 
-    /// Voltage expression the `-ic` lines render for logic `1` [default: $VDD].
+    /// Voltage for logic `1` [default: $VDD].
     #[arg(long, value_name = "VOLTAGE")]
     logic_high: Option<String>,
 
-    /// Write the artifacts to stdout (with banners) instead of to files.
+    /// Write the artifacts to stdout instead of to files.
     #[arg(long)]
     stdout: bool,
 
-    /// Ceiling on the seed minterms a cell's exploration may pool as initialisation candidates.
+    /// Ceiling on pooled seed minterms.
     #[arg(long, value_name = "N", default_value_t = ExplorationBudget::default().candidates)]
     max_candidates: usize,
 
-    /// Ceiling on the reachable stable states a cell's exploration may record.
+    /// Ceiling on recorded stable states.
     #[arg(long, value_name = "N", default_value_t = ExplorationBudget::default().states)]
     max_states: usize,
 }
@@ -102,8 +102,8 @@ fn when_arg() -> Arg {
         .require_equals(true)
         .action(ArgAction::Append)
         .help(
-            "Also emit the `-when`-conditioned arcs of an arc class; bare `--when` selects every \
-             class. Repeat to select several; a value must be attached with `=`",
+            "Also emit the `-when`-conditioned arcs of a class; bare selects every class, \
+             repeat to select several (attach the value with `=`)",
         )
 }
 
