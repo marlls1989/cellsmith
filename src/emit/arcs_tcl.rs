@@ -29,7 +29,7 @@
 //! reads that view — the `define_cell` pinlist ([`pinlist_str`]) and every other artifact keep to the
 //! cell's actual pins.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::Hash;
 
 use espresso_logic::Symbol;
@@ -97,10 +97,12 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     // blocks — the emitted form cannot express the internal state that makes them distinct arcs. Neither
     // repeat drops an arc or misstates timing; the duplication is harmless.
     //
-    // A measured block addresses its exposed columns by name, so the aliases it may name together are
-    // those whose netlist agrees on them — its [`Group`]. Every pass below therefore runs per group,
-    // each group's blocks contiguous. A cell that maps no node per alias has exactly one group holding
-    // every alias, and emits what it always did.
+    // A block addresses its columns by name, so the aliases it may name together are those whose
+    // netlist agrees on the columns IT carries — its [`Group`]. That is asked per block rather than per
+    // cell: a measured block carries the cell's exposures, a constraint block those plus the nodes it
+    // protects, and it is no business of a transition arc how some constraint's protected node is
+    // spelled. A cell that maps no node per alias has one group holding every alias throughout, and
+    // emits what it always did.
     let general = generalised(
         &cell.arcs,
         |arc| ArcIdentity::of(cell, arc),
@@ -109,8 +111,8 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     let general_hidden = generalised(&cell.hidden_arcs, ArcIdentity::of_hidden, |h| {
         h.prevector.len()
     });
-    let groups = groups(cell);
-    for group in &groups {
+    let measured = groups(cell, &[]);
+    for group in &measured {
         for (_, arc) in cell
             .arcs
             .iter()
@@ -164,8 +166,9 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     // Constraint arcs emit whatever generation produced: `cell.constraints` is populated only when the
     // cell opted in (per-cell `constraint_arcs`, or the global `--constraints` flag), and is empty
     // otherwise — so this loop is its own gate.
-    for group in &groups {
-        for c in &cell.constraints {
+    for c in &cell.constraints {
+        let protected: Vec<Symbol> = c.nodes.iter().map(|(node, _)| node.clone()).collect();
+        for group in &groups(cell, &protected) {
             out.push_str(&format_constraint(cell, group, c));
         }
     }
@@ -310,9 +313,9 @@ struct Group {
     names: Vec<Symbol>,
     /// What this group's exposed nodes are called in its netlist, in `cell.exposed` order.
     exposed: Vec<Symbol>,
-    /// What this group's netlist calls each node a constraint protects, by the node's own name. A
-    /// protected node earns a column on the block that protects it, so a group has to agree on its
-    /// name too, not only on the cell's exposures.
+    /// What this group's netlist calls each node the BLOCK carries beyond the cell's exposures — the
+    /// nodes its own constraint protects, and nothing else. A block groups on the columns it carries,
+    /// so it holds names for those and no others.
     probed: BTreeMap<Symbol, Symbol>,
 }
 
@@ -329,27 +332,25 @@ impl Group {
     }
 }
 
-/// The cell's alias groups, in first-appearance order — aliases bundled by the netlist nodes their
-/// columns resolve to: the exposed ones every block lists, and the ones a constraint block adds for the
-/// node it protects.
-fn groups(cell: &AnalysedCell) -> Vec<Group> {
-    /// The netlist names one drive strength's blocks address, which is what decides whether two of them
-    /// can share a block. Both halves are lists of netlist names, so they are named rather than
+/// The alias groups for a block carrying `extra` columns beyond the cell's exposures — the nodes its
+/// own constraint protects, or nothing for a measured block — in first-appearance order.
+///
+/// The grouping is per block, not per cell: a block may name every drive strength whose netlist agrees
+/// on the columns IT carries, and it is no business of a transition arc how some constraint's protected
+/// node is spelled. A cell mapping nothing per drive strength has one group holding every alias
+/// whatever it carries.
+fn groups(cell: &AnalysedCell, extra: &[Symbol]) -> Vec<Group> {
+    /// The netlist names one drive strength's block addresses, which is what decides whether two of
+    /// them can share it. Both halves are lists of netlist names, so they are named rather than
     /// positional: transposing them would regroup the cell silently.
     #[derive(PartialEq, Eq, Hash)]
     struct Columns {
-        /// The cell's exposed nodes, in `cell.exposed` order — a column on every measured block.
+        /// The cell's exposed nodes, in `cell.exposed` order — a column on every block.
         exposed: Vec<Symbol>,
-        /// The nodes the cell's constraints protect, in `protected` order — a column on the block that
-        /// protects them.
-        protected: Vec<Symbol>,
+        /// The columns this block carries beyond them, in `extra` order.
+        extra: Vec<Symbol>,
     }
 
-    let protected: BTreeSet<Symbol> = cell
-        .constraints
-        .iter()
-        .flat_map(|c| c.nodes.iter().map(|(n, _)| n.clone()))
-        .collect();
     let mut by_nodes: IndexMap<Columns, Vec<Symbol>> = IndexMap::new();
     for alias in &cell.name {
         let resolved = |names: &mut dyn Iterator<Item = &Symbol>| -> Vec<Symbol> {
@@ -357,7 +358,7 @@ fn groups(cell: &AnalysedCell) -> Vec<Group> {
         };
         let key = Columns {
             exposed: resolved(&mut cell.exposed.iter()),
-            protected: resolved(&mut protected.iter()),
+            extra: resolved(&mut extra.iter()),
         };
         by_nodes.entry(key).or_default().push(alias.clone());
     }
@@ -366,7 +367,7 @@ fn groups(cell: &AnalysedCell) -> Vec<Group> {
         .map(|(columns, names)| Group {
             names,
             exposed: columns.exposed,
-            probed: protected.iter().cloned().zip(columns.protected).collect(),
+            probed: extra.iter().cloned().zip(columns.extra).collect(),
         })
         .collect()
 }
@@ -1448,9 +1449,21 @@ Y = "A*B"
     }
 
     /// The cell as the single group it is when no node is mapped per alias: every alias named together,
-    /// every exposed node under its own name. Tests that render one block directly go through this.
+    /// every exposed node under its own name. Tests that render one measured block directly go through
+    /// this.
     fn whole(cell: &AnalysedCell) -> Group {
-        let mut g = groups(cell);
+        one_group(cell, &[])
+    }
+
+    /// The same, for a block that also carries the columns `c` protects — what a constraint block
+    /// groups on.
+    fn whole_for(cell: &AnalysedCell, c: &Constraint) -> Group {
+        let protected: Vec<Symbol> = c.nodes.iter().map(|(node, _)| node.clone()).collect();
+        one_group(cell, &protected)
+    }
+
+    fn one_group(cell: &AnalysedCell, extra: &[Symbol]) -> Group {
+        let mut g = groups(cell, extra);
         assert_eq!(g.len(), 1, "fixture has one alias group");
         g.remove(0)
     }
@@ -2910,7 +2923,7 @@ Y = "!W"
         let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
         eprintln!("{tcl}");
         for c in &arc.constraints {
-            let rendered = format_constraint(arc, &whole(arc), c);
+            let rendered = format_constraint(arc, &whole_for(arc, c), c);
             assert!(
                 tcl.contains(&rendered),
                 "the emitted Tcl carries this constraint's blocks:\n{rendered}"
@@ -3159,6 +3172,49 @@ M = "XI4/m"
                 !probed.split_whitespace().any(|n| n == "M"),
                 "the spec's own name is not what Liberate is handed: {block}"
             );
+        }
+    }
+
+    #[test]
+    fn only_the_blocks_carrying_a_disputed_column_fan_out() {
+        // Two drive strengths whose netlists spell the master differently. A block addresses its
+        // columns by name, so the ones CARRYING that column cannot name both — but a block that never
+        // lists it does not care how it is spelled, and still names both. The grouping is per block,
+        // not per cell.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = ["DFFX1", "DFFX4"]
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+constraint_arcs = true
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+[cell.nodes]
+M = "XI7/m"
+[cell.nodes.DFFX4]
+M = "XI4/m"
+"#,
+        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        let mut split = 0;
+        for block in blocks(&tcl) {
+            let carries = block.contains("/m");
+            let both = block.contains("{ DFFX1 DFFX4 }");
+            assert_eq!(
+                carries, !both,
+                "a block names both drive strengths exactly when it carries no disputed column:\n{block}"
+            );
+            split += usize::from(carries);
+        }
+        assert!(split > 0, "the constraint blocks do carry it:\n{tcl}");
+        // Leakage carries the cell's pins alone, so nothing divides it whatever the map says.
+        for block in tcl.split("define_leakage").skip(1) {
+            let block = block.split("\n\n").next().unwrap_or(block);
+            assert!(block.contains("{ DFFX1 DFFX4 }"), "{block}");
         }
     }
 
