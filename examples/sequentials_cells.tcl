@@ -182,6 +182,13 @@ define_cell \
 define_cell \
 	-input { D } \
 	-output { Q } \
+	-clock { CLKA CLKB } \
+	-pinlist { CLKA CLKB D Q } \
+	{ MCDFFX1 MCDFFX4 }
+
+define_cell \
+	-input { D } \
+	-output { Q } \
 	-clock { CLK } \
 	-pinlist { CLK D Q } \
 	{ TCASC }

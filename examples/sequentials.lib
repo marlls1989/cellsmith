@@ -676,6 +676,68 @@ library (sequentials) {
       internal_node : "M";
     }
   }
+  cell (MCDFFX1) {
+    pin (CLKA) {
+      direction : input;
+    }
+    pin (CLKB) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("CLKA CLKB D", "Q_st sela0") {
+      table : "- L - : - - : N - , \
+               - H - : - L : L - , \
+               - H - : - H : H - , \
+               L - L : - - : - L , \
+               L - H : - - : - H , \
+               H - - : - - : - N";
+    }
+    pin (Q) {
+      direction : output;
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
+    }
+    pin (sela0) {
+      direction : internal;
+      internal_node : "sela0";
+    }
+  }
+  cell (MCDFFX4) {
+    pin (CLKA) {
+      direction : input;
+    }
+    pin (CLKB) {
+      direction : input;
+    }
+    pin (D) {
+      direction : input;
+    }
+    statetable ("CLKA CLKB D", "Q_st sela0") {
+      table : "- L - : - - : N - , \
+               - H - : - L : L - , \
+               - H - : - H : H - , \
+               L - L : - - : - L , \
+               L - H : - - : - H , \
+               H - - : - - : - N";
+    }
+    pin (Q) {
+      direction : output;
+      state_function : "Q_st";
+    }
+    pin (Q_st) {
+      direction : internal;
+      internal_node : "Q_st";
+    }
+    pin (sela0) {
+      direction : internal;
+      internal_node : "sela0";
+    }
+  }
   cell (TCASC) {
     pin (CLK) {
       direction : input;

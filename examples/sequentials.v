@@ -697,6 +697,54 @@ MCDFF_Q u_MCDFF_Q (Q, CLKB, M);
 MCDFF_M u_MCDFF_M (M, CLKA, D);
 endmodule
 `endcelldefine
+primitive MCDFFX1_Q(Q, CLKB, sela0);
+output Q;
+input  CLKB, sela0;
+reg    Q;
+table
+	0 ? : ? : -;
+	1 0 : ? : 0;
+	1 1 : ? : 1;
+endtable
+endprimitive
+primitive MCDFFX1_sela0(sela0, CLKA, D);
+output sela0;
+input  CLKA, D;
+reg    sela0;
+table
+	0 0 : ? : 0;
+	0 1 : ? : 1;
+	1 ? : ? : -;
+endtable
+endprimitive
+`celldefine
+module MCDFFX1(Q, CLKA, CLKB, D);
+output Q;
+input  CLKA, CLKB, D;
+wire   sela0;
+specify
+	(CLKA => Q) = (0.1, 0.1);
+	(CLKB => Q) = (0.1, 0.1);
+	(D => Q) = (0.1, 0.1);
+endspecify
+MCDFFX1_Q u_MCDFFX1_Q (Q, CLKB, sela0);
+MCDFFX1_sela0 u_MCDFFX1_sela0 (sela0, CLKA, D);
+endmodule
+`endcelldefine
+`celldefine
+module MCDFFX4(Q, CLKA, CLKB, D);
+output Q;
+input  CLKA, CLKB, D;
+wire   sela0;
+specify
+	(CLKA => Q) = (0.1, 0.1);
+	(CLKB => Q) = (0.1, 0.1);
+	(D => Q) = (0.1, 0.1);
+endspecify
+MCDFFX1_Q u_MCDFFX1_Q (Q, CLKB, sela0);
+MCDFFX1_sela0 u_MCDFFX1_sela0 (sela0, CLKA, D);
+endmodule
+`endcelldefine
 primitive TCASC_Q(Q, CLK, M);
 output Q;
 input  CLK, M;

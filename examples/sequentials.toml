@@ -273,6 +273,24 @@ M = "!CLKA*D + CLKA*M"
 [cell.outputs]
 Q = "CLKB*M + !CLKB*Q"
 
+# The same two-clock pair over two drive strengths, each holding its master on a differently-spelled
+# netlist node. Two clocks keep the master a state node of its own, so `sela0` is what the Verilog and
+# Liberty artifacts carry while `[cell.nodes]` hands Liberate the netlist's spelling. The arcs fan out
+# per drive strength: a block addresses its exposed column by one name, and these two disagree on it.
+[[cell]]
+name = ["MCDFFX1", "MCDFFX4"]
+inputs = ["CLKA", "CLKB", "D"]
+clock = ["CLKA", "CLKB"]
+expose = ["sela0"]
+[cell.internal]
+sela0 = "!CLKA*D + CLKA*sela0"
+[cell.outputs]
+Q = "CLKB*sela0 + !CLKB*Q"
+[cell.nodes]
+sela0 = "XI7/m"                # every alias, unless overridden below
+[cell.nodes.MCDFFX4]
+sela0 = "XI4/m"                # this alias only
+
 # Latch on CLK low in series with another latch on CLK low: a same-phase transparent cascade, no flop.
 [[cell]]
 name = "TCASC"
