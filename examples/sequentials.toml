@@ -20,6 +20,7 @@
 name = "DFF"
 inputs = ["CLK", "D"]
 clock = ["CLK"]
+constraint_arcs = true
 [cell.internal]
 M = "!CLK*D + CLK*M"
 [cell.outputs]
@@ -35,6 +36,7 @@ name = "DFF_NOCOLLAPSE"
 inputs = ["CLK", "D"]
 clock = ["CLK"]
 no_edge_collapse = true
+constraint_arcs = true
 [cell.internal]
 M = "!CLK*D + CLK*M"
 [cell.outputs]
@@ -44,6 +46,7 @@ Q = "CLK*M + !CLK*Q"
 [[cell]]
 name = "UCDFF"
 inputs = ["CLK", "D"]
+constraint_arcs = true
 [cell.internal]
 M = "!CLK*D + CLK*M"
 [cell.outputs]
@@ -54,6 +57,7 @@ Q = "CLK*M + !CLK*Q"
 name = "EMDFF"
 inputs = ["CLK", "D"]
 clock = ["CLK"]
+constraint_arcs = true
 [cell.outputs]
 Q = "CLK*M + !CLK*Q"
 M = "!CLK*D + CLK*M"
@@ -63,6 +67,7 @@ M = "!CLK*D + CLK*M"
 name = "TAPDFF"
 inputs = ["CLK", "D"]
 clock = ["CLK"]
+constraint_arcs = true
 [cell.internal]
 M = "!CLK*D + CLK*M"
 [cell.outputs]
@@ -74,6 +79,7 @@ T = "M"
 name = "IDFF"
 inputs = ["CLK", "D"]
 clock = ["CLK"]
+constraint_arcs = true
 [cell.internal]
 M = "!CLK*D + CLK*M"
 [cell.outputs]
@@ -85,6 +91,7 @@ Q = "CLK*!M + !CLK*Q"
 name = "XN"
 inputs = ["CLK", "D"]
 clock = ["CLK"]
+constraint_arcs = true
 [cell.internal]
 M = "!CLK*D + CLK*M"
 [cell.outputs]
@@ -98,6 +105,7 @@ name = "TFF"
 inputs = ["CLK", "R"]
 clock = ["CLK"]
 async = ["R"]
+constraint_arcs = true
 [cell.internal]
 M = "!R*(!CLK*!Q + CLK*M)"
 [cell.outputs]
@@ -109,6 +117,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
 name = "DET"
 inputs = ["CLK", "D"]
 clock = ["CLK"]
+constraint_arcs = true
 [cell.internal]
 L1 = "!CLK*D + CLK*L1"
 L2 = "CLK*D + !CLK*L2"
@@ -122,6 +131,7 @@ Q = "CLK*L1 + !CLK*L2"
 name = "MOR"
 inputs = ["CLK", "D", "R"]
 clock = ["CLK"]
+constraint_arcs = true
 [cell.internal]
 M = "!R*(!CLK*D + CLK*M)"
 [cell.outputs]
@@ -133,6 +143,7 @@ name = "MORA"
 inputs = ["CLK", "D", "R"]
 clock = ["CLK"]
 async = ["R"]
+constraint_arcs = true
 [cell.internal]
 M = "!R*(!CLK*D + CLK*M)"
 [cell.outputs]
@@ -144,6 +155,7 @@ name = "BR"
 inputs = ["CLK", "D", "R"]
 clock = ["CLK"]
 async = ["R"]
+constraint_arcs = true
 [cell.internal]
 M = "!R*(!CLK*D + CLK*M)"
 [cell.outputs]
@@ -154,6 +166,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
 name = "SYNCR"
 inputs = ["CLK", "D", "R"]
 clock = ["CLK"]
+constraint_arcs = true
 [cell.internal]
 M = "!R*(!CLK*D + CLK*M)"
 [cell.outputs]
@@ -164,6 +177,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
 name = "SYNCRG"
 inputs = ["CLK", "D", "R", "G"]
 clock = ["CLK"]
+constraint_arcs = true
 [cell.internal]
 M = "!(R+G)*(!CLK*D + CLK*M)"
 [cell.outputs]
@@ -174,6 +188,7 @@ Q = "!(R+G)*(CLK*M + !CLK*Q)"
 name = "GATEDR"
 inputs = ["CLK", "D", "R", "G"]
 clock = ["CLK"]
+constraint_arcs = true
 [cell.internal]
 M = "!(R*G)*(!CLK*D + CLK*M)"
 [cell.outputs]
@@ -185,6 +200,7 @@ name = "AGATEDR"
 inputs = ["CLK", "D", "R", "G"]
 clock = ["CLK"]
 async = ["R", "G"]
+constraint_arcs = true
 [cell.internal]
 M = "!(R*G)*(!CLK*D + CLK*M)"
 [cell.outputs]
@@ -195,6 +211,7 @@ Q = "!(R*G)*(CLK*M + !CLK*Q)"
 name = "RDFF"
 inputs = ["CLK", "D", "R"]
 clock = ["CLK", "R"]
+constraint_arcs = true
 [cell.internal]
 M = "!R*(!CLK*D + CLK*M)"
 [cell.outputs]
@@ -206,6 +223,7 @@ name = "COEX"
 inputs = ["CLK", "D", "B", "R"]
 clock = ["CLK"]
 async = ["R"]
+constraint_arcs = true
 [cell.internal]
 M = "!R*(B + !CLK*D + CLK*M)"
 [cell.outputs]
@@ -217,6 +235,7 @@ name = "CAFF"
 inputs = ["CLK", "D", "PRE", "CLR"]
 clock = ["CLK"]
 async = ["PRE", "CLR"]
+constraint_arcs = true
 [cell.internal]
 M = "!CLR*(PRE + !CLK*D + CLK*M)"
 [cell.outputs]
@@ -229,6 +248,7 @@ Q = "!CLR*(PRE + CLK*M + !CLK*Q)"
 name = "DLAT"
 inputs = ["CLK", "D"]
 clock = ["CLK"]
+constraint_arcs = true
 [cell.outputs]
 Q = "CLK*D + !CLK*Q"
 
@@ -237,6 +257,7 @@ Q = "CLK*D + !CLK*Q"
 name = "DLAT_EN"
 inputs = ["EN", "D"]
 clock = ["EN"]
+constraint_arcs = true
 [cell.outputs]
 Q = "EN*D + !EN*Q"
 
@@ -244,6 +265,7 @@ Q = "EN*D + !EN*Q"
 [[cell]]
 name = "DLAT_E"
 inputs = ["E", "D"]
+constraint_arcs = true
 [cell.outputs]
 Q = "E*D + !E*Q"
 
@@ -252,6 +274,7 @@ Q = "E*D + !E*Q"
 name = "GLAT"
 inputs = ["CLK", "D"]
 clock = ["CLK"]
+constraint_arcs = true
 [cell.outputs]
 Q = "CLK*(D+Q) + !CLK*Q"
 
@@ -260,6 +283,7 @@ Q = "CLK*(D+Q) + !CLK*Q"
 name = "MUXLAT"
 inputs = ["CLKA", "CLKB", "D"]
 clock = ["CLKA", "CLKB"]
+constraint_arcs = true
 [cell.outputs]
 Q = "CLKA*D + !CLKA*(CLKB*D + !CLKB*Q)"
 
@@ -268,6 +292,7 @@ Q = "CLKA*D + !CLKA*(CLKB*D + !CLKB*Q)"
 name = "MCDFF"
 inputs = ["CLKA", "CLKB", "D"]
 clock = ["CLKA", "CLKB"]
+constraint_arcs = true
 [cell.internal]
 M = "!CLKA*D + CLKA*M"
 [cell.outputs]
@@ -282,6 +307,7 @@ name = ["MCDFFX1", "MCDFFX4"]
 inputs = ["CLKA", "CLKB", "D"]
 clock = ["CLKA", "CLKB"]
 expose = ["sela0"]
+constraint_arcs = true
 [cell.internal]
 sela0 = "!CLKA*D + CLKA*sela0"
 [cell.outputs]
@@ -296,6 +322,7 @@ sela0 = "XI4/m"                # this alias only
 name = "TCASC"
 inputs = ["CLK", "D"]
 clock = ["CLK"]
+constraint_arcs = true
 [cell.internal]
 M = "!CLK*D + CLK*M"
 [cell.outputs]
@@ -306,6 +333,7 @@ Q = "!CLK*M + CLK*Q"
 name = "XLAT"
 inputs = ["CLK", "D"]
 clock = ["CLK"]
+constraint_arcs = true
 [cell.internal]
 M = "!CLK*D + CLK*M"
 M2 = "CLK*D + !CLK*M2"
@@ -320,6 +348,7 @@ T = "M*!M2 + !M*M2"
 name = "HPIPE"
 inputs = ["CLKA", "CLKB", "D"]
 clock = ["CLKA", "CLKB"]
+constraint_arcs = true
 [cell.internal]
 M1 = "!CLKA*D + CLKA*M1"
 M2 = "CLKA*M1 + !CLKA*M2"
@@ -333,6 +362,7 @@ Q = "!CLKB*M2 + CLKB*Q"
 name = "DCMUX"
 inputs = ["CLKA", "CLKB", "DA", "DB"]
 clock = ["CLKA", "CLKB"]
+constraint_arcs = true
 [cell.internal]
 MA = "!CLKA*DA + CLKA*MA"
 MB = "!CLKB*DB + CLKB*MB"
@@ -346,6 +376,7 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
 name = "ICG"
 inputs = ["CLK", "EN"]
 clock = ["CLK"]
+constraint_arcs = true
 [cell.internal]
 EL = "!CLK*EN + CLK*EL"
 [cell.outputs]
@@ -358,6 +389,7 @@ GCLK = "CLK*EL"
 name = "ICM"
 inputs = ["CLKA", "CLKB", "RA", "RB", "S"]
 clock = ["CLKA", "CLKB"]
+constraint_arcs = true
 [cell.internal]
 sela = "!enB*!S"
 selb = "!enA*S"
@@ -374,6 +406,7 @@ GCLK = "enA*CLKA+enB*CLKB"
 [[cell]]
 name = "GL"
 inputs = ["C", "D"]
+constraint_arcs = true
 [cell.internal]
 L = "!C*D + C*L"
 [cell.outputs]
@@ -383,6 +416,7 @@ Y = "C*L"
 [[cell]]
 name = "MIX"
 inputs = ["A", "B", "C", "D"]
+constraint_arcs = true
 [cell.internal]
 L = "!C*D + C*L"
 [cell.outputs]
@@ -393,6 +427,7 @@ Z = "A*B"
 [[cell]]
 name = "TRW"
 inputs = ["C", "D", "E"]
+constraint_arcs = true
 [cell.internal]
 L = "!C*D + C*L"
 W = "C*L"
@@ -405,6 +440,7 @@ Z2 = "W + E"
 [[cell]]
 name = "COLL"
 inputs = ["A", "Q_st"]
+constraint_arcs = true
 [cell.outputs]
 Q = "A*Q_st + Q*(A+Q_st)"
 
@@ -412,6 +448,7 @@ Q = "A*Q_st + Q*(A+Q_st)"
 [[cell]]
 name = "C2P"
 inputs = ["A", "B"]
+constraint_arcs = true
 [cell.outputs]
 Q = "A*B + Q*(A+B)"
 Qc = "Q"
@@ -422,5 +459,6 @@ Qn = "!Q"
 name = "RC2"
 inputs = ["A", "B", "R"]
 async = ["R"]
+constraint_arcs = true
 [cell.outputs]
 Q = "(A*B + Q*(A+B))*!R"
