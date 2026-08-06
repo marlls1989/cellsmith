@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`[cell.nodes]` says which netlist node an internal signal stands for.** A spec is written in names
+  that read well in the behavioural model, while the netlist may hold that state on a node spelled
+  otherwise; this hands Liberate the netlist's spelling and leaves the Verilog and Liberty artifacts in
+  the spec's. A drive-strength alias may override any of the map under `[cell.nodes.<NAME>]`, the same
+  signal being free to sit on a different node in each alias's netlist; where aliases disagree on an
+  exposed node the arcs fan out into one set per group.
+
+### Changed
+
+- **`define_leakage` states every state the cell can rest in.** One block per fully-initialised
+  reachable rest state, carrying the `-prevector` that primes the cell's internal nodes into it and a
+  `-vector` holding the cell's pins at the levels they rest at. A cell leaks differently in each state
+  it rests in, and two rest states can share an input assignment while differing in what the cell holds
+  — a C-element at `A=1,B=0` with `Q` either way, a mutex at `A=B=1` in whichever grant it arbitrated
+  into — so each is its own block.
+
+- **`define_cell` names its characterisation template with `-constraint`.** The spec key is
+  `constraint`, also accepted spelled `constrain`.
+
+- **`--help` gives one line per flag.** The behaviour behind the flags is described in the README.
+
 ## [0.4.1] - 2026-08-02
 
 ### Changed

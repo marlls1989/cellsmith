@@ -10,14 +10,14 @@ inputs = ["A", "B"]
 Y = "A*B"
 
 [[cell]]
-name = ["INVX1", "INVX2", "INVX3"]   # multi-drive inverter: demonstrates -delay/-power/-constrain
+name = ["INVX1", "INVX2", "INVX3"]   # multi-drive inverter: demonstrates -delay/-power/-constraint
 inputs = ["A"]                          #   emission and a per-drive template override (INVX2 splits off)
 [cell.outputs]
 Y = "!A"
 [cell.template]
 delay = "inv_delay"
 power = "inv_power"
-constrain = "inv_constrain"
+constraint = "inv_constraint"
 [cell.template_overrides.INVX2]
 delay = "inv_delay_x2"
 

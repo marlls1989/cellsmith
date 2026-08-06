@@ -2,10 +2,10 @@
 //! attach to.
 //!
 //! Each block names the cell's pins (`-input`/`-clock`/`-async`/`-output`/`-pinlist`) and the
-//! characterisation templates the cell carries (`-delay`/`-power`/`-constrain`). Clock and async pins
+//! characterisation templates the cell carries (`-delay`/`-power`/`-constraint`). Clock and async pins
 //! are split out of `-input` into their own flags but still appear verbatim in `-pinlist`; any flag
 //! whose pin set is empty is omitted. The drive-strength aliases are bundled by their resolved
-//! `(delay, power, constrain)` template triple — each alias inherits the cell-wide `template` unless
+//! `(delay, power, constraint)` template triple — each alias inherits the cell-wide `template` unless
 //! its `template_overrides` entry supplies a field — so aliases sharing a triple emit as one block, in
 //! first-appearance order.
 //!
@@ -20,7 +20,7 @@ use indexmap::IndexMap;
 use crate::emit::arcs_tcl::pinlist_str;
 use crate::model::AnalysedCell;
 
-/// A resolved template triple: the `(delay, power, constrain)` names an alias attaches, each `Some`
+/// A resolved template triple: the `(delay, power, constraint)` names an alias attaches, each `Some`
 /// only when the alias override or the cell-wide template supplies it.
 type Triple = (Option<Symbol>, Option<Symbol>, Option<Symbol>);
 
@@ -49,10 +49,10 @@ pub fn cell_define_cell(cell: &AnalysedCell) -> String {
         let power = ov
             .and_then(|o| o.power.clone())
             .or_else(|| def.and_then(|d| d.power.clone()));
-        let constrain = ov
-            .and_then(|o| o.constrain.clone())
-            .or_else(|| def.and_then(|d| d.constrain.clone()));
-        (delay, power, constrain)
+        let constraint = ov
+            .and_then(|o| o.constraint.clone())
+            .or_else(|| def.and_then(|d| d.constraint.clone()));
+        (delay, power, constraint)
     };
 
     // Bundle the aliases by resolved triple. `IndexMap` insertion order groups by first appearance and
@@ -66,7 +66,7 @@ pub fn cell_define_cell(cell: &AnalysedCell) -> String {
     }
 
     let mut out = String::new();
-    for ((delay, power, constrain), aliases) in &groups {
+    for ((delay, power, constraint), aliases) in &groups {
         out.push_str("define_cell \\\n");
         // Data inputs only — an all-clock/all-async cell drops the flag entirely.
         if !data_inputs.is_empty() {
@@ -88,8 +88,8 @@ pub fn cell_define_cell(cell: &AnalysedCell) -> String {
         if let Some(p) = power {
             out.push_str(&format!("\t-power {p} \\\n"));
         }
-        if let Some(c) = constrain {
-            out.push_str(&format!("\t-constrain {c} \\\n"));
+        if let Some(c) = constraint {
+            out.push_str(&format!("\t-constraint {c} \\\n"));
         }
         out.push_str(&format!("\t{}\n", brace(aliases)));
         out.push('\n');
@@ -135,14 +135,14 @@ Y = "!A"
 [cell.template]
 delay = "dt"
 power = "pt"
-constrain = "ct"
+constraint = "ct"
 "#,
         );
         eprintln!("{tcl}");
         assert_eq!(tcl.matches("define_cell").count(), 1);
         assert!(tcl.contains("-delay dt \\"));
         assert!(tcl.contains("-power pt \\"));
-        assert!(tcl.contains("-constrain ct \\"));
+        assert!(tcl.contains("-constraint ct \\"));
         assert!(tcl.contains("{ INVX1 INVX2 }"));
     }
 
@@ -162,7 +162,7 @@ Y = "!A"
         assert_eq!(tcl.matches("define_cell").count(), 1);
         assert!(!tcl.contains("-delay"));
         assert!(!tcl.contains("-power"));
-        assert!(!tcl.contains("-constrain"));
+        assert!(!tcl.contains("-constraint"));
         assert!(tcl.contains("{ INVX1 INVX2 }"));
     }
 
@@ -216,9 +216,9 @@ delay = "other"
         );
     }
 
-    /// (e) A template that sets only delay + power emits no `-constrain` flag.
+    /// (e) A template that sets only delay + power emits no `-constraint` flag.
     #[test]
-    fn omitted_constrain_no_constrain_flag() {
+    fn omitted_constraint_no_constraint_flag() {
         let tcl = emit(
             r#"
 [[cell]]
@@ -234,11 +234,11 @@ power = "pt"
         eprintln!("{tcl}");
         assert!(tcl.contains("-delay dt \\"));
         assert!(tcl.contains("-power pt \\"));
-        assert!(!tcl.contains("-constrain"));
+        assert!(!tcl.contains("-constraint"));
     }
 
     /// (f) An override that supplies only delay MERGES over the cell-wide template: its block keeps the
-    /// default power + constrain and takes the overridden delay.
+    /// default power + constraint and takes the overridden delay.
     #[test]
     fn override_merges_over_default_fields() {
         let tcl = emit(
@@ -251,7 +251,7 @@ Y = "!A"
 [cell.template]
 delay = "dt"
 power = "pt"
-constrain = "ct"
+constraint = "ct"
 [cell.template_overrides.INVX2]
 delay = "dt2"
 "#,
@@ -260,10 +260,31 @@ delay = "dt2"
         let inv2 = block_with(&tcl, "{ INVX2 }");
         assert!(inv2.contains("-delay dt2 \\"));
         assert!(inv2.contains("-power pt \\"));
-        assert!(inv2.contains("-constrain ct \\"));
+        assert!(inv2.contains("-constraint ct \\"));
     }
 
-    /// (g) A declared async pin is lifted out of `-input` into `-async`, yet still appears in
+    /// (g) The template key is accepted under both spellings, `constraint` and the older `constrain`,
+    /// and either emits the `-constraint` flag.
+    #[test]
+    fn constrain_spelling_is_accepted_as_constraint() {
+        for key in ["constraint", "constrain"] {
+            let tcl = emit(&format!(
+                r#"
+[[cell]]
+name = "INV"
+inputs = ["A"]
+[cell.outputs]
+Y = "!A"
+[cell.template]
+{key} = "ct"
+"#,
+            ));
+            eprintln!("{tcl}");
+            assert!(tcl.contains("-constraint ct \\"), "{key} spelling");
+        }
+    }
+
+    /// (h) A declared async pin is lifted out of `-input` into `-async`, yet still appears in
     /// `-pinlist`.
     #[test]
     fn async_split_excludes_input_keeps_pinlist() {
@@ -283,7 +304,7 @@ Q = "(A*B + Q*(A+B))*!R"
         assert!(tcl.contains("-pinlist { A B R Q }"));
     }
 
-    /// (h) A cell with no async pins emits no `-async` flag.
+    /// (i) A cell with no async pins emits no `-async` flag.
     #[test]
     fn no_async_no_async_flag() {
         let tcl = emit(
@@ -300,7 +321,7 @@ Y = "A*B"
         assert!(tcl.contains("-input { A B }"));
     }
 
-    /// (i) An internal state node is excluded from both `-output` and `-pinlist`.
+    /// (j) An internal state node is excluded from both `-output` and `-pinlist`.
     #[test]
     fn internals_excluded_from_output_and_pinlist() {
         let tcl = emit(
@@ -321,7 +342,7 @@ Q = "CLK*M + !CLK*Q"
         assert!(tcl.contains("-pinlist { CLK D Q }"));
     }
 
-    /// (j) When every input is async, `-input` is dropped entirely — but `-pinlist` still lists them.
+    /// (k) When every input is async, `-input` is dropped entirely — but `-pinlist` still lists them.
     #[test]
     fn all_inputs_async_drops_input_keeps_pinlist() {
         let tcl = emit(
@@ -340,7 +361,7 @@ Q = "!R*(S + Q)"
         assert!(tcl.contains("-pinlist { S R Q }"));
     }
 
-    /// (k) A declared clock pin is lifted out of `-input` into `-clock`, yet still appears in
+    /// (l) A declared clock pin is lifted out of `-input` into `-clock`, yet still appears in
     /// `-pinlist`.
     #[test]
     fn clock_split_excludes_input_keeps_pinlist() {
@@ -362,7 +383,7 @@ Q = "CLK*M + !CLK*Q"
         assert!(tcl.contains("-pinlist { CLK D Q }"));
     }
 
-    /// (l) A cell with no clock pins emits no `-clock` flag.
+    /// (m) A cell with no clock pins emits no `-clock` flag.
     #[test]
     fn no_clock_no_clock_flag() {
         let tcl = emit(

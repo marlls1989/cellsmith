@@ -19,10 +19,10 @@ For every cell in the input spec, cellsmith emits four artifacts:
 
 | Artifact | File | Contents |
 |----------|------|----------|
-| Liberate arcs | `<name>_arcs.tcl` | `define_arc` blocks with prevector walks and `R/F/1/0/X` vectors, plus `define_leakage` blocks — one static leakage state per settled seed state (an input assignment that forces the cell into a defined state on its own), conditioned on inputs and settled outputs |
+| Liberate arcs | `<name>_arcs.tcl` | `define_arc` blocks with prevector walks and `R/F/1/0/X` vectors, plus `define_leakage` blocks — one static leakage state per fully-initialised reachable rest state, primed by a prevector walk |
 | Behavioural Verilog | `<name>.v` | one sequential UDP `primitive` per signal (outputs + internal state nodes — signals that hold memory — with a three-valued next-state table) + a `celldefine`d wrapper `module` (internals as internal `wire`s) with a `specify` block |
 | Liberty stub | `<name>.lib` | a self-contained `library (<name>) { ... }` file (Liberate can consume it directly) wrapping one `cell (...)` per cell: input `pin`s; a sequential cell gets one joint `statetable` whose columns live in their own namespace, separate from the pins: a state output **mints** its node (`Q` → `Q_st`, escalating past any real signal of that name), while a genuine internal node keeps its own name. Every node is anchored by a `direction : internal` pin carrying its `internal_node`. Each output pin is then classified against the table: an output that **is** a state node carries a `state_function` naming its minted node, an output that **depends on** state nodes carries a `state_function` over them, and an output over primary inputs alone carries a plain `function`. A cell with no state nodes gets a plain `function` per output and no `statetable` |
-| Liberate cell declaration | `<name>_cells.tcl` | `define_cell` blocks: the structural pin declaration (`-input`/`-clock`/`-async`/`-output`/`-pinlist`) and characterisation-template references (`-delay`/`-power`/`-constrain`) from `[cell.template]`/`[cell.template_overrides]` — no logic or timing; one block per distinct resolved `(delay, power, constrain)` triple, bundling the drive-strength aliases that share it. Suppressed by `--no-cells` |
+| Liberate cell declaration | `<name>_cells.tcl` | `define_cell` blocks: the structural pin declaration (`-input`/`-clock`/`-async`/`-output`/`-pinlist`) and characterisation-template references (`-delay`/`-power`/`-constraint`) from `[cell.template]`/`[cell.template_overrides]` — no logic or timing; one block per distinct resolved `(delay, power, constraint)` triple, bundling the drive-strength aliases that share it. Suppressed by `--no-cells` |
 
 ## The model
 
@@ -70,9 +70,10 @@ Three properties follow from this construction:
 - **input-forced transitions cascade through settling** — in a settable cross-coupled pair, toggling a
   set input flips both the output it forces (rise) and, through the coupling, that output's partner
   (fall); the search discovers both;
-- **a state-holding cell's arcs carry `-ic`**, the start-state voltage of every `-pinlist` entry.
-  Liberate discards the `-prevector` simulation instead of carrying its settled values into the measured
-  vector, so `-ic` states the start condition directly. A purely combinational cell carries no `-ic`.
+- **a state-holding cell's arcs carry `-ic`**, the start-state voltage of every `-pinlist` entry. A
+  block measuring a transition runs on a prepark deck, which parks the cell afresh rather than
+  carrying the `-prevector` simulation's settled values into the measured vector, so `-ic` states the
+  start condition directly. A purely combinational cell carries no `-ic`.
 
 A cross-coupled cell is also **bistable**: under some input condition (`A·B` for a mutex) the
 joint next-state has two stable states, and the physical cell picks one non-deterministically instead
@@ -216,6 +217,32 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 ```
 
+`[cell.nodes]` says which netlist node an internal signal stands for, for the artifacts Liberate reads.
+A spec is written in names that read well in the behavioural model; the netlist may hold that state on a
+node spelled otherwise, and Liberate has to be handed its spelling. A signal with no entry stands for
+itself, and only the Liberate arcs are affected — the Verilog, Liberty and `define_cell` artifacts carry
+the spec's names throughout.
+
+A drive-strength alias may override any of it, since the same signal can sit on a different node in each
+alias's netlist. A block addresses an exposed node by one name, so where aliases disagree on it the arcs
+fan out into one set per group, as `define_cell` fans out per template triple.
+
+```toml
+[[cell]]
+name = ["DFFX1", "DFFX4"]
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+expose = ["sela0"]
+[cell.internal]
+sela0 = "!CLK*D + CLK*sela0"
+[cell.outputs]
+Q = "CLK*sela0 + !CLK*Q"
+[cell.nodes]
+sela0 = "XI7/m"                # every alias, unless overridden below
+[cell.nodes.DFFX4]
+sela0 = "XI4/m"                # this alias only
+```
+
 `logic_low` and `logic_high` name the voltage expressions a cell's `-ic` line renders for the two logic
 levels, defaulting to `0` and `$VDD`. Either is a Tcl value fragment, so a Tcl variable works as well as
 a literal; a cell's own key wins over the `--logic-low`/`--logic-high` command-line value.
@@ -255,15 +282,16 @@ the escaping and before the split.
 ### Characterisation templates
 
 `[cell.template]` names the characterisation templates the `<name>_cells.tcl` artifact's
-`define_cell` blocks attach to the cell: `delay`, `power` and `constrain`, each an optional template
+`define_cell` blocks attach to the cell: `delay`, `power` and `constraint`, each an optional template
 name taken verbatim from the spec (cellsmith never generates or validates the names — Liberate is
-the consumer). `[cell.template_overrides.<ALIAS>]` overrides these for one drive-strength alias (a
+the consumer). `constraint` is also accepted spelled `constrain`. `[cell.template_overrides.<ALIAS>]`
+overrides these for one drive-strength alias (a
 name from the cell's `name` list); the alias key must be one of the cell's declared names, or it is a
 hard error. Overriding merges **per field**: a field set on the override wins, otherwise it falls back
 to the cell-wide `[cell.template]` value; a field unset on both means the corresponding
-`-delay`/`-power`/`-constrain` flag is omitted for that alias.
+`-delay`/`-power`/`-constraint` flag is omitted for that alias.
 
-Aliases that resolve to the same `(delay, power, constrain)` triple after merging are bundled into one
+Aliases that resolve to the same `(delay, power, constraint)` triple after merging are bundled into one
 `define_cell` block, in first-appearance order; an alias whose override changes even one field splits
 off into its own block.
 
@@ -276,13 +304,13 @@ Y = "!A"
 [cell.template]
 delay = "inv_delay"
 power = "inv_power"
-constrain = "inv_constrain"
+constraint = "inv_constraint"
 [cell.template_overrides.INVX2]
-delay = "inv_delay_x2"         # only `delay` differs; power/constrain still inherit the default
+delay = "inv_delay_x2"         # only `delay` differs; power/constraint still inherit the default
 ```
 
-`INVX1` and `INVX3` both resolve to `(inv_delay, inv_power, inv_constrain)` and share one
-`define_cell` block naming both; `INVX2` resolves to `(inv_delay_x2, inv_power, inv_constrain)` and
+`INVX1` and `INVX3` both resolve to `(inv_delay, inv_power, inv_constraint)` and share one
+`define_cell` block naming both; `INVX2` resolves to `(inv_delay_x2, inv_power, inv_constraint)` and
 gets its own block.
 
 This cell is a runnable example in `examples/cells.toml`, and its two generated `define_cell` blocks
@@ -306,53 +334,26 @@ terminal width, so wrapping and column positions legitimately differ from any gi
 cellsmith [OPTIONS] <SPEC>
 
 Arguments:
-  <SPEC>              TOML cell spec to read ("-" reads from stdin)
+  <SPEC>              TOML cell spec ("-" reads stdin)
 
 Options:
-  -o, --outdir <OUTDIR>   Directory for the generated files [default: .]
-  -n, --name <NAME>       Base name for the output files (defaults to the spec file stem, or "cells" for stdin)
-      --when[=<CLASS>]    Also emit the `-when`-conditioned arcs, per arc class (off by default). One
-                          general arc per transition — a related pin's edge driving an output pin's edge
-                          — is always emitted, without a `-when` line; a selected class adds its `-when`
-                          arcs on top, so an arc can appear both with and without its condition. Bare
-                          `--when` selects every class; `--when=hidden` / `--when=transition` select one;
-                          repeat the flag to select several. A value must be attached with `=` (the space
-                          form is not accepted). A cell can select classes itself with `when = ...`, and
-                          the two selections are unioned
-
-                          Possible values:
-                          - transition: The `define_arc` delay/transition arcs: an input edge on a
-                                        related pin driving an output edge
-                          - hidden:     The hidden (internal-power) arcs: an input toggle that settles
-                                        without changing any output
-      --no-internal       Suppress hidden (internal-power) arcs — input toggles where no output changes
-                          (emitted by default)
-      --no-leakage        Suppress `define_leakage` blocks — static leakage states derived from the
-                          machine's settled seed states (emitted by default)
-      --no-cells          Suppress the `<base>_cells.tcl` define_cell artifact (emitted by default)
-      --constraints       Emit derived setup/hold & non_seq constraint arcs (off by default; a cell can
-                          opt in with `constraint_arcs = true`)
-      --no-edge-collapse  Suppress the behavioural edge-register annotation (on by default); a cell can
-                          opt out individually with `no_edge_collapse = true`
-      --logic-low <VOLTAGE>   Override the low-logic-level (`0`) voltage expression a state-holding
-                          cell's `-ic` renders — every entry on its transition, hidden and
-                          constraint blocks, whether an input, an exposed internal node or an
-                          output — applied to every cell that doesn't declare its own `logic_low`
-                          (default: `0`). Recognised simple forms are emitted as written; any other
-                          value is escaped and wrapped so it occupies exactly one `-ic` column
-      --logic-high <VOLTAGE>  Override the high-logic-level (`1`) voltage expression, mirroring
-                          `--logic-low` (default: `$VDD`). Recognised simple forms are emitted as
-                          written; any other value is escaped and wrapped so it occupies exactly one
-                          `-ic` column
-      --stdout            Write all four artifacts to stdout (with banners) instead of writing files
-      --max-candidates <N>    Ceiling on the seed minterms a cell's exploration may pool as
-                          initialisation candidates: a forced cover cube expands to 2^d of them for its d
-                          unconstrained input columns [default: 4194304]
-      --max-states <N>        Ceiling on the reachable stable states a cell's exploration may record;
-                          every one of them is re-walked by the arc derivation and the hazard probes
-                          [default: 1048576]
-  -h, --help              Print help
-  -V, --version           Print version
+  -o, --outdir <OUTDIR>       Output directory [default: .]
+  -n, --name <NAME>           Output base name [default: the spec file stem]
+      --when[=<CLASS>]        Also emit the `-when`-conditioned arcs of a class; bare selects every
+                              class, repeat to select several (attach the value with `=`)
+                              [possible values: transition, hidden]
+      --no-internal           Suppress hidden (internal-power) arcs
+      --no-leakage            Suppress `define_leakage` blocks
+      --no-cells              Suppress the `<base>_cells.tcl` artifact
+      --constraints           Emit derived setup/hold & non_seq constraint arcs
+      --no-edge-collapse      Suppress the edge-register annotation
+      --logic-low <VOLTAGE>   Voltage for logic `0` [default: 0]
+      --logic-high <VOLTAGE>  Voltage for logic `1` [default: $VDD]
+      --stdout                Write the artifacts to stdout instead of to files
+      --max-candidates <N>    Ceiling on pooled seed minterms [default: 4194304]
+      --max-states <N>        Ceiling on recorded stable states [default: 1048576]
+  -h, --help                  Print help
+  -V, --version               Print version
 ```
 
 Exceeding either exploration ceiling is a hard error: cellsmith names every cell whose exploration

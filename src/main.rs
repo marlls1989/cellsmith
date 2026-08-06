@@ -24,14 +24,14 @@ use cellsmith::model::{parse_spec, AnalysedCell, ArcClass, ArcClasses};
 #[derive(Parser)]
 #[command(name = "cellsmith", version, about, long_about = None)]
 struct Cli {
-    /// TOML cell spec to read ("-" reads from stdin).
+    /// TOML cell spec ("-" reads stdin).
     spec: String,
 
-    /// Directory for the generated files.
+    /// Output directory.
     #[arg(short, long, default_value = ".")]
     outdir: PathBuf,
 
-    /// Base name for the output files (defaults to the spec file stem, or "cells" for stdin).
+    /// Output base name [default: the spec file stem].
     #[arg(short, long)]
     name: Option<String>,
 
@@ -40,54 +40,43 @@ struct Cli {
     #[command(flatten)]
     when: WhenArg,
 
-    /// Suppress hidden (internal-power) arcs — input toggles where no output changes (emitted by default).
+    /// Suppress hidden (internal-power) arcs.
     #[arg(long)]
     no_internal: bool,
 
-    /// Suppress `define_leakage` blocks — static leakage states derived from the machine's settled seed
-    /// states (emitted by default).
+    /// Suppress `define_leakage` blocks.
     #[arg(long)]
     no_leakage: bool,
 
-    /// Suppress the `<base>_cells.tcl` define_cell artifact (emitted by default).
+    /// Suppress the `<base>_cells.tcl` artifact.
     #[arg(long)]
     no_cells: bool,
 
-    /// Emit derived setup/hold & non_seq constraint arcs (off by default; a cell can opt in with
-    /// `constraint_arcs = true`).
+    /// Emit derived setup/hold & non_seq constraint arcs.
     #[arg(long)]
     constraints: bool,
 
-    /// Suppress the behavioural edge-register annotation (on by default); a cell can opt out
-    /// individually with `no_edge_collapse = true`.
+    /// Suppress the edge-register annotation.
     #[arg(long)]
     no_edge_collapse: bool,
 
-    /// Override the low-logic-level (`0`) voltage expression a state-holding cell's `-ic` renders —
-    /// every entry on its transition, hidden and constraint blocks, whether an input, an exposed
-    /// internal node or an output — applied to every cell that doesn't declare its own `logic_low`
-    /// (default: `0`). Recognised simple forms are emitted as written; any other value is escaped
-    /// and wrapped so it occupies exactly one `-ic` column.
+    /// Voltage for logic `0` [default: 0].
     #[arg(long, value_name = "VOLTAGE")]
     logic_low: Option<String>,
 
-    /// Override the high-logic-level (`1`) voltage expression, mirroring `--logic-low` (default: `$VDD`).
-    /// Recognised simple forms are emitted as written; any other value is escaped and wrapped so it
-    /// occupies exactly one `-ic` column.
+    /// Voltage for logic `1` [default: $VDD].
     #[arg(long, value_name = "VOLTAGE")]
     logic_high: Option<String>,
 
-    /// Write all four artifacts to stdout (with banners) instead of writing files.
+    /// Write the artifacts to stdout instead of to files.
     #[arg(long)]
     stdout: bool,
 
-    /// Ceiling on the seed minterms a cell's exploration may pool as initialisation candidates: a
-    /// forced cover cube expands to 2^d of them for its d unconstrained input columns.
+    /// Ceiling on pooled seed minterms.
     #[arg(long, value_name = "N", default_value_t = ExplorationBudget::default().candidates)]
     max_candidates: usize,
 
-    /// Ceiling on the reachable stable states a cell's exploration may record; every one of them is
-    /// re-walked by the arc derivation and the hazard probes.
+    /// Ceiling on recorded stable states.
     #[arg(long, value_name = "N", default_value_t = ExplorationBudget::default().states)]
     max_states: usize,
 }
@@ -113,13 +102,8 @@ fn when_arg() -> Arg {
         .require_equals(true)
         .action(ArgAction::Append)
         .help(
-            "Also emit the `-when`-conditioned arcs, per arc class (off by default). One general \
-             arc per transition — a related pin's edge driving an output pin's edge — is always \
-             emitted, without a `-when` line; a selected class adds its `-when` arcs on top, so an \
-             arc can appear both with and without its condition. Bare `--when` selects every class; \
-             `--when=hidden` / `--when=transition` select one; repeat the flag to select several. A \
-             value must be attached with `=` (the space form is not accepted). A cell can select \
-             classes itself with `when = ...`, and the two selections are unioned",
+            "Also emit the `-when`-conditioned arcs of a class; bare selects every class, \
+             repeat to select several (attach the value with `=`)",
         )
 }
 

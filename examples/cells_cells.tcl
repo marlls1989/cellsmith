@@ -10,7 +10,7 @@ define_cell \
 	-pinlist { A Y } \
 	-delay inv_delay \
 	-power inv_power \
-	-constrain inv_constrain \
+	-constraint inv_constraint \
 	{ INVX1 INVX3 }
 
 define_cell \
@@ -19,7 +19,7 @@ define_cell \
 	-pinlist { A Y } \
 	-delay inv_delay_x2 \
 	-power inv_power \
-	-constrain inv_constrain \
+	-constraint inv_constraint \
 	{ INVX2 }
 
 define_cell \
