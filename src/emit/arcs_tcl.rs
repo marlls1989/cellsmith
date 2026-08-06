@@ -923,20 +923,26 @@ fn hidden_when_str(h: &HiddenArc) -> Option<String> {
 /// assignment — and the `-vector` then holds every pin at the level it rests at. The pins are the cell's
 /// own, inputs then outputs ([`pinlist_str`]): an exposed internal is no pin of the cell and the
 /// prevector has already put it where it belongs, so it takes no column here.
+///
+/// A state reached with no walk primes nothing, so it is rendered without a prevector at all. Its path
+/// is a single step — `Explored::path_to` seeds the chain with the state itself, so one step means no
+/// predecessor — and that step is the input assignment `-vector` already carries.
 fn format_leakage(cell: &AnalysedCell, l: &LeakageState) -> String {
     let mut lits: Vec<(Symbol, bool)> = assignment(&l.inputs).into_iter().collect();
     lits.extend(l.outputs.iter().cloned());
     lits.sort();
 
     let mut s = String::from("define_leakage \\\n");
-    s.push_str(&format!(
-        "\t-prevector_pinlist {{{}}} \\\n",
-        cell.inputs.join(" ")
-    ));
-    s.push_str(&format!(
-        "\t-prevector {{{}}} \\\n",
-        prevector_str(cell, &l.prevector)
-    ));
+    if l.prevector.len() > 1 {
+        s.push_str(&format!(
+            "\t-prevector_pinlist {{{}}} \\\n",
+            cell.inputs.join(" ")
+        ));
+        s.push_str(&format!(
+            "\t-prevector {{{}}} \\\n",
+            prevector_str(cell, &l.prevector)
+        ));
+    }
     s.push_str(&format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell)));
     s.push_str(&format!(
         "\t-vector {{{}}} \\\n",
@@ -3366,6 +3372,16 @@ Q = "A*B + Q*(A+B)"
         assert!(low.contains("-vector {1 0 0}"), "held low: {low}");
         assert!(high.contains("-prevector {11 10}"), "held high: {high}");
         assert!(low.contains("-prevector {00 10}"), "held low: {low}");
+
+        // A forcing input drives the cell into its state on its own — no walk, so nothing to prime and
+        // no prevector, unlike the hold states above.
+        for needle in ["-when \"A*B*Q\"", "-when \"!A*!B*!Q\""] {
+            let forced = block(needle);
+            assert!(
+                !forced.contains("-prevector"),
+                "a forced rest state needs no priming: {forced}"
+            );
+        }
     }
 
     #[test]
@@ -3381,13 +3397,21 @@ Y = "A*B"
         );
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
-        // A combinational cell holds nothing, so its rest states are just the input square, each
-        // reached without a walk (a one-step prevector) and each stating every pin's level.
+        // A combinational cell holds nothing, so its rest states are just the input square. Each is
+        // reached with no walk, and a walk-free state has nothing to prime: no block carries a
+        // prevector, and the vector alone states every pin's level.
         assert_eq!(tcl.matches("define_leakage").count(), 4);
         assert!(tcl.contains("-when \"A*B*Y\""));
         assert!(tcl.contains("-when \"!A*!B*!Y\""));
-        assert!(tcl.contains("-prevector {11} \\\n\t-pinlist {A B Y} \\\n\t-vector {1 1 1} \\"));
-        assert!(tcl.contains("-prevector {00} \\\n\t-pinlist {A B Y} \\\n\t-vector {0 0 0} \\"));
+        assert!(tcl.contains("define_leakage \\\n\t-pinlist {A B Y} \\\n\t-vector {1 1 1} \\"));
+        assert!(tcl.contains("define_leakage \\\n\t-pinlist {A B Y} \\\n\t-vector {0 0 0} \\"));
+        for block in tcl.split("define_leakage").skip(1) {
+            let block = block.split("\n\n").next().unwrap_or(block);
+            assert!(
+                !block.contains("-prevector"),
+                "a combinational rest state needs no priming: {block}"
+            );
+        }
     }
 
     #[test]

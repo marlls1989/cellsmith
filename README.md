@@ -100,6 +100,10 @@ inputs apart, and a `-vector` holding the cell's own pins (inputs then outputs, 
 the levels they rest at. An exposed internal node earns no column there: the prevector has already put
 it where it belongs. A state carrying an uninitialised latch is at an unknown state and is not emitted.
 
+A state the inputs drive the cell into on their own — every rest state of a combinational cell, or a
+C-element held at `A=B=1` — is reached with no walk, so there is nothing to prime and the block carries
+no prevector at all; the `-vector` alone states it.
+
 The Verilog UDP and Liberty `statetable` are both the **functional** view, but Liberty's spec forces a
 different shape. Verilog keeps one sequential UDP per signal, and an output's table may reference
 another output directly — the UDP columns are simply that signal's support, projecting out only its own
