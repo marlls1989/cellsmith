@@ -1010,9 +1010,7 @@ fn format_leakage(cell: &AnalysedCell, l: &LeakageState) -> String {
         "\t-vector {{{}}} \\\n",
         leakage_vector_str(cell, l)
     ));
-    if !lits.is_empty() {
-        s.push_str(&format!("\t-when \"{}\" \\\n", literal_product(&lits)));
-    }
+    s.push_str(&format!("\t-when \"{}\" \\\n", literal_product(&lits)));
     s.push_str(&format!("\t{}\n", name_block(&cell.name)));
     s.push('\n');
     s

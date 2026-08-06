@@ -139,11 +139,6 @@ impl NodeNames {
             .cloned()
             .unwrap_or_else(|| signal.clone())
     }
-
-    /// Whether nothing is mapped at all — the artifacts then carry the spec's own names throughout.
-    pub fn is_empty(&self) -> bool {
-        self.cell.is_empty() && self.aliases.values().all(IndexMap::is_empty)
-    }
 }
 
 /// The characterisation-template references for a cell (or a drive-strength alias override): the
@@ -359,13 +354,41 @@ fn de_opt_symbol<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Symbol
 /// live in different value positions. Both halves keep their insertion order, and both are validated at
 /// analyse time — an alias key against the cell's declared names, a signal key against its internals.
 fn de_nodes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<NodeNames, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
+    /// One entry's value. Read through a hand-written visitor rather than an untagged enum so a value
+    /// of neither shape reports the two shapes a spec author can write, in their vocabulary, instead of
+    /// naming this type: serde's untagged form can only say the value matched no variant.
     enum Entry {
         /// `signal = "netlist/node"` — the cell-wide mapping.
         Node(String),
         /// `[cell.nodes.<ALIAS>]` — one alias's own mapping.
         Alias(IndexMap<String, String>),
+    }
+    impl<'de> Deserialize<'de> for Entry {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            struct V;
+            impl<'de> serde::de::Visitor<'de> for V {
+                type Value = Entry;
+                fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    f.write_str(
+                        "a netlist node name, or a table of them keyed by drive-strength name",
+                    )
+                }
+                fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<Entry, E> {
+                    Ok(Entry::Node(s.to_owned()))
+                }
+                fn visit_map<M: serde::de::MapAccess<'de>>(
+                    self,
+                    mut m: M,
+                ) -> Result<Entry, M::Error> {
+                    let mut map = IndexMap::new();
+                    while let Some((k, v)) = m.next_entry::<String, String>()? {
+                        map.insert(k, v);
+                    }
+                    Ok(Entry::Alias(map))
+                }
+            }
+            d.deserialize_any(V)
+        }
     }
     let mut nodes = NodeNames::default();
     for (key, entry) in IndexMap::<String, Entry>::deserialize(d)? {
@@ -460,6 +483,18 @@ pub enum ModelError {
     NodeNotInternal { cell: Symbol, signal: Symbol },
     #[error("cell {cell:?}: node mapping alias {alias:?} is not a declared cell name")]
     UnknownNodeAlias { cell: Symbol, alias: Symbol },
+    #[error("cell {cell:?}: two exposed nodes map onto {node:?} under {alias:?}")]
+    DuplicateNode {
+        cell: Symbol,
+        alias: Symbol,
+        node: Symbol,
+    },
+    #[error("cell {cell:?}: an exposed node maps onto the pin {node:?} under {alias:?}")]
+    NodeClashesWithPin {
+        cell: Symbol,
+        alias: Symbol,
+        node: Symbol,
+    },
     #[error("cell {cell:?}: exposed node {node:?} is not a declared internal signal")]
     ExposeNotInternal { cell: Symbol, node: Symbol },
     #[error("cell {cell:?}: duplicate exposed node {node:?}")]
@@ -907,6 +942,38 @@ impl Cell {
                     cell: self.name[0].clone(),
                     node: node.clone(),
                 });
+            }
+        }
+
+        // What an exposed node RESOLVES to is a `-pinlist` column, and the `-vector` and `-ic` columns
+        // are positional against that list, so two columns under one name shift every column after
+        // them. `expose` rejects that collision above, before resolution; a mapping can reintroduce it —
+        // two nodes onto one, or a node onto a pin — and does so per drive strength, so each alias is
+        // checked on the columns it actually emits.
+        let pin_set: BTreeSet<Symbol> = self
+            .inputs
+            .iter()
+            .chain(self.outputs.keys())
+            .cloned()
+            .collect();
+        for alias in &self.name {
+            let mut resolved_seen: BTreeSet<Symbol> = BTreeSet::new();
+            for node in &self.expose {
+                let resolved = self.nodes.of(alias, node);
+                if pin_set.contains(&resolved) {
+                    return Err(ModelError::NodeClashesWithPin {
+                        cell: self.name[0].clone(),
+                        alias: alias.clone(),
+                        node: resolved,
+                    });
+                }
+                if !resolved_seen.insert(resolved.clone()) {
+                    return Err(ModelError::DuplicateNode {
+                        cell: self.name[0].clone(),
+                        alias: alias.clone(),
+                        node: resolved,
+                    });
+                }
             }
         }
 
@@ -1604,6 +1671,90 @@ M = "XI7/m"
         assert!(
             matches!(err, ModelError::UnknownNodeAlias { .. }),
             "{err:?}"
+        );
+    }
+
+    /// A two-drive-strength cell exposing two internals, with `nodes` spliced in.
+    fn two_exposed_src(nodes: &str) -> String {
+        format!(
+            r#"
+[[cell]]
+name = ["DFFX1", "DFFX4"]
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+expose = ["m", "n"]
+[cell.internal]
+m = "!CLK*D + CLK*m"
+n = "CLK*m + !CLK*n"
+[cell.outputs]
+Q = "n"
+{nodes}
+"#
+        )
+    }
+
+    #[test]
+    fn two_exposed_nodes_may_not_map_onto_one() {
+        // The resolved names are `-pinlist` columns and the vector is positional against that list, so
+        // two columns under one name shift every column after them. `expose` rejects the same collision
+        // before resolution; the mapping may not reintroduce it.
+        let err = parse_spec(&two_exposed_src(
+            "[cell.nodes]\nm = \"XI7/m\"\nn = \"XI7/m\"",
+        ))
+        .unwrap()
+        .cells[0]
+            .analyse()
+            .unwrap_err();
+        assert!(matches!(err, ModelError::DuplicateNode { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn a_mapped_node_may_not_land_on_a_pin() {
+        for onto in ["CLK", "Q"] {
+            let err = parse_spec(&two_exposed_src(&format!("[cell.nodes]\nm = \"{onto}\"")))
+                .unwrap()
+                .cells[0]
+                .analyse()
+                .unwrap_err();
+            assert!(
+                matches!(err, ModelError::NodeClashesWithPin { .. }),
+                "mapping onto {onto}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_collision_is_judged_per_drive_strength() {
+        // Resolution is per alias, so the columns one alias emits are what its own check reads: a
+        // cell-wide map that is fine stays fine where an alias's override collides.
+        let src = two_exposed_src(
+            "[cell.nodes]\nm = \"XI7/m\"\nn = \"XI7/n\"\n[cell.nodes.DFFX4]\nn = \"XI7/m\"",
+        );
+        let err = parse_spec(&src).unwrap().cells[0].analyse().unwrap_err();
+        let ModelError::DuplicateNode { alias, .. } = &err else {
+            panic!("expected a duplicate-node error, got {err:?}");
+        };
+        assert_eq!(
+            alias.as_str(),
+            "DFFX4",
+            "the colliding drive strength is named"
+        );
+
+        // Without that override the same cell analyses cleanly.
+        let ok = two_exposed_src("[cell.nodes]\nm = \"XI7/m\"\nn = \"XI7/n\"");
+        assert!(parse_spec(&ok).unwrap().cells[0].analyse().is_ok());
+    }
+
+    #[test]
+    fn a_malformed_node_value_names_the_shapes_it_accepts() {
+        // The error a spec author reads names the two shapes an entry may take, in their vocabulary —
+        // not the deserialiser's own type.
+        let err = parse_spec(&two_exposed_src("[cell.nodes]\nm = 7"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("a netlist node name, or a table of them keyed by drive-strength name"),
+            "{err}"
         );
     }
 
