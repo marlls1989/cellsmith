@@ -216,6 +216,32 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 ```
 
+`[cell.nodes]` says which netlist node an internal signal stands for, for the artifacts Liberate reads.
+A spec is written in names that read well in the behavioural model; the netlist may hold that state on a
+node spelled otherwise, and Liberate has to be handed its spelling. A signal with no entry stands for
+itself, and only the Liberate arcs are affected — the Verilog, Liberty and `define_cell` artifacts carry
+the spec's names throughout.
+
+A drive-strength alias may override any of it, since the same signal can sit on a different node in each
+alias's netlist. A block addresses an exposed node by one name, so where aliases disagree on it the arcs
+fan out into one set per group, as `define_cell` fans out per template triple.
+
+```toml
+[[cell]]
+name = ["DFFX1", "DFFX4"]
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+expose = ["sela0"]
+[cell.internal]
+sela0 = "!CLK*D + CLK*sela0"
+[cell.outputs]
+Q = "CLK*sela0 + !CLK*Q"
+[cell.nodes]
+sela0 = "XI7/m"                # every alias, unless overridden below
+[cell.nodes.DFFX4]
+sela0 = "XI4/m"                # this alias only
+```
+
 `logic_low` and `logic_high` name the voltage expressions a cell's `-ic` line renders for the two logic
 levels, defaulting to `0` and `$VDD`. Either is a Tcl value fragment, so a Tcl variable works as well as
 a literal; a cell's own key wins over the `--logic-low`/`--logic-high` command-line value.

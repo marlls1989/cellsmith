@@ -95,6 +95,11 @@ pub struct Cell {
     /// validated against the cell's declared names at analyse time.
     #[serde(default, deserialize_with = "de_template_overrides")]
     pub template_overrides: IndexMap<Symbol, TemplateSpec>,
+    /// Optional: the netlist node each internal signal stands for. A spec is written in names that read
+    /// well in the behavioural model, while the node a cell actually holds its state on may be spelled
+    /// however the netlist spells it (`XI7/m`); this says which is which. See [`NodeNames`].
+    #[serde(default, deserialize_with = "de_nodes")]
+    pub nodes: NodeNames,
     /// Optional: override the low-logic-level (`0`) voltage expression the exposed nodes' `-ic` renders.
     /// Falls back to the `--logic-low` CLI default, then to [`LogicVoltages::default`]'s `"0"`. A Tcl
     /// variable is as good as a literal: the arcs emitter renders the value as one `-ic` column.
@@ -104,6 +109,41 @@ pub struct Cell {
     /// back to the `--logic-high` CLI default, then to [`LogicVoltages::default`]'s `"$VDD"`.
     #[serde(default)]
     pub logic_high: Option<String>,
+}
+
+/// Which netlist node each of a cell's internal signals stands for, as declared under `[cell.nodes]`.
+///
+/// A signal's name in the spec is the one the behavioural model reads well in and is what the Verilog
+/// and Liberty artifacts carry; the netlist may hold that state on a node spelled quite differently,
+/// and it is that spelling Liberate has to be handed. A signal with no entry stands for itself.
+///
+/// The map is per cell, and a drive-strength alias may override any of it — the same signal can sit on
+/// a different node in each alias's netlist. Resolution is per signal: the alias's own entry if it has
+/// one, else the cell-wide entry, else the signal's own name ([`Self::of`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NodeNames {
+    /// The cell-wide mapping, in declared order.
+    pub cell: IndexMap<Symbol, Symbol>,
+    /// Per-alias mappings, keyed by a name from the cell's `name` list, each in declared order.
+    pub aliases: IndexMap<Symbol, IndexMap<Symbol, Symbol>>,
+}
+
+impl NodeNames {
+    /// The netlist node `signal` stands for under drive-strength alias `alias`: the alias's own entry,
+    /// else the cell-wide entry, else `signal` itself.
+    pub fn of(&self, alias: &Symbol, signal: &Symbol) -> Symbol {
+        self.aliases
+            .get(alias)
+            .and_then(|m| m.get(signal))
+            .or_else(|| self.cell.get(signal))
+            .cloned()
+            .unwrap_or_else(|| signal.clone())
+    }
+
+    /// Whether nothing is mapped at all — the artifacts then carry the spec's own names throughout.
+    pub fn is_empty(&self) -> bool {
+        self.cell.is_empty() && self.aliases.values().all(IndexMap::is_empty)
+    }
 }
 
 /// The characterisation-template references for a cell (or a drive-strength alias override): the
@@ -304,6 +344,48 @@ fn de_opt_symbol<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Symbol
     Ok(Option::<String>::deserialize(d)?.map(Symbol::from))
 }
 
+/// Deserialize `[cell.nodes]`: one table carrying both halves of the mapping, told apart by the value's
+/// TYPE. A string value maps a signal to the netlist node it stands for, cell-wide; a table value is a
+/// drive-strength alias's own map, overriding the cell-wide one per signal. So
+///
+/// ```toml
+/// [cell.nodes]
+/// sela0 = "XI7/m"      # every alias, unless overridden below
+/// [cell.nodes.DFFX4]
+/// sela0 = "XI4/m"      # this alias only
+/// ```
+///
+/// A cell name can therefore never be mistaken for a signal name here, whatever it is spelled: the two
+/// live in different value positions. Both halves keep their insertion order, and both are validated at
+/// analyse time — an alias key against the cell's declared names, a signal key against its internals.
+fn de_nodes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<NodeNames, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        /// `signal = "netlist/node"` — the cell-wide mapping.
+        Node(String),
+        /// `[cell.nodes.<ALIAS>]` — one alias's own mapping.
+        Alias(IndexMap<String, String>),
+    }
+    let mut nodes = NodeNames::default();
+    for (key, entry) in IndexMap::<String, Entry>::deserialize(d)? {
+        match entry {
+            Entry::Node(node) => {
+                nodes.cell.insert(Symbol::from(key), Symbol::from(node));
+            }
+            Entry::Alias(map) => {
+                nodes.aliases.insert(
+                    Symbol::from(key),
+                    map.into_iter()
+                        .map(|(k, v)| (Symbol::from(k), Symbol::from(v)))
+                        .collect(),
+                );
+            }
+        }
+    }
+    Ok(nodes)
+}
+
 /// Deserialize an `alias -> template overrides` table as `IndexMap<Symbol, TemplateSpec>`, interning
 /// the keys and keeping the insertion order. `Symbol` has no `serde` impl, so the keys are read as
 /// `String` and interned via `Symbol::from`.
@@ -374,6 +456,10 @@ pub enum ModelError {
     ClockNotInput { cell: Symbol, pin: Symbol },
     #[error("cell {cell:?}: template override alias {alias:?} is not a declared cell name")]
     UnknownTemplateOverride { cell: Symbol, alias: Symbol },
+    #[error("cell {cell:?}: node mapping for {signal:?} is not a declared internal signal")]
+    NodeNotInternal { cell: Symbol, signal: Symbol },
+    #[error("cell {cell:?}: node mapping alias {alias:?} is not a declared cell name")]
+    UnknownNodeAlias { cell: Symbol, alias: Symbol },
     #[error("cell {cell:?}: exposed node {node:?} is not a declared internal signal")]
     ExposeNotInternal { cell: Symbol, node: Symbol },
     #[error("cell {cell:?}: duplicate exposed node {node:?}")]
@@ -471,7 +557,13 @@ pub struct AnalysedCell {
     /// Per-drive-strength-alias template overrides carried verbatim from the spec, keyed by an alias
     /// from `name`. Merged per-field over `template` by the `define_cell` emitter. Keys are validated
     /// against the declared names in [`Cell::analyse_signals`]; raw carry otherwise.
+    ///
+    /// (`nodes` below is validated in the same place and carried the same way.)
     pub template_overrides: IndexMap<Symbol, TemplateSpec>,
+    /// Which netlist node each internal signal stands for, carried verbatim from the spec for the arcs
+    /// emitter. Analysis never reads it: the machine is built and explored in the spec's own names, and
+    /// only the Liberate artifacts are rendered in the netlist's.
+    pub nodes: NodeNames,
     /// The voltage expressions the Liberate arcs' `-ic` renders for the two logic levels, resolved from
     /// the cell's `logic_low`/`logic_high` overrides (falling back to [`LogicVoltages::default`]). Raw
     /// carry — analysis never reads it, like `template`.
@@ -772,6 +864,34 @@ impl Cell {
             }
         }
 
+        // Every `[cell.nodes]` entry must name a declared internal, and every per-alias table a declared
+        // cell name. A mistyped key would otherwise map nothing and hand Liberate the spec's own name,
+        // which reads as a working spec right up to characterisation.
+        for signal in self.nodes.cell.keys() {
+            if !internal_set.contains(signal) {
+                return Err(ModelError::NodeNotInternal {
+                    cell: self.name[0].clone(),
+                    signal: signal.clone(),
+                });
+            }
+        }
+        for (alias, map) in &self.nodes.aliases {
+            if !name_set.contains(alias) {
+                return Err(ModelError::UnknownNodeAlias {
+                    cell: self.name[0].clone(),
+                    alias: alias.clone(),
+                });
+            }
+            for signal in map.keys() {
+                if !internal_set.contains(signal) {
+                    return Err(ModelError::NodeNotInternal {
+                        cell: self.name[0].clone(),
+                        signal: signal.clone(),
+                    });
+                }
+            }
+        }
+
         // Every exposed node must be a declared internal signal, checked in declaration order against a
         // running set so a duplicate is caught deterministically.
         let mut expose_seen: BTreeSet<Symbol> = BTreeSet::new();
@@ -855,6 +975,7 @@ impl Cell {
             unexplored: None,
             template: self.template.clone(),
             template_overrides: self.template_overrides.clone(),
+            nodes: self.nodes.clone(),
             voltages,
             exposed_view: None,
         };
@@ -1337,6 +1458,7 @@ Z = "A"
             when: ArcClasses::default(),
             template: None,
             template_overrides: IndexMap::new(),
+            nodes: NodeNames::default(),
             logic_low: None,
             logic_high: None,
         };
@@ -1408,6 +1530,165 @@ Y = "!A"
 delay = "delay_template"
 "#;
         assert!(parse_spec(s).unwrap().cells[0].analyse().is_ok());
+    }
+
+    /// A DFF over two drive strengths whose master sits on a differently-spelled netlist node in each.
+    const NODES_SRC: &str = r#"
+[[cell]]
+name = ["DFFX1", "DFFX4"]
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+expose = ["sela0"]
+[cell.internal]
+sela0 = "!CLK*D + CLK*sela0"
+[cell.outputs]
+Q = "CLK*sela0 + !CLK*Q"
+[cell.nodes]
+sela0 = "XI7/m"
+[cell.nodes.DFFX4]
+sela0 = "XI4/m"
+"#;
+
+    #[test]
+    fn nodes_reads_both_halves_of_one_table() {
+        // The section carries the cell-wide mapping and the per-alias tables together, told apart by
+        // the value's type, and each resolves per signal: the alias's own entry, else the cell-wide.
+        let cell = parse_spec(NODES_SRC).unwrap().cells.remove(0);
+        let (sela0, x1, x4) = (
+            Symbol::from("sela0"),
+            Symbol::from("DFFX1"),
+            Symbol::from("DFFX4"),
+        );
+        assert_eq!(cell.nodes.cell[&sela0], Symbol::from("XI7/m"));
+        assert_eq!(cell.nodes.aliases[&x4][&sela0], Symbol::from("XI4/m"));
+        assert_eq!(cell.nodes.of(&x1, &sela0), Symbol::from("XI7/m"));
+        assert_eq!(cell.nodes.of(&x4, &sela0), Symbol::from("XI4/m"));
+        // An unmapped signal stands for itself, under every alias.
+        let q = Symbol::from("Q");
+        assert_eq!(cell.nodes.of(&x4, &q), q);
+    }
+
+    #[test]
+    fn node_mapping_must_name_a_declared_internal() {
+        // A mistyped signal key would map nothing and hand Liberate the spec's own name, so it is a
+        // hard error rather than a silent identity.
+        let s = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+[cell.nodes]
+NOPE = "XI7/m"
+"#;
+        let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
+        assert!(matches!(err, ModelError::NodeNotInternal { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn node_mapping_alias_must_be_a_declared_name() {
+        let s = r#"
+[[cell]]
+name = ["DFFX1", "DFFX4"]
+inputs = ["CLK", "D"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+[cell.nodes.NOPE]
+M = "XI7/m"
+"#;
+        let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
+        assert!(
+            matches!(err, ModelError::UnknownNodeAlias { .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_mapped_node_reaches_liberate_alone() {
+        // The netlist spelling is for Liberate: it addresses the exposed column in the arcs, and
+        // appears in no other artifact. The behavioural artifacts keep the spec's own name, which is
+        // what the model was built and explored in.
+        let cell = analyse_one(NODES_SRC);
+        let arcs = crate::emit::arcs_tcl::cell_arcs_tcl(
+            &cell,
+            crate::emit::arcs_tcl::ArcsTclOptions::default(),
+        );
+        assert!(arcs.contains("-pinlist {CLK D XI7/m Q}"), "{arcs}");
+        assert!(arcs.contains("-pinlist {CLK D XI4/m Q}"), "{arcs}");
+        assert!(
+            !arcs.contains("sela0"),
+            "the spec name is not Liberate's:\n{arcs}"
+        );
+
+        for other in [
+            crate::emit::verilog::cell_verilog(&cell),
+            crate::emit::liberty::library_liberty("lib", std::slice::from_ref(&cell)),
+            crate::emit::define_cell::cell_define_cell(&cell),
+        ] {
+            assert!(
+                !other.contains("XI7/m") && !other.contains("XI4/m"),
+                "a netlist node reached a behavioural artifact:\n{other}"
+            );
+        }
+    }
+
+    #[test]
+    fn per_alias_nodes_fan_the_arcs_out_by_group() {
+        // A block addresses its exposed column by one name, so aliases whose netlists disagree on it
+        // cannot share a block: each group names only its own aliases. Leakage carries no exposed
+        // column, so it stays one block naming both.
+        let cell = analyse_one(NODES_SRC);
+        let arcs = crate::emit::arcs_tcl::cell_arcs_tcl(
+            &cell,
+            crate::emit::arcs_tcl::ArcsTclOptions::default(),
+        );
+        for block in arcs.split("define_arc").skip(1) {
+            let block = block.split("\n\n").next().unwrap_or(block);
+            let (x1, x4) = (block.contains("XI7/m"), block.contains("XI4/m"));
+            assert!(x1 ^ x4, "a block addresses one netlist node:\n{block}");
+            let named = if x1 { "{ DFFX1 }" } else { "{ DFFX4 }" };
+            assert!(
+                block.contains(named),
+                "the block names only the aliases that agree on it:\n{block}"
+            );
+        }
+        for block in arcs.split("define_leakage").skip(1) {
+            let block = block.split("\n\n").next().unwrap_or(block);
+            assert!(
+                block.contains("{ DFFX1 DFFX4 }"),
+                "leakage carries no exposed column, so no group divides it:\n{block}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unmapped_cell_emits_one_group() {
+        // The common case: nothing mapped, so every alias is named together and the exposed node keeps
+        // its own name — the output a cell had before any of this existed.
+        let cell = analyse_one(
+            r#"
+[[cell]]
+name = ["DFFX1", "DFFX4"]
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+expose = ["sela0"]
+[cell.internal]
+sela0 = "!CLK*D + CLK*sela0"
+[cell.outputs]
+Q = "CLK*sela0 + !CLK*Q"
+"#,
+        );
+        let arcs = crate::emit::arcs_tcl::cell_arcs_tcl(
+            &cell,
+            crate::emit::arcs_tcl::ArcsTclOptions::default(),
+        );
+        assert!(arcs.contains("-pinlist {CLK D sela0 Q}"), "{arcs}");
+        assert!(!arcs.contains("{ DFFX1 }"), "one group names both:\n{arcs}");
+        assert!(arcs.contains("{ DFFX1 DFFX4 }"), "{arcs}");
     }
 
     #[test]
