@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-06
+
 ### Added
 
 - **A constraint arc names the nodes it protects.** Each emitted setup/hold or non_seq block carries a
@@ -269,7 +271,8 @@ Initial release.
 - Emit Liberty, Verilog, and Tcl (arc) artefacts from a TOML cell specification.
 - Multi-threaded analysis with rayon.
 
-[Unreleased]: https://github.com/marlls1989/cellsmith/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/marlls1989/cellsmith/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/marlls1989/cellsmith/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/marlls1989/cellsmith/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/marlls1989/cellsmith/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/marlls1989/cellsmith/compare/v0.3.2...v0.3.3
