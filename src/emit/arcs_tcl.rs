@@ -317,12 +317,15 @@ struct Group {
 }
 
 impl Group {
-    /// What this group's netlist calls `node`, which a constraint protects.
+    /// What this group's netlist calls `node`, which a constraint protects. Every such node is resolved
+    /// when the groups are built — from the union of what the cell's constraints protect — and a block
+    /// only ever asks after its own constraint's nodes, so the lookup cannot miss. Falling back to the
+    /// spec's own name would hand Liberate a node its netlist does not have.
     fn probed_name(&self, node: &Symbol) -> Symbol {
         self.probed
             .get(node)
             .cloned()
-            .unwrap_or_else(|| node.clone())
+            .expect("a group resolves every node the cell's constraints protect")
     }
 }
 
@@ -330,28 +333,40 @@ impl Group {
 /// columns resolve to: the exposed ones every block lists, and the ones a constraint block adds for the
 /// node it protects.
 fn groups(cell: &AnalysedCell) -> Vec<Group> {
+    /// The netlist names one drive strength's blocks address, which is what decides whether two of them
+    /// can share a block. Both halves are lists of netlist names, so they are named rather than
+    /// positional: transposing them would regroup the cell silently.
+    #[derive(PartialEq, Eq, Hash)]
+    struct Columns {
+        /// The cell's exposed nodes, in `cell.exposed` order — a column on every measured block.
+        exposed: Vec<Symbol>,
+        /// The nodes the cell's constraints protect, in `protected` order — a column on the block that
+        /// protects them.
+        protected: Vec<Symbol>,
+    }
+
     let protected: BTreeSet<Symbol> = cell
         .constraints
         .iter()
         .flat_map(|c| c.nodes.iter().map(|(n, _)| n.clone()))
         .collect();
-    let mut by_nodes: IndexMap<(Vec<Symbol>, Vec<Symbol>), Vec<Symbol>> = IndexMap::new();
+    let mut by_nodes: IndexMap<Columns, Vec<Symbol>> = IndexMap::new();
     for alias in &cell.name {
         let resolved = |names: &mut dyn Iterator<Item = &Symbol>| -> Vec<Symbol> {
             names.map(|node| cell.nodes.of(alias, node)).collect()
         };
-        let key = (
-            resolved(&mut cell.exposed.iter()),
-            resolved(&mut protected.iter()),
-        );
+        let key = Columns {
+            exposed: resolved(&mut cell.exposed.iter()),
+            protected: resolved(&mut protected.iter()),
+        };
         by_nodes.entry(key).or_default().push(alias.clone());
     }
     by_nodes
         .into_iter()
-        .map(|((exposed, probed), names)| Group {
+        .map(|(columns, names)| Group {
             names,
-            exposed,
-            probed: protected.iter().cloned().zip(probed).collect(),
+            exposed: columns.exposed,
+            probed: protected.iter().cloned().zip(columns.protected).collect(),
         })
         .collect()
 }

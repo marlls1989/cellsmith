@@ -501,7 +501,6 @@ hazard puts at risk — in a single `-probe`, so Liberate measures the node the 
 protected node with no pin of its own, such as a flop's master latch, is given a `-pinlist` column on
 that block alone, which its `-ic` states the start level through.
 
-
 ## Known issues
 
 Cells wide enough to panic the espresso-logic dependency during cover expansion are
