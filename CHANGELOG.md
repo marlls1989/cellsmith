@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A constraint arc names the nodes it protects.** Each emitted setup/hold or non_seq block carries a
+  single `-probe` naming the state variables whose settled value the hazard puts at risk, so Liberate
+  measures the node the constraint is about — a flop's master latch, for the setup that separates its
+  clock from its data. A protected node with no pin of its own is given a `-pinlist` column on that
+  block alone, which its `-ic` states the start level through.
+
 - **`[cell.nodes]` says which netlist node an internal signal stands for.** A spec is written in names
   that read well in the behavioural model, while the netlist may hold that state on a node spelled
   otherwise; this hands Liberate the netlist's spelling and leaves the Verilog and Liberty artifacts in

@@ -27,6 +27,8 @@
 //! tie-break that fixes the surviving [`OrderDependence`] and, downstream,
 //! `confluence::constrain`'s own constraint dedup. See `hazard-detection.md` for the concept.
 
+use std::collections::BTreeMap;
+
 use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::arcs::{ArcLevels, Edge};
@@ -63,6 +65,10 @@ pub struct Race {
     /// The levels the cell's outputs hold at the probed state — sampled at the SAME state as
     /// `prevector`, so the pair the constraint carries is consistent.
     pub levels: ArcLevels,
+    /// The level each node the hazard names holds at the PROBED state, by name. Sampled at the same
+    /// state as `prevector` and `levels`, and covering every entry of the hazard's `group`, so the
+    /// constraint generated from this observation can state the start level of the node it protects.
+    pub node_levels: BTreeMap<Symbol, bool>,
     /// Index of the probed state in `ex.order` (the sequential BFS exploration order).
     pub discovered: usize,
 }
@@ -87,6 +93,10 @@ pub struct OrderDependence {
     /// The levels the cell's outputs hold at the probed state — sampled at the SAME state as
     /// `prevector`, so the pair the constraint carries is consistent.
     pub levels: ArcLevels,
+    /// The level each node the hazard names holds at the PROBED state, by name. Sampled at the same
+    /// state as `prevector` and `levels`, and covering every entry of the hazard's `group`, so the
+    /// constraint generated from this observation can state the start level of the node it protects.
+    pub node_levels: BTreeMap<Symbol, bool>,
     /// Index of the probed state in `ex.order` (the sequential BFS exploration order) — the secondary
     /// tie-break key: on equal `prevector.len`, the earlier-discovered representative is kept.
     pub discovered: usize,

@@ -93,6 +93,12 @@ pub struct Constraint {
     /// The levels the cell's outputs hold in that state — the constraint arc's `-ic` initial condition,
     /// sampled at the same probed state as `prevector`.
     pub levels: ArcLevels,
+    /// The nodes this constraint protects, each with the level it holds at the probed state: the state
+    /// variables whose settled value the hazard puts at risk — a flop's master latch, for the setup
+    /// constraint that separates its clock from its data — in signal declaration order. The emitted
+    /// block gives each a column of its own and names them all in one Liberate `-probe`, so the
+    /// characterisation measures the nodes the constraint is actually about.
+    pub nodes: Vec<(Symbol, bool)>,
 }
 
 impl Constraint {
@@ -120,6 +126,46 @@ impl Constraint {
     }
 }
 
+/// What a hazard observation sampled at the state it was probed from, which a constraint carries
+/// forward as one: the walk into that state, the levels the cell's pins hold there, and the nodes the
+/// hazard puts at risk with the level each holds. All three are read at the one state, so they travel
+/// together — a surviving representative carries the sample of the very state its prevector walks to.
+struct Probed {
+    prevector: Vec<Minterm<Symbol>>,
+    levels: ArcLevels,
+    nodes: Vec<(Symbol, bool)>,
+}
+
+/// The nodes a hazard puts at risk, each with the level the observation sampled for it. An observation
+/// samples every node of the group it was recorded with — `record_oscillation` keys on that group, so a
+/// race only ever joins an oscillation naming the same nodes — so every entry is there.
+fn protected(group: &[Symbol], levels: &BTreeMap<Symbol, bool>) -> Vec<(Symbol, bool)> {
+    group
+        .iter()
+        .map(|node| {
+            let level = *levels
+                .get(node)
+                .expect("a hazard observation samples every node of its own group");
+            (node.clone(), level)
+        })
+        .collect()
+}
+
+/// The level each of `group`'s nodes holds at the probed state — what a constraint block states as the
+/// start condition of the node it protects. A hazard's group holds state variables, which are machine
+/// coordinates, and a probed state is fully initialised, so every one of them is defined there.
+fn node_levels_at(state: &Minterm<Symbol>, group: &[Symbol]) -> BTreeMap<Symbol, bool> {
+    group
+        .iter()
+        .map(|w| {
+            let level = state
+                .value_of(w.as_str())
+                .expect("a hazard's group node is defined at the fully-initialised probed state");
+            (w.clone(), level)
+        })
+        .collect()
+}
+
 /// The direction `name` toggles from its current value at `node`. Explored nodes carry a complete input
 /// assignment, so an input's value is always fixed there.
 fn edge_from(node: &Minterm<Symbol>, name: &str) -> Edge {
@@ -134,20 +180,30 @@ fn edge_from(node: &Minterm<Symbol>, name: &str) -> Edge {
 }
 
 /// A canonical dedup key: setup/hold is directed; non_seq is unordered over its two pins.
+/// A constraint's protected nodes as one key fragment, in their own order.
+fn names_of(nodes: &[(Symbol, bool)]) -> String {
+    nodes
+        .iter()
+        .map(|(n, _)| n.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 fn constraint_key(c: &Constraint) -> String {
     match c.kind {
         ConstraintKind::SetupHold => format!(
-            "SH|{}{}|{}{}",
+            "SH|{}{}|{}{}|{}",
             c.related,
             c.related_edge.rf(),
             c.pin,
-            c.pin_edge.rf()
+            c.pin_edge.rf(),
+            names_of(&c.nodes)
         ),
         ConstraintKind::NonSeq => {
             let a = format!("{}{}", c.related, c.related_edge.rf());
             let b = format!("{}{}", c.pin, c.pin_edge.rf());
             let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
-            format!("NS|{lo}|{hi}")
+            format!("NS|{lo}|{hi}|{}", names_of(&c.nodes))
         }
     }
 }
@@ -333,6 +389,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                         y_edge: edge_from(s, y.as_str()),
                         prevector: prevector_s.clone(),
                         levels: levels_s.clone(),
+                        node_levels: node_levels_at(s, &group),
                         discovered,
                     };
                     record_oscillation(
@@ -381,6 +438,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                 // than of the declaration.
                 let group: Vec<Symbol> =
                     state_vars.iter().filter(|w| diverges(w)).cloned().collect();
+                let node_levels = node_levels_at(s, &group);
                 let mut stable_set: BTreeSet<Minterm<Symbol>> = BTreeSet::new();
                 stable_set.insert(s_xy.project_to(&group));
                 stable_set.insert(s_yx.project_to(&group));
@@ -397,6 +455,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                         stable: stable_set.into_iter().collect(),
                         prevector: prevector_s.clone(),
                         levels: levels_s.clone(),
+                        node_levels,
                         discovered,
                     },
                 );
@@ -453,8 +512,11 @@ pub(crate) fn constrain(hz: &DetectedHazards, clock_pins: &[Symbol]) -> Vec<Cons
                 &od.y,
                 od.y_edge,
                 clock_pins,
-                od.prevector.clone(),
-                od.levels.clone(),
+                Probed {
+                    prevector: od.prevector.clone(),
+                    levels: od.levels.clone(),
+                    nodes: protected(&od.group, &od.node_levels),
+                },
             ),
             od.discovered,
         );
@@ -469,8 +531,11 @@ pub(crate) fn constrain(hz: &DetectedHazards, clock_pins: &[Symbol]) -> Vec<Cons
                     &race.y,
                     race.y_edge,
                     clock_pins,
-                    race.prevector.clone(),
-                    race.levels.clone(),
+                    Probed {
+                        prevector: race.prevector.clone(),
+                        levels: race.levels.clone(),
+                        nodes: protected(&osc.group, &race.node_levels),
+                    },
                 ),
                 race.discovered,
             );
@@ -489,9 +554,13 @@ fn make_constraint(
     y: &str,
     y_edge: Edge,
     clock_pins: &[Symbol],
-    prevector: Vec<Minterm<Symbol>>,
-    levels: ArcLevels,
+    probed: Probed,
 ) -> Constraint {
+    let Probed {
+        prevector,
+        levels,
+        nodes,
+    } = probed;
     let is_clock = |p: &str| clock_pins.iter().any(|c| c.as_str() == p);
     if is_clock(x) ^ is_clock(y) {
         let (clk, clk_edge, data, data_edge) = if is_clock(x) {
@@ -507,6 +576,7 @@ fn make_constraint(
             pin_edge: data_edge,
             prevector,
             levels,
+            nodes,
         }
     } else {
         Constraint {
@@ -517,6 +587,7 @@ fn make_constraint(
             pin_edge: y_edge,
             prevector,
             levels,
+            nodes,
         }
     }
 }
