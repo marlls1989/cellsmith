@@ -567,10 +567,11 @@ pub struct AnalysedCell {
     pub regions: Vec<crate::logic::regions::StateRegions>,
     /// Whether the cell holds state: at least one of its minimised signals is a state variable — a
     /// signal on a dependency cycle ([`crate::logic::resolve::state_variables`]). The Liberate arc
-    /// emitter gates the `-ic` initial condition on it: Liberate discards the `-prevector` simulation
-    /// instead of carrying its settled values into the measured vector, so a cell with memory starts
-    /// that vector from state the prevector was supposed to establish and did not, and `-ic` states the
-    /// start condition outright. A combinational cell has no state to lose and gets no `-ic`.
+    /// emitter gates the `-ic` initial condition on it: a block measuring a transition runs on a
+    /// prepark deck, which parks the cell afresh instead of carrying the `-prevector` simulation's
+    /// settled values into the measured vector, so a cell with memory starts that vector from state the
+    /// prevector was supposed to establish and did not, and `-ic` states the start condition outright.
+    /// A combinational cell has no state to lose and gets no `-ic`.
     pub state_holding: bool,
     /// The cell's behavioural edge classification ([`crate::logic::edge::EdgeArcs`]): the per-node edge
     /// seams (`captures`), the per-arc `-type edge` labels (`labels`) — the field the Liberate arc emitter

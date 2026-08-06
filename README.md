@@ -70,9 +70,10 @@ Three properties follow from this construction:
 - **input-forced transitions cascade through settling** — in a settable cross-coupled pair, toggling a
   set input flips both the output it forces (rise) and, through the coupling, that output's partner
   (fall); the search discovers both;
-- **a state-holding cell's arcs carry `-ic`**, the start-state voltage of every `-pinlist` entry.
-  Liberate discards the `-prevector` simulation instead of carrying its settled values into the measured
-  vector, so `-ic` states the start condition directly. A purely combinational cell carries no `-ic`.
+- **a state-holding cell's arcs carry `-ic`**, the start-state voltage of every `-pinlist` entry. A
+  block measuring a transition runs on a prepark deck, which parks the cell afresh rather than
+  carrying the `-prevector` simulation's settled values into the measured vector, so `-ic` states the
+  start condition directly. A purely combinational cell carries no `-ic`.
 
 A cross-coupled cell is also **bistable**: under some input condition (`A·B` for a mutex) the
 joint next-state has two stable states, and the physical cell picks one non-deterministically instead

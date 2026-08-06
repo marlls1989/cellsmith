@@ -13,8 +13,12 @@
 //!
 //! Every block of a state-holding cell — transition, hidden and constraint alike — also carries an
 //! `-ic` line giving each `-pinlist` pin the voltage it starts the measured vector at (see [`ic_str`]).
-//! Liberate discards the `-prevector` simulation instead of carrying its settled values into the
-//! vector, so a cell with memory would otherwise begin measuring from state nothing established.
+//! Whether the `-prevector` simulation reaches the measurement at all follows the DECK each kind of
+//! measurement runs on. A block measuring a transition — the transition arcs, and the constraint arcs
+//! with them — runs on a PREPARK deck, which parks the cell afresh and so discards those settled
+//! values, and `-ic` is what states the start condition there. `define_arc -type hidden` and
+//! `define_leakage` run on a SINGLE deck, which carries them. Every block carries its prevector either
+//! way: a block relying on the levels alone draws a Liberate warning about user arcs.
 //!
 //! A cell that exposes internal nodes (`expose = [...]`) is rendered from its ARC VIEW
 //! ([`crate::model::AnalysedCell::arc_view`]), the analysis that keeps those nodes as model coordinates.
@@ -864,10 +868,10 @@ fn is_one_brace_group(value: &str) -> bool {
 /// as the cell's `logic_low`/`logic_high` expression for the level it starts at (through
 /// [`ic_column`]). Inputs start where the
 /// prevector leaves them (its last step); outputs and exposed nodes start at the levels measured at the
-/// arc's start state. Liberate discards the `-prevector` simulation rather than carrying its settled
-/// values forward, so this is what actually establishes a state-holding cell's start condition — and
-/// the exposed columns are the reason it can establish an internal one at all, an internal node having
-/// no pin to drive it through. Every block kind renders every column, the constraint block included,
+/// arc's start state. A block measuring a transition runs on a prepark deck, which parks the cell
+/// afresh rather than carrying the `-prevector` simulation's settled values forward, so this is what
+/// actually establishes a state-holding cell's start condition — and the exposed columns are the reason
+/// it can establish an internal one at all, an internal node having no pin to drive it through. Every block kind renders every column, the constraint block included,
 /// where `-vector` states no behaviour but the start level is real all the same. Rendered through the
 /// same [`vector`] helper as `-pinlist` and `-vector`, so the three lines' columns line up by
 /// construction.
@@ -2388,8 +2392,7 @@ Q = "CLK*M + !CLK*Q"
 
     #[test]
     fn combinational_cell_emits_no_ic() {
-        // A cell with no state loses nothing when Liberate discards the prevector simulation, so no
-        // block states a start condition.
+        // A cell with no state loses nothing to the prepark deck, so no block states a start condition.
         for src in [
             AND2,
             r#"
