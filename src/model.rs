@@ -483,13 +483,13 @@ pub enum ModelError {
     NodeNotInternal { cell: Symbol, signal: Symbol },
     #[error("cell {cell:?}: node mapping alias {alias:?} is not a declared cell name")]
     UnknownNodeAlias { cell: Symbol, alias: Symbol },
-    #[error("cell {cell:?}: two exposed nodes map onto {node:?} under {alias:?}")]
+    #[error("cell {cell:?}: two nodes resolve to {node:?} under {alias:?}")]
     DuplicateNode {
         cell: Symbol,
         alias: Symbol,
         node: Symbol,
     },
-    #[error("cell {cell:?}: an exposed node maps onto the pin {node:?} under {alias:?}")]
+    #[error("cell {cell:?}: a node resolves to the pin {node:?} under {alias:?}")]
     NodeClashesWithPin {
         cell: Symbol,
         alias: Symbol,
@@ -946,20 +946,33 @@ impl Cell {
             }
         }
 
-        // What an exposed node RESOLVES to is a `-pinlist` column, and the `-vector` and `-ic` columns
-        // are positional against that list, so two columns under one name shift every column after
-        // them. `expose` rejects that collision above, before resolution; a mapping can reintroduce it —
-        // two nodes onto one, or a node onto a pin — and does so per drive strength, so each alias is
-        // checked on the columns it actually emits.
+        // What a node RESOLVES to can be a `-pinlist` column, and the `-vector` and `-ic` columns are
+        // positional against that list, so two columns under one name shift every column after them.
+        // `expose` rejects that collision above, before resolution; a mapping can reintroduce it — two
+        // nodes onto one, or a node onto a pin — and does so per drive strength, so each alias is
+        // checked on what it resolves.
+        //
+        // Every MAPPED node is checked, not only the exposed ones: a constraint arc gives the node it
+        // protects a column of its own, and which nodes those are is not known until the machine has
+        // been explored. The rule is the netlist's own either way — one node, one name — so a mapping
+        // that collides is wrong wherever the column would have come from.
         let pin_set: BTreeSet<Symbol> = self
             .inputs
             .iter()
             .chain(self.outputs.keys())
             .cloned()
             .collect();
+        let columnar: Vec<&Symbol> = self
+            .expose
+            .iter()
+            .chain(self.nodes.cell.keys())
+            .chain(self.nodes.aliases.values().flat_map(IndexMap::keys))
+            .collect::<indexmap::IndexSet<_>>()
+            .into_iter()
+            .collect();
         for alias in &self.name {
             let mut resolved_seen: BTreeSet<Symbol> = BTreeSet::new();
-            for node in &self.expose {
+            for node in &columnar {
                 let resolved = self.nodes.of(alias, node);
                 if pin_set.contains(&resolved) {
                     return Err(ModelError::NodeClashesWithPin {
@@ -1695,7 +1708,7 @@ Q = "n"
     }
 
     #[test]
-    fn two_exposed_nodes_may_not_map_onto_one() {
+    fn two_nodes_may_not_resolve_to_one() {
         // The resolved names are `-pinlist` columns and the vector is positional against that list, so
         // two columns under one name shift every column after them. `expose` rejects the same collision
         // before resolution; the mapping may not reintroduce it.
@@ -1707,6 +1720,31 @@ Q = "n"
             .analyse()
             .unwrap_err();
         assert!(matches!(err, ModelError::DuplicateNode { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn an_unexposed_node_is_checked_for_collisions_too() {
+        // Which nodes take a column is not settled by `expose`: a constraint arc gives the node it
+        // protects one of its own, and that is known only after exploration. So every MAPPED node is
+        // checked, exposed or not — here a flop's master, protected by the setup/hold pair it earns.
+        let s = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+constraint_arcs = true
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+[cell.nodes]
+M = "CLK"
+"#;
+        let err = parse_spec(s).unwrap().cells[0].analyse().unwrap_err();
+        assert!(
+            matches!(err, ModelError::NodeClashesWithPin { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]
