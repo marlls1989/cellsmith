@@ -9,24 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`define_leakage` states every rest state the cell can hold, not just the settled seeds.** A cell
-  leaks differently in each state it rests in, and two rest states can share an input assignment while
-  differing in what the cell holds — a C-element at `A=1,B=0` with `Q` either way, a mutex at `A=B=1` in
-  whichever grant it arbitrated into — neither of which a seed-keyed derivation could express. Each block
-  now carries a `-vector` holding the cell's own pins at their rest levels, and a `-prevector` priming
-  the internal nodes to what the state holds, which is what tells two states at the same inputs apart.
-  An exposed internal node takes no column in the vector: the prevector has already placed it. A state
-  the inputs drive the cell into on their own is reached with no walk and has nothing to prime, so it
-  carries no prevector at all — every rest state of a combinational cell, and the forced states of a
-  state-holding one. Only
-  fully-initialised states are emitted — a state carrying an uninitialised latch is at an unknown state —
-  so a leakage state is never partial, where the previous derivation emitted seeds with unresolved
-  outputs dropped.
+- **`define_leakage` states every state the cell can rest in.** One block per fully-initialised
+  reachable rest state, carrying the `-prevector` that primes the cell's internal nodes into it and a
+  `-vector` holding the cell's pins at the levels they rest at. A cell leaks differently in each state
+  it rests in, and two rest states can share an input assignment while differing in what the cell holds
+  — a C-element at `A=1,B=0` with `Q` either way, a mutex at `A=B=1` in whichever grant it arbitrated
+  into — so each is its own block.
 
-- **`define_cell`'s characterisation-template flag is `-constraint`.** The emitted flag was
-  `-constrain`. The spec key is `constraint` to match, and is also accepted spelled `constrain`.
-- **Condensed the `--help` text.** Each flag's help is now a single line; the behaviour behind the
-  flags is described in the README.
+- **`define_cell` names its characterisation template with `-constraint`.** The spec key is
+  `constraint`, also accepted spelled `constrain`.
+
+- **`--help` gives one line per flag.** The behaviour behind the flags is described in the README.
 
 ## [0.4.1] - 2026-08-02
 
