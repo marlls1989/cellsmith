@@ -924,23 +924,30 @@ fn hidden_when_str(h: &HiddenArc) -> Option<String> {
 /// own, inputs then outputs ([`pinlist_str`]): an exposed internal is no pin of the cell and the
 /// prevector has already put it where it belongs, so it takes no column here.
 ///
-/// A state reached with no walk primes nothing, so it is rendered without a prevector at all. Its path
-/// is a single step — `Explored::path_to` seeds the chain with the state itself, so one step means no
-/// predecessor — and that step is the input assignment `-vector` already carries.
+/// The walk's LAST step is the state itself — `Explored::path_to` ends its chain there — and `-vector`
+/// already states that input assignment, so only the steps before it prime and only those are rendered.
+/// Trimmed to nothing, the prevector goes entirely: a state the inputs drive the cell into on their own
+/// has no internal state left to prime.
 fn format_leakage(cell: &AnalysedCell, l: &LeakageState) -> String {
     let mut lits: Vec<(Symbol, bool)> = assignment(&l.inputs).into_iter().collect();
     lits.extend(l.outputs.iter().cloned());
     lits.sort();
 
+    let priming = l
+        .prevector
+        .split_last()
+        .expect("path_to ends its chain with the state itself")
+        .1;
+
     let mut s = String::from("define_leakage \\\n");
-    if l.prevector.len() > 1 {
+    if !priming.is_empty() {
         s.push_str(&format!(
             "\t-prevector_pinlist {{{}}} \\\n",
             cell.inputs.join(" ")
         ));
         s.push_str(&format!(
             "\t-prevector {{{}}} \\\n",
-            prevector_str(cell, &l.prevector)
+            prevector_str(cell, priming)
         ));
     }
     s.push_str(&format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell)));
@@ -3359,7 +3366,8 @@ Q = "A*B + Q*(A+B)"
         assert!(tcl.contains("-when \"!A*!B*!Q\""));
 
         // The pair that shares an input assignment and differs only in what the cell holds: same
-        // -pinlist, opposite Q column, and a prevector that walks in from the forcing input it kept.
+        // -pinlist, opposite Q column, and a prevector naming the forcing input that set Q — the walk
+        // trimmed of its last step, which is the rest state -vector already states.
         let block = |needle: &str| {
             tcl.split("define_leakage")
                 .find(|b| b.contains(needle))
@@ -3370,8 +3378,8 @@ Q = "A*B + Q*(A+B)"
         assert!(high.contains("-pinlist {A B Q}") && low.contains("-pinlist {A B Q}"));
         assert!(high.contains("-vector {1 0 1}"), "held high: {high}");
         assert!(low.contains("-vector {1 0 0}"), "held low: {low}");
-        assert!(high.contains("-prevector {11 10}"), "held high: {high}");
-        assert!(low.contains("-prevector {00 10}"), "held low: {low}");
+        assert!(high.contains("-prevector {11} \\"), "held high: {high}");
+        assert!(low.contains("-prevector {00} \\"), "held low: {low}");
 
         // A forcing input drives the cell into its state on its own — no walk, so nothing to prime and
         // no prevector, unlike the hold states above.
