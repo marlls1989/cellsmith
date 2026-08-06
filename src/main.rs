@@ -101,10 +101,7 @@ fn when_arg() -> Arg {
         .num_args(0..=1)
         .require_equals(true)
         .action(ArgAction::Append)
-        .help(
-            "Also emit the `-when`-conditioned arcs of a class; bare selects every class, \
-             repeat to select several (attach the value with `=`)",
-        )
+        .help("Also emit `-when`-conditioned arcs; bare = every class, repeatable")
 }
 
 impl Args for WhenArg {
