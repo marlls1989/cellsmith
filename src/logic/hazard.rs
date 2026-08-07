@@ -71,6 +71,10 @@ pub struct Race {
     /// state as `prevector` and `levels`, and covering every entry of the hazard's `group`, so the
     /// constraint generated from this observation can state the start level of the node it protects.
     pub node_levels: BTreeMap<Symbol, bool>,
+    /// The probed state itself: every input and state variable at the level it holds there. The
+    /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
+    /// emitted column carries.
+    pub state: Minterm<Symbol>,
     /// Index of the probed state in `ex.order` (the sequential BFS exploration order).
     pub discovered: usize,
 }
@@ -99,6 +103,10 @@ pub struct OrderDependence {
     /// state as `prevector` and `levels`, and covering every entry of the hazard's `group`, so the
     /// constraint generated from this observation can state the start level of the node it protects.
     pub node_levels: BTreeMap<Symbol, bool>,
+    /// The probed state itself: every input and state variable at the level it holds there. The
+    /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
+    /// emitted column carries.
+    pub state: Minterm<Symbol>,
     /// Index of the probed state in `ex.order` (the sequential BFS exploration order) — the secondary
     /// tie-break key: on equal `prevector.len`, the earlier-discovered representative is kept.
     pub discovered: usize,

@@ -99,6 +99,10 @@ pub struct Constraint {
     /// block gives each a column of its own and names them all in one Liberate `-probe`, so the
     /// characterisation measures the nodes the constraint is actually about.
     pub nodes: Vec<(Symbol, bool)>,
+    /// The probed state itself: every input and state variable at the level it holds there. The
+    /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
+    /// emitted column carries.
+    pub state: Minterm<Symbol>,
 }
 
 impl Constraint {
@@ -134,6 +138,7 @@ struct Probed {
     prevector: Vec<Minterm<Symbol>>,
     levels: ArcLevels,
     nodes: Vec<(Symbol, bool)>,
+    state: Minterm<Symbol>,
 }
 
 /// The nodes a hazard puts at risk, each with the level the observation sampled for it. An observation
@@ -391,6 +396,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                         prevector: prevector_s.clone(),
                         levels: levels_s.clone(),
                         node_levels: node_levels_at(s, &group),
+                        state: s.clone(),
                         discovered,
                     };
                     record_oscillation(
@@ -457,6 +463,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                         prevector: prevector_s.clone(),
                         levels: levels_s.clone(),
                         node_levels,
+                        state: s.clone(),
                         discovered,
                     },
                 );
@@ -517,6 +524,7 @@ pub(crate) fn constrain(hz: &DetectedHazards, clock_pins: &[Symbol]) -> Vec<Cons
                     prevector: od.prevector.clone(),
                     levels: od.levels.clone(),
                     nodes: protected(&od.group, &od.node_levels),
+                    state: od.state.clone(),
                 },
             ),
             od.discovered,
@@ -536,6 +544,7 @@ pub(crate) fn constrain(hz: &DetectedHazards, clock_pins: &[Symbol]) -> Vec<Cons
                         prevector: race.prevector.clone(),
                         levels: race.levels.clone(),
                         nodes: protected(&osc.group, &race.node_levels),
+                        state: race.state.clone(),
                     },
                 ),
                 race.discovered,
@@ -561,6 +570,7 @@ fn make_constraint(
         prevector,
         levels,
         nodes,
+        state,
     } = probed;
     let is_clock = |p: &str| clock_pins.iter().any(|c| c.as_str() == p);
     if is_clock(x) ^ is_clock(y) {
@@ -578,6 +588,7 @@ fn make_constraint(
             prevector,
             levels,
             nodes,
+            state,
         }
     } else {
         Constraint {
@@ -589,6 +600,7 @@ fn make_constraint(
             prevector,
             levels,
             nodes,
+            state,
         }
     }
 }

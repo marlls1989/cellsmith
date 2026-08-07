@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, Parser};
 use rayon::prelude::*;
 
-use cellsmith::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
+use cellsmith::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, CellArcs};
 use cellsmith::emit::define_cell::cell_define_cell;
 use cellsmith::emit::liberty::library_liberty;
 use cellsmith::emit::verilog::cell_verilog;
@@ -231,6 +231,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     // Both hazard loops read the ARC VIEW, the same analysis `cell_arcs_tcl` renders: it is that view's
     // hazards the emitted constraint arcs come from, so reporting the other view's would describe arcs
     // the run never wrote.
+    let arc_opts = ArcsTclOptions {
+        emit_internal: !cli.no_internal,
+        emit_leakage: !cli.no_leakage,
+    };
+    let rendered: Vec<CellArcs> = cells.par_iter().map(|c| cell_arcs(c, arc_opts)).collect();
+
     let mut warnings: Vec<String> = Vec::new();
     for c in &cells {
         for a in &c.arc_view().oscillation {
@@ -289,6 +295,28 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         }
     }
 
+    // Diagnose the arcs no block could state: every arc should express the cell state it measures
+    // from, and `-ic` and `-vector` reach exactly the `-pinlist`, so a firing that differs only in an
+    // internal node with no column renders a block already emitted. Exposing those nodes is the remedy,
+    // which is why the warning names the state as well as the arc.
+    for (c, r) in cells.iter().zip(&rendered) {
+        if r.masked.is_empty() {
+            continue;
+        }
+        let mut lines = vec![format!(
+            "cellsmith: warning: cell {:?}: {} arc(s) masked: too few nodes exposed for -ic to express the cell state",
+            c.repr_name(),
+            r.masked.len(),
+        )];
+        for m in &r.masked {
+            lines.extend(subblock(&[
+                ("arc", m.arc.clone()),
+                ("cell state", m.state.clone()),
+            ]));
+        }
+        warnings.push(lines.join("\n"));
+    }
+
     if !warnings.is_empty() {
         eprintln!("{}", warnings.join("\n\n"));
     }
@@ -297,12 +325,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     // order-dependence warnings above, so the constraint arcs are emitted (below, gated by the
     // per-cell opt-in) without a separate diagnostic.
 
-    let arc_opts = ArcsTclOptions {
-        emit_internal: !cli.no_internal,
-        emit_leakage: !cli.no_leakage,
-    };
     let base = cli.name.unwrap_or_else(|| base_name(&cli.spec));
-    let arcs = render(&cells, |c| cell_arcs_tcl(c, arc_opts));
+    let arcs: String = rendered.iter().map(|r| r.tcl.as_str()).collect();
     let verilog = render(&cells, cell_verilog);
     let liberty = library_liberty(&base, &cells);
     let cells_tcl = render(&cells, cell_define_cell);
