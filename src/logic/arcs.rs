@@ -18,11 +18,11 @@
 //!      `related` pin (arcs are only ever sourced by primary inputs — never an output or internal),
 //!      and the prevector is the BFS path — each node projected onto the inputs — that reaches the
 //!      arc's start state in cellsmith's own model, driving every state variable (internal ones
-//!      included) to its value there. A block measuring a transition runs on a prepark deck, which
-//!      parks the cell afresh and so discards that `-prevector` simulation instead of carrying its
-//!      settled values into the measurement; the start condition reaches it through `-ic` instead,
-//!      which names the level of every `-pinlist` entry. (`-type hidden` and `define_leakage` run on a
-//!      single deck, which does carry them.)
+//!      included) to its value there. It is not emitted: no `define_arc` carries a `-prevector`, and
+//!      the start condition reaches Liberate through `-ic`, which names the level of every `-pinlist`
+//!      entry. The walk is what identifies the start state, and both `-ic` and the vector's held
+//!      columns are read off its last step. (A `define_leakage` that must WALK the cell into its rest
+//!      state does run one — see [`super::leakage`].)
 
 use std::collections::HashSet;
 use std::hash::Hash;

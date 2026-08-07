@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **No `define_arc` carries a `-prevector`.** The start condition reaches Liberate through `-ic` alone,
+  which every block of a state-holding cell already carried; a purely combinational cell has no state to
+  establish and carries neither. cellsmith still walks its own model to find the state an arc is measured
+  from — that walk is what `-ic` and the vector's held columns are read off — it is simply no longer
+  emitted.
+
+- **A `define_leakage` that needs no priming is the bare condition.** A rest state the inputs drive the
+  cell into on their own has nothing to prime and so nothing to run: the block is `define_leakage -when
+  "…" { … }`, with no prevector, pinlist or vector. A state the cell must be walked into keeps all four.
+
 ## [0.5.0] - 2026-08-06
 
 ### Added

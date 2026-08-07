@@ -353,7 +353,7 @@ raised for a run with its own flag, `--max-candidates` or `--max-states`.
 ## 7. Worked example: discovering `B↓ → Qa↑` on the mutex
 
 `MUT`: `Qa = !Qb·A`, `Qb = !Qa·B`. We trace the arc from related pin `B` to pin `Qa` (rise), whose
-emitted block is `-prevector {01 11} -vector {1 F R X}`.
+emitted block carries `-vector {1 F R X}`, its start condition stated by `-ic`.
 
 **Start.** Start states are discovered from the signals' forced covers (§6), not from an all-zero reset.
 `δ_Qb = !Qa·B` is forced high by `B` alone, so `N_B = (0 1 | 0 1)` — *B holds the grant* — is one of the
@@ -382,7 +382,7 @@ Settled `(1 0 | 1 0)`. The two micro-steps are the physical cascade: B drops →
 A=1, Qa rises.
 
 **Emit.** Across the toggle at `N_AB2 → (1 0 | 1 0)`, `Qa: 0 → 1` (rise). Arc: `related = B`, `pin = Qa`,
-edge Rise, `start = 11`, `end = 10`, `prevector = 01 11`, vector `{1 F R X}`. (The same step emits
+edge Rise, `start = 11`, `end = 10`, prevector `01 11` (model only), vector `{1 F R X}`. (The same step emits
 `B → Qb↓`.)
 
 `B` does not appear in `Qa`'s own function. The `B↓ → Qa↑` dependence arises from *reaching* the state
