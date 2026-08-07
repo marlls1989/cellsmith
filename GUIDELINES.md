@@ -58,12 +58,23 @@ emit, the spec for an input we parse. A signature or a sample tells you what hap
 the documentation tells you what is actually guaranteed, and the gap between the two is where
 the subtle bugs live.
 
-## Emission order is not significant
+## Determinism is not a goal
+
+**The output may differ between runs of the same input, and that is fine.** cellsmith is
+free to emit its blocks in any order, and free to pick any equally-good representative
+wherever a choice is arbitrary — which state an arc was measured from, which walk reaches
+a rest state, which of several tied candidates survives a dedup. None of that is part of
+what the tool promises, and none of it needs to be stable from one run to the next.
+
+So **never choose a slower, more awkward or less clear implementation in order to make the
+output repeatable.** No `BTreeMap` where a `HashMap` is the right structure, no sort that
+exists only to fix an order, no serialising a parallel pass to pin which candidate wins.
+Stability is not a benefit to weigh against speed or clarity; it is worth nothing here, so
+it loses every trade it is offered.
 
 The order in which the tool emits its output commands carries no meaning, and nothing in
 the design or the tests should depend on it. Two runs that produce the same arcs, hazards
-and constraints are equivalent even if the blocks come out in a different order, and a run
-is free to pick any equally-good representative where a choice is arbitrary.
+and constraints are equivalent even if the blocks come out in a different order.
 
 The one place ordering *is* real is where a format the output feeds gives a position
 meaning — a `-vector`'s characters line up with the `-pinlist`, and Liberty's statetable

@@ -22,7 +22,7 @@
 //! The machine model and the two-stage detect/constrain hazard pipeline are described concept-first in
 //! `state-machine-arc-engine.md` and `hazard-detection.md`; this module only wires the shared pass.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
@@ -174,8 +174,7 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             // [`machine::explore`] records the visitation order and predecessors, shared by both
             // derivations.
             Exploration::Fresh(budget) => {
-                let output_names: BTreeSet<&Symbol> =
-                    cell.outputs.iter().map(|o| &o.name).collect();
+                let output_names: HashSet<&Symbol> = cell.outputs.iter().map(|o| &o.name).collect();
                 let seed_funcs: Vec<_> = deltas
                     .iter()
                     .chain(

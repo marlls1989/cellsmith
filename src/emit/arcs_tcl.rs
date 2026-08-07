@@ -533,7 +533,7 @@ struct Group {
     /// What this group's netlist calls each node the BLOCK carries beyond the cell's exposures — the
     /// nodes its own constraint protects, and nothing else. A block groups on the columns it carries,
     /// so it holds names for those and no others.
-    probed: BTreeMap<Symbol, Symbol>,
+    probed: HashMap<Symbol, Symbol>,
 }
 
 impl Group {
@@ -619,7 +619,7 @@ fn constraint_block(cell: &AnalysedCell, group: &Group, c: &Constraint, arc_type
     // it, so only the rest are added.
     let mut model = cell.exposed.clone();
     let mut listed = group.exposed.clone();
-    let mut probed: BTreeMap<Symbol, bool> = BTreeMap::new();
+    let mut probed: HashMap<Symbol, bool> = HashMap::new();
     for (node, level) in &c.nodes {
         if cell.exposed.contains(node) || cell.outputs.iter().any(|o| o.name == *node) {
             continue;
@@ -753,7 +753,7 @@ fn format_arc(cell: &AnalysedCell, group: &Group, arc: &Arc, with_when: bool) ->
                 &cell.exposed,
                 &arc.prevector,
                 &arc.levels,
-                &BTreeMap::new()
+                &HashMap::new()
             )
         )
     } else {
@@ -853,7 +853,7 @@ fn format_hidden_arc(cell: &AnalysedCell, group: &Group, h: &HiddenArc, with_whe
                 &cell.exposed,
                 &h.prevector,
                 &h.levels,
-                &BTreeMap::new()
+                &HashMap::new()
             )
         ));
     }
@@ -1152,7 +1152,7 @@ fn ic_str(
     exposed: &[Symbol],
     prevector: &[espresso_logic::Minterm<espresso_logic::Symbol>],
     levels: &ArcLevels,
-    probed: &BTreeMap<Symbol, bool>,
+    probed: &HashMap<Symbol, bool>,
 ) -> String {
     let held = assignment(
         prevector

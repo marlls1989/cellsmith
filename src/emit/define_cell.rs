@@ -12,7 +12,7 @@
 //! Unlike the arcs emitter these blocks carry no `-type`/`-when`/`-related_pin`/`-function`: they are
 //! purely the cell's structural declaration.
 
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 
 use espresso_logic::Symbol;
 use indexmap::IndexMap;
@@ -29,7 +29,7 @@ type Triple = (Option<Symbol>, Option<Symbol>, Option<Symbol>);
 pub fn cell_define_cell(cell: &AnalysedCell) -> String {
     // Pin flags are group-independent, so compute them once. Clock and async pins are lifted out of
     // `-input` into their own flags (they still appear in `-pinlist`, which is untouched).
-    let excluded: BTreeSet<&Symbol> = cell.async_pins.iter().chain(&cell.clock_pins).collect();
+    let excluded: HashSet<&Symbol> = cell.async_pins.iter().chain(&cell.clock_pins).collect();
     let data_inputs: Vec<Symbol> = cell
         .inputs
         .iter()

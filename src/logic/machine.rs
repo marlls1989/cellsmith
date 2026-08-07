@@ -43,7 +43,7 @@
 //!   [`super::confluence::detect`] at O(|order| · inputs²), so a machine that explores unboundedly many
 //!   states is one whose hazard detection does not finish.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
@@ -376,7 +376,7 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     // built in parallel across seed functions — set semantics make the union order-free.
     // ¬f's FR cover is f's with the F/R sides swapped, and `cover_inputs` pools `.cubes()`
     // type-blind, so `cover_inputs(&!f) == cover_inputs(f)` as a minterm set — no complement call.
-    let pool: BTreeSet<Minterm<Symbol>> =
+    let pool: HashSet<Minterm<Symbol>> =
         seed_funcs.par_iter().flat_map_iter(cover_inputs).collect();
     if charged.load(Ordering::Relaxed) > budget.candidates {
         return Err(ExplorationLimit::Candidates(budget.candidates));
@@ -440,8 +440,7 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
             .sum()
     };
 
-    // Rank the candidates: most state variables settled first, ties toward state nearest the inputs,
-    // then by minterm order for determinism.
+    // Rank the candidates: most state variables settled first, ties toward state nearest the inputs.
     let mut ranked: Vec<(Minterm<Symbol>, Vec<Option<bool>>)> = pool
         .into_par_iter()
         .map(|x| {
@@ -453,7 +452,6 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
         settle_count(&b.1)
             .cmp(&settle_count(&a.1))
             .then_with(|| depth_sum(&a.1).cmp(&depth_sum(&b.1)))
-            .then_with(|| a.0.cmp(&b.0))
     });
 
     // Seed the BFS from the ranked candidates: widen each candidate input onto the full columns (the
