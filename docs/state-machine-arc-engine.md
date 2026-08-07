@@ -322,8 +322,8 @@ classifies as, and emits **one representative** per group, with no `-when` line.
 generalises over what the group's members differ in: the side inputs' held levels, the held outputs, and
 the internal state the firing was measured from. The representative is a member with the **strictly
 shortest prevector** — where several tie at the minimum, any one of them is an equally valid
-representative of the group at this grain — and it renders its own concrete `-prevector` and `-vector`,
-those of one real firing rather than a synthesised context.
+representative of the group at this grain — and it renders its own concrete `-ic` and `-vector`, those
+of one real firing rather than a synthesised context.
 
 Selecting the class (`--when`, or the per-cell `when` key) adds a **conditioned pass** on top: every
 derived arc of that class comes back as its own block carrying its own condition, so a firing can appear

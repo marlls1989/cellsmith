@@ -1,5 +1,5 @@
 //! cellsmith CLI: read a minimal multi-cell TOML spec and emit, for every cell, the Liberate arcs
-//! (`define_arc` + prevectors), the structural Liberate `define_cell` blocks (`cells.tcl`), a
+//! (`define_arc`), the structural Liberate `define_cell` blocks (`cells.tcl`), a
 //! behavioural Verilog model (sequential UDP + wrapper), and a minimal Liberty fragment (`statetable`
 //! for hysteretic outputs, plain `function` for combinational ones).
 
@@ -19,7 +19,7 @@ use cellsmith::emit::verilog::cell_verilog;
 use cellsmith::logic::machine::{ExplorationBudget, ExplorationLimit};
 use cellsmith::model::{parse_spec, AnalysedCell, ArcClass, ArcClasses};
 
-/// Generate Cadence Liberate transition arcs (with prevectors), a behavioural Verilog model and a
+/// Generate Cadence Liberate transition arcs, a behavioural Verilog model and a
 /// Liberty fragment for logic cells, including state-holding/hysteretic cells.
 #[derive(Parser)]
 #[command(name = "cellsmith", version, about, long_about = None)]
