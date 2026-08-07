@@ -7,14 +7,25 @@
 //! the prevector that drives the cell into it: the input-assignment sequence that primes the internal
 //! nodes, which is what tells two states apart at the same inputs.
 //!
+//! **Deduplicated on the condition the block states** — the inputs and the outputs, which is what the
+//! emitted `-when` names — keeping the SHORTEST walk. Rest states that agree there differ only in
+//! something the block cannot say, so they would emit as one measurement written twice; where they
+//! genuinely differ the `-when` differs with them and both are kept.
+//!
 //! Only fully-initialised states qualify, per `Machine::arc_eligible`: a state carrying an
 //! uninitialised state variable is at an unknown state, and nothing static can be concluded from it.
 //! Every output resolves at such a state by construction, so a leakage state is never partial.
+
+use std::collections::BTreeMap;
 
 use espresso_logic::bdd::{Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::analysis::Machine;
+
+/// What a leakage block STATES: the inputs held there, and every output's settled level — the two the
+/// emitted `-when` names. Two rest states agreeing here differ only in something the block cannot say.
+type Condition = (Minterm<Symbol>, Vec<(Symbol, bool)>);
 
 /// One static leakage state: a fully-initialised reachable stable state of the machine.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -29,15 +40,18 @@ pub struct LeakageState {
     pub prevector: Vec<Minterm<Symbol>>,
 }
 
-/// Derive the cell's static leakage states: every reachable stable state `Machine::arc_eligible`
-/// admits, in exploration order. `Explored::order` holds each reachable state once, so this is one
-/// leakage state per rest state of the cell, each carrying the BFS path that reaches it.
+/// Derive the cell's static leakage states from every reachable stable state `Machine::arc_eligible`
+/// admits, one per distinct CONDITION — the inputs and outputs the emitted `-when` names — keeping the
+/// state reached by the shortest walk.
+///
+/// `Explored::order` holds each reachable state once, so the states themselves never repeat; what
+/// repeats is the condition. A cell whose rest states differ in a node the block does not carry — a
+/// synchroniser's inner latch levels, say — reaches several of them under one condition, and they would
+/// otherwise emit as that one measurement written once per state.
 pub fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> Vec<LeakageState> {
-    m.explored
-        .order
-        .iter()
-        .filter(|node| m.arc_eligible(node))
-        .map(|node| {
+    let mut found: BTreeMap<Condition, LeakageState> = BTreeMap::new();
+    for node in m.explored.order.iter().filter(|node| m.arc_eligible(node)) {
+        let state = {
             let inputs = node.project_to(&m.cell.inputs);
             // Total, never partial: at a fully-initialised state an output is either a state variable,
             // which `arc_eligible` requires to be defined, or a combinational signal whose support lies
@@ -59,12 +73,24 @@ pub fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> Vec<LeakageState> 
                 outputs,
                 prevector,
             }
-        })
-        .collect()
+        };
+        let key: Condition = (state.inputs.clone(), state.outputs.clone());
+        // Strictly shorter displaces the incumbent, so where several walks tie at the minimum the
+        // first one reached stands for them — the same rule the arc and constraint dedups apply.
+        match found.get(&key) {
+            Some(kept) if kept.prevector.len() <= state.prevector.len() => {}
+            _ => {
+                found.insert(key, state);
+            }
+        }
+    }
+    found.into_values().collect()
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use espresso_logic::Symbol;
 
     use crate::model::analyse_one as analyse;
@@ -198,6 +224,41 @@ Q = "CLK*M + !CLK*Q"
                 "inputs are fully fixed at a rest state: {l:?}"
             );
         }
+    }
+
+    #[test]
+    fn rest_states_agreeing_on_the_condition_keep_the_shortest_walk() {
+        // A dual-clock synchroniser rests in states that differ only in latch levels its leakage block
+        // does not carry — the block states the inputs and the outputs, and nothing else — so several
+        // states share one condition. They would emit as one measurement written once per state, so the
+        // condition is the unit and the shortest walk stands for the rest.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "SYNC"
+inputs = ["CLKA", "CLKB", "D"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+a1 = "!CLKA*D + CLKA*a1"
+a2 = "CLKA*a1 + !CLKA*a2"
+b1 = "!CLKB*a2 + CLKB*b1"
+[cell.outputs]
+Q = "CLKB*b1 + !CLKB*Q"
+"#,
+        );
+        let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+        for l in &cell.leakage {
+            let when = format!("{:?}|{:?}", l.inputs, l.outputs);
+            assert!(
+                seen.insert(when.clone(), l.prevector.len()).is_none(),
+                "one leakage state per condition, got {when} twice",
+            );
+        }
+        assert!(
+            cell.leakage.len() > 1,
+            "the fixture rests in several conditions, got {:?}",
+            cell.leakage
+        );
     }
 
     #[test]

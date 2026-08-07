@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from — that walk is what `-ic` and the vector's held columns are read off — it is simply no longer
   emitted.
 
+- **One `define_leakage` per condition.** Rest states that agree on the inputs and outputs the `-when`
+  names differ only in something the block cannot say — a synchroniser's inner latch levels — so they
+  emitted as one measurement written once per state. The condition is now the unit, and the state
+  reached by the shortest walk stands for the rest.
+
 - **A `define_leakage` that needs no priming is the bare condition.** A rest state the inputs drive the
   cell into on their own has nothing to prime and so nothing to run: the block is `define_leakage -when
   "…" { … }`, with no prevector, pinlist or vector. A state the cell must be walked into keeps all four.
