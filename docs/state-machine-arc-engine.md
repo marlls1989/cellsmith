@@ -307,6 +307,11 @@ Every context a firing can happen in yields its own arc: an arc's identity here 
 related pin, the direction, and the **full machine start state**, so two firings that agree on the
 inputs but differ in internal state are two arcs, each with its own prevector, and both are derived.
 
+Whether both are *emitted* is a separate question. A block reaches only its `-pinlist` columns, so two
+such arcs render the same block wherever the state that separates them has no column of its own; the
+cell states that block once and reports the arcs it conflates, naming each of their states so the node
+worth adding to `expose` can be read off them.
+
 Because arcs are found by *reaching* states and *settling*, the correctness properties are structural:
 related pins are inputs, impossible arcs are never reached (they oscillate), and input-forced transitions
 cascade naturally through the multi-round settle.

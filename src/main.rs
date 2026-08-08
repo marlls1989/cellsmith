@@ -223,21 +223,23 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         std::process::exit(1);
     }
 
-    // Diagnose detected oscillation hazards: a periodic, non-settling cycle rather than a fixpoint,
-    // naming the nodes (outputs or internals) that oscillate — the user should know, as this is never
-    // expressed as deterministic timing.
-    // Each warning is one contiguous block of lines (a header plus its indented detail fields);
-    // distinct warnings are separated by a single blank line when printed, so a block reads as a unit.
-    // Both hazard loops read the ARC VIEW, the same analysis `cell_arcs_tcl` renders: it is that view's
-    // hazards the emitted constraint arcs come from, so reporting the other view's would describe arcs
-    // the run never wrote.
+    // Rendered before the diagnostics, because one of them reports what the rendering could not say.
     let arc_opts = ArcsTclOptions {
         emit_internal: !cli.no_internal,
         emit_leakage: !cli.no_leakage,
     };
     let rendered: Vec<CellArcs> = cells.par_iter().map(|c| cell_arcs(c, arc_opts)).collect();
 
+    // Each warning is one contiguous block of lines (a header plus its indented detail fields);
+    // distinct warnings are separated by a single blank line when printed, so a block reads as a unit.
     let mut warnings: Vec<String> = Vec::new();
+
+    // Diagnose detected oscillation hazards: a periodic, non-settling cycle rather than a fixpoint,
+    // naming the nodes (outputs or internals) that oscillate — the user should know, as this is never
+    // expressed as deterministic timing.
+    // Both hazard loops read the ARC VIEW, the same analysis `cell_arcs` renders: it is that view's
+    // hazards the emitted constraint arcs come from, so reporting the other view's would describe arcs
+    // the run never wrote.
     for c in &cells {
         for a in &c.arc_view().oscillation {
             // The condition leads the sub-block as `when` (as in the race warning). How the machine
@@ -312,8 +314,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         for m in &r.masked {
             // Every state the block covers, as equals — it expresses none of them, and which firing
             // reached the emitter first is nothing to report. What differs across them wants exposing.
-            let mut fields = vec![("arc", m.arc.clone())];
-            fields.extend(m.states.iter().map(|s| ("cell state", s.clone())));
+            let mut fields = vec![("arc", m.arc_str())];
+            fields.extend(m.state_strs().into_iter().map(|s| ("cell state", s)));
             lines.extend(subblock(&fields));
         }
         warnings.push(lines.join("\n"));

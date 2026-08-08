@@ -11,12 +11,18 @@
 //! its level rather than being held — stays `-type combinational`, and a declared-async related pin
 //! takes precedence with `-type async`.
 //!
-//! **No `define_arc` carries a `-prevector`.** The start condition reaches Liberate through `-ic`
-//! alone, which every block of a state-holding cell carries — transition, hidden and constraint alike —
-//! giving each `-pinlist` pin the voltage it starts the measured vector at (see [`ic_str`]). A purely
-//! combinational cell has no state to establish and so carries neither. The walk still exists in the
-//! model: it is what identifies the start state, and `-ic` and the vector's held columns are read off
-//! its last step — it is simply not rendered.
+//! **No `define_arc` carries a `-prevector`. That is a DELIBERATE CHOICE, not an omission: `-ic` is
+//! cheaper than a prevector.** A prevector is a simulation the characterisation run has to perform to
+//! arrive at the start state; `-ic` states that state outright. Where both can say the same thing,
+//! saying it costs less, and it is said on every block of a state-holding cell — transition, hidden and
+//! constraint alike — giving each `-pinlist` pin the voltage it starts the measured vector at (see
+//! [`ic_str`]). A purely combinational cell has no state to establish and so carries neither.
+//!
+//! What `-ic` reaches is exactly the `-pinlist`, so the price is that an internal node the spec did not
+//! `expose` has no column and goes unsaid where a walk would have primed it. That is the trade taken,
+//! and it is reported rather than hidden: see [`MaskedArc`]. The walk still exists in the model — it is
+//! what identifies the start state, and `-ic` and the vector's held columns are read off its last step
+//! — it is simply not rendered.
 //!
 //! A cell that exposes internal nodes (`expose = [...]`) is rendered from its ARC VIEW
 //! ([`crate::model::AnalysedCell::arc_view`]), the analysis that keeps those nodes as model coordinates.
@@ -78,14 +84,75 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
 /// differ only there are one block. Exposing those nodes is what tells them apart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaskedArc {
-    /// What the block measures: `combinational A↑ -> Q↓`, `hidden S↑` for a toggle no output follows,
-    /// or `setup CLK↑ & D↑` for a constraint.
-    pub arc: String,
+    /// The `-type` the block carries.
+    pub arc_type: ArcType,
+    /// The pins the block measures between.
+    pub kind: MaskedKind,
     /// The cell states the one emitted block conflates. None of them is the block's: which firing
     /// reached the emitter first decides nothing, since the block says the same of every one. Read
     /// against each other they agree on what the block states and differ on what it cannot — and what
     /// differs is the node to expose.
-    pub states: Vec<String>,
+    pub states: Vec<Minterm<Symbol>>,
+}
+
+/// The pins a block measures between, which differ by what kind of block it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MaskedKind {
+    /// A transition arc: a related pin's edge driving an output pin's edge.
+    Transition {
+        related: Symbol,
+        related_edge: Edge,
+        pin: Symbol,
+        edge: Edge,
+    },
+    /// A hidden arc: an input toggle that settles with no output following it.
+    Toggle { pin: Symbol, edge: Edge },
+    /// A constraint arc: the two edges it holds apart.
+    Constraint {
+        related: Symbol,
+        related_edge: Edge,
+        pin: Symbol,
+        pin_edge: Edge,
+    },
+}
+
+impl MaskedArc {
+    /// The arc on one line: `combinational A↑ -> Q↓`, `hidden S↑`, `setup CLK↑ & D↑`.
+    pub fn arc_str(&self) -> String {
+        let ty = self.arc_type.token();
+        match &self.kind {
+            MaskedKind::Transition {
+                related,
+                related_edge,
+                pin,
+                edge,
+            } => format!(
+                "{ty} {related}{} -> {pin}{}",
+                related_edge.arrow(),
+                edge.arrow()
+            ),
+            MaskedKind::Toggle { pin, edge } => format!("{ty} {pin}{}", edge.arrow()),
+            MaskedKind::Constraint {
+                related,
+                related_edge,
+                pin,
+                pin_edge,
+            } => format!(
+                "{ty} {related}{} & {pin}{}",
+                related_edge.arrow(),
+                pin_edge.arrow()
+            ),
+        }
+    }
+
+    /// Each conflated state as a brace-wrapped literal product (`{A=1, B=0, M=1}`), in the order the
+    /// states were reached.
+    pub fn state_strs(&self) -> Vec<String> {
+        self.states
+            .iter()
+            .map(|s| format!("{{{}}}", crate::logic::fixed_pairs(s, &[]).join(", ")))
+            .collect()
+    }
 }
 
 /// A cell's `define_arc` blocks, with the arcs that went unstated for want of a column to tell them
@@ -121,7 +188,7 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
     // transition explicitly and symmetrically, the representative's included. The two blocks differ —
     // one carries the `-when` — so each is stated in its own right.
     //
-    // A CELL STATES EACH BLOCK ONCE ([`state_once`]). Firings that differ only in state the block cannot
+    // A CELL STATES EACH BLOCK ONCE ([`Blocks::state`]). Firings that differ only in state the block cannot
     // carry — an internal node with no column, since `-ic` and `-vector` reach exactly the `-pinlist` —
     // render the same block, and repeating it would hand Liberate the same measurement several times
     // over rather than characterising the contexts apart. They are distinct arcs in the model and stay
@@ -150,11 +217,7 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
             .enumerate()
             .filter(|(i, _)| general.contains_key(i))
         {
-            blocks.state(
-                format_arc(cell, group, arc, false),
-                arc_label(cell, arc),
-                state_str(&arc.start),
-            );
+            blocks.state(format_arc(cell, group, arc, false), arc_firing(cell, arc));
         }
         if cell.when.contains(ArcClass::Transition) {
             for (i, arc) in cell.arcs.iter().enumerate() {
@@ -162,11 +225,7 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
                     .get(&i)
                     .is_some_and(|&cases| cases == 1 || when_str(&arc.end, &arc.related).is_none());
                 if !redundant {
-                    blocks.state(
-                        format_arc(cell, group, arc, true),
-                        arc_label(cell, arc),
-                        state_str(&arc.start),
-                    );
+                    blocks.state(format_arc(cell, group, arc, true), arc_firing(cell, arc));
                 }
             }
         }
@@ -177,11 +236,7 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
                 .enumerate()
                 .filter(|(i, _)| general_hidden.contains_key(i))
             {
-                blocks.state(
-                    format_hidden_arc(cell, group, h, false),
-                    hidden_label(h),
-                    state_str(&h.start),
-                );
+                blocks.state(format_hidden_arc(cell, group, h, false), hidden_firing(h));
             }
             if cell.when.contains(ArcClass::Hidden) {
                 // The same rule as the transition pass, over the hidden class's own condition (which
@@ -193,11 +248,7 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
                         .get(&i)
                         .is_some_and(|&cases| cases == 1 || hidden_when_str(h).is_none());
                     if !redundant {
-                        blocks.state(
-                            format_hidden_arc(cell, group, h, true),
-                            hidden_label(h),
-                            state_str(&h.start),
-                        );
+                        blocks.state(format_hidden_arc(cell, group, h, true), hidden_firing(h));
                     }
                 }
             }
@@ -220,11 +271,7 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
                 .into_iter()
                 .zip(format_constraint(cell, group, c))
             {
-                blocks.state(
-                    block,
-                    format!("{arc_type} {}", c.condition()),
-                    state_str(&c.state),
-                );
+                blocks.state(block, constraint_firing(arc_type, c));
             }
         }
     }
@@ -234,10 +281,9 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
     }
 }
 
-/// Append `block` unless the cell has already stated exactly it. A block says its `-type`, its columns
-/// and their `-ic` and `-vector`, its `-when` and the pins it relates — so two firings rendering the
-/// same block are one measurement, however they differ in the model.
-/// The blocks a cell states, each remembering the firing it came from and the firings it stood for.
+/// The blocks a cell states, each remembering every firing that rendered it. A block says its `-type`,
+/// its columns and their `-ic` and `-vector`, its `-when` and the pins it relates — so two firings
+/// rendering the same block are one measurement, however they differ in the model.
 struct Blocks {
     out: String,
     /// Block text to its entry in `arcs`, so a repeat finds the firing that already spoke for it.
@@ -254,18 +300,15 @@ impl Blocks {
         }
     }
 
-    /// State `block` if the cell has not, and record `state` among the states that block covers.
-    /// `arc` and `state` describe the firing this call renders.
-    fn state(&mut self, block: String, arc: String, state: String) {
+    /// State `block` if the cell has not, and record the firing it renders among the states that
+    /// block covers. `firing` carries exactly one state — the one this call renders.
+    fn state(&mut self, block: String, firing: MaskedArc) {
         match self.index.get(&block) {
-            Some(&i) => self.arcs[i].states.push(state),
+            Some(&i) => self.arcs[i].states.extend(firing.states),
             None => {
                 self.out.push_str(&block);
                 self.index.insert(block, self.arcs.len());
-                self.arcs.push(MaskedArc {
-                    arc,
-                    states: vec![state],
-                });
+                self.arcs.push(firing);
             }
         }
     }
@@ -279,31 +322,44 @@ impl Blocks {
     }
 }
 
-/// A state as a brace-wrapped literal product over every coordinate it fixes (`{A=1, B=0, M=1}`).
-fn state_str(state: &Minterm<Symbol>) -> String {
-    format!("{{{}}}", crate::logic::fixed_pairs(state, &[]).join(", "))
+/// The firing a transition block renders, carrying the one state it measures from.
+fn arc_firing(cell: &AnalysedCell, arc: &Arc) -> MaskedArc {
+    MaskedArc {
+        arc_type: ArcIdentity::of(cell, arc).arc_type(),
+        kind: MaskedKind::Transition {
+            related: arc.related.clone(),
+            related_edge: related_edge(arc),
+            pin: arc.output.clone(),
+            edge: arc.edge,
+        },
+        states: vec![arc.start.clone()],
+    }
 }
 
-/// A transition arc as `<type> <related><edge> -> <pin><edge>`.
-fn arc_label(cell: &AnalysedCell, arc: &Arc) -> String {
-    format!(
-        "{} {}{} -> {}{}",
-        ArcIdentity::of(cell, arc).type_token(),
-        arc.related,
-        related_edge(arc).arrow(),
-        arc.output,
-        arc.edge.arrow(),
-    )
+/// The firing a hidden block renders: the toggle is the whole of it, no output follows.
+fn hidden_firing(h: &HiddenArc) -> MaskedArc {
+    MaskedArc {
+        arc_type: ArcIdentity::of_hidden(h).arc_type(),
+        kind: MaskedKind::Toggle {
+            pin: h.pin.clone(),
+            edge: h.edge,
+        },
+        states: vec![h.start.clone()],
+    }
 }
 
-/// A hidden arc as `hidden <pin><edge>`: the toggle is the whole of it, no output follows.
-fn hidden_label(h: &HiddenArc) -> String {
-    format!(
-        "{} {}{}",
-        ArcIdentity::of_hidden(h).type_token(),
-        h.pin,
-        h.edge.arrow(),
-    )
+/// The firing a constraint block renders, sampled at the state the hazard was probed from.
+fn constraint_firing(arc_type: ArcType, c: &Constraint) -> MaskedArc {
+    MaskedArc {
+        arc_type,
+        kind: MaskedKind::Constraint {
+            related: c.related.clone(),
+            related_edge: c.related_edge,
+            pin: c.pin.clone(),
+            pin_edge: c.pin_edge,
+        },
+        states: vec![c.state.clone()],
+    }
 }
 
 /// The general arcs of one class: each identity's representative index into `items`, mapped to the
@@ -416,12 +472,42 @@ impl ArcIdentity {
 
     /// The `-type` word Liberate reads, and the ONE source of it: every `define_arc` block the emitter
     /// renders takes its type line from here.
-    fn type_token(&self) -> &'static str {
+    fn arc_type(&self) -> ArcType {
         match self {
-            ArcIdentity::Async(_) => "async",
-            ArcIdentity::Edge(_) => "edge",
-            ArcIdentity::Combinational(_) => "combinational",
-            ArcIdentity::Hidden { .. } => "hidden",
+            ArcIdentity::Async(_) => ArcType::Async,
+            ArcIdentity::Edge(_) => ArcType::Edge,
+            ArcIdentity::Combinational(_) => ArcType::Combinational,
+            ArcIdentity::Hidden { .. } => ArcType::Hidden,
+        }
+    }
+}
+
+/// Every `-type` a `define_arc` of this emitter can carry: the four a measured block classifies into,
+/// and the four halves of a constraint pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArcType {
+    Async,
+    Edge,
+    Combinational,
+    Hidden,
+    Setup,
+    Hold,
+    NonSeqSetup,
+    NonSeqHold,
+}
+
+impl ArcType {
+    /// The Liberate keyword, as it is written after `-type`.
+    pub fn token(self) -> &'static str {
+        match self {
+            ArcType::Async => "async",
+            ArcType::Edge => "edge",
+            ArcType::Combinational => "combinational",
+            ArcType::Hidden => "hidden",
+            ArcType::Setup => "setup",
+            ArcType::Hold => "hold",
+            ArcType::NonSeqSetup => "non_seq_setup",
+            ArcType::NonSeqHold => "non_seq_hold",
         }
     }
 }
@@ -504,10 +590,10 @@ fn groups(cell: &AnalysedCell, extra: &[Symbol]) -> Vec<Group> {
 }
 
 /// The `-type` tokens of a constraint's two blocks, in the order [`format_constraint`] renders them.
-fn constraint_types(c: &Constraint) -> [&'static str; 2] {
+fn constraint_types(c: &Constraint) -> [ArcType; 2] {
     match c.kind {
-        ConstraintKind::SetupHold => ["setup", "hold"],
-        ConstraintKind::NonSeq => ["non_seq_setup", "non_seq_hold"],
+        ConstraintKind::SetupHold => [ArcType::Setup, ArcType::Hold],
+        ConstraintKind::NonSeq => [ArcType::NonSeqSetup, ArcType::NonSeqHold],
     }
 }
 
@@ -517,8 +603,8 @@ fn constraint_types(c: &Constraint) -> [&'static str; 2] {
 fn format_constraint(cell: &AnalysedCell, group: &Group, c: &Constraint) -> [String; 2] {
     let [setup, hold] = constraint_types(c);
     [
-        constraint_block(cell, group, c, setup),
-        constraint_block(cell, group, c, hold),
+        constraint_block(cell, group, c, setup.token()),
+        constraint_block(cell, group, c, hold.token()),
     ]
 }
 
@@ -648,7 +734,10 @@ fn related_edge(arc: &Arc) -> Edge {
 /// and `X` is legal only in the unmonitored-output columns (see [`vector_str`]), so a general block's
 /// generality lives in the ABSENCE of the `-when` line, not in a relaxed vector.
 fn format_arc(cell: &AnalysedCell, group: &Group, arc: &Arc, with_when: bool) -> String {
-    let type_line = format!("\t-type {} \\\n", ArcIdentity::of(cell, arc).type_token());
+    let type_line = format!(
+        "\t-type {} \\\n",
+        ArcIdentity::of(cell, arc).arc_type().token()
+    );
     let pinlist = format!(
         "\t-pinlist {{{}}} \\\n",
         arc_pinlist_str(cell, &group.exposed)
@@ -750,7 +839,7 @@ fn format_hidden_arc(cell: &AnalysedCell, group: &Group, h: &HiddenArc, with_whe
     let mut s = String::from("define_arc \\\n");
     s.push_str(&format!(
         "\t-type {} \\\n",
-        ArcIdentity::of_hidden(h).type_token()
+        ArcIdentity::of_hidden(h).arc_type().token()
     ));
     s.push_str(&format!(
         "\t-pinlist {{{}}} \\\n",
@@ -1184,6 +1273,10 @@ fn hidden_when_str(h: &HiddenArc) -> Option<String> {
 /// "…" { … }`. There is nothing to prime, so there is nothing to run, and the condition alone states
 /// it. Its walk is a single step — `Explored::path_to` seeds the chain with the state itself — which
 /// is the state that condition already names.
+///
+/// Two bare blocks cannot collide, which is why leakage needs no equivalent of [`Blocks::state`]:
+/// walk-free means the inputs alone drive the cell into the state, so the inputs determine it, and two
+/// states resting under one `-when` cannot differ.
 fn format_leakage(cell: &AnalysedCell, l: &LeakageState) -> String {
     let mut lits: Vec<(Symbol, bool)> = assignment(&l.inputs).into_iter().collect();
     lits.extend(l.outputs.iter().cloned());
@@ -4339,17 +4432,27 @@ Q = "CLKB*M + !CLKB*Q"
             rendered.tcl
         );
         for m in &rendered.masked {
+            assert_eq!(
+                m.arc_type,
+                ArcType::Hidden,
+                "a masked toggle carries the hidden -type: {m:?}"
+            );
             assert!(
-                m.arc.starts_with("hidden "),
-                "a masked toggle is labelled by its kind and edge: {m:?}"
+                matches!(m.kind, MaskedKind::Toggle { .. }),
+                "a toggle no output follows: {m:?}"
+            );
+            assert!(
+                m.arc_str().starts_with("hidden "),
+                "it reads as its kind and edge: {}",
+                m.arc_str()
             );
             assert!(
                 m.states.len() > 1,
                 "only a block covering several states is reported: {m:?}"
             );
-            // The report is read by comparing the states: each names M, and they are distinct — that
+            // The report is read by comparing the states: each fixes M, and they are distinct — that
             // difference IS the node to expose.
-            let distinct: HashSet<&String> = m.states.iter().collect();
+            let distinct: HashSet<&Minterm<Symbol>> = m.states.iter().collect();
             assert_eq!(
                 distinct.len(),
                 m.states.len(),
@@ -4357,11 +4460,12 @@ Q = "CLKB*M + !CLKB*Q"
             );
             for s in &m.states {
                 assert!(
-                    s.contains("M="),
-                    "each state names the node no column carries: {m:?}"
+                    s.value_of("M").is_some(),
+                    "each state fixes the node no column carries: {m:?}"
                 );
             }
         }
+
         // What did come out states each block once.
         let blocks: Vec<&str> = rendered
             .tcl

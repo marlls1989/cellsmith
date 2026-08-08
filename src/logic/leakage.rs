@@ -227,10 +227,14 @@ Q = "CLKB*b1 + !CLKB*Q"
         for l in &cell.leakage {
             let when = format!("{:?}|{:?}", l.inputs, l.outputs);
             *per_when.entry(when.clone()).or_default() += 1;
+            // A walked block renders its walk, so the condition and the walk together are what it
+            // states. A walk-free one renders the condition alone and could only collide with another
+            // walk-free state under the same `-when` — which cannot happen, since walk-free means the
+            // inputs alone drive the cell there and so determine the state.
             let block = format!("{when}|{:?}", l.prevector);
             assert!(
                 stated.insert(block.clone(), ()).is_none(),
-                "no two leakage states render the same block, got {block} twice",
+                "no two leakage states share a condition and a walk, got {block} twice",
             );
         }
         assert!(

@@ -567,11 +567,9 @@ pub struct AnalysedCell {
     pub regions: Vec<crate::logic::regions::StateRegions>,
     /// Whether the cell holds state: at least one of its minimised signals is a state variable — a
     /// signal on a dependency cycle ([`crate::logic::resolve::state_variables`]). The Liberate arc
-    /// emitter gates the `-ic` initial condition on it: a block measuring a transition runs on a
-    /// prepark deck, which parks the cell afresh instead of carrying the `-prevector` simulation's
-    /// settled values into the measured vector, so a cell with memory starts that vector from state the
-    /// prevector was supposed to establish and did not, and `-ic` states the start condition outright.
-    /// A combinational cell has no state to lose and gets no `-ic`.
+    /// emitter gates the `-ic` initial condition on it: no block renders a walk, so `-ic` is the whole
+    /// of how a cell with memory is told what state its measured vector begins in. A combinational cell
+    /// has no state to establish and gets no `-ic`.
     pub state_holding: bool,
     /// The cell's behavioural edge classification ([`crate::logic::edge::EdgeArcs`]): the per-node edge
     /// seams (`captures`), the per-arc `-type edge` labels (`labels`) — the field the Liberate arc emitter
@@ -2405,8 +2403,9 @@ Q = "CLK*M + !CLK*Q"
                 "cell {cell}: no exposure-free block lists {node}: {without_node:?}"
             );
 
-            // A leakage block states the cell's pins and holds them at the level it rests at; the
-            // exposed node is primed by the prevector instead, so it takes no column in EITHER run.
+            // A leakage block names no column at all — its `-when` states the inputs held and every
+            // output's level, and a walked one primes the internals through its `-prevector` — so the
+            // exposed node is nowhere in it, under EITHER run.
             let all = crate::emit::arcs_tcl::ArcsTclOptions::default();
             for c in [&exposed, &plain] {
                 let tcl = crate::emit::arcs_tcl::cell_arcs_tcl(c, all);
@@ -2419,10 +2418,24 @@ Q = "CLK*M + !CLK*Q"
                     })
                     .collect();
                 assert!(!leakage.is_empty(), "cell {cell}: the fixture leaks");
+                let columns = |b: &str| -> Vec<String> {
+                    b.lines()
+                        .map(str::trim)
+                        .filter(|l| {
+                            l.starts_with("-pinlist ") || l.starts_with("-prevector_pinlist ")
+                        })
+                        .map(str::to_owned)
+                        .collect()
+                };
+                assert!(
+                    leakage.iter().any(|b| !columns(b).is_empty()),
+                    "cell {cell}: a walked leakage block carries columns to check"
+                );
                 for block in &leakage {
+                    let cols = columns(block);
                     assert!(
-                        !pinlists(block.clone()).iter().any(|l| names(l)),
-                        "cell {cell}: no leakage block lists {node}: {block:?}"
+                        !cols.iter().any(|l| names(l)),
+                        "cell {cell}: no leakage column names {node}: {cols:?}"
                     );
                 }
             }

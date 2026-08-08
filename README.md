@@ -491,9 +491,11 @@ latches) and an **oscillation** hazard (a bistable condition where the machine p
 non-deterministically instead of converging on one, as in a mutex/arbiter). From a detected hazard,
 cellsmith can **generate** a timing constraint (setup/hold for a pair holding a declared clock,
 otherwise a symmetric `non_seq`) to avoid it, gated by the `--constraints` flag or a cell's
-`constraint_arcs = true`. cellsmith emits three kinds of per-cell stderr diagnostic: the oscillation 
+`constraint_arcs = true`. cellsmith emits four kinds of per-cell stderr diagnostic: the oscillation 
 hazards, the order-dependent hazards (grouped per racing input pair, a pair's conditions joined), 
-and the constraints generated to avoid them.
+the constraints generated to avoid them, and the arcs whose blocks conflate several cell states — 
+firings a block cannot tell apart because the state that separates them has no column, which naming 
+those nodes in `expose` would fix.
 
 Each emitted constraint arc names the nodes it protects — the state variables whose settled value the
 hazard puts at risk — in a single `-probe`, so Liberate measures the node the constraint is about. A

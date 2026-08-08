@@ -18,11 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **No `define_arc` carries a `-prevector`.** The start condition reaches Liberate through `-ic` alone,
-  which every block of a state-holding cell already carried; a purely combinational cell has no state to
+- **No `define_arc` carries a `-prevector`, because `-ic` is cheaper.** A prevector is a simulation the
+  characterisation run must perform to arrive at the start state; `-ic` states that state outright, and
+  every block of a state-holding cell already carried it. A purely combinational cell has no state to
   establish and carries neither. cellsmith still walks its own model to find the state an arc is measured
   from — that walk is what `-ic` and the vector's held columns are read off — it is simply no longer
-  emitted.
+  emitted. The price is that an internal node left unexposed has no column and so goes unsaid, which is
+  what the new conflation warning reports.
 
 - **A `define_leakage` states its condition, and the walk in where the cell needs one.** The `-pinlist`
   and `-vector` are gone from every leakage block: the `-when` already names the inputs held there and
