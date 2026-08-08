@@ -464,7 +464,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // Reaching `root` means `root`'s edge reaches `o`; `o` itself is the first node tested (a birth at `o`
     // types the arc directly).
     let propagates = |o: &Symbol, sp: &Minterm<Symbol>, root: &Symbol| -> bool {
-        let mut visited: BTreeSet<Symbol> = BTreeSet::new();
+        let mut visited: HashSet<Symbol> = HashSet::new();
         let mut stack: Vec<Symbol> = vec![o.clone()];
         while let Some(node) = stack.pop() {
             if &node == root {
@@ -620,8 +620,8 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     if let Some(b) = builder.as_ref() {
         // The transitive state cone of a node: the state variables its δ depends on, directly or through
         // other state variables' δ.
-        let cone_of = |o: &str| -> BTreeSet<Symbol> {
-            let mut seen: BTreeSet<Symbol> = BTreeSet::new();
+        let cone_of = |o: &str| -> HashSet<Symbol> {
+            let mut seen: HashSet<Symbol> = HashSet::new();
             let mut stack: Vec<Symbol> = fn_of
                 .get(o)
                 .map(|f| f.variables().filter(|v| m.state_set.contains(v)).collect())
@@ -1157,7 +1157,7 @@ fn residual_depends<B: Brand, C: ManagerCell>(
 /// by following `succ`? A self-loop (`w → w` live) or any longer loop through `w` answers yes: `w` is
 /// opaque (bistable) at this state.
 fn reaches_self(succ: &BTreeMap<Symbol, BTreeSet<Symbol>>, w: &Symbol) -> bool {
-    let mut seen: BTreeSet<&Symbol> = BTreeSet::new();
+    let mut seen: HashSet<&Symbol> = HashSet::new();
     let mut stack: Vec<&Symbol> = succ.get(w).into_iter().flatten().collect();
     while let Some(x) = stack.pop() {
         if x == w {

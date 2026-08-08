@@ -58,7 +58,7 @@
 //! so iteration order — and hence report/emission order — is deterministic independent of any hash map's
 //! order. A fold may only gain a constraint, never lose one.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use rayon::prelude::*;
 
@@ -144,7 +144,7 @@ struct Probed {
 /// The nodes a hazard puts at risk, each with the level the observation sampled for it. An observation
 /// samples every node of the group it was recorded with — `record_oscillation` keys on that group, so a
 /// race only ever joins an oscillation naming the same nodes — so every entry is there.
-fn protected(group: &[Symbol], levels: &BTreeMap<Symbol, bool>) -> Vec<(Symbol, bool)> {
+fn protected(group: &[Symbol], levels: &HashMap<Symbol, bool>) -> Vec<(Symbol, bool)> {
     group
         .iter()
         .map(|node| {
@@ -159,7 +159,7 @@ fn protected(group: &[Symbol], levels: &BTreeMap<Symbol, bool>) -> Vec<(Symbol, 
 /// The level each of `group`'s nodes holds at the probed state — what a constraint block states as the
 /// start condition of the node it protects. A hazard's group holds state variables, which are machine
 /// coordinates, and a probed state is fully initialised, so every one of them is defined there.
-fn node_levels_at(state: &Minterm<Symbol>, group: &[Symbol]) -> BTreeMap<Symbol, bool> {
+fn node_levels_at(state: &Minterm<Symbol>, group: &[Symbol]) -> HashMap<Symbol, bool> {
     group
         .iter()
         .map(|w| {
@@ -303,15 +303,15 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
     // keeping the incumbent representative while appending every colliding pair-probe [`Race`]. Both are
     // BTreeMaps, so the final iteration order is deterministic regardless of merge order.
     let per_state = |(discovered, s): (usize, &Minterm<Symbol>)| -> (
-        BTreeMap<String, OrderDependence>,
-        BTreeMap<String, Oscillation>,
+        HashMap<String, OrderDependence>,
+        HashMap<String, Oscillation>,
     ) {
         debug_assert!(
             m.arc_eligible(s),
             "detect: a probe may only start from a fully-initialised state"
         );
-        let mut order_dependence: BTreeMap<String, OrderDependence> = BTreeMap::new();
-        let mut oscillation: BTreeMap<String, Oscillation> = BTreeMap::new();
+        let mut order_dependence: HashMap<String, OrderDependence> = HashMap::new();
+        let mut oscillation: HashMap<String, Oscillation> = HashMap::new();
 
         // `path_to` depends only on `s`: compute the prevector into `s` once and clone it per hazard.
         let prevector_s = ex.path_to(s, inputs);
@@ -486,7 +486,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
         .filter(|(_, s)| m.arc_eligible(s))
         .map(per_state)
         .reduce(
-            || (BTreeMap::new(), BTreeMap::new()),
+            || (HashMap::new(), HashMap::new()),
             |(mut oa, mut osca), (ob, oscb)| {
                 for od in ob.into_values() {
                     record_order_dependence(&mut oa, od);
@@ -510,7 +510,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
 /// canonical [`constraint_key`], keeping the min `(prevector.len, discovered)` representative; BTreeMap
 /// gives deterministic output order.
 pub(crate) fn constrain(hz: &DetectedHazards, clock_pins: &[Symbol]) -> Vec<Constraint> {
-    let mut found: BTreeMap<String, (Constraint, usize)> = BTreeMap::new();
+    let mut found: HashMap<String, (Constraint, usize)> = HashMap::new();
     for od in &hz.order_dependence {
         record_constraint(
             &mut found,
@@ -607,7 +607,7 @@ fn make_constraint(
 
 /// Record a detected order-dependent hazard into the dedup map, keyed by its unordered
 /// `(pin,edge)|(pin,edge)` key, keeping the min `(prevector.len, discovered)` representative.
-fn record_order_dependence(map: &mut BTreeMap<String, OrderDependence>, od: OrderDependence) {
+fn record_order_dependence(map: &mut HashMap<String, OrderDependence>, od: OrderDependence) {
     let a = format!("{}{}", od.x, od.x_edge.rf());
     let b = format!("{}{}", od.y, od.y_edge.rf());
     let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
@@ -633,7 +633,7 @@ fn record_order_dependence(map: &mut BTreeMap<String, OrderDependence>, od: Orde
 /// chosen later, when folding per-state maps together: [`merge_oscillation`] keeps whichever colliding
 /// representative it sees first (an arbitrary, equal-quality tie) and unions every state's races.
 fn record_oscillation(
-    oscillation: &mut BTreeMap<String, Oscillation>,
+    oscillation: &mut HashMap<String, Oscillation>,
     inputs: &[Symbol],
     node: &Minterm<Symbol>,
     names: &[&str],
@@ -665,12 +665,12 @@ fn record_oscillation(
 /// both share the key space. So keep the incumbent's remaining (key-determined) fields, UNION `stable`
 /// as a set (dedup + canonical sort — collision-order-independent) and UNION the [`Race`]s. Races are
 /// never dropped; they feed [`constrain`].
-fn merge_oscillation(map: &mut BTreeMap<String, Oscillation>, key: String, osc: Oscillation) {
+fn merge_oscillation(map: &mut HashMap<String, Oscillation>, key: String, osc: Oscillation) {
     match map.entry(key) {
-        std::collections::btree_map::Entry::Vacant(v) => {
+        std::collections::hash_map::Entry::Vacant(v) => {
             v.insert(osc);
         }
-        std::collections::btree_map::Entry::Occupied(mut e) => {
+        std::collections::hash_map::Entry::Occupied(mut e) => {
             let entry = e.get_mut();
             let mut merged: BTreeSet<Minterm<Symbol>> =
                 std::mem::take(&mut entry.stable).into_iter().collect();
@@ -684,7 +684,7 @@ fn merge_oscillation(map: &mut BTreeMap<String, Oscillation>, key: String, osc: 
 /// Record a generated constraint into the dedup map, keeping the min `(prevector.len, discovered)`
 /// representative per canonical key.
 fn record_constraint(
-    found: &mut BTreeMap<String, (Constraint, usize)>,
+    found: &mut HashMap<String, (Constraint, usize)>,
     cons: Constraint,
     discovered: usize,
 ) {

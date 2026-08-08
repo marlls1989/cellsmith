@@ -65,7 +65,7 @@ pub fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> Vec<LeakageState> 
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{HashMap, HashSet};
 
     use espresso_logic::Symbol;
 
@@ -222,8 +222,8 @@ b1 = "!CLKB*a2 + CLKB*b1"
 Q = "CLKB*b1 + !CLKB*Q"
 "#,
         );
-        let mut per_when: BTreeMap<String, usize> = BTreeMap::new();
-        let mut stated: BTreeMap<String, ()> = BTreeMap::new();
+        let mut per_when: HashMap<String, usize> = HashMap::new();
+        let mut stated: HashSet<String> = HashSet::new();
         for l in &cell.leakage {
             let when = format!("{:?}|{:?}", l.inputs, l.outputs);
             *per_when.entry(when.clone()).or_default() += 1;
@@ -233,7 +233,7 @@ Q = "CLKB*b1 + !CLKB*Q"
             // inputs alone drive the cell there and so determine the state.
             let block = format!("{when}|{:?}", l.prevector);
             assert!(
-                stated.insert(block.clone(), ()).is_none(),
+                stated.insert(block.clone()),
                 "no two leakage states share a condition and a walk, got {block} twice",
             );
         }

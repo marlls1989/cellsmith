@@ -13,7 +13,7 @@
 //! steady-clock data transitions. The keying clocks are the primitive's LAST ports. A pure master folded
 //! into such a register contributes nothing — no primitive, no wire, no instance.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use espresso_logic::Symbol;
 
@@ -37,7 +37,7 @@ pub fn cell_verilog(cell: &AnalysedCell) -> String {
         .iter()
         .map(|er| (er.node.as_str(), er))
         .collect();
-    let folded: BTreeSet<&str> = cell.edge.folded.iter().map(Symbol::as_str).collect();
+    let folded: HashSet<&str> = cell.edge.folded.iter().map(Symbol::as_str).collect();
     // Read-gated outputs read a factored register combinationally: they emit a continuous `assign` in the
     // wrapper, no UDP of their own. Their factored register (minted, not a declared signal) emits an
     // edge-sensitive UDP like any register.
@@ -128,7 +128,8 @@ fn constant_module(name: &str, pin: &str, value: bool) -> String {
     format!("module {name}({pin});\noutput {pin};\nassign {pin} = {bit};\nendmodule\n")
 }
 
-/// The UDP table rows, one per region cube, in a deterministic (sorted) order. Each row is
+/// The UDP table rows, one per region cube. A UDP table is a truth table — its rows carry no order
+/// between them — so they come out as the cubes do. Each row is
 /// `<input pattern> : ? : <next>` where `next` is `1` (on), `0` (off) or `-` (hold).
 fn table_lines(sr: &StateRegions) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
@@ -141,7 +142,6 @@ fn table_lines(sr: &StateRegions) -> Vec<String> {
     for cube in &sr.hold {
         lines.push(format!("{} : ? : -;", pattern(cube)));
     }
-    lines.sort();
     lines
 }
 
@@ -213,7 +213,7 @@ fn edge_primitive(name: &str, pin: &Symbol, er: &EdgeCaptures) -> String {
     s
 }
 
-/// The edge-register UDP table rows, sorted for determinism. Column order is the data cols (`er.cols`
+/// The edge-register UDP table rows. Column order is the data cols (`er.cols`
 /// minus the register's own symbol and the clocks) then the clocks in [`EdgeCaptures::clocks`] order; the
 /// current-state (`reg`) field is `?` except on a self-referencing register's capture rows, where it
 /// carries that register's own literal. Each capture row carries exactly ONE edge indicator (IEEE 1364);
@@ -307,7 +307,6 @@ fn edge_table_lines(er: &EdgeCaptures) -> Vec<String> {
         lines.push(format!("{} : ? : -;", cells.join(" ")));
     }
 
-    lines.sort();
     lines
 }
 
@@ -370,7 +369,7 @@ fn wrapper_module(
     cell: &AnalysedCell,
     name: &Symbol,
     edge_by_node: &BTreeMap<&str, &EdgeCaptures>,
-    folded: &BTreeSet<&str>,
+    folded: &HashSet<&str>,
 ) -> String {
     let outputs: Vec<Symbol> = cell.outputs.iter().map(|o| o.name.clone()).collect();
     // Read-gated outputs (continuous assigns) and their minted factored registers (internal wires driven

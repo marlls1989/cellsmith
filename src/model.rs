@@ -2,7 +2,7 @@
 //! variables into **primary inputs** vs **feedback/state** (an output name referenced inside a
 //! function is the delayed/feedback value of that output).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
 use espresso_logic::{sync_bdd_builder, BoolExpr, Symbol};
@@ -679,7 +679,7 @@ impl Spec {
         &self,
         budget: &ExplorationBudget,
     ) -> Result<Vec<AnalysedCell>, ModelError> {
-        let mut seen: BTreeSet<Symbol> = BTreeSet::new();
+        let mut seen: HashSet<Symbol> = HashSet::new();
         for cell in &self.cells {
             for name in &cell.name {
                 if !seen.insert(name.clone()) {
@@ -849,9 +849,9 @@ impl Cell {
         }
 
         let output_names: Vec<Symbol> = self.outputs.keys().cloned().collect();
-        let output_set: BTreeSet<Symbol> = output_names.iter().cloned().collect();
+        let output_set: HashSet<Symbol> = output_names.iter().cloned().collect();
         let internal_names: Vec<Symbol> = self.internal.keys().cloned().collect();
-        let internal_set: BTreeSet<Symbol> = internal_names.iter().cloned().collect();
+        let internal_set: HashSet<Symbol> = internal_names.iter().cloned().collect();
 
         for pin in &self.inputs {
             if output_set.contains(pin) {
@@ -888,7 +888,7 @@ impl Cell {
 
         // Every template-override key must name one of this cell's (de_name_list-deduped) drive-strength
         // aliases. Iterating in insertion order keeps the reported error deterministic.
-        let name_set: BTreeSet<Symbol> = self.name.iter().cloned().collect();
+        let name_set: HashSet<Symbol> = self.name.iter().cloned().collect();
         for alias in self.template_overrides.keys() {
             if !name_set.contains(alias) {
                 return Err(ModelError::UnknownTemplateOverride {
@@ -928,7 +928,7 @@ impl Cell {
 
         // Every exposed node must be a declared internal signal, checked in declaration order against a
         // running set so a duplicate is caught deterministically.
-        let mut expose_seen: BTreeSet<Symbol> = BTreeSet::new();
+        let mut expose_seen: HashSet<Symbol> = HashSet::new();
         for node in &self.expose {
             if !internal_set.contains(node) {
                 return Err(ModelError::ExposeNotInternal {
@@ -955,14 +955,14 @@ impl Cell {
         // name shift every column after them — but the columns are the consequence, not the rule.
         // Which internals earn one is not even known here: a constraint arc gives the node it protects
         // a column of its own, and where the hazards are is settled only by exploring the machine.
-        let pin_set: BTreeSet<Symbol> = self
+        let pin_set: HashSet<Symbol> = self
             .inputs
             .iter()
             .chain(self.outputs.keys())
             .cloned()
             .collect();
         for alias in &self.name {
-            let mut resolved_seen: BTreeSet<Symbol> = BTreeSet::new();
+            let mut resolved_seen: HashSet<Symbol> = HashSet::new();
             for node in self.internal.keys() {
                 let resolved = self.nodes.of(alias, node);
                 if pin_set.contains(&resolved) {

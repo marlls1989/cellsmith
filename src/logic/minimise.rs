@@ -171,7 +171,7 @@
 //! For an ironclad criterion the fold would carry a BDD check that the projected cycle structure
 //! survives; the structural guard is accepted per the decided enforcement level.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use espresso_logic::bdd::{Bdd, Brand, Composer, ManagerCell};
 use espresso_logic::Symbol;
@@ -408,7 +408,7 @@ fn dedup_pass<B: Brand, C: ManagerCell>(
     // Rewrite every surviving consumer of a retired member in one shared-memo stream pass. Functions
     // referencing no retired member are held out (an untouched no-op); demoted signals are held out too
     // — their whole entry is overwritten with var(rep) below, not composed.
-    let demoted_names: BTreeSet<&Symbol> = demoted.iter().map(|(m, _)| m).collect();
+    let demoted_names: HashSet<&Symbol> = demoted.iter().map(|(m, _)| m).collect();
     let names: Vec<Symbol> = order
         .iter()
         .filter(|n| bdds.contains_key(*n) && !demoted_names.contains(*n))

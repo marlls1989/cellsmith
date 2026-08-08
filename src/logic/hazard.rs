@@ -29,7 +29,7 @@
 //! tie-break that fixes the surviving [`OrderDependence`] and, downstream,
 //! `confluence::constrain`'s own constraint dedup. See `hazard-detection.md` for the concept.
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 use espresso_logic::{Minterm, Symbol};
 
@@ -70,7 +70,7 @@ pub struct Race {
     /// The level each node the hazard names holds at the PROBED state, by name. Sampled at the same
     /// state as `prevector` and `levels`, and covering every entry of the hazard's `group`, so the
     /// constraint generated from this observation can state the start level of the node it protects.
-    pub node_levels: BTreeMap<Symbol, bool>,
+    pub node_levels: HashMap<Symbol, bool>,
     /// The probed state itself: every input and state variable at the level it holds there. The
     /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
     /// emitted column carries.
@@ -102,7 +102,7 @@ pub struct OrderDependence {
     /// The level each node the hazard names holds at the PROBED state, by name. Sampled at the same
     /// state as `prevector` and `levels`, and covering every entry of the hazard's `group`, so the
     /// constraint generated from this observation can state the start level of the node it protects.
-    pub node_levels: BTreeMap<Symbol, bool>,
+    pub node_levels: HashMap<Symbol, bool>,
     /// The probed state itself: every input and state variable at the level it holds there. The
     /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
     /// emitted column carries.

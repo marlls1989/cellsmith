@@ -58,12 +58,35 @@ emit, the spec for an input we parse. A signature or a sample tells you what hap
 the documentation tells you what is actually guaranteed, and the gap between the two is where
 the subtle bugs live.
 
-## Emission order is not significant
+## Determinism is a tradeoff we are still weighing
 
-The order in which the tool emits its output commands carries no meaning, and nothing in
-the design or the tests should depend on it. Two runs that produce the same arcs, hazards
-and constraints are equivalent even if the blocks come out in a different order, and a run
-is free to pick any equally-good representative where a choice is arbitrary.
+**Whether repeatable output is worth its cost is an open question here, and this section
+records where the thinking has got to rather than a settled rule.**
+
+The case FOR it is real: a run you can repeat byte-for-byte is one you can diff against a
+previous run, hand to someone else, or bisect against when a characterisation result moves.
+That is reproducibility, and it is not dismissed.
+
+The case against is that none of it was ever *decided*. Ordered collections and sorts
+accumulated by reflex, case by case, without the cost being weighed once — and the
+stability that fell out was then written up as though it had been the point.
+
+**The working answer, until that is settled: strip it, and do not add it back by reflex.**
+The output may differ between runs of the same input, and that is fine. cellsmith is free
+to emit its blocks in any order, and free to pick any equally-good representative wherever
+a choice is arbitrary — which state an arc was measured from, which walk reaches a rest
+state, which of several tied candidates survives a dedup. So do not reach for a `BTreeMap`
+where a `HashMap` is the right structure, a sort that exists only to fix an order, or a
+serialised pass to pin which candidate wins.
+
+**Putting ordering back is allowed, but it has to be paid for.** Not with "it makes the
+output stable" — that is the claim under examination, not an argument. State the algorithm
+cost, say what the alternatives were, and bring a benchmark. Ordering that arrives without
+that evidence is the reflex again wearing a justification.
+
+Nothing in the design or the tests should depend on emission order meanwhile. Two runs that
+produce the same arcs, hazards and constraints are equivalent even if the blocks come out in
+a different order.
 
 The one place ordering *is* real is where a format the output feeds gives a position
 meaning — a `-vector`'s characters line up with the `-pinlist`, and Liberty's statetable

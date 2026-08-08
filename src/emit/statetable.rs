@@ -44,7 +44,7 @@
 //! register node is a state-table node even when its region is non-hysteretic (a combinational output
 //! made sequential — the dual-edge mux-DET Q).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use espresso_logic::{Anonymous, Cover, Minimizable, Minterm, Symbol};
 
@@ -144,8 +144,8 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     // vanishes entirely — no node, no column, no rows; an edge-register node keeps its column but its
     // rows come from the annotation in (e), never the level cover pass in (d).
     let edge_regs = &cell.edge.captures;
-    let folded: BTreeSet<Symbol> = cell.edge.folded.iter().cloned().collect();
-    let edge_nodes: BTreeSet<Symbol> = edge_regs.iter().map(|er| er.node.clone()).collect();
+    let folded: HashSet<Symbol> = cell.edge.folded.iter().cloned().collect();
+    let edge_nodes: HashSet<Symbol> = edge_regs.iter().map(|er| er.node.clone()).collect();
     // A register node is ALWAYS a state-table node, whether or not its region is hysteretic: a
     // combinational output made sequential (the dual-edge mux-DET Q) is still a register column.
     let is_node = |sig: &Symbol, sr: &StateRegions| {

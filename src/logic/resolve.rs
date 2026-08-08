@@ -13,7 +13,7 @@
 //! variable's next-state function) is then a direct lookup in the shared BDD map — there is no
 //! resolve/substitution step left to perform here.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use espresso_logic::Symbol;
 
@@ -31,8 +31,8 @@ pub fn dependency_map(signals: &[&AnalysedOutput]) -> BTreeMap<Symbol, Vec<Symbo
 /// The ≥1-step reachability relation of a directed graph: `node → the nodes reachable from it in one
 /// or more edges`. Computed by relaxation (the graphs are tiny). Used by [`state_variables`] to find
 /// the signals that reach themselves (the state variables).
-fn transitive_closure(edges: &BTreeMap<Symbol, Vec<Symbol>>) -> BTreeMap<Symbol, BTreeSet<Symbol>> {
-    let mut reach: BTreeMap<Symbol, BTreeSet<Symbol>> = edges
+fn transitive_closure(edges: &BTreeMap<Symbol, Vec<Symbol>>) -> HashMap<Symbol, HashSet<Symbol>> {
+    let mut reach: HashMap<Symbol, HashSet<Symbol>> = edges
         .iter()
         .map(|(k, vs)| (k.clone(), vs.iter().cloned().collect()))
         .collect();
