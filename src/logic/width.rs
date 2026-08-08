@@ -23,11 +23,29 @@
 //! primary-input assignment under which the group oscillates, and a pulse returns `p` to the assignment
 //! it started from — which is stable — so that claim would be false.
 //!
+//! One pin's pulse decides different nodes from different states, and on a cell whose internals form a
+//! chain those node sets nest — one set per depth the cascade was cut at, every one of them the same
+//! pulse seen from further in. [`detect`] reports the **maximal** sets alone: an observation is dropped
+//! only where another observation of the same pin and edge decides a strict superset of its nodes, and
+//! two sets that nest neither way both stand. What makes that sound is how the hazard is measured. The
+//! block characterising one names the nodes it protects in Liberate's `-probe`, and Liberate narrows the
+//! pulse until the probed behaviour fails, so the width a probe set reports is the maximum over the
+//! nodes in it. A block probing a strict superset therefore asks a strictly stronger question, and the
+//! subset's answer is contained in it; a superset and an incomparable set ask different questions, and
+//! both are asked.
+//!
+//! What that leaves open is whether the width one node needs can itself differ with the start state it
+//! is characterised from. If it can, a dropped observation's nodes end up measured from the surviving
+//! observation's state rather than from their own, and the collapse trades that conservatism for a
+//! fraction of the characterisation cost.
+//!
 //! **Implementation notes:** states are probed in parallel and their per-state dedup maps merged
-//! together, as in [`super::confluence::detect`]. The dedup keeps the min `(prevector.len, discovered)`
-//! representative per `pin/edge/nodes` key — a total order, so the surviving entry is fixed regardless
-//! of merge order — and the map is a [`BTreeMap`], so report order is deterministic independent of any
-//! hash map's.
+//! together, as in [`super::confluence::detect`]. Merge order cannot move the result: the maximal sets
+//! of a collection are the same however it is accumulated, since an observation dropped against an
+//! incumbent stays dominated when that incumbent is itself dropped — only a strict superset of it
+//! displaces it, and strict inclusion is transitive — and among observations over the SAME nodes the
+//! survivor is the min `(prevector.len, discovered)`, a total order. Both levels of the dedup are
+//! [`BTreeMap`]s, so report order is deterministic independent of any hash map's.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -49,15 +67,20 @@ use crate::logic::machine;
 const DETERMINATE: &str =
     "a settle from a fully-initialised state leaves every state column determinate";
 
+/// The observations kept under one pin/edge key: one per maximal set of decided nodes, keyed by that set
+/// so an observation over nodes already spoken for meets its incumbent rather than joining it.
+type Maximal = BTreeMap<String, WidthDependence>;
+
 /// Detected width-dependent hazards under the dedup key [`record`] computes — one probed state's own
 /// map, or the merge of several.
-type Detected = BTreeMap<String, WidthDependence>;
+type Detected = BTreeMap<String, Maximal>;
 
 /// Detect a cell's width-dependent hazards by pulsing every input at every fully-initialised reachable
 /// stable state (`Machine::arc_eligible`: a state carrying an uninitialised state variable is at an
-/// unknown state, from which nothing can be concluded). Produces one [`WidthDependence`] per
-/// pin/edge/endangered-nodes key, keeping the representative reached along the shortest prevector, and
-/// generates no constraint. Empty for cells whose pulses all settle back to where they started.
+/// unknown state, from which nothing can be concluded). Produces one [`WidthDependence`] per pin/edge per
+/// maximal set of decided nodes (see the module note on why a set another's strictly contains carries
+/// nothing), keeping the representative reached along the shortest prevector, and generates no
+/// constraint. Empty for cells whose pulses all settle back to where they started.
 pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<WidthDependence> {
     // With no memory every coordinate is a function of the inputs alone, so returning `p` to its
     // pre-pulse value returns the whole machine to `s`: a pulse can leave no net effect for its width to
@@ -175,39 +198,57 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
     // Probe every fully-initialised reachable state in parallel, then fold the per-state dedup maps
     // together. The filter comes AFTER `enumerate`, so `discovered` stays the BFS index of the state —
     // the tie-break the dedup reads — rather than a position in the filtered sequence. The merge is
-    // associative and commutative: `record` keeps the min `(prevector.len, discovered)`, a total order
-    // per key, so the folded result equals the sequential one regardless of state/thread order.
+    // associative and commutative (see the module note on why keeping the maximal sets is), so the
+    // folded result equals the sequential one regardless of state/thread order.
     ex.order
         .par_iter()
         .enumerate()
         .filter(|(_, s)| m.arc_eligible(s))
         .map(per_state)
         .reduce(Detected::new, |mut acc, other| {
-            for wd in other.into_values() {
+            for wd in other.into_values().flat_map(Maximal::into_values) {
                 record(&mut acc, wd);
             }
             acc
         })
         .into_values()
+        .flat_map(Maximal::into_values)
         .collect()
 }
 
-/// Record a detected width-dependent hazard into the dedup map, keyed by the pulsed pin, its opening
-/// edge and the nodes the width decides, keeping the min `(prevector.len, discovered)` representative.
+/// Record a detected width-dependent hazard into the dedup map, keyed by the pulsed pin and its opening
+/// edge, keeping the observations whose decided nodes no other observation of that key strictly contains
+/// and, among observations over the same nodes, the min `(prevector.len, discovered)` representative.
 fn record(map: &mut Detected, wd: WidthDependence) {
-    // The nodes are part of a hazard's identity, as they are for an order-dependent one: the same pin
-    // pulsed under different conditions can decide DIFFERENT nodes, and those are different hazards,
-    // each with its own pre-pulse state to characterise from. Observations deciding the SAME nodes are
-    // one hazard reached along different walks, and there the shortest walk stands for all of them.
-    let key = format!("{}{}|{}", wd.pin, wd.edge.rf(), wd.group.join(","));
-    // The `Option` read here is the incumbent — no entry yet, or one this candidate beats on
-    // `(prevector.len, discovered)` — nothing to do with a state value's determinacy.
-    if map
-        .get(&key)
+    let key = format!("{}{}", wd.pin, wd.edge.rf());
+    let nodes = wd.group.join(",");
+    let kept = map.entry(key).or_default();
+
+    // An incumbent over a strict superset is characterised against these nodes too, so this observation
+    // asks nothing that is not already asked (module note) and it goes; the `retain` is the converse
+    // pass, retiring the incumbents this one has come to speak for. An incumbent over the SAME nodes is
+    // neither case — it is this hazard reached along another walk, and meets the tie-break below.
+    if kept.values().any(|e| strictly_within(&wd.group, &e.group)) {
+        return;
+    }
+    kept.retain(|_, e| !strictly_within(&e.group, &wd.group));
+    // The `Option` read here is the incumbent — no entry yet for these nodes, or one this candidate beats
+    // on `(prevector.len, discovered)` — nothing to do with a state value's determinacy.
+    if kept
+        .get(&nodes)
         .is_none_or(|e| (wd.prevector.len(), wd.discovered) < (e.prevector.len(), e.discovered))
     {
-        map.insert(key, wd);
+        kept.insert(nodes, wd);
     }
+}
+
+/// Is every node of `inner` among `outer`'s, with `outer` naming at least one more? Strict on purpose:
+/// two observations over the same nodes are one hazard reached along different walks, settled by the
+/// walk-length tie-break rather than by one displacing the other.
+fn strictly_within(inner: &[Symbol], outer: &[Symbol]) -> bool {
+    let inner: BTreeSet<&Symbol> = inner.iter().collect();
+    let outer: BTreeSet<&Symbol> = outer.iter().collect();
+    inner.len() < outer.len() && inner.is_subset(&outer)
 }
 
 #[cfg(test)]
@@ -488,6 +529,72 @@ Q = "!CLK*M + CLK*Q"
                 &[("Q", q0), ("M", !m0)],
                 &[("Q", !q0), ("M", !m0)],
             ]),
+        );
+    }
+
+    #[test]
+    fn nested_node_sets_collapse_onto_the_widest() {
+        // The same cascade as TCASC with its second stage gated: M is transparent while CLK is low, Q
+        // follows M while CLK is low AND EN is high, and holds otherwise. Signal order (outputs first) is
+        // [Q, M].
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "GCASC"
+inputs = ["CLK", "D", "EN"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "!CLK*(EN*M + !EN*Q) + CLK*Q"
+"#,
+        );
+        // A CLK↓ pulse decides different nodes from different CLK-high states: with EN low the open
+        // master moves alone ({M}); with EN high over a master already at D the second stage moves alone
+        // ({Q}); with EN high over a master off D the pulse walks both ({Q, M}). All three are the one
+        // CLK↓ key, and the first two decide strict subsets of the third's nodes, so the widest stands
+        // for them and one hazard is reported on CLK↓.
+        //
+        // EN↑ is a key of its own and untouched by that: with CLK low, raising EN opens the second stage
+        // for one step — Q takes M — and dropping EN again holds Q where the pulse left it.
+        assert_eq!(
+            keys(&cell),
+            [
+                ("CLK".to_string(), 'F', "Q,M".to_string()),
+                ("EN".to_string(), 'R', "Q".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+    }
+
+    #[test]
+    fn incomparable_node_sets_both_stand() {
+        // Two independent latches on one clock, each opened by a level of SEL: A follows D while CLK is
+        // low and SEL high, B while CLK is low and SEL low.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "SPLIT"
+inputs = ["CLK", "D", "SEL"]
+[cell.outputs]
+A = "!CLK*(SEL*D + !SEL*A) + CLK*A"
+B = "!CLK*(!SEL*D + SEL*B) + CLK*B"
+"#,
+        );
+        // A CLK↓ pulse decides A alone where SEL is high and B alone where it is low. Neither node set
+        // contains the other, so neither block's measurement would answer for the other's node and both
+        // hazards stand on the one CLK↓ key. SEL's own pulse opens one stage for its width while CLK is
+        // low, and which stage that is IS the edge: SEL↑ decides A, SEL↓ decides B.
+        assert_eq!(
+            keys(&cell),
+            [
+                ("CLK".to_string(), 'F', "A".to_string()),
+                ("CLK".to_string(), 'F', "B".to_string()),
+                ("SEL".to_string(), 'R', "A".to_string()),
+                ("SEL".to_string(), 'F', "B".to_string()),
+            ]
+            .into_iter()
+            .collect(),
         );
     }
 
