@@ -1727,7 +1727,7 @@ impl<'a> LeakageBlock<'a> {
         let when = match self {
             LeakageBlock::Primed(l) | LeakageBlock::Resting(l) => {
                 let mut lits: Vec<(Symbol, bool)> = assignment(&l.inputs).into_iter().collect();
-                lits.extend(l.outputs.iter().cloned());
+                lits.extend(l.levels.outputs.iter().cloned());
                 lits.sort();
                 literal_product(&lits)
             }

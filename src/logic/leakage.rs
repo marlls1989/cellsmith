@@ -3,30 +3,56 @@
 //!
 //! A cell leaks differently in each state it can rest in, and two rest states can share an input
 //! assignment while differing in what the cell holds — a bistable's whole point — so the state, not the
-//! input vector, is the unit. Each one records its input assignment, every output's settled value, and
-//! the prevector that drives the cell into it: the input-assignment sequence that primes the internal
-//! nodes, which is what tells two states apart at the same inputs.
+//! input vector, is the unit. Each one records the full machine state it rests at, the levels every
+//! output and every exposed internal node holds there, that state's input assignment, and the
+//! prevector.
+//!
+//! The full state is what identifies a rest state: two states a leakage block renders identically
+//! differ only in a node no column of the block carries, so a report of that conflation names their
+//! `state` minterms. The prevector is the model's path into the state — the exploration's walk over
+//! input assignments, which primes the internal nodes on the way — and is what
+//! [`LeakageState::input_forced`] reads.
 //!
 //! Only fully-initialised states qualify, per `Machine::arc_eligible`: a state carrying an
 //! uninitialised state variable is at an unknown state, and nothing static can be concluded from it.
-//! Every output resolves at such a state by construction, so a leakage state is never partial.
+//! Every level resolves at such a state by construction, so a leakage state is never partial.
 
 use espresso_logic::bdd::{Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::analysis::Machine;
+use crate::logic::arcs::ArcLevels;
 
 /// One static leakage state: a fully-initialised reachable stable state of the machine.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeakageState {
-    /// The state's primary-input assignment (inputs are always fully fixed at a node), projected onto
-    /// `cell.inputs`.
+    /// The state's primary-input assignment (inputs are always fully fixed at a node): `state`
+    /// projected onto `cell.inputs`.
     pub(crate) inputs: Minterm<Symbol>,
-    /// EVERY output's settled value at the state, in `cell.outputs` order.
-    pub(crate) outputs: Vec<(Symbol, bool)>,
+    /// The full machine state the cell rests at, over the input AND state-variable columns. Two rest
+    /// states agreeing on `inputs` and on `levels` still differ here — in a state variable no leakage
+    /// column names — which is what a conflation report has to point at.
+    pub(crate) state: Minterm<Symbol>,
+    /// The levels the cell holds at `state`: every output's settled value in `cell.outputs` order, and
+    /// every exposed internal node's level in the machine's exposure order. Sampled at the one state, so
+    /// each exposed level's `start` equals its `end`.
+    pub(crate) levels: ArcLevels,
     /// The prevector: the input-assignment sequence that drives the cell — its internal nodes included
     /// — into this state.
     pub(crate) prevector: Vec<Minterm<Symbol>>,
+}
+
+impl LeakageState {
+    /// Whether the inputs alone drive the cell into this state, which its prevector being a single step
+    /// states.
+    ///
+    /// [`Explored::path_to`](super::machine::Explored::path_to) seeds the chain with the node itself and
+    /// then walks predecessors back to a start, so a chain of one is a node with no predecessor —
+    /// exactly one of [`Explored::seeds`](super::machine::Explored::seeds). Reaching it primes nothing:
+    /// settling from the input assignment lands there.
+    pub fn input_forced(&self) -> bool {
+        self.prevector.len() == 1
+    }
 }
 
 /// Derive the cell's static leakage states: every reachable stable state `Machine::arc_eligible`
@@ -39,24 +65,14 @@ pub fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> Vec<LeakageState> 
         .filter(|node| m.arc_eligible(node))
         .map(|node| {
             let inputs = node.project_to(&m.cell.inputs);
-            // Total, never partial: at a fully-initialised state an output is either a state variable,
-            // which `arc_eligible` requires to be defined, or a combinational signal whose support lies
-            // within the inputs plus the state variables — resolved either way.
-            let outputs = m
-                .cell
-                .outputs
-                .iter()
-                .map(|o| {
-                    let v = m
-                        .output_value(&o.name, node)
-                        .expect("every output is defined at a fully-initialised state");
-                    (o.name.clone(), v)
-                })
-                .collect();
+            // Total, never partial: [`ArcLevels::at`] rests its totality on the same `arc_eligible`
+            // states the filter above keeps, so every output and every exposed node resolves here.
+            let levels = ArcLevels::at(m, node);
             let prevector = m.explored.path_to(node, &m.cell.inputs);
             LeakageState {
                 inputs,
-                outputs,
+                state: node.clone(),
+                levels,
                 prevector,
             }
         })
@@ -69,6 +85,8 @@ mod tests {
 
     use espresso_logic::Symbol;
 
+    use super::LeakageState;
+    use crate::logic::arcs::ExposedLevel;
     use crate::model::analyse_one as analyse;
 
     /// The (A, B, Q) triples a cell's leakage states record, sorted — the rest states, without the
@@ -81,7 +99,8 @@ mod tests {
                 (
                     l.inputs.value_of("A").expect("A fixed at a rest state"),
                     l.inputs.value_of("B").expect("B fixed at a rest state"),
-                    l.outputs
+                    l.levels
+                        .outputs
                         .iter()
                         .find(|(n, _)| n.as_str() == "Q")
                         .expect("Q resolved at a rest state")
@@ -128,7 +147,7 @@ Q = "A*B + Q*(A+B)"
             .find(|l| {
                 l.inputs.value_of("A") == Some(true)
                     && l.inputs.value_of("B") == Some(false)
-                    && l.outputs == vec![(Symbol::from("Q"), true)]
+                    && l.levels.outputs == vec![(Symbol::from("Q"), true)]
             })
             .expect("A=1,B=0 holding Q=1");
         assert!(
@@ -160,11 +179,16 @@ Y = "A*B"
         for l in leak {
             let a = l.inputs.value_of("A").expect("A fixed at a rest state");
             let b = l.inputs.value_of("B").expect("B fixed at a rest state");
-            assert_eq!(l.outputs.len(), 1, "AND2 has a single output");
-            assert_eq!(l.outputs[0].0.as_str(), "Y");
-            assert_eq!(l.outputs[0].1, a && b, "Y == A&&B at every rest state");
-            // A combinational cell holds nothing, so every state is its own start.
-            assert_eq!(l.prevector.len(), 1, "no walk is needed to reach {l:?}");
+            assert_eq!(l.levels.outputs.len(), 1, "AND2 has a single output");
+            assert_eq!(l.levels.outputs[0].0.as_str(), "Y");
+            assert_eq!(
+                l.levels.outputs[0].1,
+                a && b,
+                "Y == A&&B at every rest state"
+            );
+            // A combinational cell holds nothing, so the inputs alone drive it into every one of its
+            // rest states and each is its own start.
+            assert!(l.input_forced(), "no walk is needed to reach {l:?}");
         }
     }
 
@@ -190,11 +214,11 @@ Q = "CLK*M + !CLK*Q"
             // Q is the only output and it always resolves: no state is emitted partially, and the
             // internal master M is never named among the outputs.
             assert_eq!(
-                l.outputs.len(),
+                l.levels.outputs.len(),
                 1,
                 "every output resolves at a rest state: {l:?}"
             );
-            assert_eq!(l.outputs[0].0.as_str(), "Q");
+            assert_eq!(l.levels.outputs[0].0.as_str(), "Q");
             assert!(
                 l.inputs.value_of("CLK").is_some() && l.inputs.value_of("D").is_some(),
                 "inputs are fully fixed at a rest state: {l:?}"
@@ -203,11 +227,61 @@ Q = "CLK*M + !CLK*Q"
     }
 
     #[test]
+    fn an_exposed_master_is_measured_at_every_rest_state() {
+        // The same DFF with its master exposed. Exposure keeps M as a machine coordinate of the arc
+        // view, so that view's leakage states measure M's level beside Q's, each read at the state it
+        // rests in — the level the state's own M column fixes.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+expose = ["M"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#,
+        );
+        let leak = &cell.arc_view().leakage;
+        assert_eq!(leak.len(), 8, "expected eight rest states, got {leak:?}");
+        for l in leak {
+            let m = l.state.value_of("M").expect("M fixed at a rest state");
+            assert_eq!(
+                l.levels.exposed,
+                vec![ExposedLevel {
+                    node: Symbol::from("M"),
+                    start: m,
+                    end: m,
+                }],
+                "the exposed master is measured at the level the state fixes: {l:?}",
+            );
+        }
+
+        // A state the cell HOLDS is walked into: at CLK=1,D=0 the pair still carries the 1 it captured
+        // on an earlier edge, which no input assignment establishes on its own.
+        let held_high = leak
+            .iter()
+            .find(|l| {
+                l.inputs.value_of("CLK") == Some(true)
+                    && l.inputs.value_of("D") == Some(false)
+                    && l.state.value_of("M") == Some(true)
+            })
+            .expect("CLK=1,D=0 holding M=1");
+        assert!(
+            !held_high.input_forced(),
+            "a held state is walked into: {:?}",
+            held_high.prevector,
+        );
+    }
+
+    #[test]
     fn rest_states_sharing_a_condition_keep_their_own_walks() {
-        // A dual-clock synchroniser rests in states that differ only in latch levels its leakage block
-        // does not name, so several states share one `-when`. The block still tells them apart, through
-        // the walk that primes those latches, so each is its own measurement — what collapses is only a
-        // state the block would render identically.
+        // A dual-clock synchroniser rests in states that differ only in latch levels no condition names,
+        // so several of its rest states agree on both `inputs` and `levels` — the pair a `-when` renders.
+        // The model keeps them apart by the full `state`, which is what a report of that conflation
+        // points at, and the walk into each remains the model datum identifying it: two states under one
+        // condition are reached along different walks.
         let cell = analyse(
             r#"
 [[cell]]
@@ -222,11 +296,11 @@ b1 = "!CLKB*a2 + CLKB*b1"
 Q = "CLKB*b1 + !CLKB*Q"
 "#,
         );
-        let mut per_when: BTreeMap<String, usize> = BTreeMap::new();
+        let mut per_when: BTreeMap<String, Vec<&LeakageState>> = BTreeMap::new();
         let mut stated: BTreeMap<String, ()> = BTreeMap::new();
         for l in &cell.leakage {
-            let when = format!("{:?}|{:?}", l.inputs, l.outputs);
-            *per_when.entry(when.clone()).or_default() += 1;
+            let when = format!("{:?}|{:?}", l.inputs, l.levels);
+            per_when.entry(when.clone()).or_default().push(l);
             // A walked block renders its walk, so the condition and the walk together are what it
             // states. A walk-free one renders the condition alone and could only collide with another
             // walk-free state under the same `-when` — which cannot happen, since walk-free means the
@@ -237,10 +311,28 @@ Q = "CLKB*b1 + !CLKB*Q"
                 "no two leakage states share a condition and a walk, got {block} twice",
             );
         }
+        let shared: Vec<&Vec<&LeakageState>> =
+            per_when.values().filter(|ls| ls.len() > 1).collect();
         assert!(
-            per_when.values().any(|&n| n > 1),
-            "the fixture rests in several states under one condition, got {per_when:?}",
+            !shared.is_empty(),
+            "the fixture rests in several states under one condition, got {:?}",
+            per_when
+                .iter()
+                .map(|(when, ls)| (when, ls.len()))
+                .collect::<Vec<_>>(),
         );
+        // The states a condition conflates are pairwise distinct machine states: they differ in a latch
+        // column the condition does not carry, so `state` is what a report of the conflation names.
+        for ls in shared {
+            for (i, a) in ls.iter().enumerate() {
+                for b in &ls[i + 1..] {
+                    assert_ne!(
+                        a.state, b.state,
+                        "two rest states under one condition are one machine state",
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -274,12 +366,14 @@ Qb = "!Qa*B"
         );
         for l in &both_high {
             let qa = l
+                .levels
                 .outputs
                 .iter()
                 .find(|(n, _)| n.as_str() == "Qa")
                 .expect("Qa resolved")
                 .1;
             let qb = l
+                .levels
                 .outputs
                 .iter()
                 .find(|(n, _)| n.as_str() == "Qb")
