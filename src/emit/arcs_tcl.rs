@@ -1279,7 +1279,7 @@ fn hidden_when_str(h: &HiddenArc) -> Option<String> {
 /// states resting under one `-when` cannot differ.
 fn format_leakage(cell: &AnalysedCell, l: &LeakageState) -> String {
     let mut lits: Vec<(Symbol, bool)> = assignment(&l.inputs).into_iter().collect();
-    lits.extend(l.outputs.iter().cloned());
+    lits.extend(l.levels.outputs.iter().cloned());
     lits.sort();
     let when = literal_product(&lits);
 

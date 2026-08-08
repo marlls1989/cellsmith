@@ -537,8 +537,8 @@ pub struct AnalysedCell {
     /// output unchanged — precomputed once by the shared machine pass
     /// ([`crate::logic::analysis::analyse_machine`]) and consumed by the arcs emitter.
     pub hidden_arcs: Vec<HiddenArc>,
-    /// The cell's static leakage states — the settled seed states of the machine exploration —
-    /// precomputed once by the shared machine pass
+    /// The cell's static leakage states — one per fully-initialised reachable rest state of the machine
+    /// exploration — precomputed once by the shared machine pass
     /// ([`crate::logic::analysis::analyse_machine`]) and consumed by the arcs emitter.
     pub leakage: Vec<LeakageState>,
     /// Detected order-dependent hazards — pairs whose settled state depends on which edge lands first
@@ -2271,7 +2271,7 @@ Q = "CLK*M + !CLK*Q"
                 .iter()
                 .map(|l| LeakageRecord {
                     inputs: l.inputs.clone(),
-                    outputs: l.outputs.clone(),
+                    outputs: l.levels.outputs.clone(),
                 })
                 .collect(),
             constraints: cell
