@@ -237,7 +237,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     // Diagnose detected oscillation hazards: a periodic, non-settling cycle rather than a fixpoint,
     // naming the nodes (outputs or internals) that oscillate — the user should know, as this is never
     // expressed as deterministic timing.
-    // Both hazard loops read the ARC VIEW, the same analysis `cell_arcs` renders: it is that view's
+    // All three hazard loops read the ARC VIEW, the same analysis `cell_arcs` renders: it is that view's
     // hazards the emitted constraint arcs come from, so reporting the other view's would describe arcs
     // the run never wrote.
     for c in &cells {
@@ -297,6 +297,28 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         }
     }
 
+    // Diagnose detected width-dependent hazards: a pulse on one input whose settled outcome depends on
+    // how wide the pulse is. A pulse returns its pin to the value it started from, so the pre-pulse
+    // input state IS the condition the hazard occurs under — `when` states it, and a separate
+    // pre-hazard field would only restate it.
+    for c in &cells {
+        for wd in &c.arc_view().width_dependence {
+            let mut lines = vec![format!(
+                "cellsmith: warning: cell {:?}: a pulse on {}{} decides nodes {{{}}} by its width",
+                c.repr_name(),
+                wd.pin,
+                wd.edge.arrow(),
+                wd.group.join(", "),
+            )];
+            lines.extend(subblock(&[
+                ("when", wd.condition_str()),
+                ("reached along", wd.path_str()),
+                ("outcomes", wd.outcome_strs().join(" | ")),
+            ]));
+            warnings.push(lines.join("\n"));
+        }
+    }
+
     // Diagnose the arcs no block could state: every arc should express the cell state it measures
     // from, and `-ic` and `-vector` reach exactly the `-pinlist`, so a firing that differs only in an
     // internal node with no column renders a block already emitted. Exposing those nodes is the remedy,
@@ -325,8 +347,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         eprintln!("{}", warnings.join("\n\n"));
     }
 
-    // Constraints are the remedy for a hazard already reported by the oscillation and
-    // order-dependence warnings above, so the constraint arcs are emitted (below, gated by the
+    // Constraints are the remedy for a hazard already reported by the oscillation, order-dependence
+    // and width-dependence warnings above, so the constraint arcs are emitted (below, gated by the
     // per-cell opt-in) without a separate diagnostic.
 
     let base = cli.name.unwrap_or_else(|| base_name(&cli.spec));

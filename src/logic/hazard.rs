@@ -1,7 +1,7 @@
-//! The two **detected hazards** of an asynchronous cell: the report types only.
+//! The three **detected hazards** of an asynchronous cell: the report types only.
 //!
-//! Two closely-timed input changes can drive a cell into metastability. Detection
-//! ([`super::confluence`]) finds the two shapes that risk takes and reports each here; a
+//! Closely-timed input changes can drive a cell into metastability. Detection
+//! ([`super::confluence`]) finds the three shapes that risk takes and reports each here; a
 //! [`super::confluence::Constraint`] is then *generated* from a detected hazard to specify the timing
 //! separation that removes it. Detection happens first; constraint generation follows from each
 //! detected hazard.
@@ -12,11 +12,18 @@
 //! - An [`Oscillation`] hazard: two simultaneous input edges (or, degenerately, a single toggle) drive
 //!   the state into a periodic, non-settling cycle rather than a fixpoint. Detected when
 //!   [`super::machine::settle_or_cycle`] returns the cycle instead of settling.
+//! - A [`WidthDependence`] hazard: the settled state depends on how far apart two edges of the *same*
+//!   input are (a pulse's width), rather than which of two different inputs' edges lands first. Detected
+//!   when closing a pulse at different points along its opening edge's cascade settles to more than one
+//!   outcome. A cut that leaves the cascade oscillating instead of settling is carried as
+//!   [`PulseOutcome::NoFixpoint`] on the width hazard rather than filed as its own [`Oscillation`]:
+//!   [`Oscillation::condition`] claims a primary-input assignment under which the group oscillates, and a
+//!   pulse returns its input to a stable assignment, so that claim would be false.
 //!
-//! Both are *detected* during the state-space exploration in [`super::confluence`]. An uninitialised
+//! All three are *detected* during the state-space exploration in [`super::confluence`]. An uninitialised
 //! state variable is at an UNKNOWN state — not a value, and not a third one — so no detection runs from a
-//! state carrying one. Metastability is the shared physical risk both create — the reason a constraint is
-//! generated. This module carries only the resulting report types.
+//! state carrying one. Metastability is the shared physical risk all three create — the reason a
+//! constraint is generated. This module carries only the resulting report types.
 //!
 //! **Implementation note:** deduplication is handled by [`super::confluence`].
 //! [`OrderDependence`] is keyed by the unordered `(pin,edge)|(pin,edge)` pair together with the nodes
@@ -94,6 +101,45 @@ pub struct OrderDependence {
     /// The competing settled states — each a group-projected minterm (group order), sorted for
     /// determinism.
     pub stable: Vec<Minterm<Symbol>>,
+    /// The prevector: the input-assignment path that drives every state variable into the probed state.
+    pub prevector: Vec<Minterm<Symbol>>,
+    /// The levels the cell's outputs hold at the probed state — sampled at the SAME state as
+    /// `prevector`, so the pair the constraint carries is consistent.
+    pub levels: ArcLevels,
+    /// The level each node the hazard names holds at the PROBED state, by name. Sampled at the same
+    /// state as `prevector` and `levels`, and covering every entry of the hazard's `group`, so the
+    /// constraint generated from this observation can state the start level of the node it protects.
+    pub node_levels: BTreeMap<Symbol, bool>,
+    /// The probed state itself: every input and state variable at the level it holds there. The
+    /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
+    /// emitted column carries.
+    pub state: Minterm<Symbol>,
+    /// Index of the probed state in `ex.order` (the sequential BFS exploration order) — the secondary
+    /// tie-break key: on equal `prevector.len`, the earlier-discovered representative is kept.
+    pub discovered: usize,
+}
+
+/// The outcome of closing the pulse at one cut: the settled state projected onto the hazard's group, or
+/// no fixpoint at all.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PulseOutcome {
+    /// The cascade settled at this state, projected onto the hazard's `group` (group order).
+    Settled(Minterm<Symbol>),
+    /// Closing the pulse at this cut left the cascade oscillating rather than settling.
+    NoFixpoint,
+}
+
+/// One detected **width-dependent hazard** of a cell: a pulse on one input whose settled outcome depends
+/// on the pulse's width. Reported alongside [`OrderDependence`] and [`Oscillation`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WidthDependence {
+    pub pin: Symbol,
+    /// The opening edge of the pulse — rise means the pulse is high, fall low.
+    pub edge: Edge,
+    /// The state variables whose settled value depends on the pulse width, in signal declaration order.
+    pub group: Vec<Symbol>,
+    /// The competing outcomes across the cuts, deduplicated and sorted.
+    pub outcomes: Vec<PulseOutcome>,
     /// The prevector: the input-assignment path that drives every state variable into the probed state.
     pub prevector: Vec<Minterm<Symbol>>,
     /// The levels the cell's outputs hold at the probed state — sampled at the SAME state as
@@ -205,6 +251,37 @@ impl OrderDependence {
         let (x, xe) = (&self.x, self.x_edge.arrow());
         let (y, ye) = (&self.y, self.y_edge.arrow());
         format!("{x}{xe} then {y}{ye} vs {y}{ye} then {x}{xe}")
+    }
+}
+
+impl WidthDependence {
+    /// The condition as a Boolean product of literals (`A*B`, `!R*S`, …). A pulse returns every input to
+    /// its pre-pulse value, so the pre-pulse input state — the prevector's last step — IS the condition;
+    /// no separate `condition` field is carried.
+    pub fn condition_str(&self) -> String {
+        crate::logic::literals_str(
+            self.prevector
+                .last()
+                .expect("path_to seeds its chain with the probed node itself"),
+        )
+    }
+
+    /// The path into the pre-hazard state: the sequence of input states the machine walks — driving its
+    /// hidden state — to reach the state the pulse is applied to. Last state is the pre-hazard state.
+    pub fn path_str(&self) -> String {
+        render_path(&self.prevector)
+    }
+
+    /// Each competing outcome across the cuts, rendered: a settled outcome as a brace-wrapped literal
+    /// product (`{Q=1}`), a non-settling cut as the literal `no fixpoint`.
+    pub fn outcome_strs(&self) -> Vec<String> {
+        self.outcomes
+            .iter()
+            .map(|o| match o {
+                PulseOutcome::Settled(state) => render_state(state),
+                PulseOutcome::NoFixpoint => "no fixpoint".to_string(),
+            })
+            .collect()
     }
 }
 

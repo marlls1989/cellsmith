@@ -10,6 +10,7 @@ pub mod machine;
 pub mod minimise;
 pub mod regions;
 pub mod resolve;
+pub mod width;
 
 use std::collections::BTreeMap;
 

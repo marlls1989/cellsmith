@@ -204,6 +204,20 @@ pub fn settle_or_cycle<B: Brand, C: ManagerCell>(
     deltas: &[Delta<B, C>],
     node: &Minterm<Symbol>,
 ) -> Result<Minterm<Symbol>, Vec<Minterm<Symbol>>> {
+    settle_trace(deltas, node).map(|t| {
+        t.into_iter()
+            .next_back()
+            .expect("a settle trace is seeded with the node itself")
+    })
+}
+
+/// Like [`settle_or_cycle`], but on a fixpoint returns the whole settling trace rather than just its
+/// end: `t[0]` is `node` itself (unstepped), `t[last]` is the fixpoint, so the round count is
+/// `t.len() - 1`. On oscillation the error arm is unchanged — the periodic cycle.
+pub fn settle_trace<B: Brand, C: ManagerCell>(
+    deltas: &[Delta<B, C>],
+    node: &Minterm<Symbol>,
+) -> Result<Vec<Minterm<Symbol>>, Vec<Minterm<Symbol>>> {
     let mut trace: Vec<Minterm<Symbol>> = vec![node.clone()];
     let mut pos: HashMap<Minterm<Symbol>, usize> = HashMap::new();
     pos.insert(node.clone(), 0);
@@ -211,7 +225,7 @@ pub fn settle_or_cycle<B: Brand, C: ManagerCell>(
     loop {
         let next = step(deltas, &cur);
         if next == cur {
-            return Ok(cur); // fixpoint
+            return Ok(trace); // fixpoint
         }
         if let Some(&p) = pos.get(&next) {
             return Err(trace[p..].to_vec()); // revisited a non-fixpoint state → the oscillating cycle
@@ -681,5 +695,42 @@ mod tests {
             2,
             "Qb should differ across the cycle, got {cycle:?}"
         );
+    }
+
+    #[test]
+    fn settle_trace_ends_at_the_fixpoint() {
+        // Same C-element as `settles_a_c_element_hold`: A=1 B=1 Q=0 is not stable and settles to
+        // Q=1. settle_trace's trace is seeded with the node itself and ends at the fixpoint settle()
+        // reports.
+        let builder = bdd_builder!();
+        let dq = builder.parse("A*B + Q*(A+B)").unwrap();
+        let deltas = vec![(Symbol::from("Q"), dq)];
+        let forcing = node_from(&["A", "B", "Q"], |n| matches!(n, "A" | "B"));
+
+        let trace = settle_trace(&deltas, &forcing).expect("settles");
+        assert_eq!(
+            trace[0], forcing,
+            "the trace is seeded with the node itself"
+        );
+        let settled = settle(&deltas, &forcing).expect("settles");
+        assert_eq!(
+            trace.last(),
+            Some(&settled),
+            "the trace ends at the fixpoint"
+        );
+    }
+
+    #[test]
+    fn settle_trace_still_reports_the_oscillating_cycle() {
+        // Same cross-coupled mutex as `settle_or_cycle_names_the_oscillating_pair`: settle_trace's
+        // Err arm is unchanged from settle_or_cycle's.
+        let builder = bdd_builder!();
+        let da = builder.parse("!Qb*A").unwrap();
+        let db = builder.parse("!Qa*B").unwrap();
+        let deltas = vec![(Symbol::from("Qa"), da), (Symbol::from("Qb"), db)];
+        let both_low = node_from(&["A", "B", "Qa", "Qb"], |n| matches!(n, "A" | "B"));
+
+        let cycle = settle_trace(&deltas, &both_low).expect_err("oscillates, no fixpoint");
+        assert_eq!(cycle.len(), 2, "expected a length-2 cycle, got {cycle:?}");
     }
 }

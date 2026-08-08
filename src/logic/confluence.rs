@@ -144,7 +144,9 @@ struct Probed {
 /// The nodes a hazard puts at risk, each with the level the observation sampled for it. An observation
 /// samples every node of the group it was recorded with — `record_oscillation` keys on that group, so a
 /// race only ever joins an oscillation naming the same nodes — so every entry is there.
-fn protected(group: &[Symbol], levels: &BTreeMap<Symbol, bool>) -> Vec<(Symbol, bool)> {
+///
+/// Shared with [`super::width`], whose hazards name their protected nodes the same way.
+pub(super) fn protected(group: &[Symbol], levels: &BTreeMap<Symbol, bool>) -> Vec<(Symbol, bool)> {
     group
         .iter()
         .map(|node| {
@@ -159,7 +161,9 @@ fn protected(group: &[Symbol], levels: &BTreeMap<Symbol, bool>) -> Vec<(Symbol, 
 /// The level each of `group`'s nodes holds at the probed state — what a constraint block states as the
 /// start condition of the node it protects. A hazard's group holds state variables, which are machine
 /// coordinates, and a probed state is fully initialised, so every one of them is defined there.
-fn node_levels_at(state: &Minterm<Symbol>, group: &[Symbol]) -> BTreeMap<Symbol, bool> {
+///
+/// Shared with [`super::width`], which samples its pulses' nodes at the pre-pulse state through it.
+pub(super) fn node_levels_at(state: &Minterm<Symbol>, group: &[Symbol]) -> BTreeMap<Symbol, bool> {
     group
         .iter()
         .map(|w| {
@@ -173,7 +177,9 @@ fn node_levels_at(state: &Minterm<Symbol>, group: &[Symbol]) -> BTreeMap<Symbol,
 
 /// The direction `name` toggles from its current value at `node`. Explored nodes carry a complete input
 /// assignment, so an input's value is always fixed there.
-fn edge_from(node: &Minterm<Symbol>, name: &str) -> Edge {
+///
+/// Shared with [`super::width`], which reads a pulse's opening edge through it.
+pub(super) fn edge_from(node: &Minterm<Symbol>, name: &str) -> Edge {
     if node
         .value_of(name)
         .expect("every input is fixed at an explored node")
@@ -235,7 +241,9 @@ const DETERMINATE: &str =
 
 /// The state variables that oscillate across a `settle_or_cycle` cycle — those whose VALUE differs
 /// between any two cycle nodes — in `state_vars` declaration order.
-fn oscillating_group(cycle: &[Minterm<Symbol>], state_vars: &[Symbol]) -> Vec<Symbol> {
+///
+/// Shared with [`super::width`], which names the nodes of a pulse cut that never settles through it.
+pub(super) fn oscillating_group(cycle: &[Minterm<Symbol>], state_vars: &[Symbol]) -> Vec<Symbol> {
     state_vars
         .iter()
         .filter(|v| {

@@ -14,7 +14,7 @@ use thiserror::Error;
 use crate::logic::analysis::Exploration;
 use crate::logic::arcs::{Arc, HiddenArc};
 use crate::logic::confluence::Constraint;
-use crate::logic::hazard::{OrderDependence, Oscillation};
+use crate::logic::hazard::{OrderDependence, Oscillation, WidthDependence};
 use crate::logic::leakage::LeakageState;
 use crate::logic::machine::{ExplorationBudget, Explored};
 
@@ -548,6 +548,10 @@ pub struct AnalysedCell {
     /// Detected oscillation hazards — pairs (or single toggles) that drive a periodic, non-settling
     /// cycle (empty for ordinary combinational or self-holding cells). See [`crate::logic::hazard`].
     pub oscillation: Vec<Oscillation>,
+    /// Detected width-dependent hazards — pulses on one input whose settled outcome depends on how wide
+    /// the pulse is (empty for cells whose pulses all settle back to where they started). A detected
+    /// hazard, sibling to the two above. See [`crate::logic::hazard`].
+    pub width_dependence: Vec<WidthDependence>,
     /// Declared clock input pins (`clock = [...]`). See [`crate::logic::confluence`].
     pub clock_pins: Vec<Symbol>,
     /// The constraints generated to avoid the cell's detected hazards (setup/hold and non_seq). Emission
@@ -581,8 +585,8 @@ pub struct AnalysedCell {
     pub edge: crate::logic::edge::EdgeArcs,
     /// The exploration budget counter that stopped the machine pass, or `None` when the machine was
     /// explored in full. Set ⇒ nothing was derived from the machine: `arcs`, `hidden_arcs`, `leakage`,
-    /// `order_dependence`, `oscillation` and `constraints` are all empty and `edge` is the default, so
-    /// the CLI reports the cell instead of emitting arc-free artifacts for it.
+    /// `order_dependence`, `oscillation`, `width_dependence` and `constraints` are all empty and `edge`
+    /// is the default, so the CLI reports the cell instead of emitting arc-free artifacts for it.
     pub unexplored: Option<crate::logic::machine::ExplorationLimit>,
     /// The cell-wide characterisation-template references (delay/power/constraint) carried verbatim from
     /// the spec for the `define_cell` emitter. `None` when the cell declares no `template`. Raw carry —
@@ -796,9 +800,9 @@ impl Cell {
         recompute_signal_metadata(&mut view, bdds, min);
 
         // Build the cell's state machine once and derive both its transition arcs and its hazards from
-        // the shared exploration over the minimised model: the two detected hazards (order-dependence,
-        // oscillation) and the constraints — setup/hold, non_seq — generated to avoid them. Clock
-        // suppression and emission gating are applied downstream.
+        // the shared exploration over the minimised model: the three detected hazards
+        // (order-dependence, oscillation, width-dependence) and the constraints — setup/hold, non_seq —
+        // generated to avoid them. Clock suppression and emission gating are applied downstream.
         // The opt-out (`no_edge_collapse`, also set for every cell by the global `--no-edge-collapse`)
         // gates the classify() call itself, not just its result — no wasted work when collapse is off.
         let analysis = crate::logic::analysis::analyse_machine(
@@ -813,6 +817,7 @@ impl Cell {
         view.constraints = analysis.constraints;
         view.order_dependence = analysis.order_dependence;
         view.oscillation = analysis.oscillation;
+        view.width_dependence = analysis.width_dependence;
         view.edge = analysis.edge;
         view.unexplored = analysis.unexplored;
         let explored = analysis.explored;
@@ -828,8 +833,9 @@ impl Cell {
 
     /// Validate the cell and parse its functions into the pre-minimise [`AnalysedCell`]: every signal's
     /// parse-time support and feedback classification, with all derived analysis fields
-    /// (arcs/hidden_arcs/leakage/order_dependence/oscillation/constraints/regions) still empty. The
-    /// state-space rewrite and machine/region passes are layered on by [`Cell::analyse`].
+    /// (arcs/hidden_arcs/leakage/order_dependence/oscillation/width_dependence/constraints/regions)
+    /// still empty. The state-space rewrite and machine/region passes are layered on by
+    /// [`Cell::analyse`].
     pub fn analyse_signals(&self) -> Result<AnalysedCell, ModelError> {
         // Programmatic guard: `de_name_list` rejects an empty name list on deserialisation, but `Cell`
         // has all-pub fields, so a hand-built `Cell { name: vec![], .. }` bypasses it and would panic on
@@ -1037,6 +1043,7 @@ impl Cell {
             leakage: Vec::new(),
             order_dependence: Vec::new(),
             oscillation: Vec::new(),
+            width_dependence: Vec::new(),
             clock_pins: self.clock.clone(),
             constraints: Vec::new(),
             constraint_arcs_declared: self.constraint_arcs,
@@ -1147,6 +1154,7 @@ mod tests {
     use super::*;
     use crate::logic::arcs::Edge;
     use crate::logic::confluence::ConstraintKind;
+    use crate::logic::hazard::PulseOutcome;
     use espresso_logic::{bdd_builder, expr, Minterm};
 
     const SAMPLE: &str = r#"
@@ -2196,6 +2204,17 @@ Q = "CLK*M + !CLK*Q"
         stable: Vec<Minterm<Symbol>>,
     }
 
+    /// One detected width-dependent hazard: the pulsed pin with the pulse's opening edge, the nodes the
+    /// width decides and the outcomes it decides between. A pulse relates one pin to itself, so there is
+    /// no pin PAIR to record and [`HazardRecord`] does not fit it.
+    #[derive(Debug, PartialEq, Eq)]
+    struct WidthRecord {
+        pin: Symbol,
+        edge: Edge,
+        group: Vec<Symbol>,
+        outcomes: Vec<PulseOutcome>,
+    }
+
     /// The behavioural edge classification reduced to the node names it carries: the folded masters, the
     /// nodes holding an edge capture, and the derived registers.
     #[derive(Debug, PartialEq, Eq)]
@@ -2219,6 +2238,7 @@ Q = "CLK*M + !CLK*Q"
         constraints: Vec<ConstraintRecord>,
         order_dependence: Vec<HazardRecord>,
         oscillation: Vec<HazardRecord>,
+        width_dependence: Vec<WidthRecord>,
         edge: EdgeRecord,
     }
 
@@ -2296,6 +2316,16 @@ Q = "CLK*M + !CLK*Q"
                 })
                 .collect(),
             oscillation,
+            width_dependence: cell
+                .width_dependence
+                .iter()
+                .map(|wd| WidthRecord {
+                    pin: wd.pin.clone(),
+                    edge: wd.edge,
+                    group: wd.group.clone(),
+                    outcomes: wd.outcomes.clone(),
+                })
+                .collect(),
             edge: EdgeRecord {
                 folded: cell.edge.folded.iter().cloned().collect(),
                 captures: cell.edge.captures.iter().map(|c| c.node.clone()).collect(),
@@ -2353,6 +2383,11 @@ Q = "CLK*M + !CLK*Q"
             &a.oscillation,
             &b.oscillation,
             &format!("cell {cell}: oscillation"),
+        );
+        assert_same_records(
+            &a.width_dependence,
+            &b.width_dependence,
+            &format!("cell {cell}: width dependence"),
         );
         assert_eq!(a.edge, b.edge, "cell {cell}: edge classification");
     }
