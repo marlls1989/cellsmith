@@ -307,6 +307,11 @@ Every context a firing can happen in yields its own arc: an arc's identity here 
 related pin, the direction, and the **full machine start state**, so two firings that agree on the
 inputs but differ in internal state are two arcs, each with its own prevector, and both are derived.
 
+Whether both are *emitted* is a separate question. A block reaches only its `-pinlist` columns, so two
+such arcs render the same block wherever the state that separates them has no column of its own; the
+cell states that block once and reports the arcs it conflates, naming each of their states so the node
+worth adding to `expose` can be read off them.
+
 Because arcs are found by *reaching* states and *settling*, the correctness properties are structural:
 related pins are inputs, impossible arcs are never reached (they oscillate), and input-forced transitions
 cascade naturally through the multi-round settle.
@@ -322,8 +327,8 @@ classifies as, and emits **one representative** per group, with no `-when` line.
 generalises over what the group's members differ in: the side inputs' held levels, the held outputs, and
 the internal state the firing was measured from. The representative is a member with the **strictly
 shortest prevector** — where several tie at the minimum, any one of them is an equally valid
-representative of the group at this grain — and it renders its own concrete `-prevector` and `-vector`,
-those of one real firing rather than a synthesised context.
+representative of the group at this grain — and it renders its own concrete `-ic` and `-vector`, those
+of one real firing rather than a synthesised context.
 
 Selecting the class (`--when`, or the per-cell `when` key) adds a **conditioned pass** on top: every
 derived arc of that class comes back as its own block carrying its own condition, so a firing can appear
@@ -353,7 +358,7 @@ raised for a run with its own flag, `--max-candidates` or `--max-states`.
 ## 7. Worked example: discovering `B↓ → Qa↑` on the mutex
 
 `MUT`: `Qa = !Qb·A`, `Qb = !Qa·B`. We trace the arc from related pin `B` to pin `Qa` (rise), whose
-emitted block is `-prevector {01 11} -vector {1 F R X}`.
+emitted block carries `-vector {1 F R X}`, its start condition stated by `-ic`.
 
 **Start.** Start states are discovered from the signals' forced covers (§6), not from an all-zero reset.
 `δ_Qb = !Qa·B` is forced high by `B` alone, so `N_B = (0 1 | 0 1)` — *B holds the grant* — is one of the
@@ -382,7 +387,7 @@ Settled `(1 0 | 1 0)`. The two micro-steps are the physical cascade: B drops →
 A=1, Qa rises.
 
 **Emit.** Across the toggle at `N_AB2 → (1 0 | 1 0)`, `Qa: 0 → 1` (rise). Arc: `related = B`, `pin = Qa`,
-edge Rise, `start = 11`, `end = 10`, `prevector = 01 11`, vector `{1 F R X}`. (The same step emits
+edge Rise, `start = 11`, `end = 10`, prevector `01 11` (model only), vector `{1 F R X}`. (The same step emits
 `B → Qb↓`.)
 
 `B` does not appear in `Qa`'s own function. The `B↓ → Qa↑` dependence arises from *reaching* the state

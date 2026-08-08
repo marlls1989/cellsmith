@@ -1,4 +1,4 @@
-//! cellsmith — generate Cadence Liberate transition arcs (with prevectors) for logic cells,
+//! cellsmith — generate Cadence Liberate transition arcs for logic cells,
 //! including state-holding/hysteretic cells (C-elements, latches, cross-coupled pairs).
 //!
 //! **cellsmith is a command-line tool.** This library target exists only as an internal build

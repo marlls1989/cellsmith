@@ -1,6 +1,6 @@
 # cellsmith
 
-Generate Cadence Liberate **transition arcs** (with prevectors) for logic cells — including
+Generate Cadence Liberate **transition arcs** for logic cells — including
 state-holding / hysteretic cells (C-elements, latches, cross-coupled pairs, mutexes, and flip-flops
 with internal state) that Liberate cannot auto-detect on non-standard nodes (e.g. nMOS or pMOS only, dynamic logic).
 
@@ -19,7 +19,7 @@ For every cell in the input spec, cellsmith emits four artifacts:
 
 | Artifact | File | Contents |
 |----------|------|----------|
-| Liberate arcs | `<name>_arcs.tcl` | `define_arc` blocks with prevector walks and `R/F/1/0/X` vectors, plus `define_leakage` blocks — one static leakage state per fully-initialised reachable rest state, primed by a prevector walk |
+| Liberate arcs | `<name>_arcs.tcl` | `define_arc` blocks with `R/F/1/0/X` vectors and an `-ic` start condition, plus `define_leakage` blocks — one static leakage state per fully-initialised reachable rest state, run from a prevector walk where the cell must be walked into it, and stated as the bare condition where the inputs alone drive it there |
 | Behavioural Verilog | `<name>.v` | one sequential UDP `primitive` per signal (outputs + internal state nodes — signals that hold memory — with a three-valued next-state table) + a `celldefine`d wrapper `module` (internals as internal `wire`s) with a `specify` block |
 | Liberty stub | `<name>.lib` | a self-contained `library (<name>) { ... }` file (Liberate can consume it directly) wrapping one `cell (...)` per cell: input `pin`s; a sequential cell gets one joint `statetable` whose columns live in their own namespace, separate from the pins: a state output **mints** its node (`Q` → `Q_st`, escalating past any real signal of that name), while a genuine internal node keeps its own name. Every node is anchored by a `direction : internal` pin carrying its `internal_node`. Each output pin is then classified against the table: an output that **is** a state node carries a `state_function` naming its minted node, an output that **depends on** state nodes carries a `state_function` over them, and an output over primary inputs alone carries a plain `function`. A cell with no state nodes gets a plain `function` per output and no `statetable` |
 | Liberate cell declaration | `<name>_cells.tcl` | `define_cell` blocks: the structural pin declaration (`-input`/`-clock`/`-async`/`-output`/`-pinlist`) and characterisation-template references (`-delay`/`-power`/`-constraint`) from `[cell.template]`/`[cell.template_overrides]` — no logic or timing; one block per distinct resolved `(delay, power, constraint)` triple, bundling the drive-strength aliases that share it. Suppressed by `--no-cells` |
@@ -62,18 +62,17 @@ Three properties follow from this construction:
 
 - **related pins are always primary inputs** — outputs and internal nodes are never arc sources
   (naming one cross-coupled output as the related pin of another would be invalid); they are established
-  *indirectly* by the prevector, whose input sequence drives every state variable — internal ones
-  included — to its value at the arc's start state, in cellsmith's own model (e.g. a flop's `CLK→Q`
-  prevector first drives `D` to load the master);
+  *indirectly* by `-ic`, which states the level every column starts the measured vector at. cellsmith
+  finds that start state by walking its own model — a flop's `CLK→Q` start is reached by first driving
+  `D` to load the master — but the walk is not emitted;
 - **impossible arcs are never generated** — a mutex's colliding states oscillate (an oscillation
   hazard) instead of settling, so the search drops them, and no arc between its two grants is produced;
 - **input-forced transitions cascade through settling** — in a settable cross-coupled pair, toggling a
   set input flips both the output it forces (rise) and, through the coupling, that output's partner
   (fall); the search discovers both;
-- **a state-holding cell's arcs carry `-ic`**, the start-state voltage of every `-pinlist` entry. A
-  block measuring a transition runs on a prepark deck, which parks the cell afresh rather than
-  carrying the `-prevector` simulation's settled values into the measured vector, so `-ic` states the
-  start condition directly. A purely combinational cell carries no `-ic`.
+- **a state-holding cell's arcs carry `-ic`**, the start-state voltage of every `-pinlist` entry, and
+  that is the whole of how the start condition reaches Liberate: no `define_arc` emits a `-prevector`.
+  A purely combinational cell has no state to establish and carries neither.
 
 A cross-coupled cell is also **bistable**: under some input condition (`A·B` for a mutex) the
 joint next-state has two stable states, and the physical cell picks one non-deterministically instead
@@ -161,8 +160,8 @@ constraint_arcs = true         # optional: opt this cell in to emitting the deri
 [cell.internal]                # internal state node: referenceable, but emits no external pin
 M = "!CLK*D + CLK*M"           #   the master latch (transparent low)
 [cell.outputs]
-Q = "CLK*M + !CLK*Q"           # the slave references the internal master; CLK→Q arcs are discovered,
-                               #   and each prevector drives D to load the master first
+Q = "CLK*M + !CLK*Q"           # the slave references the internal master; CLK→Q arcs are discovered
+                               #   by walking D to load the master, and state the start with -ic
 ```
 
 `M` and `Q` are an opposite-phase latch pair on the declared clock `CLK`, so by default cellsmith
@@ -171,8 +170,8 @@ recognises, after exploration, the `CLK` rising arc on `Q` as an **edge arc**: `
 (carried by its primary-input hidden arcs) is unchanged; `Q`'s next state is re-expressed
 combinationally in terms of `D`, and its Liberate arc carries `-type edge`. Setting
 `no_edge_collapse = true` (or passing `--no-edge-collapse`) keeps the two-latch form written above
-exactly as it stands, with `M` staying a separate internal node and `Q`'s arcs discovered by prevector
-as before.
+exactly as it stands, with `M` staying a separate internal node and `Q`'s arcs discovered by the same
+walk as before.
 
 Classification is **per arc**: every arc is labelled independently, and the label is the **edge arc**: a
 clock toggle that takes a latch from opaque to transparent and whose delivered value depends on retained
@@ -482,9 +481,9 @@ The **state-machine** arc engine supports state-holding cells of these shapes: s
 C-elements and latches, cross-coupled SR pairs, mutexes / arbiters, and cells with **internal state
 nodes** (a master/slave flip-flop). Arcs are found by exploring the settled state machine, so related
 pins are always primary inputs, impossible arcs are never reached, input-forced transitions cascade
-through settling, and a prevector drives every state variable (internal ones included) to its value at
-the arc's start state; a state-holding cell's `-ic` line carries that start condition into the measured
-vector.
+through settling, and the walk into an arc's start state drives every state variable (internal ones
+included) to its value there; a state-holding cell's `-ic` line is what carries that start condition
+into the measured vector.
 
 The engine detects two kinds of hazard: an **order-dependent** hazard (non-confluence — the settled
 state depends on which of a racing input pair's edges lands first; seen on C-elements, DFFs and SR
@@ -492,9 +491,11 @@ latches) and an **oscillation** hazard (a bistable condition where the machine p
 non-deterministically instead of converging on one, as in a mutex/arbiter). From a detected hazard,
 cellsmith can **generate** a timing constraint (setup/hold for a pair holding a declared clock,
 otherwise a symmetric `non_seq`) to avoid it, gated by the `--constraints` flag or a cell's
-`constraint_arcs = true`. cellsmith emits three kinds of per-cell stderr diagnostic: the oscillation 
+`constraint_arcs = true`. cellsmith emits four kinds of per-cell stderr diagnostic: the oscillation 
 hazards, the order-dependent hazards (grouped per racing input pair, a pair's conditions joined), 
-and the constraints generated to avoid them.
+the constraints generated to avoid them, and the arcs whose blocks conflate several cell states — 
+firings a block cannot tell apart because the state that separates them has no column, which naming 
+those nodes in `expose` would fix.
 
 Each emitted constraint arc names the nodes it protects — the state variables whose settled value the
 hazard puts at risk — in a single `-probe`, so Liberate measures the node the constraint is about. A

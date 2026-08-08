@@ -199,9 +199,11 @@ pair. Every constraint is built the same way, whichever hazard it came from:
 - **Edges** are the directions the two pins toggle *from their values at the probed state* (a pin at 0
   races rising, at 1 falling).
 - **Prevector** is the path from a start state to the probed state, each node projected onto the inputs —
-  the same construction as a delay arc's prevector, and it serves the same purpose: it drives every state
-  variable, hidden ones included, into the state where the hazard manifests. The rendered human-readable
-  form is the two switching edges plus any other inputs held fixed, e.g. A↓ & B↑ with R=0.
+  the same construction as a delay arc's prevector. It is a model quantity and reaches no emitted block:
+  the constraint arc states its start condition through `-ic`, as every `define_arc` does. What the walk
+  gives is the state itself, which the constraint carries as `Constraint::state` — every input and state
+  variable at the level it holds there, including the internal nodes no column carries. The rendered
+  human-readable form is the two switching edges plus any other inputs held fixed, e.g. A↓ & B↑ with R=0.
 
 - **Protected nodes** are the state variables the hazard puts at risk — its `group`, the nodes whose
   settled value depends on the arrival order, sampled with the level each holds at the probed state. A

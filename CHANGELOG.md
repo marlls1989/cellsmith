@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A warning names every arc no block could state.** An arc should express the cell state it measures
+  from, and `-ic` and `-vector` reach exactly the `-pinlist`: firings differing only in an internal
+  node with no column all render one block, which then expresses none of them. The warning names the
+  arc — `hidden S↑`, `combinational A↑ -> Q↓`, `setup CLK↑ & D↑` — and every cell state that one block
+  conflates. They agree on what the block states and differ on what it cannot, so what varies across
+  them is the node to expose.
+
+### Changed
+
+- **No `define_arc` carries a `-prevector`, because `-ic` is cheaper.** A prevector is a simulation the
+  characterisation run must perform to arrive at the start state; `-ic` states that state outright, and
+  every block of a state-holding cell already carried it. A purely combinational cell has no state to
+  establish and carries neither. cellsmith still walks its own model to find the state an arc is measured
+  from — that walk is what `-ic` and the vector's held columns are read off — it is simply no longer
+  emitted. The price is that an internal node left unexposed has no column and so goes unsaid, which is
+  what the new conflation warning reports.
+
+- **A `define_leakage` states its condition, and the walk in where the cell needs one.** The `-pinlist`
+  and `-vector` are gone from every leakage block: the `-when` already names the inputs held there and
+  every output's settled level. A rest state the inputs drive the cell into on their own has nothing to
+  prime and so nothing to run — the block is `define_leakage -when "…" { … }` — while a state the cell
+  must be walked into runs its `-prevector` to prime the internal nodes.
+
+- **A cell states each `define_arc` once.** Firings that differ only in state no block can carry — an
+  internal node with no column, since `-ic` and `-vector` reach exactly the `-pinlist` — render the same
+  block, and a repeat hands Liberate the same measurement over again rather than characterising the
+  contexts apart. They remain distinct arcs in the model; what is deduplicated is the emitted block,
+  keyed on everything it states.
+
 ## [0.5.0] - 2026-08-06
 
 ### Added

@@ -1,7 +1,7 @@
 //! Emit Cadence Liberate `define_arc` blocks for a cell's transition arcs.
 //!
-//! The layout places `-type` first on rise arcs and after the prevector on fall arcs, with pins
-//! emitted in declaration order.
+//! A block states its start condition and its stimulus, and nothing about how the cell was walked
+//! there: `-type` leads, then the pins in declaration order.
 //!
 //! Arc typing follows the per-arc labels in [`crate::logic::edge`], which are SOURCED FROM the arc
 //! pipeline itself: each emitted delay arc looks up its own `(output, related clock, clock direction)`
@@ -11,14 +11,18 @@
 //! its level rather than being held — stays `-type combinational`, and a declared-async related pin
 //! takes precedence with `-type async`.
 //!
-//! Every block of a state-holding cell — transition, hidden and constraint alike — also carries an
-//! `-ic` line giving each `-pinlist` pin the voltage it starts the measured vector at (see [`ic_str`]).
-//! Whether the `-prevector` simulation reaches the measurement at all follows the DECK each kind of
-//! measurement runs on. A block measuring a transition — the transition arcs, and the constraint arcs
-//! with them — runs on a PREPARK deck, which parks the cell afresh and so discards those settled
-//! values, and `-ic` is what states the start condition there. `define_arc -type hidden` and
-//! `define_leakage` run on a SINGLE deck, which carries them. Every block carries its prevector either
-//! way: a block relying on the levels alone draws a Liberate warning about user arcs.
+//! **No `define_arc` carries a `-prevector`. That is a DELIBERATE CHOICE, not an omission: `-ic` is
+//! cheaper than a prevector.** A prevector is a simulation the characterisation run has to perform to
+//! arrive at the start state; `-ic` states that state outright. Where both can say the same thing,
+//! saying it costs less, and it is said on every block of a state-holding cell — transition, hidden and
+//! constraint alike — giving each `-pinlist` pin the voltage it starts the measured vector at (see
+//! [`ic_str`]). A purely combinational cell has no state to establish and so carries neither.
+//!
+//! What `-ic` reaches is exactly the `-pinlist`, so the price is that an internal node the spec did not
+//! `expose` has no column and goes unsaid where a walk would have primed it. That is the trade taken,
+//! and it is reported rather than hidden: see [`MaskedArc`]. The walk still exists in the model — it is
+//! what identifies the start state, and `-ic` and the vector's held columns are read off its last step
+//! — it is simply not rendered.
 //!
 //! A cell that exposes internal nodes (`expose = [...]`) is rendered from its ARC VIEW
 //! ([`crate::model::AnalysedCell::arc_view`]), the analysis that keeps those nodes as model coordinates.
@@ -32,7 +36,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::Hash;
 
-use espresso_logic::Symbol;
+use espresso_logic::{Minterm, Symbol};
 use indexmap::IndexMap;
 
 use crate::logic::arcs::{Arc, ArcLevels, Edge, ExposedLevel, HiddenArc};
@@ -71,11 +75,100 @@ impl Default for ArcsTclOptions {
 /// constraint arcs (setup/hold, non_seq) the cell opted into — its `constraint_arcs` was set, so
 /// generation populated `cell.constraints` — follow the delay arcs.
 pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
+    cell_arcs(cell, opts).tcl
+}
+
+/// One arc a cell could not state, because a firing already rendered the identical block. Every block
+/// should express the cell state it measures from, and `-ic` and `-vector` reach exactly the
+/// `-pinlist`: an internal node with no column is in nothing the block says, so two firings that
+/// differ only there are one block. Exposing those nodes is what tells them apart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaskedArc {
+    /// The `-type` the block carries.
+    pub arc_type: ArcType,
+    /// The pins the block measures between.
+    pub kind: MaskedKind,
+    /// The cell states the one emitted block conflates. None of them is the block's: which firing
+    /// reached the emitter first decides nothing, since the block says the same of every one. Read
+    /// against each other they agree on what the block states and differ on what it cannot — and what
+    /// differs is the node to expose.
+    pub states: Vec<Minterm<Symbol>>,
+}
+
+/// The pins a block measures between, which differ by what kind of block it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MaskedKind {
+    /// A transition arc: a related pin's edge driving an output pin's edge.
+    Transition {
+        related: Symbol,
+        related_edge: Edge,
+        pin: Symbol,
+        edge: Edge,
+    },
+    /// A hidden arc: an input toggle that settles with no output following it.
+    Toggle { pin: Symbol, edge: Edge },
+    /// A constraint arc: the two edges it holds apart.
+    Constraint {
+        related: Symbol,
+        related_edge: Edge,
+        pin: Symbol,
+        pin_edge: Edge,
+    },
+}
+
+impl MaskedArc {
+    /// The arc on one line: `combinational A↑ -> Q↓`, `hidden S↑`, `setup CLK↑ & D↑`.
+    pub fn arc_str(&self) -> String {
+        let ty = self.arc_type.token();
+        match &self.kind {
+            MaskedKind::Transition {
+                related,
+                related_edge,
+                pin,
+                edge,
+            } => format!(
+                "{ty} {related}{} -> {pin}{}",
+                related_edge.arrow(),
+                edge.arrow()
+            ),
+            MaskedKind::Toggle { pin, edge } => format!("{ty} {pin}{}", edge.arrow()),
+            MaskedKind::Constraint {
+                related,
+                related_edge,
+                pin,
+                pin_edge,
+            } => format!(
+                "{ty} {related}{} & {pin}{}",
+                related_edge.arrow(),
+                pin_edge.arrow()
+            ),
+        }
+    }
+
+    /// Each conflated state as a brace-wrapped literal product (`{A=1, B=0, M=1}`), in the order the
+    /// states were reached.
+    pub fn state_strs(&self) -> Vec<String> {
+        self.states
+            .iter()
+            .map(|s| format!("{{{}}}", crate::logic::fixed_pairs(s, &[]).join(", ")))
+            .collect()
+    }
+}
+
+/// A cell's `define_arc` blocks, with the arcs that went unstated for want of a column to tell them
+/// apart (see [`MaskedArc`]).
+pub struct CellArcs {
+    pub tcl: String,
+    pub masked: Vec<MaskedArc>,
+}
+
+/// All `define_arc` blocks for a cell, and the arcs masked in rendering them.
+pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
     // Everything below renders the arc view: for a cell that exposes internal nodes that is the analysis
     // carrying them as model coordinates, so its arcs, hazards and leakage states are the ones an
     // exposed column can be read off; for every other cell it IS the cell.
     let cell = cell.arc_view();
-    let mut out = oscillation_comment(cell);
+    let out = oscillation_comment(cell);
     // Each arc class is emitted in two passes. The GENERAL pass comes out ALWAYS: one representative per
     // transition — a related pin's edge driving an output pin's edge — rendered with no `-when` line, so
     // the block generalises over the side inputs' held levels, the held outputs and the internal state
@@ -86,16 +179,20 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     // representative, once carrying its own condition. The conditioned pass skips a representative whose
     // conditioned block adds nothing over the general one: the transition has a single case (its one
     // context is already what the general block stands for), or the representative renders no `-when` (so
-    // the two blocks would be identical). Any non-representative firing renders its own prevector and is
+    // the two blocks would be identical). Any non-representative firing renders its own block and is
     // emitted whether or not it carries a condition.
     //
-    // Two redundancies survive here BY DESIGN — do not "optimise" either away. On a transition with more
-    // than one context, the representative's OWN conditioned block restates the context its general block
+    // One redundancy survives here BY DESIGN — do not "optimise" it away. On a transition with more than
+    // one context, the representative's OWN conditioned block restates the context its general block
     // already pins, yet it is emitted: the conditioned pass names every context of a multi-context
-    // transition explicitly and symmetrically, the representative's included. And two firings that agree
-    // on vector and `-when` but reach it from different internal states both emit identical conditioned
-    // blocks — the emitted form cannot express the internal state that makes them distinct arcs. Neither
-    // repeat drops an arc or misstates timing; the duplication is harmless.
+    // transition explicitly and symmetrically, the representative's included. The two blocks differ —
+    // one carries the `-when` — so each is stated in its own right.
+    //
+    // A CELL STATES EACH BLOCK ONCE ([`Blocks::state`]). Firings that differ only in state the block cannot
+    // carry — an internal node with no column, since `-ic` and `-vector` reach exactly the `-pinlist` —
+    // render the same block, and repeating it would hand Liberate the same measurement several times
+    // over rather than characterising the contexts apart. They are distinct arcs in the model and stay
+    // so; what is deduplicated is the emitted block, keyed on everything it states.
     //
     // A block addresses its columns by name, so the aliases it may name together are those whose
     // netlist agrees on the columns IT carries — its [`Group`]. That is asked per block rather than per
@@ -112,6 +209,7 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
         h.prevector.len()
     });
     let measured = groups(cell, &[]);
+    let mut blocks = Blocks::new(out);
     for group in &measured {
         for (_, arc) in cell
             .arcs
@@ -119,7 +217,7 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
             .enumerate()
             .filter(|(i, _)| general.contains_key(i))
         {
-            out.push_str(&format_arc(cell, group, arc, false));
+            blocks.state(format_arc(cell, group, arc, false), arc_firing(cell, arc));
         }
         if cell.when.contains(ArcClass::Transition) {
             for (i, arc) in cell.arcs.iter().enumerate() {
@@ -127,7 +225,7 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
                     .get(&i)
                     .is_some_and(|&cases| cases == 1 || when_str(&arc.end, &arc.related).is_none());
                 if !redundant {
-                    out.push_str(&format_arc(cell, group, arc, true));
+                    blocks.state(format_arc(cell, group, arc, true), arc_firing(cell, arc));
                 }
             }
         }
@@ -138,7 +236,7 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
                 .enumerate()
                 .filter(|(i, _)| general_hidden.contains_key(i))
             {
-                out.push_str(&format_hidden_arc(cell, group, h, false));
+                blocks.state(format_hidden_arc(cell, group, h, false), hidden_firing(h));
             }
             if cell.when.contains(ArcClass::Hidden) {
                 // The same rule as the transition pass, over the hidden class's own condition (which
@@ -150,17 +248,17 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
                         .get(&i)
                         .is_some_and(|&cases| cases == 1 || hidden_when_str(h).is_none());
                     if !redundant {
-                        out.push_str(&format_hidden_arc(cell, group, h, true));
+                        blocks.state(format_hidden_arc(cell, group, h, true), hidden_firing(h));
                     }
                 }
             }
         }
     }
-    // Leakage carries the cell's own pins and no exposed column, so no group divides it: one block per
-    // rest state, naming every alias.
+    // A leakage block names no column at all, so no group divides it: one block per rest state, naming
+    // every alias.
     if opts.emit_leakage {
         for l in &cell.leakage {
-            out.push_str(&format_leakage(cell, l));
+            blocks.out.push_str(&format_leakage(cell, l));
         }
     }
     // Constraint arcs emit whatever generation produced: `cell.constraints` is populated only when the
@@ -169,10 +267,99 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     for c in &cell.constraints {
         let protected: Vec<Symbol> = c.nodes.iter().map(|(node, _)| node.clone()).collect();
         for group in &groups(cell, &protected) {
-            out.push_str(&format_constraint(cell, group, c));
+            for (arc_type, block) in constraint_types(c)
+                .into_iter()
+                .zip(format_constraint(cell, group, c))
+            {
+                blocks.state(block, constraint_firing(arc_type, c));
+            }
         }
     }
-    out
+    CellArcs {
+        tcl: std::mem::take(&mut blocks.out),
+        masked: blocks.masked(),
+    }
+}
+
+/// The blocks a cell states, each remembering every firing that rendered it. A block says its `-type`,
+/// its columns and their `-ic` and `-vector`, its `-when` and the pins it relates — so two firings
+/// rendering the same block are one measurement, however they differ in the model.
+struct Blocks {
+    out: String,
+    /// Block text to its entry in `arcs`, so a repeat finds the firing that already spoke for it.
+    index: HashMap<String, usize>,
+    arcs: Vec<MaskedArc>,
+}
+
+impl Blocks {
+    fn new(out: String) -> Self {
+        Blocks {
+            out,
+            index: HashMap::new(),
+            arcs: Vec::new(),
+        }
+    }
+
+    /// State `block` if the cell has not, and record the firing it renders among the states that
+    /// block covers. `firing` carries exactly one state — the one this call renders.
+    fn state(&mut self, block: String, firing: MaskedArc) {
+        match self.index.get(&block) {
+            Some(&i) => self.arcs[i].states.extend(firing.states),
+            None => {
+                self.out.push_str(&block);
+                self.index.insert(block, self.arcs.len());
+                self.arcs.push(firing);
+            }
+        }
+    }
+
+    /// Only the blocks covering more than one state — the ones expressing none of what they cover.
+    fn masked(self) -> Vec<MaskedArc> {
+        self.arcs
+            .into_iter()
+            .filter(|a| a.states.len() > 1)
+            .collect()
+    }
+}
+
+/// The firing a transition block renders, carrying the one state it measures from.
+fn arc_firing(cell: &AnalysedCell, arc: &Arc) -> MaskedArc {
+    MaskedArc {
+        arc_type: ArcIdentity::of(cell, arc).arc_type(),
+        kind: MaskedKind::Transition {
+            related: arc.related.clone(),
+            related_edge: related_edge(arc),
+            pin: arc.output.clone(),
+            edge: arc.edge,
+        },
+        states: vec![arc.start.clone()],
+    }
+}
+
+/// The firing a hidden block renders: the toggle is the whole of it, no output follows.
+fn hidden_firing(h: &HiddenArc) -> MaskedArc {
+    MaskedArc {
+        arc_type: ArcIdentity::of_hidden(h).arc_type(),
+        kind: MaskedKind::Toggle {
+            pin: h.pin.clone(),
+            edge: h.edge,
+        },
+        states: vec![h.start.clone()],
+    }
+}
+
+/// The firing a constraint block renders, sampled at the state the hazard was probed from.
+fn constraint_firing(arc_type: ArcType, c: &Constraint) -> MaskedArc {
+    MaskedArc {
+        arc_type,
+        kind: MaskedKind::Constraint {
+            related: c.related.clone(),
+            related_edge: c.related_edge,
+            pin: c.pin.clone(),
+            pin_edge: c.pin_edge,
+        },
+        states: vec![c.state.clone()],
+    }
 }
 
 /// The general arcs of one class: each identity's representative index into `items`, mapped to the
@@ -285,12 +472,42 @@ impl ArcIdentity {
 
     /// The `-type` word Liberate reads, and the ONE source of it: every `define_arc` block the emitter
     /// renders takes its type line from here.
-    fn type_token(&self) -> &'static str {
+    fn arc_type(&self) -> ArcType {
         match self {
-            ArcIdentity::Async(_) => "async",
-            ArcIdentity::Edge(_) => "edge",
-            ArcIdentity::Combinational(_) => "combinational",
-            ArcIdentity::Hidden { .. } => "hidden",
+            ArcIdentity::Async(_) => ArcType::Async,
+            ArcIdentity::Edge(_) => ArcType::Edge,
+            ArcIdentity::Combinational(_) => ArcType::Combinational,
+            ArcIdentity::Hidden { .. } => ArcType::Hidden,
+        }
+    }
+}
+
+/// Every `-type` a `define_arc` of this emitter can carry: the four a measured block classifies into,
+/// and the four halves of a constraint pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArcType {
+    Async,
+    Edge,
+    Combinational,
+    Hidden,
+    Setup,
+    Hold,
+    NonSeqSetup,
+    NonSeqHold,
+}
+
+impl ArcType {
+    /// The Liberate keyword, as it is written after `-type`.
+    pub fn token(self) -> &'static str {
+        match self {
+            ArcType::Async => "async",
+            ArcType::Edge => "edge",
+            ArcType::Combinational => "combinational",
+            ArcType::Hidden => "hidden",
+            ArcType::Setup => "setup",
+            ArcType::Hold => "hold",
+            ArcType::NonSeqSetup => "non_seq_setup",
+            ArcType::NonSeqHold => "non_seq_hold",
         }
     }
 }
@@ -372,23 +589,29 @@ fn groups(cell: &AnalysedCell, extra: &[Symbol]) -> Vec<Group> {
         .collect()
 }
 
+/// The `-type` tokens of a constraint's two blocks, in the order [`format_constraint`] renders them.
+fn constraint_types(c: &Constraint) -> [ArcType; 2] {
+    match c.kind {
+        ConstraintKind::SetupHold => [ArcType::Setup, ArcType::Hold],
+        ConstraintKind::NonSeq => [ArcType::NonSeqSetup, ArcType::NonSeqHold],
+    }
+}
+
 /// A constraint arc as a pair of `define_arc` blocks — the setup member and the hold member (Liberate
 /// characterises them as separate arcs): `setup`/`hold` for a directed clock↔data constraint,
 /// `non_seq_setup`/`non_seq_hold` for a symmetric (oscillation / mutual-exclusion) one.
-fn format_constraint(cell: &AnalysedCell, group: &Group, c: &Constraint) -> String {
-    let (setup, hold) = match c.kind {
-        ConstraintKind::SetupHold => ("setup", "hold"),
-        ConstraintKind::NonSeq => ("non_seq_setup", "non_seq_hold"),
-    };
-    let mut s = constraint_block(cell, group, c, setup);
-    s.push_str(&constraint_block(cell, group, c, hold));
-    s
+fn format_constraint(cell: &AnalysedCell, group: &Group, c: &Constraint) -> [String; 2] {
+    let [setup, hold] = constraint_types(c);
+    [
+        constraint_block(cell, group, c, setup.token()),
+        constraint_block(cell, group, c, hold.token()),
+    ]
 }
 
 /// One constraint `define_arc` of the given `-type`. Liberate cannot infer how to prepare these
-/// non-standard state-holding cells, so every pin is listed and fully specified: the `-prevector`
-/// drives the cell (inputs + internal state) into the pre-toggle state, and the full `-vector` carries
-/// the two switching pins as `R`/`F`, the other inputs at their held value, and the outputs as `X`.
+/// non-standard state-holding cells, so every pin is listed and fully specified: `-ic` states the
+/// pre-toggle condition of every column, and the full `-vector` carries the two switching pins as
+/// `R`/`F`, the other inputs at their held value, and the outputs as `X`.
 fn constraint_block(cell: &AnalysedCell, group: &Group, c: &Constraint, arc_type: &str) -> String {
     // The nodes the constraint protects are measured, so each needs a column: one `-probe` names them
     // all, and the columns are what `-ic` initialises them through. A node already has a column when
@@ -414,14 +637,6 @@ fn constraint_block(cell: &AnalysedCell, group: &Group, c: &Constraint, arc_type
 
     let mut s = String::from("define_arc \\\n");
     s.push_str(&format!("\t-type {arc_type} \\\n"));
-    s.push_str(&format!(
-        "\t-prevector_pinlist {{{}}} \\\n",
-        cell.inputs.join(" ")
-    ));
-    s.push_str(&format!(
-        "\t-prevector {{{}}} \\\n",
-        prevector_str(cell, &c.prevector)
-    ));
     s.push_str(&format!(
         "\t-pinlist {{{}}} \\\n",
         arc_pinlist_str(cell, &listed)
@@ -515,15 +730,13 @@ fn related_edge(arc: &Arc) -> Edge {
 
 /// One transition `define_arc`. `with_when` selects which of the two passes in [`cell_arcs_tcl`] the
 /// block belongs to: the conditioned one, carrying the arc's `-when`, or the general one. Either way the
-/// block renders THIS arc's own concrete `-prevector` and `-vector`: `-vector` is the stimulus Liberate
-/// drives and `X` is legal only in the unmonitored-output columns (see [`vector_str`]), so a general
-/// block's generality lives in the ABSENCE of the `-when` line, not in a relaxed vector.
+/// block renders THIS arc's own concrete `-ic` and `-vector`: `-vector` is the stimulus Liberate drives
+/// and `X` is legal only in the unmonitored-output columns (see [`vector_str`]), so a general block's
+/// generality lives in the ABSENCE of the `-when` line, not in a relaxed vector.
 fn format_arc(cell: &AnalysedCell, group: &Group, arc: &Arc, with_when: bool) -> String {
-    let type_line = format!("\t-type {} \\\n", ArcIdentity::of(cell, arc).type_token());
-    let prevector_pinlist = format!("\t-prevector_pinlist {{{}}} \\\n", cell.inputs.join(" "));
-    let prevector = format!(
-        "\t-prevector {{{}}} \\\n",
-        prevector_str(cell, &arc.prevector)
+    let type_line = format!(
+        "\t-type {} \\\n",
+        ArcIdentity::of(cell, arc).arc_type().token()
     );
     let pinlist = format!(
         "\t-pinlist {{{}}} \\\n",
@@ -556,19 +769,7 @@ fn format_arc(cell: &AnalysedCell, group: &Group, arc: &Arc, with_when: bool) ->
     let name = format!("\t{}\n", name_block(&group.names));
 
     let mut s = String::from("define_arc \\\n");
-    match arc.edge {
-        // Rise: -type, then prevector. Fall: prevector, then -type.
-        Edge::Rise => {
-            s.push_str(&type_line);
-            s.push_str(&prevector_pinlist);
-            s.push_str(&prevector);
-        }
-        Edge::Fall => {
-            s.push_str(&prevector_pinlist);
-            s.push_str(&prevector);
-            s.push_str(&type_line);
-        }
-    }
+    s.push_str(&type_line);
     s.push_str(&pinlist);
     s.push_str(&ic);
     s.push_str(&vector);
@@ -631,22 +832,14 @@ fn hidden_vector_str(cell: &AnalysedCell, h: &HiddenArc) -> String {
 /// arcs there is no `-related_pin`, and `-type hidden` always leads regardless of edge direction.
 /// `with_when` selects which of the two passes in [`cell_arcs_tcl`] the block belongs to: the
 /// conditioned one, carrying the arc's `-when`, or the general one, which keeps its own concrete
-/// `-prevector` and `-vector` and generalises solely by omitting the `-when` line.
+/// `-ic` and `-vector` and generalises solely by omitting the `-when` line.
 fn format_hidden_arc(cell: &AnalysedCell, group: &Group, h: &HiddenArc, with_when: bool) -> String {
     let vec = hidden_vector_str(cell, h);
 
     let mut s = String::from("define_arc \\\n");
     s.push_str(&format!(
         "\t-type {} \\\n",
-        ArcIdentity::of_hidden(h).type_token()
-    ));
-    s.push_str(&format!(
-        "\t-prevector_pinlist {{{}}} \\\n",
-        cell.inputs.join(" ")
-    ));
-    s.push_str(&format!(
-        "\t-prevector {{{}}} \\\n",
-        prevector_str(cell, &h.prevector)
+        ArcIdentity::of_hidden(h).arc_type().token()
     ));
     s.push_str(&format!(
         "\t-pinlist {{{}}} \\\n",
@@ -946,12 +1139,11 @@ fn is_one_brace_group(value: &str) -> bool {
 
 /// The `-ic` initial condition over [`arc_pinlist_str`] order: each column's starting voltage, written
 /// as the cell's `logic_low`/`logic_high` expression for the level it starts at (through
-/// [`ic_column`]). Inputs start where the
-/// prevector leaves them (its last step); outputs and exposed nodes start at the levels measured at the
-/// arc's start state. A block measuring a transition runs on a prepark deck, which parks the cell
-/// afresh rather than carrying the `-prevector` simulation's settled values forward, so this is what
-/// actually establishes a state-holding cell's start condition — and the exposed columns are the reason
-/// it can establish an internal one at all, an internal node having no pin to drive it through. Every block kind renders every column, the constraint block included,
+/// [`ic_column`]). Inputs start where the walk
+/// leaves them (its last step); outputs and exposed nodes start at the levels measured at the arc's
+/// start state. No `define_arc` renders that walk, so `-ic` is the whole of what establishes a
+/// state-holding cell's start condition — and the exposed columns are the reason it can establish an
+/// internal one at all, an internal node having no pin to drive it through. Every block kind renders every column, the constraint block included,
 /// where `-vector` states no behaviour but the start level is real all the same. Rendered through the
 /// same [`vector`] helper as `-pinlist` and `-vector`, so the three lines' columns line up by
 /// construction.
@@ -1071,21 +1263,36 @@ fn hidden_when_str(h: &HiddenArc) -> Option<String> {
     Some(crate::logic::literal_product(&lits))
 }
 
-/// One `define_leakage` block for a static leakage state. The `-prevector` drives the cell into the
-/// state — priming the internal nodes, which is what distinguishes two rest states sharing an input
-/// assignment — and the `-vector` then holds every pin at the level it rests at. The pins are the cell's
-/// own, inputs then outputs ([`pinlist_str`]): an exposed internal is no pin of the cell and the
-/// prevector has already put it where it belongs, so it takes no column here.
+/// One `define_leakage` block for a static leakage state, in one of two forms.
 ///
-/// Every block carries its walk, whole, including the walk-free state whose single step only restates
-/// where the cell already is: a block that leans on the levels alone draws a Liberate warning about user
-/// arcs, and carrying the prevector silences it. The redundancy is the point. Its last step is the state
-/// itself — `Explored::path_to` ends its chain there — which is also what Liberate requires of a
-/// prevector, that it end at the vector's value.
+/// A state the cell must be WALKED into runs the walk: the `-prevector` primes the internal nodes,
+/// which is what distinguishes two rest states sharing an input assignment, and the `-when` names the
+/// condition the cell rests at. The walk is rendered whole, its last step being the state itself.
+///
+/// A state the INPUTS drive the cell into on their own is the bare condition: `define_leakage -when
+/// "…" { … }`. There is nothing to prime, so there is nothing to run, and the condition alone states
+/// it. Its walk is a single step — `Explored::path_to` seeds the chain with the state itself — which
+/// is the state that condition already names.
+///
+/// Two bare blocks cannot collide, which is why leakage needs no equivalent of [`Blocks::state`]:
+/// walk-free means the inputs alone drive the cell into the state, so the inputs determine it, and two
+/// states resting under one `-when` cannot differ.
 fn format_leakage(cell: &AnalysedCell, l: &LeakageState) -> String {
     let mut lits: Vec<(Symbol, bool)> = assignment(&l.inputs).into_iter().collect();
     lits.extend(l.outputs.iter().cloned());
     lits.sort();
+    let when = literal_product(&lits);
+
+    // A state the inputs drive the cell into on their own needs no priming, and with nothing to prime
+    // there is nothing to run: the condition alone states it, and the block is that one line. Its walk
+    // is a single step — `Explored::path_to` seeds the chain with the state itself — which is the state
+    // the condition already names.
+    if l.prevector.len() <= 1 {
+        return format!(
+            "define_leakage -when \"{when}\" {}\n\n",
+            name_block(&cell.name)
+        );
+    }
 
     let mut s = String::from("define_leakage \\\n");
     s.push_str(&format!(
@@ -1096,38 +1303,10 @@ fn format_leakage(cell: &AnalysedCell, l: &LeakageState) -> String {
         "\t-prevector {{{}}} \\\n",
         prevector_str(cell, &l.prevector)
     ));
-    s.push_str(&format!("\t-pinlist {{{}}} \\\n", pinlist_str(cell)));
-    s.push_str(&format!(
-        "\t-vector {{{}}} \\\n",
-        leakage_vector_str(cell, l)
-    ));
-    s.push_str(&format!("\t-when \"{}\" \\\n", literal_product(&lits)));
+    s.push_str(&format!("\t-when \"{when}\" \\\n"));
     s.push_str(&format!("\t{}\n", name_block(&cell.name)));
     s.push('\n');
     s
-}
-
-/// The leakage `-vector` over [`pinlist_str`] order: every input and output at the constant level it
-/// holds in this rest state. A leakage state is static, so no column ever carries an edge.
-fn leakage_vector_str(cell: &AnalysedCell, l: &LeakageState) -> String {
-    let inputs = assignment(&l.inputs);
-    let outputs: BTreeMap<&str, bool> = l.outputs.iter().map(|(s, b)| (s.as_str(), *b)).collect();
-    let level = |v: bool| if v { "1" } else { "0" };
-
-    let mut parts = Vec::with_capacity(cell.inputs.len() + cell.outputs.len());
-    for input in &cell.inputs {
-        let v = *inputs
-            .get(input)
-            .expect("every input is assigned in a leakage state");
-        parts.push(level(v));
-    }
-    for output in &cell.outputs {
-        let v = *outputs
-            .get(output.name.as_str())
-            .expect("every output is defined at a fully-initialised leakage state");
-        parts.push(level(v));
-    }
-    parts.join(" ")
 }
 
 #[cfg(test)]
@@ -1155,7 +1334,6 @@ Q = "A*B + Q*(A+B)"
         assert!(tcl.contains("-related_pin A"));
         assert!(tcl.contains("-related_pin B"));
         assert!(tcl.contains("-pin Q"));
-        assert!(tcl.contains("-prevector_pinlist {A B}"));
         assert!(tcl.contains("-pinlist {A B Q}"));
         assert!(tcl.contains("{ C2 }"));
         // every transition block is balanced and combinational here
@@ -2442,9 +2620,9 @@ Q = "CLK*M + !CLK*Q"
     #[test]
     fn state_holding_blocks_carry_a_pinlist_aligned_ic() {
         // Every block a state-holding cell emits states its start condition: one voltage per `-pinlist`
-        // pin, in the same column order. The input columns are read back against the prevector's last
-        // step — the state the cell is in when the measured vector begins — which is what pins the
-        // alignment rather than merely the count.
+        // pin, in the same column order. The input columns are read back against the `-vector` — a held
+        // column's level outright, a switching one's the level its edge starts from — which is what pins
+        // the alignment rather than merely the count.
         let cell = analyse(IC_DFF);
         assert!(cell.state_holding);
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
@@ -2456,18 +2634,22 @@ Q = "CLK*M + !CLK*Q"
             let ic = ic_values(&block)
                 .unwrap_or_else(|| panic!("a state-holding cell's block carries an -ic:\n{block}"));
             assert_eq!(ic.len(), pins.len(), "one -ic entry per pin:\n{block}");
-            let last = braced(&block, "-prevector")
-                .expect("every block renders a -prevector")
-                .split_whitespace()
-                .last()
-                .expect("a prevector has at least one step")
-                .to_owned();
-            assert_eq!(last.len(), cell.inputs.len());
-            for (i, step) in last.chars().enumerate() {
+            // Each input's `-ic` is the level it STARTS the vector at, which the vector itself states:
+            // a held input shows that level outright, and a switching one shows the edge it makes, so
+            // it starts at the level the edge leaves.
+            let vector = vector_values(&block);
+            for (i, _) in cell.inputs.iter().enumerate() {
+                let starts_high = match vector[i] {
+                    "1" => true,
+                    "0" => false,
+                    "R" => false,
+                    "F" => true,
+                    other => panic!("an input column is a level or an edge, got {other}:\n{block}"),
+                };
                 assert_eq!(
                     ic[i],
-                    voltage(step == '1'),
-                    "{} starts where the prevector leaves it:\n{block}",
+                    voltage(starts_high),
+                    "{} starts where its vector column begins:\n{block}",
                     pins[i]
                 );
             }
@@ -2846,7 +3028,10 @@ Y = "!W"
             ic_values(&block).expect("a state-holding cell's block carries an -ic"),
             ["$VDD", "0", "$VDD", "0"],
         );
-        assert!(block.contains("-prevector {00 10}"));
+        assert!(
+            !block.contains("-prevector"),
+            "an arc states its start condition through -ic alone:\n{block}"
+        );
     }
 
     #[test]
@@ -2923,7 +3108,7 @@ Y = "!W"
         let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
         eprintln!("{tcl}");
         for c in &arc.constraints {
-            let rendered = format_constraint(arc, &whole_for(arc, c), c);
+            let rendered = format_constraint(arc, &whole_for(arc, c), c).concat();
             assert!(
                 tcl.contains(&rendered),
                 "the emitted Tcl carries this constraint's blocks:\n{rendered}"
@@ -3700,7 +3885,6 @@ Qb = "!Qa * B"
         assert!(!tcl.contains("-related_pin Qb"));
         assert!(tcl.contains("-related_pin A"));
         assert!(tcl.contains("-related_pin B"));
-        assert!(tcl.contains("-prevector_pinlist {A B}"));
         assert!(tcl.contains("-pinlist {A B Qa Qb}"));
     }
 
@@ -3722,9 +3906,9 @@ Q = "A*B + Q*(A+B)"
         assert!(tcl.contains("-when \"A*B*Q\""));
         assert!(tcl.contains("-when \"!A*!B*!Q\""));
 
-        // The pair that shares an input assignment and differs only in what the cell holds: same
-        // -pinlist, opposite Q column, and a prevector walking in from the forcing input that set Q.
-        // Each walk ends at the rest state, as Liberate requires of a prevector.
+        // The pair that shares an input assignment and differs only in what the cell holds: the
+        // prevector walks in from the forcing input that set Q, which is the only thing telling the
+        // two apart, and the -when carries the level each rests at.
         let block = |needle: &str| {
             tcl.split("define_leakage")
                 .find(|b| b.contains(needle))
@@ -3732,25 +3916,20 @@ Q = "A*B + Q*(A+B)"
         };
         let high = block("-when \"A*!B*Q\"");
         let low = block("-when \"A*!B*!Q\"");
-        assert!(high.contains("-pinlist {A B Q}") && low.contains("-pinlist {A B Q}"));
-        assert!(high.contains("-vector {1 0 1}"), "held high: {high}");
-        assert!(low.contains("-vector {1 0 0}"), "held low: {low}");
         assert!(high.contains("-prevector {11 10}"), "held high: {high}");
         assert!(low.contains("-prevector {00 10}"), "held low: {low}");
 
-        // A forcing input drives the cell into its state on its own, so its walk is the single step it
-        // rests at — carried all the same, since a block leaning on the levels alone draws a Liberate
-        // warning about user arcs.
-        for (needle, step) in [("-when \"A*B*Q\"", "11"), ("-when \"!A*!B*!Q\"", "00")] {
-            let forced = block(needle);
+        // A forcing input drives the cell into its state on its own: nothing to prime, so no run at
+        // all and the condition alone states the block.
+        for needle in ["A*B*Q", "!A*!B*!Q"] {
             assert!(
-                forced.contains(&format!("-prevector {{{step}}} \\")),
-                "a forced rest state carries its own step: {forced}"
+                tcl.contains(&format!("define_leakage -when \"{needle}\" {{ C2 }}")),
+                "a forced rest state is its condition alone:\n{tcl}"
             );
         }
 
-        // Liberate requires a prevector to END at the vector's value, so every rendered walk's last
-        // step is the rest state's own input assignment — the two inputs of the {A B Q} vector.
+        // Every rendered walk ends at the state it names: its last step is that rest state's own
+        // input assignment, which the block's -when spells out literal by literal.
         let field = |b: &str, tag: &str| -> String {
             b.lines()
                 .find(|l| l.trim_start().starts_with(tag))
@@ -3769,12 +3948,22 @@ Q = "A*B + Q*(A+B)"
                 .last()
                 .expect("a rendered prevector has a step")
                 .to_string();
-            let inputs: String = field(b, "-vector ")
-                .split_whitespace()
-                .take(2)
-                .collect::<Vec<_>>()
-                .concat();
-            assert_eq!(last, inputs, "the walk ends at the vector's value: {b}");
+            let when = b
+                .lines()
+                .find(|l| l.trim_start().starts_with("-when"))
+                .and_then(|l| l.split('"').nth(1))
+                .unwrap_or_else(|| panic!("block renders a -when: {b}"));
+            let inputs: String = ["A", "B"]
+                .iter()
+                .map(|p| {
+                    if when.contains(&format!("!{p}")) {
+                        '0'
+                    } else {
+                        '1'
+                    }
+                })
+                .collect();
+            assert_eq!(last, inputs, "the walk ends at the state it names: {b}");
         }
     }
 
@@ -3791,18 +3980,19 @@ Y = "A*B"
         );
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
-        // A combinational cell holds nothing, so its rest states are just the input square, each walk
-        // the single step it rests at. Every block still carries one.
+        // A combinational cell holds nothing, so its rest states are just the input square and the
+        // inputs drive it into each of them: nothing to prime, nothing to run, and the condition alone
+        // states the block.
         assert_eq!(tcl.matches("define_leakage").count(), 4);
-        assert!(tcl.contains("-when \"A*B*Y\""));
-        assert!(tcl.contains("-when \"!A*!B*!Y\""));
-        assert!(tcl.contains("-prevector {11} \\\n\t-pinlist {A B Y} \\\n\t-vector {1 1 1} \\"));
-        assert!(tcl.contains("-prevector {00} \\\n\t-pinlist {A B Y} \\\n\t-vector {0 0 0} \\"));
+        assert!(tcl.contains("define_leakage -when \"A*B*Y\" { AND2 }"));
+        assert!(tcl.contains("define_leakage -when \"!A*!B*!Y\" { AND2 }"));
         for block in tcl.split("define_leakage").skip(1) {
+            // The whole block, to the blank line that ends it — truncating at the first newline would
+            // cut a walked block's `define_leakage \` header off and assert against nothing.
             let block = block.split("\n\n").next().unwrap_or(block);
             assert!(
-                block.contains("-prevector "),
-                "every leakage block carries its walk: {block}"
+                !block.contains("-prevector"),
+                "no walk-free rest state runs a prevector: {block}"
             );
         }
     }
@@ -3875,7 +4065,7 @@ Q = "A*B + Q*(A+B)"
         assert!(!tcl.contains("{ C2A }"));
         assert!(!tcl.contains("{ C2B }"));
         // A leakage block fans the names into the same single trailer an arc block does.
-        assert!(tcl.contains("-when \"A*B*Q\" \\\n\t{ C2A C2B }"));
+        assert!(tcl.contains("define_leakage -when \"A*B*Q\" { C2A C2B }"));
         // Same arc count regardless of how many names the cell carries — one arc per transition, a
         // single trailer names both.
         assert_eq!(
@@ -4214,5 +4404,80 @@ Q = "CLK*M + !CLK*Q"
             assert!(tcl.contains("-pin Q"));
         }
         assert_eq!(shaped_blocks(&tcl_direct), shaped_blocks(&tcl_via_flag));
+    }
+
+    #[test]
+    fn a_masked_arc_is_reported_with_the_state_no_column_carries() {
+        // Two clocks over one unexposed master latch: a D toggle settles at M=0 and at M=1 leaving every
+        // output where it was, so both firings render the same hidden block — `-ic` and `-vector` reach
+        // only the pins, and M is not among them. One block comes out; the other is reported, naming the
+        // state that would have told them apart.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "MCDFF"
+inputs = ["CLKA", "CLKB", "D"]
+clock = ["CLKA", "CLKB"]
+when = "hidden"
+[cell.internal]
+M = "!CLKA*D + CLKA*M"
+[cell.outputs]
+Q = "CLKB*M + !CLKB*Q"
+"#,
+        );
+        let rendered = cell_arcs(&cell, ArcsTclOptions::default());
+        assert!(
+            !rendered.masked.is_empty(),
+            "the fixture masks arcs:\n{}",
+            rendered.tcl
+        );
+        for m in &rendered.masked {
+            assert_eq!(
+                m.arc_type,
+                ArcType::Hidden,
+                "a masked toggle carries the hidden -type: {m:?}"
+            );
+            assert!(
+                matches!(m.kind, MaskedKind::Toggle { .. }),
+                "a toggle no output follows: {m:?}"
+            );
+            assert!(
+                m.arc_str().starts_with("hidden "),
+                "it reads as its kind and edge: {}",
+                m.arc_str()
+            );
+            assert!(
+                m.states.len() > 1,
+                "only a block covering several states is reported: {m:?}"
+            );
+            // The report is read by comparing the states: each fixes M, and they are distinct — that
+            // difference IS the node to expose.
+            let distinct: HashSet<&Minterm<Symbol>> = m.states.iter().collect();
+            assert_eq!(
+                distinct.len(),
+                m.states.len(),
+                "the states a block conflates are distinct: {m:?}"
+            );
+            for s in &m.states {
+                assert!(
+                    s.value_of("M").is_some(),
+                    "each state fixes the node no column carries: {m:?}"
+                );
+            }
+        }
+
+        // What did come out states each block once.
+        let blocks: Vec<&str> = rendered
+            .tcl
+            .split("\n\n")
+            .filter(|b| b.trim_start().starts_with("define_arc"))
+            .collect();
+        let distinct: HashSet<&&str> = blocks.iter().collect();
+        assert_eq!(
+            blocks.len(),
+            distinct.len(),
+            "a cell states each block once:\n{}",
+            rendered.tcl
+        );
     }
 }

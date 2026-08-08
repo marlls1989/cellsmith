@@ -65,6 +65,8 @@ pub fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> Vec<LeakageState> 
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use espresso_logic::Symbol;
 
     use crate::model::analyse_one as analyse;
@@ -198,6 +200,47 @@ Q = "CLK*M + !CLK*Q"
                 "inputs are fully fixed at a rest state: {l:?}"
             );
         }
+    }
+
+    #[test]
+    fn rest_states_sharing_a_condition_keep_their_own_walks() {
+        // A dual-clock synchroniser rests in states that differ only in latch levels its leakage block
+        // does not name, so several states share one `-when`. The block still tells them apart, through
+        // the walk that primes those latches, so each is its own measurement — what collapses is only a
+        // state the block would render identically.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "SYNC"
+inputs = ["CLKA", "CLKB", "D"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+a1 = "!CLKA*D + CLKA*a1"
+a2 = "CLKA*a1 + !CLKA*a2"
+b1 = "!CLKB*a2 + CLKB*b1"
+[cell.outputs]
+Q = "CLKB*b1 + !CLKB*Q"
+"#,
+        );
+        let mut per_when: BTreeMap<String, usize> = BTreeMap::new();
+        let mut stated: BTreeMap<String, ()> = BTreeMap::new();
+        for l in &cell.leakage {
+            let when = format!("{:?}|{:?}", l.inputs, l.outputs);
+            *per_when.entry(when.clone()).or_default() += 1;
+            // A walked block renders its walk, so the condition and the walk together are what it
+            // states. A walk-free one renders the condition alone and could only collide with another
+            // walk-free state under the same `-when` — which cannot happen, since walk-free means the
+            // inputs alone drive the cell there and so determine the state.
+            let block = format!("{when}|{:?}", l.prevector);
+            assert!(
+                stated.insert(block.clone(), ()).is_none(),
+                "no two leakage states share a condition and a walk, got {block} twice",
+            );
+        }
+        assert!(
+            per_when.values().any(|&n| n > 1),
+            "the fixture rests in several states under one condition, got {per_when:?}",
+        );
     }
 
     #[test]

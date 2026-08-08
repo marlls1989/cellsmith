@@ -1,5 +1,5 @@
 //! cellsmith CLI: read a minimal multi-cell TOML spec and emit, for every cell, the Liberate arcs
-//! (`define_arc` + prevectors), the structural Liberate `define_cell` blocks (`cells.tcl`), a
+//! (`define_arc`), the structural Liberate `define_cell` blocks (`cells.tcl`), a
 //! behavioural Verilog model (sequential UDP + wrapper), and a minimal Liberty fragment (`statetable`
 //! for hysteretic outputs, plain `function` for combinational ones).
 
@@ -12,14 +12,14 @@ use std::path::{Path, PathBuf};
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, Parser};
 use rayon::prelude::*;
 
-use cellsmith::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
+use cellsmith::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, CellArcs};
 use cellsmith::emit::define_cell::cell_define_cell;
 use cellsmith::emit::liberty::library_liberty;
 use cellsmith::emit::verilog::cell_verilog;
 use cellsmith::logic::machine::{ExplorationBudget, ExplorationLimit};
 use cellsmith::model::{parse_spec, AnalysedCell, ArcClass, ArcClasses};
 
-/// Generate Cadence Liberate transition arcs (with prevectors), a behavioural Verilog model and a
+/// Generate Cadence Liberate transition arcs, a behavioural Verilog model and a
 /// Liberty fragment for logic cells, including state-holding/hysteretic cells.
 #[derive(Parser)]
 #[command(name = "cellsmith", version, about, long_about = None)]
@@ -223,15 +223,23 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         std::process::exit(1);
     }
 
+    // Rendered before the diagnostics, because one of them reports what the rendering could not say.
+    let arc_opts = ArcsTclOptions {
+        emit_internal: !cli.no_internal,
+        emit_leakage: !cli.no_leakage,
+    };
+    let rendered: Vec<CellArcs> = cells.par_iter().map(|c| cell_arcs(c, arc_opts)).collect();
+
+    // Each warning is one contiguous block of lines (a header plus its indented detail fields);
+    // distinct warnings are separated by a single blank line when printed, so a block reads as a unit.
+    let mut warnings: Vec<String> = Vec::new();
+
     // Diagnose detected oscillation hazards: a periodic, non-settling cycle rather than a fixpoint,
     // naming the nodes (outputs or internals) that oscillate — the user should know, as this is never
     // expressed as deterministic timing.
-    // Each warning is one contiguous block of lines (a header plus its indented detail fields);
-    // distinct warnings are separated by a single blank line when printed, so a block reads as a unit.
-    // Both hazard loops read the ARC VIEW, the same analysis `cell_arcs_tcl` renders: it is that view's
+    // Both hazard loops read the ARC VIEW, the same analysis `cell_arcs` renders: it is that view's
     // hazards the emitted constraint arcs come from, so reporting the other view's would describe arcs
     // the run never wrote.
-    let mut warnings: Vec<String> = Vec::new();
     for c in &cells {
         for a in &c.arc_view().oscillation {
             // The condition leads the sub-block as `when` (as in the race warning). How the machine
@@ -289,6 +297,30 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         }
     }
 
+    // Diagnose the arcs no block could state: every arc should express the cell state it measures
+    // from, and `-ic` and `-vector` reach exactly the `-pinlist`, so a firing that differs only in an
+    // internal node with no column renders a block already emitted. Exposing those nodes is the remedy,
+    // which is why the warning names the state as well as the arc.
+    for (c, r) in cells.iter().zip(&rendered) {
+        if r.masked.is_empty() {
+            continue;
+        }
+        let mut lines = vec![format!(
+            "cellsmith: warning: cell {:?}: {} block(s) conflate {} arcs: too few nodes exposed for -ic to express the cell state",
+            c.repr_name(),
+            r.masked.len(),
+            r.masked.iter().map(|m| m.states.len()).sum::<usize>(),
+        )];
+        for m in &r.masked {
+            // Every state the block covers, as equals — it expresses none of them, and which firing
+            // reached the emitter first is nothing to report. What differs across them wants exposing.
+            let mut fields = vec![("arc", m.arc_str())];
+            fields.extend(m.state_strs().into_iter().map(|s| ("cell state", s)));
+            lines.extend(subblock(&fields));
+        }
+        warnings.push(lines.join("\n"));
+    }
+
     if !warnings.is_empty() {
         eprintln!("{}", warnings.join("\n\n"));
     }
@@ -297,12 +329,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     // order-dependence warnings above, so the constraint arcs are emitted (below, gated by the
     // per-cell opt-in) without a separate diagnostic.
 
-    let arc_opts = ArcsTclOptions {
-        emit_internal: !cli.no_internal,
-        emit_leakage: !cli.no_leakage,
-    };
     let base = cli.name.unwrap_or_else(|| base_name(&cli.spec));
-    let arcs = render(&cells, |c| cell_arcs_tcl(c, arc_opts));
+    let arcs: String = rendered.iter().map(|r| r.tcl.as_str()).collect();
     let verilog = render(&cells, cell_verilog);
     let liberty = library_liberty(&base, &cells);
     let cells_tcl = render(&cells, cell_define_cell);
