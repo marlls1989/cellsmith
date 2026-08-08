@@ -1,34 +1,38 @@
 # Hazard detection and constraint generation
 
-How cellsmith detects the two hazards of a state-holding cell — the **order-dependent hazard** and the
-**oscillation hazard** — and, from each detected hazard, **generates** the timing constraint (setup/hold
-or non-sequential) that avoids it. Detection and generation are two separate stages: detection names the
-risky situation; generation quantifies the timing separation that removes it. Both run on the same
-reachable-state machine that drives arc discovery.
+How cellsmith detects the three hazards of a state-holding cell — the **order-dependent hazard**, the
+**oscillation hazard** and the **width-dependent hazard** — and, from each detected hazard, **generates**
+the timing constraint (setup/hold, non-sequential, or minimum pulse width) that avoids it. Detection and
+generation are two separate stages: detection names the risky situation; generation quantifies the timing
+that removes it. Both run on the same reachable-state machine that drives arc discovery.
 
 This is a companion to `state-machine-arc-engine.md`, which covers the model, the next-state functions δ,
 settling, and the reachability exploration; everything here builds on those. The functional state-table
 view of the same signals is documented separately in `state-table-regions.md`.
 
-## 1. Two hazards and one remedy
+## 1. Three hazards and one remedy
 
-A **delay arc** records that a single input edge causes an output edge. A hazard instead involves *two*
-inputs changing too close together. When two signals switch simultaneously — or close enough in time —
-they can drive the cell into **metastability**: an unresolved condition the cell cannot leave cleanly.
-Detection finds the situations where that risk is real, and the risk takes two shapes:
+A **delay arc** records that a single input edge causes an output edge. A hazard instead involves *two
+edges* landing too close together — one edge on each of two inputs, or the two edges a single input makes
+on its own. Edges that land close enough in time can drive the cell into **metastability**: an unresolved
+condition the cell cannot leave cleanly. Detection finds the situations where that risk is real, and the
+risk takes three shapes:
 
-- **Order-dependent hazard** — the settled state depends on *which* of the two edges lands first. The
-  machine is **non-confluent** at that state for that pair.
+- **Order-dependent hazard** — the settled state depends on *which* of two different inputs' edges lands
+  first. The machine is **non-confluent** at that state for that pair.
 - **Oscillation hazard** — the two edges landing *at once* drive the state into a **periodic cycle** that
   never settles.
+- **Width-dependent hazard** — the settled state depends on how far apart two edges of the *same* input
+  are: a **pulse** (§6) too narrow to carry the cell through settles it somewhere a wider pulse does not.
 
-**Metastability is the shared physical risk of both** — the reason a remedy is needed — not a third
+**Metastability is the shared physical risk of all three** — the reason a remedy is needed — not a fourth
 hazard and not another name for oscillation.
 
 A **constraint** is that remedy. It is **generated from** a detected hazard; it is never itself a hazard
-and never itself detected. It states the timing separation the two inputs need so the risky situation
-cannot arise — directed *setup/hold* if the pair contains a declared clock, symmetric *non-sequential*
-otherwise (§6). Detection names the situation; the constraint quantifies the separation that removes it.
+and never itself detected. It states the timing the risky situation cannot arise under — for two inputs,
+the separation between their edges, directed *setup/hold* if the pair contains a declared clock and
+symmetric *non-sequential* otherwise; for one input's pulse, the *minimum pulse width* its two edges must
+stand apart by (§7). Detection names the situation; the constraint quantifies the timing that removes it.
 
 Two things are deliberately **not** hazards:
 
@@ -37,8 +41,8 @@ Two things are deliberately **not** hazards:
   seeds traversal only: nothing is concluded from it, so no probe starts there (§2).
 - **Ordinary order-dependence of an arbiter's grants** is its *function*, not its fault: a mutual-exclusion
   element is supposed to grant whichever request arrived first. Its hazard is the oscillation when the
-  requests tie — which is why the two hazards must be told apart rather than lumped together as "the
-  results differ".
+  requests tie — which is why order dependence and oscillation must be told apart rather than lumped
+  together as "the results differ".
 
 ## 2. Everything starts from the reachable states
 
@@ -90,11 +94,14 @@ classify as:
 
 | Observation | Meaning | Detected hazard → generated constraint |
 |---|---|---|
-| the simultaneous settle returns a cycle | the pair tied and the state oscillates | **oscillation hazard** → its pair's constraint generated (§6) |
+| the simultaneous settle returns a cycle | the pair tied and the state oscillates | **oscillation hazard** → its pair's constraint generated (§7) |
 | a lone toggle never settles | even one toggle is degenerate | **oscillation hazard** (no competing orders, no pair recorded) |
 | the two order outcomes agree | confluent — order does not matter here | nothing |
-| the two order outcomes diverge, and the divergence *interacts* (§4) | order matters at this pair | **order-dependent hazard** → constraint generated (§6) |
+| the two order outcomes diverge, and the divergence *interacts* (§4) | order matters at this pair | **order-dependent hazard** → constraint generated (§7) |
 | the two order outcomes diverge, latch-mediated only (§4) | divergence real but design-tolerated | nothing |
+
+These probes relate two inputs to each other. The width-dependent hazard relates one input to itself, and
+is probed by pulsing that input rather than by toggling a pair — §6 has those probes.
 
 ## 4. The order-dependent hazard
 
@@ -161,7 +168,7 @@ which is where the metastability risk arises. From the cycle the report is assem
 
 A bare oscillation record cannot by itself name the pins, edges and prevector its constraint needs, so
 detection **records the racing pair with the hazard** — the two pins, their edges, and the path to the
-probed state — one per pair-probe that oscillated. That record is what the constraining stage (§6) turns
+probed state — one per pair-probe that oscillated. That record is what the constraining stage (§7) turns
 into a constraint, and it is why an arbiter's constraint originates here rather than from its (filtered)
 divergence. A degenerate oscillation from a lone toggle has no competing orders, so it records no racing
 pair and yields no pair constraint.
@@ -183,13 +190,96 @@ A C-element, by contrast, never oscillates: it is bistable in its hold region, b
 holding a *settled* value — no probe from a reachable state makes it oscillate. Its A↓ racing B↑ is a
 genuine order-dependent hazard (§4), just not an oscillation.
 
+## 6. The width-dependent hazard
+
+A **pulse** on an input p, applied to a fully-initialised reachable stable state s (§2), is p toggled, the
+cascade that toggle opens left to run some distance, and p toggled back. That distance is the pulse's
+**width**, counted in settling rounds — one round being one evaluation of every δ. Settling the opening
+toggle yields the trace t[0…last]: t[0] is the toggled state itself, t[last] the fixpoint it settles to.
+Closing the pulse at **cut** i means toggling p back at t[i] and settling from there, so cut i is the
+pulse i rounds wide and a wider pulse is a later cut. What the cuts produce are the pulse's **outcomes**:
+the states they settle to, projected onto the nodes at risk.
+
+The **width-dependent hazard** at (s, p) is more than one outcome across those cuts — the settled state
+depends on how far apart two edges of the *same* signal are, where an order-dependent hazard is about
+which of two edges of *different* signals lands first. A clock pulse too narrow to carry a flop's master
+through to its slave, beside one wide enough to, is the shape of it: one pin, two settled states.
+Detection pulses every input at every state §2 admits.
+
+**The zero-width anchor.** Cut 0 is derived rather than probed. Closing there is toggling p back at the
+state the opening toggle produced, and a toggle writes only the named input's column, so the closed state
+is s itself — and s is stable, so the zero-width pulse settles to s. It is a no-op, and s enters the
+outcome set as its member: one cut settling anywhere other than s is therefore already two outcomes, and
+already the hazard.
+
+**Every cut is walked, not the two ends alone.** The narrowest and the widest pulse are the trace's two
+ends; an **interior** cut — one closing while the opening cascade is still in flight — closes onto a state
+neither end reaches, and the outcomes found there take two shapes. One is a close that leaves the cell
+with no rest state at all: a cross-NOR SR pair re-released onto the illegal both-low state rings, and a
+mutex whose request is re-asserted after the first grant has dropped and before the second has been taken
+rings the same way. The other is a partial capture — a cascade of latches on one clock phase where the
+pulse was wide enough for the first stage to take the value and not for the second, settling between the
+outcomes the two ends reach (`TCASC` in `examples/sequentials.toml`: three widths, three outcomes).
+
+**No fixpoint is an outcome.** A cut whose close leaves the machine in a periodic cycle reaches no rest
+state at that width — the cell is left ringing rather than at one of the states the other widths settle
+to. That is carried as the outcome `no fixpoint` alongside the settled ones, and the nodes the cycle moves
+join the nodes the width decides, so a hazard whose only interior cut rings still names what to probe.
+
+Such a cut is **not** also filed as an oscillation hazard (§5). An oscillation's `condition` claims a
+primary-input assignment under which the group oscillates, and a pulse returns p to the assignment it
+started from — which is stable — so that claim would be false of it. The ringing is a property of the
+width, and the width is what the constraint (§7) states.
+
+An **opening** toggle that never settles is a different thing: it is the single-toggle oscillation §5
+already records — the machine never comes to rest for a second edge to be placed against, so there is no
+pulse here to widen. No width hazard is recorded for that pin at that state.
+
+Worked example — the master-slave flop M = !CLK·D + CLK·M (the master, transparent while CLK is low) and
+Q = CLK·M + !CLK·Q (the slave, transparent while CLK is high), notation (CLK D | Q M):
+
+- **CLK↑ from (0 0 | 1 0)**, a state whose slave holds a value its master does not. The opening toggle
+  opens the slave; one round copies M into Q, reaching the fixpoint (1 0 | 0 0). Closing there leaves Q
+  at 0, where the zero-width pulse leaves it at 1. The master holds through both (δ_M = M while CLK is
+  high), so the width decides Q alone.
+- **CLK↓ from (1 0 | 1 1)**, a state whose master holds a value D does not. The opening toggle opens the
+  master; one round takes D into M, reaching (0 0 | 1 0). Closing there re-opens the slave, which then
+  copies the new M into Q — so the wide pulse moves both nodes and the zero-width pulse moves neither,
+  and the width decides {Q, M}.
+
+**The maximal node sets.** One pin's pulse decides different nodes from different states — on a cascade
+whose second stage is gated, a CLK↓ pulse moves the master alone from one state and walks master and
+slave from another — so an observation is identified by the pulsed pin, the pulse's opening edge, and the
+nodes its width decides. Observations are collapsed on that identity: an observation is dropped where
+another of the same pin and edge decides a **strict superset** of its nodes, the maximal sets under
+inclusion standing for the ones they contain. Two sets that nest neither way are both kept. Observations
+over the same nodes are one hazard reached along different walks, and settle on the representative with
+the shortest prevector, ties broken on position in exploration order.
+
+What makes the drop sound is how the hazard is measured. The block a constraint renders (§8) names the
+nodes it protects in Liberate's `-probe`, and Liberate narrows the pulse until the probed behaviour
+fails, so the width a probe set reports is the maximum over the nodes in it. A block probing a strict
+superset therefore asks a strictly stronger question, and the subset's answer sits inside it; a set that
+neither contains nor is contained asks a different question, so both are asked.
+
+What that leaves **open** is whether the width one node requires can itself differ with the start state it
+was characterised from. If it can, a dropped observation's nodes end up measured from the surviving
+observation's state rather than from their own, and the collapse trades that conservatism for a fraction
+of the characterisation cost.
+
+This collapse and §4's combinational-neighbourhood filter are the two places the engine decides what
+*not* to report, and they decide it on different grounds: the filter says a divergence is not the pin
+pair's fault, while here every observation is a real hazard and one measurement is held to answer for
+another.
+
 ## Constraining
 
-## 6. From a detected hazard to a generated constraint
+## 7. From a detected hazard to a generated constraint
 
-The constraining stage is separate from detection. It walks every detected hazard — each **order-dependent
-hazard**, and each racing pair recorded on an **oscillation hazard** — and generates one constraint per
-pair. Every constraint is built the same way, whichever hazard it came from:
+The constraining stage is separate from detection. It walks every detected hazard: each **order-dependent
+hazard** and each racing pair recorded on an **oscillation hazard** gives one constraint per pair, and each
+**width-dependent hazard** gives one single-pin **minimum-pulse-width** constraint (at the end of this
+section). Every pair constraint is built the same way, whichever of the two hazards it came from:
 
 - **Kind is decided solely by the declared clock.** A pair containing exactly one pin declared in the
   cell's clock list is a directed **setup/hold** (related = the clock, constrained = the data pin); any
@@ -221,28 +311,55 @@ setup/hold, unordered for non-sequential, and in both cases the nodes protected 
 **shortest prevector** among the states that exhibit the hazard, with a deterministic tie-break so the
 generated set is reproducible.
 
-## 7. Reporting and emission
+A **minimum-pulse-width** constraint relates one pin to itself, and carries the pulsed pin, the pulse's
+**opening** edge alone — Liberate searches the width, so no closing edge is stated — the nodes the
+hazard's width decides as its protected nodes, and the prevector, probed state and output levels sampled
+just as a pair constraint's are. Two things a pair constraint has to decide are not decisions here:
+
+- **The kind is not one.** A declared clock directs a pair by naming which of its two members is the
+  clock; a pulse has no pair to direct, so the declaration decides nothing and a cell generates the same
+  minimum-pulse-width constraints whether or not the pulsed pin is declared a clock.
+- **There is no second deduplication.** §6's collapse keys on the pulsed pin, the opening edge and the
+  nodes decided, which is exactly the key a constraint would deduplicate on, so the map from detected
+  width-dependent hazard to generated constraint is one to one.
+
+## 8. Reporting and emission
 
 - **stderr.** The detected hazards are reported — the oscillation hazards, the order-dependent hazards
-  (grouped per racing input pair, a pair's conditions joined), and — separately — the constraint generated
-  as each hazard's remedy, named with its kind and every condition under which it fires. Each hazard states the shared metastability risk; an
+  (grouped per racing input pair, a pair's conditions joined), and the width-dependent hazards (the pulsed
+  pin with its opening edge, the nodes the width decides, and the competing outcomes, `no fixpoint` among
+  them where a cut left the cell ringing). A constraint is the remedy for a hazard reported here, so it
+  carries no diagnostic of its own. Each hazard states the shared metastability risk; an
   oscillation is flagged as annotated only, never modelled as deterministic timing, because it is a
   property of the cell the user must know about, not an arc. (The exact wording is fixed elsewhere.)
-- **Constraint arcs.** Off by default; enabled per cell in the spec or globally with a CLI flag. Each
-  generated constraint renders as a *pair* of characterisation arcs — the two sides are characterised
-  separately — a setup and a hold arc for a directed clock↔data constraint, the two non-sequential sides
-  for a symmetric one. The vector toggles the two racing pins along their recorded edges, holds every other
+- **Constraint arcs.** Off by default; enabled per cell in the spec or globally with a CLI flag. A
+  constraint over a pin pair renders as a *pair* of characterisation arcs — the two sides are
+  characterised separately — a setup and a hold arc for a directed clock↔data constraint, the two
+  non-sequential sides for a symmetric one. The vector toggles the two racing pins along their recorded edges, holds every other
   input at its prevector value, and marks all outputs unknown (a constraint arc measures no output
   transition). Each block names the nodes it protects in a single `-probe`, so the characterisation
   measures them rather than inferring the violation from the pins; a protected node with no pin of its
   own — a flop's master latch — is given a column on that block alone, which is what its `-ic` states
   the start level through.
+- **Minimum-pulse-width arcs.** Under the same opt-in, and one `define_arc` of `-type min_pulse_width`
+  rather than a pair: the two members of a setup/hold pair are the two sides of a separation between two
+  pins, and a pulse has one pin. Its `-vector` switches the constrained pin alone, along the pulse's
+  opening edge, with every other input held at the level it takes in the probed state and the internals
+  and outputs marked unknown; `-pin` and `-related_pin` both name that one pin. The nodes it protects go
+  in the same single `-probe`, and `-ic` states the start condition of every column, as on every block of
+  a state-holding cell. Liberate narrows the pulse until the probed nodes stop behaving, and that
+  measurement is what puts the `min_pulse_width_high`/`min_pulse_width_low` groups in Liberate's own
+  output library — cellsmith writes no timing group for them into the `.lib` it emits.
 
-## 8. Guards and invariants
+## 9. Guards and invariants
 
-- Cells with fewer than two inputs, or with no state variables, have no hazards by construction (a hazard
-  relates two inputs; with nothing latched, every input order is confluent); detection returns an empty
-  result at those early-outs before probing anything.
+- A cell with **no state variables** has none of the three hazards: every coordinate is a function of the
+  inputs alone, so every input order is confluent, and returning a pulsed pin to its pre-pulse value
+  returns the whole machine to the state it started from — a pulse can leave no net effect for its width
+  to decide. Detection returns an empty result at that early-out before probing anything.
+- A cell with **fewer than two inputs** has no pair to race, so the pair probes (§3) early out there too.
+  That rule is theirs alone: a width-dependent hazard relates one pin to itself, so the pulse probes (§6)
+  run on a single-input cell like any other.
 - Within a cell that clears those early-outs, the probed population is filtered per state: only a
   fully-initialised reachable stable state is probed from (§2). The filter is applied after the states are
   numbered, so a hazard's `discovered` index — the dedup tie-break — remains its position in exploration

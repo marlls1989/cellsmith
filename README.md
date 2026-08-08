@@ -485,17 +485,20 @@ through settling, and the walk into an arc's start state drives every state vari
 included) to its value there; a state-holding cell's `-ic` line is what carries that start condition
 into the measured vector.
 
-The engine detects two kinds of hazard: an **order-dependent** hazard (non-confluence — the settled
+The engine detects three kinds of hazard: an **order-dependent** hazard (non-confluence — the settled
 state depends on which of a racing input pair's edges lands first; seen on C-elements, DFFs and SR
-latches) and an **oscillation** hazard (a bistable condition where the machine picks a settled state
-non-deterministically instead of converging on one, as in a mutex/arbiter). From a detected hazard,
-cellsmith can **generate** a timing constraint (setup/hold for a pair holding a declared clock,
-otherwise a symmetric `non_seq`) to avoid it, gated by the `--constraints` flag or a cell's
-`constraint_arcs = true`. cellsmith emits four kinds of per-cell stderr diagnostic: the oscillation 
-hazards, the order-dependent hazards (grouped per racing input pair, a pair's conditions joined), 
-the constraints generated to avoid them, and the arcs whose blocks conflate several cell states — 
-firings a block cannot tell apart because the state that separates them has no column, which naming 
-those nodes in `expose` would fix.
+latches), an **oscillation** hazard (a bistable condition where the machine picks a settled state
+non-deterministically instead of converging on one, as in a mutex/arbiter), and a **width-dependent**
+hazard (the settled state depends on how far apart the two edges of one input's *pulse* are — a clock
+pulse too narrow to carry a flop's master through to its slave settles the flop somewhere a wider pulse
+does not). From a detected hazard, cellsmith can **generate** a timing constraint to avoid it — setup/hold
+for a pair holding a declared clock, a symmetric `non_seq` for any other pair, and a single-pin
+`min_pulse_width` for a pulse — gated by the `--constraints` flag or a cell's `constraint_arcs = true`.
+cellsmith emits four kinds of per-cell stderr diagnostic: the oscillation hazards, the order-dependent
+hazards (grouped per racing input pair, a pair's conditions joined), the width-dependent hazards (the
+pulsed pin and its opening edge, the nodes the width decides, and the competing outcomes), and the arcs
+whose blocks conflate several cell states — firings a block cannot tell apart because the state that
+separates them has no column, which naming those nodes in `expose` would fix.
 
 Each emitted constraint arc names the nodes it protects — the state variables whose settled value the
 hazard puts at risk — in a single `-probe`, so Liberate measures the node the constraint is about. A
