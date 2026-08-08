@@ -304,15 +304,17 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             continue;
         }
         let mut lines = vec![format!(
-            "cellsmith: warning: cell {:?}: {} arc(s) masked: too few nodes exposed for -ic to express the cell state",
+            "cellsmith: warning: cell {:?}: {} block(s) conflate {} arcs: too few nodes exposed for -ic to express the cell state",
             c.repr_name(),
             r.masked.len(),
+            r.masked.iter().map(|m| m.states.len()).sum::<usize>(),
         )];
         for m in &r.masked {
-            lines.extend(subblock(&[
-                ("arc", m.arc.clone()),
-                ("cell state", m.state.clone()),
-            ]));
+            // Every state the block covers, as equals — it expresses none of them, and which firing
+            // reached the emitter first is nothing to report. What differs across them wants exposing.
+            let mut fields = vec![("arc", m.arc.clone())];
+            fields.extend(m.states.iter().map(|s| ("cell state", s.clone())));
+            lines.extend(subblock(&fields));
         }
         warnings.push(lines.join("\n"));
     }

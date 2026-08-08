@@ -10,10 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **A warning names every arc no block could state.** An arc should express the cell state it measures
-  from, and `-ic` and `-vector` reach exactly the `-pinlist`: a firing differing only in an internal
-  node with no column renders a block already emitted, and goes unstated. The warning gives the arc —
-  `hidden S↑`, `combinational A↑ -> Q↓`, `setup CLK↑ & D↑` — with the cell state it would have measured
-  from, so the nodes worth exposing are the ones the report keeps naming.
+  from, and `-ic` and `-vector` reach exactly the `-pinlist`: firings differing only in an internal
+  node with no column all render one block, which then expresses none of them. The warning names the
+  arc — `hidden S↑`, `combinational A↑ -> Q↓`, `setup CLK↑ & D↑` — and every cell state that one block
+  conflates. They agree on what the block states and differ on what it cannot, so what varies across
+  them is the node to expose.
 
 ### Changed
 

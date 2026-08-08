@@ -78,11 +78,14 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
 /// differ only there are one block. Exposing those nodes is what tells them apart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaskedArc {
-    /// What the block would have measured: `combinational A↑ -> Q↓`, `hidden S↑` for a toggle no
-    /// output follows, or `setup CLK↑ & D↑` for a constraint.
+    /// What the block measures: `combinational A↑ -> Q↓`, `hidden S↑` for a toggle no output follows,
+    /// or `setup CLK↑ & D↑` for a constraint.
     pub arc: String,
-    /// The cell state it measures from, every input and state variable at the level it holds there.
-    pub state: String,
+    /// The cell states the one emitted block conflates. None of them is the block's: which firing
+    /// reached the emitter first decides nothing, since the block says the same of every one. Read
+    /// against each other they agree on what the block states and differ on what it cannot — and what
+    /// differs is the node to expose.
+    pub states: Vec<String>,
 }
 
 /// A cell's `define_arc` blocks, with the arcs that went unstated for want of a column to tell them
@@ -98,7 +101,7 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
     // carrying them as model coordinates, so its arcs, hazards and leakage states are the ones an
     // exposed column can be read off; for every other cell it IS the cell.
     let cell = cell.arc_view();
-    let mut out = oscillation_comment(cell);
+    let out = oscillation_comment(cell);
     // Each arc class is emitted in two passes. The GENERAL pass comes out ALWAYS: one representative per
     // transition — a related pin's edge driving an output pin's edge — rendered with no `-when` line, so
     // the block generalises over the side inputs' held levels, the held outputs and the internal state
@@ -139,8 +142,7 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
         h.prevector.len()
     });
     let measured = groups(cell, &[]);
-    let mut stated: HashSet<String> = HashSet::new();
-    let mut masked: Vec<MaskedArc> = Vec::new();
+    let mut blocks = Blocks::new(out);
     for group in &measured {
         for (_, arc) in cell
             .arcs
@@ -148,25 +150,23 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
             .enumerate()
             .filter(|(i, _)| general.contains_key(i))
         {
-            if !state_once(&mut out, &mut stated, format_arc(cell, group, arc, false)) {
-                masked.push(MaskedArc {
-                    arc: arc_label(cell, arc),
-                    state: state_str(&arc.start),
-                });
-            }
+            blocks.state(
+                format_arc(cell, group, arc, false),
+                arc_label(cell, arc),
+                state_str(&arc.start),
+            );
         }
         if cell.when.contains(ArcClass::Transition) {
             for (i, arc) in cell.arcs.iter().enumerate() {
                 let redundant = general
                     .get(&i)
                     .is_some_and(|&cases| cases == 1 || when_str(&arc.end, &arc.related).is_none());
-                if !redundant
-                    && !state_once(&mut out, &mut stated, format_arc(cell, group, arc, true))
-                {
-                    masked.push(MaskedArc {
-                        arc: arc_label(cell, arc),
-                        state: state_str(&arc.start),
-                    });
+                if !redundant {
+                    blocks.state(
+                        format_arc(cell, group, arc, true),
+                        arc_label(cell, arc),
+                        state_str(&arc.start),
+                    );
                 }
             }
         }
@@ -177,16 +177,11 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
                 .enumerate()
                 .filter(|(i, _)| general_hidden.contains_key(i))
             {
-                if !state_once(
-                    &mut out,
-                    &mut stated,
+                blocks.state(
                     format_hidden_arc(cell, group, h, false),
-                ) {
-                    masked.push(MaskedArc {
-                        arc: hidden_label(h),
-                        state: state_str(&h.start),
-                    });
-                }
+                    hidden_label(h),
+                    state_str(&h.start),
+                );
             }
             if cell.when.contains(ArcClass::Hidden) {
                 // The same rule as the transition pass, over the hidden class's own condition (which
@@ -197,17 +192,12 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
                     let redundant = general_hidden
                         .get(&i)
                         .is_some_and(|&cases| cases == 1 || hidden_when_str(h).is_none());
-                    if !redundant
-                        && !state_once(
-                            &mut out,
-                            &mut stated,
+                    if !redundant {
+                        blocks.state(
                             format_hidden_arc(cell, group, h, true),
-                        )
-                    {
-                        masked.push(MaskedArc {
-                            arc: hidden_label(h),
-                            state: state_str(&h.start),
-                        });
+                            hidden_label(h),
+                            state_str(&h.start),
+                        );
                     }
                 }
             }
@@ -217,7 +207,7 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
     // every alias.
     if opts.emit_leakage {
         for l in &cell.leakage {
-            out.push_str(&format_leakage(cell, l));
+            blocks.out.push_str(&format_leakage(cell, l));
         }
     }
     // Constraint arcs emit whatever generation produced: `cell.constraints` is populated only when the
@@ -230,28 +220,63 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
                 .into_iter()
                 .zip(format_constraint(cell, group, c))
             {
-                if !state_once(&mut out, &mut stated, block) {
-                    masked.push(MaskedArc {
-                        arc: format!("{arc_type} {}", c.condition()),
-                        state: state_str(&c.state),
-                    });
-                }
+                blocks.state(
+                    block,
+                    format!("{arc_type} {}", c.condition()),
+                    state_str(&c.state),
+                );
             }
         }
     }
-    CellArcs { tcl: out, masked }
+    CellArcs {
+        tcl: std::mem::take(&mut blocks.out),
+        masked: blocks.masked(),
+    }
 }
 
 /// Append `block` unless the cell has already stated exactly it. A block says its `-type`, its columns
 /// and their `-ic` and `-vector`, its `-when` and the pins it relates — so two firings rendering the
 /// same block are one measurement, however they differ in the model.
-fn state_once(out: &mut String, stated: &mut HashSet<String>, block: String) -> bool {
-    if stated.contains(&block) {
-        return false;
+/// The blocks a cell states, each remembering the firing it came from and the firings it stood for.
+struct Blocks {
+    out: String,
+    /// Block text to its entry in `arcs`, so a repeat finds the firing that already spoke for it.
+    index: HashMap<String, usize>,
+    arcs: Vec<MaskedArc>,
+}
+
+impl Blocks {
+    fn new(out: String) -> Self {
+        Blocks {
+            out,
+            index: HashMap::new(),
+            arcs: Vec::new(),
+        }
     }
-    out.push_str(&block);
-    stated.insert(block);
-    true
+
+    /// State `block` if the cell has not, and record `state` among the states that block covers.
+    /// `arc` and `state` describe the firing this call renders.
+    fn state(&mut self, block: String, arc: String, state: String) {
+        match self.index.get(&block) {
+            Some(&i) => self.arcs[i].states.push(state),
+            None => {
+                self.out.push_str(&block);
+                self.index.insert(block, self.arcs.len());
+                self.arcs.push(MaskedArc {
+                    arc,
+                    states: vec![state],
+                });
+            }
+        }
+    }
+
+    /// Only the blocks covering more than one state — the ones expressing none of what they cover.
+    fn masked(self) -> Vec<MaskedArc> {
+        self.arcs
+            .into_iter()
+            .filter(|a| a.states.len() > 1)
+            .collect()
+    }
 }
 
 /// A state as a brace-wrapped literal product over every coordinate it fixes (`{A=1, B=0, M=1}`).
@@ -4319,9 +4344,23 @@ Q = "CLKB*M + !CLKB*Q"
                 "a masked toggle is labelled by its kind and edge: {m:?}"
             );
             assert!(
-                m.state.contains("M="),
-                "the masked state names the node no column carries: {m:?}"
+                m.states.len() > 1,
+                "only a block covering several states is reported: {m:?}"
             );
+            // The report is read by comparing the states: each names M, and they are distinct — that
+            // difference IS the node to expose.
+            let distinct: HashSet<&String> = m.states.iter().collect();
+            assert_eq!(
+                distinct.len(),
+                m.states.len(),
+                "the states a block conflates are distinct: {m:?}"
+            );
+            for s in &m.states {
+                assert!(
+                    s.contains("M="),
+                    "each state names the node no column carries: {m:?}"
+                );
+            }
         }
         // What did come out states each block once.
         let blocks: Vec<&str> = rendered
