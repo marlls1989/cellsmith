@@ -52,7 +52,7 @@ struct Cli {
     #[arg(long)]
     no_cells: bool,
 
-    /// Emit derived setup/hold & non_seq constraint arcs.
+    /// Emit derived setup/hold, non_seq & min_pulse_width constraint arcs.
     #[arg(long)]
     constraints: bool,
 

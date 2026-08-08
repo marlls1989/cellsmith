@@ -148,6 +148,15 @@ fn multi_cell_spec_covers_all_cells() {
         "no oscillation warning:\n{stderr}"
     );
     assert!(stderr.contains("race"), "no race warning:\n{stderr}");
+    assert!(
+        stderr.contains("by its width"),
+        "no width-dependent hazard warning:\n{stderr}"
+    );
+
+    assert!(
+        stdout.contains("min_pulse_width"),
+        "no min_pulse_width constraint arcs:\n{stdout}"
+    );
 
     std::fs::remove_dir_all(&dir).ok();
 }

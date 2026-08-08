@@ -343,7 +343,7 @@ Options:
       --no-internal           Suppress hidden (internal-power) arcs
       --no-leakage            Suppress `define_leakage` blocks
       --no-cells              Suppress the `<base>_cells.tcl` artifact
-      --constraints           Emit derived setup/hold & non_seq constraint arcs
+      --constraints           Emit derived setup/hold, non_seq & min_pulse_width constraint arcs
       --no-edge-collapse      Suppress the edge-register annotation
       --logic-low <VOLTAGE>   Voltage for logic `0` [default: 0]
       --logic-high <VOLTAGE>  Voltage for logic `1` [default: $VDD]

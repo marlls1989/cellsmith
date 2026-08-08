@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **cellsmith detects the width-dependent hazard and emits minimum-pulse-width constraints.** The width-dependent hazard is a pulse on one input whose settled outcome depends on how far apart the pulse's two edges are. cellsmith generates a single-pin minimum-pulse-width constraint from each detected hazard, emitting a `-type min_pulse_width` Liberate block that probes the nodes whose settled value the width decides.
+
 ## [0.5.1] - 2026-08-08
 
 ### Added
