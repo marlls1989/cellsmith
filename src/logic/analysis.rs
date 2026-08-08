@@ -32,6 +32,7 @@ use crate::logic::arcs::{self, Arc, HiddenArc};
 use crate::logic::confluence::{self, Constraint};
 use crate::logic::hazard::{OrderDependence, Oscillation, WidthDependence};
 use crate::logic::leakage::{self, LeakageState};
+use crate::logic::width::MinPulseWidth;
 use crate::logic::{machine, resolve, width};
 use crate::model::AnalysedCell;
 
@@ -48,6 +49,7 @@ pub struct MachineAnalysis {
     pub arcs: Vec<Arc>,
     pub hidden_arcs: Vec<HiddenArc>,
     pub constraints: Vec<Constraint>,
+    pub min_pulse_widths: Vec<MinPulseWidth>,
     pub order_dependence: Vec<OrderDependence>,
     pub oscillation: Vec<Oscillation>,
     pub width_dependence: Vec<WidthDependence>,
@@ -298,10 +300,13 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     // is generated — hence none emitted — unless the cell requested it.
     let detected = confluence::detect(&m);
     let width_dependence = width::detect(&m);
-    let constraints = if cell.constraint_arcs_declared {
-        confluence::constrain(&detected, &m.cell.clock_pins)
+    let (constraints, min_pulse_widths) = if cell.constraint_arcs_declared {
+        (
+            confluence::constrain(&detected, &m.cell.clock_pins),
+            width::constrain(&width_dependence),
+        )
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
     // Behavioural edge classification is read-only over the explored machine — it mints only
     // already-existing names and mutates nothing (the exploration-unchanged invariant holds BY
@@ -318,6 +323,7 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
         arcs,
         hidden_arcs,
         constraints,
+        min_pulse_widths,
         order_dependence: detected.order_dependence,
         oscillation: detected.oscillation,
         width_dependence,
@@ -365,6 +371,10 @@ mod tests {
         assert!(
             cell.constraints.is_empty(),
             "an unexplored cell has no constraints"
+        );
+        assert!(
+            cell.min_pulse_widths.is_empty(),
+            "an unexplored cell has no minimum-pulse-width constraints"
         );
         assert!(
             cell.oscillation.is_empty(),
@@ -426,6 +436,10 @@ mod tests {
             assert!(
                 view.constraints.is_empty(),
                 "the unexplored {which} has no constraints"
+            );
+            assert!(
+                view.min_pulse_widths.is_empty(),
+                "the unexplored {which} has no minimum-pulse-width constraints"
             );
             assert!(
                 view.oscillation.is_empty(),

@@ -45,6 +45,7 @@ use crate::logic::confluence::{Constraint, ConstraintKind};
 use crate::logic::hazard::Oscillation;
 use crate::logic::leakage::LeakageState;
 use crate::logic::literal_product;
+use crate::logic::width::MinPulseWidth;
 use crate::model::{AnalysedCell, ArcClass};
 
 /// Knobs for the arc emitter.
@@ -72,8 +73,9 @@ impl Default for ArcsTclOptions {
 /// its resolved `when` set ADDS its conditioned blocks on top, so the same arc can appear twice. A cell
 /// with a detected oscillation hazard is prefixed with a comment recording the racing condition and the
 /// competing settled outcomes — the metastability risk timing arcs cannot express. Any derived
-/// constraint arcs (setup/hold, non_seq) the cell opted into — its `constraint_arcs` was set, so
-/// generation populated `cell.constraints` — follow the delay arcs.
+/// constraint arcs the cell opted into — its `constraint_arcs` was set, so generation populated
+/// `cell.constraints` and `cell.min_pulse_widths` — follow the delay arcs: the setup/hold and non_seq
+/// pairs holding two pins apart, and the single-pin min_pulse_width blocks.
 pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     cell_arcs(cell, opts).tcl
 }
@@ -114,10 +116,13 @@ pub enum MaskedKind {
         pin: Symbol,
         pin_edge: Edge,
     },
+    /// A minimum-pulse-width constraint: the constrained pin and the pulse's opening edge.
+    Pulse { pin: Symbol, edge: Edge },
 }
 
 impl MaskedArc {
-    /// The arc on one line: `combinational A↑ -> Q↓`, `hidden S↑`, `setup CLK↑ & D↑`.
+    /// The arc on one line: `combinational A↑ -> Q↓`, `hidden S↑`, `setup CLK↑ & D↑`,
+    /// `min_pulse_width CLK↑`.
     pub fn arc_str(&self) -> String {
         let ty = self.arc_type.token();
         match &self.kind {
@@ -142,6 +147,7 @@ impl MaskedArc {
                 related_edge.arrow(),
                 pin_edge.arrow()
             ),
+            MaskedKind::Pulse { pin, edge } => format!("{ty} {pin}{}", edge.arrow()),
         }
     }
 
@@ -275,6 +281,14 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
             }
         }
     }
+    // The minimum-pulse-width constraints, under the same opt-in and read the same way: one block each,
+    // a pulse having no second member to characterise the other side of.
+    for pw in &cell.min_pulse_widths {
+        let protected: Vec<Symbol> = pw.nodes.iter().map(|(node, _)| node.clone()).collect();
+        for group in &groups(cell, &protected) {
+            blocks.state(format_pulse_width(cell, group, pw), pulse_firing(pw));
+        }
+    }
     CellArcs {
         tcl: std::mem::take(&mut blocks.out),
         masked: blocks.masked(),
@@ -359,6 +373,20 @@ fn constraint_firing(arc_type: ArcType, c: &Constraint) -> MaskedArc {
             pin_edge: c.pin_edge,
         },
         states: vec![c.state.clone()],
+    }
+}
+
+/// The firing a minimum-pulse-width block renders, sampled at the state the pulse was probed from. Two
+/// pulses of one pin and edge probed from states the columns cannot tell apart render the same block,
+/// and it is these states that say what would tell them apart.
+fn pulse_firing(pw: &MinPulseWidth) -> MaskedArc {
+    MaskedArc {
+        arc_type: ArcType::MinPulseWidth,
+        kind: MaskedKind::Pulse {
+            pin: pw.pin.clone(),
+            edge: pw.edge,
+        },
+        states: vec![pw.state.clone()],
     }
 }
 
@@ -483,7 +511,8 @@ impl ArcIdentity {
 }
 
 /// Every `-type` a `define_arc` of this emitter can carry: the four a measured block classifies into,
-/// and the four halves of a constraint pair.
+/// the four halves of a constraint pair, and the single-pin minimum-pulse-width block, which is one
+/// block rather than half of a pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArcType {
     Async,
@@ -494,6 +523,7 @@ pub enum ArcType {
     Hold,
     NonSeqSetup,
     NonSeqHold,
+    MinPulseWidth,
 }
 
 impl ArcType {
@@ -508,6 +538,7 @@ impl ArcType {
             ArcType::Hold => "hold",
             ArcType::NonSeqSetup => "non_seq_setup",
             ArcType::NonSeqHold => "non_seq_hold",
+            ArcType::MinPulseWidth => "min_pulse_width",
         }
     }
 }
@@ -597,22 +628,117 @@ fn constraint_types(c: &Constraint) -> [ArcType; 2] {
     }
 }
 
+/// The pins a constraint block switches, and the edge each makes: the PAIR a constraint holds apart, or
+/// the SINGLE pin a minimum-pulse-width block constrains — the pulse relating that pin to itself, so the
+/// block names it on both `-related_pin` and `-pin`.
+enum Switching<'a> {
+    Pair {
+        related: (&'a Symbol, Edge),
+        pin: (&'a Symbol, Edge),
+    },
+    Single {
+        pin: (&'a Symbol, Edge),
+    },
+}
+
+impl Switching<'_> {
+    /// The pin the block names on `-related_pin`. For [`Switching::Single`] that is the one pin: naming
+    /// it twice follows FROM the variant — a pulse constrains a pin against itself — rather than from
+    /// two fields that happen to be equal.
+    fn related(&self) -> &Symbol {
+        match self {
+            Switching::Pair { related, .. } => related.0,
+            Switching::Single { pin } => pin.0,
+        }
+    }
+
+    /// The pin the block names on `-pin`.
+    fn pin(&self) -> &Symbol {
+        match self {
+            Switching::Pair { pin, .. } | Switching::Single { pin } => pin.0,
+        }
+    }
+
+    /// The edge `input` makes in the block's `-vector`, or `None` where it is none of the switching
+    /// pins — the vector then holding it at the level it starts from.
+    fn edge_of(&self, input: &str) -> Option<Edge> {
+        match self {
+            Switching::Pair { related, pin } => [*related, *pin]
+                .into_iter()
+                .find(|(name, _)| name.as_str() == input)
+                .map(|(_, edge)| edge),
+            Switching::Single { pin } => (pin.0.as_str() == input).then_some(pin.1),
+        }
+    }
+}
+
+/// What one constraint `define_arc` renders from: the pins it switches, the nodes it protects with the
+/// level each holds at the probed state, and the walk into that state with the levels sampled there.
+/// The four are read at one state and rendered by one block, so they travel as a named whole — several
+/// of them share a type, and telling them apart by position is what a name spares the block.
+struct ConstraintArc<'a> {
+    switching: Switching<'a>,
+    nodes: &'a [(Symbol, bool)],
+    prevector: &'a [Minterm<Symbol>],
+    levels: &'a ArcLevels,
+}
+
+/// The pair constraint as one rendered arc: the two inputs it holds apart, each in the edge it makes.
+fn pair_arc(c: &Constraint) -> ConstraintArc<'_> {
+    ConstraintArc {
+        switching: Switching::Pair {
+            related: (&c.related, c.related_edge),
+            pin: (&c.pin, c.pin_edge),
+        },
+        nodes: &c.nodes,
+        prevector: &c.prevector,
+        levels: &c.levels,
+    }
+}
+
+/// The minimum-pulse-width constraint as one rendered arc: the single constrained pin, in the pulse's
+/// opening edge.
+fn pulse_arc(pw: &MinPulseWidth) -> ConstraintArc<'_> {
+    ConstraintArc {
+        switching: Switching::Single {
+            pin: (&pw.pin, pw.edge),
+        },
+        nodes: &pw.nodes,
+        prevector: &pw.prevector,
+        levels: &pw.levels,
+    }
+}
+
 /// A constraint arc as a pair of `define_arc` blocks — the setup member and the hold member (Liberate
 /// characterises them as separate arcs): `setup`/`hold` for a directed clock↔data constraint,
 /// `non_seq_setup`/`non_seq_hold` for a symmetric (oscillation / mutual-exclusion) one.
 fn format_constraint(cell: &AnalysedCell, group: &Group, c: &Constraint) -> [String; 2] {
     let [setup, hold] = constraint_types(c);
+    let arc = pair_arc(c);
     [
-        constraint_block(cell, group, c, setup.token()),
-        constraint_block(cell, group, c, hold.token()),
+        constraint_block(cell, group, &arc, setup.token()),
+        constraint_block(cell, group, &arc, hold.token()),
     ]
+}
+
+/// A minimum-pulse-width constraint as ONE `define_arc` of `-type min_pulse_width`: the constrained
+/// pin's column carries the pulse's OPENING edge alone, and Liberate searches for the width at which
+/// the probed nodes stop behaving. There is no pair here — the two members of a setup/hold pair are the
+/// two sides of a separation between two pins, and a pulse has one pin.
+fn format_pulse_width(cell: &AnalysedCell, group: &Group, pw: &MinPulseWidth) -> String {
+    constraint_block(cell, group, &pulse_arc(pw), ArcType::MinPulseWidth.token())
 }
 
 /// One constraint `define_arc` of the given `-type`. Liberate cannot infer how to prepare these
 /// non-standard state-holding cells, so every pin is listed and fully specified: `-ic` states the
-/// pre-toggle condition of every column, and the full `-vector` carries the two switching pins as
-/// `R`/`F`, the other inputs at their held value, and the outputs as `X`.
-fn constraint_block(cell: &AnalysedCell, group: &Group, c: &Constraint, arc_type: &str) -> String {
+/// pre-toggle condition of every column, and the full `-vector` carries the switching pins as `R`/`F`,
+/// the other inputs at their held value, and the outputs as `X`.
+fn constraint_block(
+    cell: &AnalysedCell,
+    group: &Group,
+    arc: &ConstraintArc<'_>,
+    arc_type: &str,
+) -> String {
     // The nodes the constraint protects are measured, so each needs a column: one `-probe` names them
     // all, and the columns are what `-ic` initialises them through. A node already has a column when
     // the cell exposes it or when it is an output pin, and a second would misalign every column after
@@ -620,7 +746,7 @@ fn constraint_block(cell: &AnalysedCell, group: &Group, c: &Constraint, arc_type
     let mut model = cell.exposed.clone();
     let mut listed = group.exposed.clone();
     let mut probed: BTreeMap<Symbol, bool> = BTreeMap::new();
-    for (node, level) in &c.nodes {
+    for (node, level) in arc.nodes {
         if cell.exposed.contains(node) || cell.outputs.iter().any(|o| o.name == *node) {
             continue;
         }
@@ -628,7 +754,7 @@ fn constraint_block(cell: &AnalysedCell, group: &Group, c: &Constraint, arc_type
         listed.push(group.probed_name(node));
         probed.insert(node.clone(), *level);
     }
-    let probe_list = c
+    let probe_list = arc
         .nodes
         .iter()
         .map(|(node, _)| group.probed_name(node).to_string())
@@ -644,53 +770,53 @@ fn constraint_block(cell: &AnalysedCell, group: &Group, c: &Constraint, arc_type
     if cell.state_holding {
         s.push_str(&format!(
             "\t-ic \"{}\" \\\n",
-            ic_str(cell, &model, &c.prevector, &c.levels, &probed)
+            ic_str(cell, &model, arc.prevector, arc.levels, &probed)
         ));
     }
     s.push_str(&format!(
         "\t-vector {{{}}} \\\n",
-        constraint_vector_str(cell, &model, c)
+        constraint_vector_str(cell, &model, arc)
     ));
-    s.push_str(&format!("\t-related_pin {} \\\n", c.related));
-    s.push_str(&format!("\t-pin {} \\\n", c.pin));
+    s.push_str(&format!("\t-related_pin {} \\\n", arc.switching.related()));
+    s.push_str(&format!("\t-pin {} \\\n", arc.switching.pin()));
     s.push_str(&format!("\t-probe {{{probe_list}}} \\\n"));
     s.push_str(&format!("\t{}\n", name_block(&group.names)));
     s.push('\n');
     s
 }
 
-/// The full constraint vector over [`arc_pinlist_str`] order: the related and pin pins as their `R`/`F`
-/// edges, every other input at its held value in the pre-toggle state (the prevector's last step), and
+/// The full constraint vector over [`arc_pinlist_str`] order: each switching pin as its `R`/`F` edge,
+/// every other input at its held value in the pre-toggle state (the prevector's last step), and
 /// every output as `X` (a constraint arc measures no output transition). An exposed node reads `X`
-/// alongside them: the block constrains WHEN the two input edges may land relative to each other and
-/// measures nothing the cell does in response, so the same column that leaves the outputs unstated
-/// leaves the internals unstated too. The node's start level still reaches Liberate — the `-ic` line
-/// below carries it, as it does for the outputs.
-fn constraint_vector_str(cell: &AnalysedCell, exposed: &[Symbol], c: &Constraint) -> String {
+/// alongside them: the block constrains WHEN the switching edges may land — relative to each other for
+/// a pair, relative to one another edge of the same pin for a pulse — and measures nothing the cell
+/// does in response, so the same column that leaves the outputs unstated leaves the internals unstated
+/// too. The node's start level still reaches Liberate — the `-ic` line below carries it, as it does for
+/// the outputs.
+fn constraint_vector_str(
+    cell: &AnalysedCell,
+    exposed: &[Symbol],
+    arc: &ConstraintArc<'_>,
+) -> String {
     let held = assignment(
-        c.prevector
+        arc.prevector
             .last()
             .expect("path_to seeds its chain with the probed node itself"),
     );
     vector(
         cell,
         exposed,
-        |input| {
-            if input == c.related {
-                c.related_edge.rf().to_string()
-            } else if input == c.pin {
-                c.pin_edge.rf().to_string()
+        |input| match arc.switching.edge_of(input) {
+            Some(edge) => edge.rf().to_string(),
+            None => if *held
+                .get(input)
+                .expect("every input has a held value in the constraint prevector")
+            {
+                "1"
             } else {
-                if *held
-                    .get(input)
-                    .expect("every input has a held value in the constraint prevector")
-                {
-                    "1"
-                } else {
-                    "0"
-                }
-                .to_string()
+                "0"
             }
+            .to_string(),
         },
         |_| "X".to_string(),
         |_| "X".to_string(),
@@ -3240,12 +3366,187 @@ Y = "!W"
         }
     }
 
-    /// The constraint blocks of `tcl`, each truncated at its own trailing blank line.
+    /// The `-type` line a minimum-pulse-width block leads with, read off the enum the emitter renders
+    /// it from.
+    fn pulse_type() -> String {
+        format!("-type {}", ArcType::MinPulseWidth.token())
+    }
+
+    /// The PAIR constraint blocks of `tcl` — the setup/hold and non_seq members — each truncated at its
+    /// own trailing blank line. Every block probing the nodes it protects carries a `-probe`, the
+    /// single-pin [`ArcType::MinPulseWidth`] blocks included, so the type is what tells the two apart.
     fn constraint_blocks(tcl: &str) -> Vec<String> {
         blocks(tcl)
             .into_iter()
-            .filter(|b| b.contains("-probe"))
+            .filter(|b| b.contains("-probe") && !b.contains(&pulse_type()))
             .collect()
+    }
+
+    /// The minimum-pulse-width blocks of `tcl` — the single-pin constraint's own kind.
+    fn pulse_blocks(tcl: &str) -> Vec<String> {
+        blocks(tcl)
+            .into_iter()
+            .filter(|b| b.contains(&pulse_type()))
+            .collect()
+    }
+
+    /// The one word on the block's `-<tag>` line, which is how `-pin` and `-related_pin` name theirs.
+    /// `-pinlist` is a different line: the space in the pattern is what tells the two apart.
+    fn named<'a>(block: &'a str, tag: &str) -> &'a str {
+        block
+            .lines()
+            .find_map(|l| l.trim().strip_prefix(&format!("{tag} ")))
+            .map(|v| v.trim_end_matches('\\').trim())
+            .unwrap_or_else(|| panic!("the block names a {tag}:\n{block}"))
+    }
+
+    /// The pins whose `-vector` column carries an edge rather than a level.
+    fn switching_pins(block: &str) -> Vec<&str> {
+        pinlist_of(block)
+            .into_iter()
+            .zip(vector_values(block))
+            .filter(|(_, symbol)| ["R", "F"].contains(symbol))
+            .map(|(pin, _)| pin)
+            .collect()
+    }
+
+    #[test]
+    fn a_min_pulse_width_block_switches_the_constrained_pin_alone() {
+        // The flop's two width-dependent hazards — the CLK↑ pulse deciding the slave, the CLK↓ pulse
+        // deciding the master and the slave after it — are a block each. A block states ONE edge, on the
+        // constrained pin, and Liberate narrows the pulse from there: everything else is either held at
+        // the level it starts from (the other inputs) or left to the cell (the outputs, which the block
+        // measures nothing of).
+        let cell = analyse(IC_DFF);
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        let pblocks = pulse_blocks(&tcl);
+        assert_eq!(
+            pblocks.len(),
+            2,
+            "the flop's clock carries a width hazard in each direction:\n{tcl}"
+        );
+        for block in &pblocks {
+            let pin = named(block, "-pin");
+            assert_eq!(
+                named(block, "-related_pin"),
+                pin,
+                "a pulse constrains one pin against itself:\n{block}"
+            );
+            assert_eq!(
+                switching_pins(block),
+                [pin],
+                "the constrained pin is the only column carrying an edge:\n{block}"
+            );
+            for (column, symbol) in pinlist_of(block).into_iter().zip(vector_values(block)) {
+                if column == pin {
+                    continue;
+                }
+                if cell.inputs.iter().any(|input| input == column) {
+                    assert!(
+                        ["0", "1"].contains(&symbol),
+                        "{column} is held at a level:\n{block}"
+                    );
+                } else {
+                    assert_eq!(symbol, "X", "{column} is left to the cell:\n{block}");
+                }
+            }
+            assert!(
+                !braced(block, "-probe")
+                    .expect("a min_pulse_width block probes")
+                    .trim()
+                    .is_empty(),
+                "the block names what the pulse's width decides:\n{block}"
+            );
+            let ic = ic_values(block).expect("a state-holding cell's block carries an -ic");
+            assert_eq!(
+                ic.len(),
+                pinlist_of(block).len(),
+                "one -ic column per pinlist entry:\n{block}"
+            );
+        }
+
+        // Which nodes a pulse decides is the direction's: a CLK↑ pulse reaches the slave alone, and `Q`
+        // is a pin already, so that block lists the cell's own columns. The CLK↓ pulse walks `D` into the
+        // master and the master into the slave, so its block also mints a column for `M` — a probed node
+        // with neither a pin nor an exposure to carry it.
+        let of_edge = |edge: &str| -> String {
+            let mut found = pblocks
+                .iter()
+                .filter(|b| vector_values(b)[column_of(b, "CLK")] == edge);
+            let block = found
+                .next()
+                .unwrap_or_else(|| panic!("a CLK{edge} pulse block:\n{tcl}"))
+                .clone();
+            assert!(found.next().is_none(), "one CLK{edge} pulse block:\n{tcl}");
+            block
+        };
+        let rise = of_edge("R");
+        assert_eq!(braced(&rise, "-probe"), Some("Q"), "{rise}");
+        assert_eq!(pinlist_of(&rise), ["CLK", "D", "Q"], "{rise}");
+        let fall = of_edge("F");
+        assert_eq!(braced(&fall, "-probe"), Some("Q M"), "{fall}");
+        assert_eq!(pinlist_of(&fall), ["CLK", "D", "M", "Q"], "{fall}");
+    }
+
+    #[test]
+    fn a_min_pulse_width_constraint_is_one_block_and_never_a_pair() {
+        // A setup/hold pair characterises the two sides of a separation between two pins. A pulse has one
+        // pin, so its constraint is one block: the cross-NOR SR's set and reset pulses are a constraint
+        // each, and two blocks come out of them — while the same cell's two-pin constraint is still
+        // rendered as its pair.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "SR"
+inputs = ["S", "R"]
+constraint_arcs = true
+[cell.outputs]
+Q  = "!(R+Qn)"
+Qn = "!(S+Q)"
+"#,
+        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        let pblocks = pulse_blocks(&tcl);
+        assert_eq!(
+            cell.min_pulse_widths.len(),
+            2,
+            "asserting S and asserting R are a width hazard each: {:?}",
+            cell.min_pulse_widths
+        );
+        assert_eq!(
+            pblocks.len(),
+            cell.min_pulse_widths.len(),
+            "one block per generated constraint:\n{tcl}"
+        );
+        let mut constrained: Vec<&str> = pblocks.iter().map(|b| named(b, "-pin")).collect();
+        constrained.sort();
+        assert_eq!(constrained, ["R", "S"], "{tcl}");
+        assert_eq!(
+            constraint_blocks(&tcl).len() % 2,
+            0,
+            "the cell's two-pin constraints are still rendered in pairs:\n{tcl}"
+        );
+    }
+
+    #[test]
+    fn a_combinational_cell_renders_no_min_pulse_width_block() {
+        // The cell opts in, so generation runs: with no memory, returning the pulsed input to where it
+        // started returns the whole cell there, and there is no width for a block to constrain.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "ND2"
+inputs = ["A", "B"]
+constraint_arcs = true
+[cell.outputs]
+Y = "!(A*B)"
+"#,
+        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        assert!(cell.min_pulse_widths.is_empty());
+        assert!(pulse_blocks(&tcl).is_empty(), "{tcl}");
     }
 
     #[test]

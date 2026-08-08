@@ -55,10 +55,64 @@ use espresso_logic::bdd::{Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::analysis::Machine;
-use crate::logic::arcs::ArcLevels;
-use crate::logic::confluence::{edge_from, node_levels_at, oscillating_group};
+use crate::logic::arcs::{ArcLevels, Edge};
+use crate::logic::confluence::{edge_from, node_levels_at, oscillating_group, protected};
 use crate::logic::hazard::{PulseOutcome, WidthDependence};
 use crate::logic::machine;
+
+/// One **minimum-pulse-width** constraint, generated from a [`WidthDependence`] to remove it: the width
+/// a pulse on the pin must have for the nodes it names to reach the outcome a wide pulse settles to.
+/// Liberate measures that width off the emitted block, narrowing the pulse until the probed behaviour
+/// fails. It is a SINGLE-pin constraint — the sibling of
+/// [`Constraint`](crate::logic::confluence::Constraint), which relates two primary inputs — and picking
+/// this struct IS the classification, so it carries neither a kind nor a related pin.
+#[derive(Debug, Clone)]
+pub struct MinPulseWidth {
+    /// The constrained pin, which the emitted block names on BOTH `-pin` and `-related_pin`: the
+    /// constraint relates the pin to itself.
+    pub pin: Symbol,
+    /// The pulse's OPENING polarity — rise means the pulse is high, fall low. The block states that one
+    /// edge, and Liberate searches the width itself.
+    pub edge: Edge,
+    /// The prevector: the input-assignment path that drives every state variable into the state where
+    /// the hazard manifests (each node projected onto the inputs).
+    pub prevector: Vec<Minterm<Symbol>>,
+    /// The levels the cell's outputs hold in that state — the block's `-ic` initial condition, sampled
+    /// at the same probed state as `prevector`.
+    pub levels: ArcLevels,
+    /// The nodes this constraint protects, each with the level it holds at the probed state, exactly as
+    /// [`Constraint::nodes`](crate::logic::confluence::Constraint::nodes) does it: the state variables
+    /// whose settled value the pulse's width decides, in signal declaration order. The emitted block
+    /// gives each a column of its own and names them all in one Liberate `-probe`.
+    pub nodes: Vec<(Symbol, bool)>,
+    /// The probed state itself: every input and state variable at the level it holds there. The
+    /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
+    /// emitted column carries.
+    pub state: Minterm<Symbol>,
+}
+
+/// Generate the minimum-pulse-width constraints that avoid a cell's width-dependent hazards: one
+/// [`MinPulseWidth`] per [`WidthDependence`], protecting the nodes that observation's pulse decides.
+///
+/// The map is 1:1 and there is NO dedup, because [`detect`] already performed the only one there is to
+/// perform: it keys on `(pin, edge)` and keeps the maximal node sets under inclusion, and `(pin, edge)`
+/// with the protected nodes is exactly the key a constraint would dedup on.
+///
+/// No `clock_pins` either, unlike [`confluence::constrain`](super::confluence::constrain): a pulse
+/// relates one pin to itself, so there is no pair for a declared clock to direct and nothing for the
+/// declaration to decide.
+pub(crate) fn constrain(hz: &[WidthDependence]) -> Vec<MinPulseWidth> {
+    hz.iter()
+        .map(|wd| MinPulseWidth {
+            pin: wd.pin.clone(),
+            edge: wd.edge,
+            prevector: wd.prevector.clone(),
+            levels: wd.levels.clone(),
+            nodes: protected(&wd.group, &wd.node_levels),
+            state: wd.state.clone(),
+        })
+        .collect()
+}
 
 /// Why every state value a pulse walk reads is defined, exactly as in [`super::confluence`]: a probe
 /// starts from a state `Machine::arc_eligible` admits, and settling from a fully-initialised state
@@ -596,6 +650,68 @@ B = "!CLK*(!SEL*D + SEL*B) + CLK*B"
             .into_iter()
             .collect(),
         );
+    }
+
+    /// One generated constraint as the triple that identifies it: the constrained pin, the pulse's
+    /// opening edge and the nodes it protects. The levels sampled beside those nodes name WHICH probed
+    /// state the representative came from, which is a choice the exploration order makes.
+    fn constrained(cell: &AnalysedCell) -> BTreeSet<(String, char, String)> {
+        cell.min_pulse_widths
+            .iter()
+            .map(|pw| {
+                let nodes: Vec<&str> = pw.nodes.iter().map(|(n, _)| n.as_str()).collect();
+                (pw.pin.to_string(), pw.edge.rf(), nodes.join(","))
+            })
+            .collect()
+    }
+
+    /// A master-slave DFF opting into constraint arcs, with whatever cell-level keys `extra` adds.
+    fn dff(extra: &str) -> String {
+        format!(
+            r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+constraint_arcs = true
+{extra}[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#
+        )
+    }
+
+    #[test]
+    fn declaring_a_clock_does_not_move_the_min_pulse_width_constraints() {
+        // A confluence constraint's kind IS the declaration's — a pair holding one declared clock is
+        // directed setup/hold, any other pair symmetric non_seq. A pulse relates one pin to itself, so
+        // there is no pair to direct and nothing for the declaration to decide: the same cell generates
+        // the same constraints either way.
+        let declared = analyse(&dff("clock = [\"CLK\"]\n"));
+        let plain = analyse(&dff(""));
+        assert_eq!(
+            constrained(&declared),
+            [
+                ("CLK".to_string(), 'R', "Q".to_string()),
+                ("CLK".to_string(), 'F', "Q,M".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        assert_eq!(constrained(&declared), constrained(&plain));
+    }
+
+    #[test]
+    fn a_cell_that_did_not_opt_in_generates_no_min_pulse_width() {
+        // Detection always runs — the hazard is reported whether or not the cell asks for constraint
+        // arcs — while generation sits behind the same per-cell opt-in as every other constraint.
+        let cell = analyse(&dff("").replace("constraint_arcs = true\n", ""));
+        assert!(
+            !cell.width_dependence.is_empty(),
+            "the flop's clock pulses are width-dependent all the same, got {:?}",
+            keys(&cell)
+        );
+        assert!(cell.min_pulse_widths.is_empty());
     }
 
     #[test]

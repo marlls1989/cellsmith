@@ -17,6 +17,7 @@ use crate::logic::confluence::Constraint;
 use crate::logic::hazard::{OrderDependence, Oscillation, WidthDependence};
 use crate::logic::leakage::LeakageState;
 use crate::logic::machine::{ExplorationBudget, Explored};
+use crate::logic::width::MinPulseWidth;
 
 /// The whole input file: a list of `[[cell]]` tables.
 #[derive(Debug, Deserialize)]
@@ -558,6 +559,10 @@ pub struct AnalysedCell {
     /// is gated by the CLI flag or `constraint_arcs_declared`; the kind of each constraint follows the
     /// declared clock.
     pub constraints: Vec<Constraint>,
+    /// The minimum-pulse-width constraints generated to avoid the cell's width-dependent hazards — one
+    /// per hazard, each constraining a single pin against itself. Gated on the same opt-in as
+    /// `constraints`. See [`crate::logic::width::MinPulseWidth`].
+    pub min_pulse_widths: Vec<MinPulseWidth>,
     /// Whether the cell opted in to constraint-arc emission (`constraint_arcs = true`).
     pub constraint_arcs_declared: bool,
     /// The arc classes whose `-when` arcs are also emitted (per-cell `when` unioned with the global
@@ -585,7 +590,8 @@ pub struct AnalysedCell {
     pub edge: crate::logic::edge::EdgeArcs,
     /// The exploration budget counter that stopped the machine pass, or `None` when the machine was
     /// explored in full. Set ⇒ nothing was derived from the machine: `arcs`, `hidden_arcs`, `leakage`,
-    /// `order_dependence`, `oscillation`, `width_dependence` and `constraints` are all empty and `edge`
+    /// `order_dependence`, `oscillation`, `width_dependence`, `constraints` and `min_pulse_widths` are
+    /// all empty and `edge`
     /// is the default, so the CLI reports the cell instead of emitting arc-free artifacts for it.
     pub unexplored: Option<crate::logic::machine::ExplorationLimit>,
     /// The cell-wide characterisation-template references (delay/power/constraint) carried verbatim from
@@ -815,6 +821,7 @@ impl Cell {
         view.hidden_arcs = analysis.hidden_arcs;
         view.leakage = analysis.leakage;
         view.constraints = analysis.constraints;
+        view.min_pulse_widths = analysis.min_pulse_widths;
         view.order_dependence = analysis.order_dependence;
         view.oscillation = analysis.oscillation;
         view.width_dependence = analysis.width_dependence;
@@ -833,7 +840,8 @@ impl Cell {
 
     /// Validate the cell and parse its functions into the pre-minimise [`AnalysedCell`]: every signal's
     /// parse-time support and feedback classification, with all derived analysis fields
-    /// (arcs/hidden_arcs/leakage/order_dependence/oscillation/width_dependence/constraints/regions)
+    /// (arcs/hidden_arcs/leakage/order_dependence/oscillation/width_dependence/constraints/
+    /// min_pulse_widths/regions)
     /// still empty. The state-space rewrite and machine/region passes are layered on by
     /// [`Cell::analyse`].
     pub fn analyse_signals(&self) -> Result<AnalysedCell, ModelError> {
@@ -1046,6 +1054,7 @@ impl Cell {
             width_dependence: Vec::new(),
             clock_pins: self.clock.clone(),
             constraints: Vec::new(),
+            min_pulse_widths: Vec::new(),
             constraint_arcs_declared: self.constraint_arcs,
             when: self.when,
             regions: Vec::new(),
@@ -2183,6 +2192,15 @@ Q = "CLK*M + !CLK*Q"
         pin_edge: Edge,
     }
 
+    /// One generated minimum-pulse-width constraint by its identity: the constrained pin, the pulse's
+    /// opening edge and the nodes it protects. One pin, so there is no second pin to record.
+    #[derive(Debug, PartialEq, Eq)]
+    struct MinPulseWidthRecord {
+        pin: Symbol,
+        edge: Edge,
+        nodes: Vec<Symbol>,
+    }
+
     /// The two racing pins and their edges of one hazard observation.
     #[derive(Debug, PartialEq, Eq)]
     struct HazardPins {
@@ -2236,6 +2254,7 @@ Q = "CLK*M + !CLK*Q"
         hidden_arcs: Vec<HiddenArcRecord>,
         leakage: Vec<LeakageRecord>,
         constraints: Vec<ConstraintRecord>,
+        min_pulse_widths: Vec<MinPulseWidthRecord>,
         order_dependence: Vec<HazardRecord>,
         oscillation: Vec<HazardRecord>,
         width_dependence: Vec<WidthRecord>,
@@ -2303,6 +2322,15 @@ Q = "CLK*M + !CLK*Q"
                     related_edge: c.related_edge,
                     pin: c.pin.clone(),
                     pin_edge: c.pin_edge,
+                })
+                .collect(),
+            min_pulse_widths: cell
+                .min_pulse_widths
+                .iter()
+                .map(|pw| MinPulseWidthRecord {
+                    pin: pw.pin.clone(),
+                    edge: pw.edge,
+                    nodes: pw.nodes.iter().map(|(node, _)| node.clone()).collect(),
                 })
                 .collect(),
             order_dependence: cell
@@ -2373,6 +2401,11 @@ Q = "CLK*M + !CLK*Q"
             &a.constraints,
             &b.constraints,
             &format!("cell {cell}: constraints"),
+        );
+        assert_same_records(
+            &a.min_pulse_widths,
+            &b.min_pulse_widths,
+            &format!("cell {cell}: minimum pulse widths"),
         );
         assert_same_records(
             &a.order_dependence,

@@ -80,6 +80,8 @@ pub enum ConstraintKind {
 
 /// One constraint arc between two **primary inputs**. For [`ConstraintKind::SetupHold`], `related` is
 /// the clock and `pin` the data pin; for [`ConstraintKind::NonSeq`], the two are symmetric requests.
+///
+/// Its single-pin sibling is [`super::width::MinPulseWidth`], which constrains one pin against itself.
 #[derive(Debug, Clone)]
 pub struct Constraint {
     pub kind: ConstraintKind,
