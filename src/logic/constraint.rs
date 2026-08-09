@@ -23,12 +23,13 @@
 //! [`Constraint::pin`] is the pin the constraint constrains — the emitted block's `-pin` — under every
 //! kind. What a kind adds is the OTHER pin of a separation, which a minimum pulse width does not have.
 //!
-//! **One constraint per situation.** A situation — one cause, at one input condition, probed from one
-//! state — can be observed as two phenomena and filed as a record each: a pair that both diverges and
-//! never settles, a pulse that both rings and lands somewhere its reference does not. One constraint
-//! removes both, and the records meet here as that constraint: they key alike under
-//! `constraint_key`, and which representative survives is the min `(prevector.len, discovered)` — a
-//! total order, so the survivor does not depend on the order the records arrive in. The dedup map is a
+//! **One constraint per situation.** A situation is a cause, at one input condition, over one set of
+//! protected nodes — the three components of `constraint_key`. Several records can read one: two
+//! phenomena of a single probe, a pair that both diverges and never settles, a pulse that both rings and
+//! lands somewhere its reference does not, and the same claim reached from several probed states. One
+//! constraint removes them all, and they meet here as that constraint: they key alike, and the one that
+//! survives is the min `discovered`. The records collapsing there are readings of one situation and so
+//! equally good; the key exists to land the fold on one of them, not to prefer any. The dedup map is a
 //! [`BTreeMap`], so the generated order is deterministic independent of any hash map's.
 
 use std::collections::BTreeMap;
@@ -85,8 +86,8 @@ pub struct Constraint {
     /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
     /// emitted column carries.
     pub state: Minterm<Symbol>,
-    /// Index of the probed state in the sequential BFS exploration order — the secondary tie-break key:
-    /// on equal `prevector.len`, the earlier-discovered representative is kept.
+    /// Index of the probed state in the sequential BFS exploration order — the tie-break key the
+    /// situation collapse and emission's general-block choice both land on one representative by.
     pub discovered: usize,
     /// Which of the four (cause, outcome) cells the observation this constraint was generated from
     /// occupies, as [`Hazard::ordinal`] numbers them. The constraint follows the cause alone, so nothing
@@ -176,6 +177,21 @@ fn protected(group: &[Symbol], levels: &BTreeMap<Symbol, bool>) -> Vec<(Symbol, 
         .collect()
 }
 
+/// Does `c` remove `hazard` — is the constraint the remedy generated for that observation?
+///
+/// The three fields compared name the observation between them: the probed state and the input condition
+/// fix the cause (a race's condition is the probed state with the racing pins toggled, a pulse's is the
+/// state's own input assignment), and a record's `group` is what its constraint protects. So it holds of
+/// the record `c` carries the probed state of, and of every other reading of that same probe: a ring and
+/// a divergence of one situation answer to it alike, whichever of them supplied the representative. An
+/// emitter asks it to annotate a constraint with the phenomenon that motivated it, which is why the
+/// probed state is compared — the annotation describes the very context the block renders.
+pub(crate) fn constrains(c: &Constraint, hazard: &Hazard) -> bool {
+    c.state == hazard.state
+        && c.condition == hazard.condition
+        && c.nodes.iter().map(|(node, _)| node).eq(hazard.group.iter())
+}
+
 /// A constraint's protected nodes as one key fragment, in their own order.
 fn names_of(nodes: &[(Symbol, bool)]) -> String {
     nodes
@@ -186,18 +202,21 @@ fn names_of(nodes: &[(Symbol, bool)]) -> String {
 }
 
 /// A canonical dedup key, one keyspace per kind: setup/hold is directed, non_seq is unordered over its
-/// two pins, and a minimum pulse width names the one pin it constrains. Every kind keys on the nodes it
-/// protects too — the same edges endangering different nodes are different constraints, each
-/// characterised from its own state.
+/// two pins, and a minimum pulse width names the one pin it constrains.
 ///
-/// A minimum pulse width also keys on the input condition it was observed under, which a separation does
-/// not: the width is a claim about the one primary-input assignment the pulse starts and ends at, so two
-/// conditions over the same nodes are two claims and each is stated.
+/// Every kind keys on the same three components, which together ARE the situation: the CAUSE (the pins
+/// and edges above), the input CONDITION it was observed under, and the NODES it protects. Two records
+/// agreeing on all three describe one situation and yield one constraint; differing on any one of them
+/// they are separate claims, each stated. The condition carries its own weight — the same edges racing
+/// with a side input held one way put a different question to the characterisation than with it held the
+/// other — and the nodes theirs: the same edges endangering different nodes are different constraints,
+/// each characterised from its own state.
 fn constraint_key(c: &Constraint) -> String {
     let constrained = format!("{}{}", c.pin, c.pin_edge.rf());
+    let condition = crate::logic::literals_str(&c.condition);
     match &c.kind {
         ConstraintKind::SetupHold { clock, clock_edge } => format!(
-            "SH|{clock}{}|{constrained}|{}",
+            "SH|{clock}{}|{constrained}|{condition}|{}",
             clock_edge.rf(),
             names_of(&c.nodes)
         ),
@@ -208,27 +227,26 @@ fn constraint_key(c: &Constraint) -> String {
             } else {
                 (constrained, a)
             };
-            format!("NS|{lo}|{hi}|{}", names_of(&c.nodes))
+            format!("NS|{lo}|{hi}|{condition}|{}", names_of(&c.nodes))
         }
-        ConstraintKind::MinPulseWidth => format!(
-            "MPW|{constrained}|{}|{}",
-            crate::logic::literals_str(&c.condition),
-            names_of(&c.nodes)
-        ),
+        ConstraintKind::MinPulseWidth => {
+            format!("MPW|{constrained}|{condition}|{}", names_of(&c.nodes))
+        }
     }
 }
 
-/// Record a generated constraint into the dedup map, keeping the min `(prevector.len, discovered)`
-/// representative per canonical key: the shortest walk to a constrained hazard stands for every longer
-/// one, as it does everywhere in this engine.
+/// Record a generated constraint into the dedup map, keeping the min `discovered` representative per
+/// canonical key.
+///
+/// The records that meet on one key are readings of ONE situation, so they are equally good and the key
+/// expresses no preference between them: `discovered` is a BFS index, not a quality, and it is not even
+/// stable between runs. What it buys is that a fold lands on one answer within a run, and choosing among
+/// equally-good representatives is free.
 fn record(found: &mut BTreeMap<String, Constraint>, c: Constraint) {
     let key = constraint_key(&c);
     // The `Option` read here is the incumbent — no entry yet for this constraint, or one this candidate
-    // beats on `(prevector.len, discovered)` — nothing to do with a state value's determinacy.
-    if found
-        .get(&key)
-        .is_none_or(|e| (c.prevector.len(), c.discovered) < (e.prevector.len(), e.discovered))
-    {
+    // beats on `discovered` — nothing to do with a state value's determinacy.
+    if found.get(&key).is_none_or(|e| c.discovered < e.discovered) {
         found.insert(key, c);
     }
 }

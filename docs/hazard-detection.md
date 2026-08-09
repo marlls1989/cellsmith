@@ -195,9 +195,10 @@ oscillation from a lone toggle has no competing orders, so it records no racing 
 constraint.
 
 Detection reports every reachable state at which a pair (or a lone toggle) is observed racing into
-oscillation — one record per probed state, not a single representative standing for the pair. Which of
-those records becomes the rendered hazard, and which of the rest are rendered alongside it, is emission's
-decision (§8).
+oscillation — one record per probed state, not a single representative standing for the pair. That holds
+of every record detection files, under either cause and either outcome: **detection deduplicates, ranks
+and selects nothing.** Which of those records becomes a rendered block, and which of the rest are
+rendered alongside it, is emission's decision (§8).
 
 Worked example — the mutex Qa = !Qb·A, Qb = !Qa·B, from the idle state (0 0 | 0 0) (notation
 (A B | Qa Qb)), pair {A, B}:
@@ -277,14 +278,22 @@ Q = CLK·M + !CLK·Q (the slave, transparent while CLK is high), notation (CLK D
 ## 7. Situations, and the constraints generated from them
 
 Emission is what turns detection's raw report into rendered blocks: first by generating a constraint for
-every situation whose cause states a timing to hold, then by deciding which of those constraints — and
-which of the situations behind each one — actually get rendered (§8).
+every situation whose cause states a timing to hold, then by deciding how each of those constraints
+renders — stating a constraint generally, or only in the context it was observed in (§8).
 
-A **situation** is the (cause, condition, start state) triple a hazard is observed under: one probe, at
-one input condition, from one reachable stable state. Two hazard records sharing a situation are two
-independent readings of that one probe — a pair that both diverges and never settles, a pulse that both
-rings at one cut and disagrees with its reference at another — and **collapse into one constraint**: the
-timing that removes one removes the other, so nothing is gained by stating them twice.
+An **observation** is one hazard record: one probe, from one reachable stable state, under one input
+condition. A **situation** is what one constraint is generated per, and it has three components — the
+hazard's **cause**, the input **condition** it was observed under, and the **nodes** it puts at risk.
+Observations agreeing on all three are independent readings of one probe — a pair that both diverges and
+never settles, a pulse that both rings at one cut and disagrees with its reference at another — and
+**collapse into one constraint**: the timing that removes one removes the other, so nothing is gained by
+stating them twice.
+
+Each of the three carries its own weight, and differing in any one of them makes two separate claims,
+both stated. The same pins racing with a side input held high put a different question to the
+characterisation than with it held low — where a side input holds an output still, an internal's
+divergence never reaches it — and the same pins endangering different nodes are different constraints,
+each characterised from its own probed state.
 
 Every situation whose cause states a timing to hold — a race naming two pins, or a pulse — generates a
 constraint. Every **pair** constraint is built the same way, whichever outcome its situation shows:
@@ -308,12 +317,9 @@ constraint. Every **pair** constraint is built the same way, whichever outcome i
   constraint carries them because the arc it renders measures them: they are what the constraint is
   about.
 
-A race settling indeterminately is identified by its racing pins and edges **and the nodes it endangers**:
-the same pair racing under a different condition can put different nodes at risk — where a side input
-holds an output still, an internal's divergence never reaches it — and that is a different situation, each
-generating its own constraint from its own pre-hazard state. A race that oscillates is identified the same
-way, from the racing pair its record carries (§5). Situations that endanger the same nodes are one hazard
-reached along different walks, collapsing onto the shortest-prevector general block described next (§8).
+A race settling indeterminately takes its cause from the racing pins and the edge each makes; a race that
+oscillates takes it the same way, from the racing pair its record carries (§5). Whether the constraints so
+generated all reach the output, and as what, is §8's.
 
 A **minimum-pulse-width** constraint relates one pin to itself, and carries the pulsed pin, the pulse's
 **opening** edge alone — Liberate searches the width, so no closing edge is stated — the nodes the
@@ -325,57 +331,55 @@ just as a pair constraint's are. Two things a pair constraint has to decide are 
   minimum-pulse-width constraints whether or not the pulsed pin is declared a clock.
 - **The node sets are not resolved here.** A pulse observed from different states can decide different,
   even nested, node sets for the same pin and edge — each such situation still generates its own
-  constraint, over its own nodes, from its own state. Deciding which of those constraints is worth
-  rendering is the maximal-node-set rule, next (§8).
+  constraint, over its own nodes, from its own state. Which of those constraints stands for the pulse
+  generally, and which is stated only in its own context, is the containment rule, next (§8).
 
 ## 8. General blocks, conditioned blocks, and the maximal node sets
 
-A cell's delay and hidden arcs already render on this split: a **general block** carries no `-when` and
-stands for the arc however it was reached — the shortest-prevector representative among every context that
-produced it — and a **conditioned block** carries a `-when` naming one context's own condition, added on
-top where the cell opts in. One transition yields one general block however many contexts it was measured
-from, and every one of those contexts can return as its own conditioned block. Constraint blocks follow the
-same split, over situations rather than contexts: a **general block** carries no `-when` and stands for the
-constraint however it was reached; a **conditioned block** carries a `-when` naming the input context of
-one situation.
+A cell's delay and hidden arcs render on a split this section carries over. A **general block** carries no
+`-when` and stands for the thing it renders however it was reached; a **conditioned block** carries a
+`-when` naming one context's own condition, and is added on top where the cell opts the class in. One
+transition yields one general block however many contexts it was measured from, and every one of those
+contexts can return as its own conditioned block. Constraint blocks split the same way, over the
+constraints generated from situations (§7) rather than over an arc's contexts.
 
-A constraint's general block is chosen from among every situation that generates a constraint of the same
-identity — the same kind, pins and edges, and the same nodes protected — keeping the one reached along the
-**shortest prevector**, with a deterministic tie-break on discovery order so the choice is reproducible.
-What detection reported and generation turned into a constraint is not lost where it loses that tie-break:
-every other situation is still available, each its own conditioned block's `-when` away.
+A constraint's **identity** is what its block states of the arc it renders: the kind — which decides the
+Liberate `-type`s the block fans out to and which pin it relates — the pins it holds apart with the edge
+each makes, and the **protected nodes** it names in a single `-probe`. Everything else a block carries
+(its `-ic` levels, the held digits of its `-vector`, its `-when`) names the observation it was measured
+from.
 
-A pulse's constraint does not have a fixed identity to collapse onto in quite the same way, because the
-nodes it protects are themselves something to decide first:
-
-**The maximal node sets.** One pin's pulse decides different nodes from different states — on a cascade
+**The maximal node sets.** One constraint decides different nodes from different states — on a cascade
 whose second stage is gated, a CLK↓ pulse moves the master alone from one state and walks master and
-slave from another — so an observation is identified by the pulsed pin, the pulse's opening edge, and the
-nodes its width decides. Observations are collapsed on that identity: an observation is dropped where
-another of the same pin and edge decides a **strict superset** of its nodes, the maximal sets under
-inclusion standing for the ones they contain. Two sets that nest neither way are both kept. Observations
-over the same nodes are one hazard reached along different walks, and settle on the representative with
-the shortest prevector, ties broken on position in exploration order.
+slave from another; a clock racing its data endangers an internal latch alone where a side input holds
+the output still, and the latch and the output together where it does not. So the observations are
+grouped by everything that identifies the constraint EXCEPT its protected nodes, and within a group their
+node sets are ordered by **containment**. Each set that no other in its group strictly contains — each
+**maximal** set — supplies a general block. Two sets that nest neither way are both maximal, and each
+gets one.
 
-What makes the drop sound is how the hazard is measured. The block a constraint renders (§9) names the
-nodes it protects in Liberate's `-probe`, and Liberate narrows the pulse until the probed behaviour
-fails, so the width a probe set reports is the maximum over the nodes in it. A block probing a strict
-superset therefore asks a strictly stronger question, and the subset's answer sits inside it; a set that
-neither contains nor is contained asks a different question, so both are asked.
+What makes containment the right order is how a block is measured. The block names the nodes it protects
+in Liberate's `-probe` (§9), so a block probing a strict superset states everything the contained set's
+does and more, and it is the one that stands for the constraint however it was reached. A set that
+neither contains nor is contained asks a different question, so it is asked in its own right.
 
-What that leaves **open** is whether the width one node requires can itself differ with the start state it
-was characterised from. If it can, a dropped observation's nodes end up measured from the surviving
-observation's state rather than from their own, and the collapse trades that conservatism for a fraction
-of the characterisation cost.
+**Being contained is a demotion, not a drop.** An observation whose node set another one strictly
+contains supplies no general block, and it still renders its own conditioned block, over its own nodes,
+in the input context it was observed in. Every context that was observed is characterised in its own
+right — that is what the conditioned pass is for — so a conditioned block can carry a `-probe` narrower
+than any general block's.
 
-This collapse and §4's combinational-neighbourhood filter are the two places the engine decides what
-*not* to report, and they decide it on different grounds: the filter says a divergence is not the pin
-pair's fault, while here every observation is a real hazard and one measurement is held to answer for
-another.
+**The tie-break.** Several observations can be equally dominant: the same identity, the same maximal node
+set, reached from different probed states. One of them supplies the general block, chosen by the probed
+state's index in exploration order and then by which of the four (cause, outcome) cells the observation
+was read from. Neither component states a preference — the index is a breadth-first position, not stable
+between runs — so this is no quality judgement. What the pair buys is a total order: a parallel fold
+lands on one answer within a run, and choosing among equally-good alternatives is free. Nothing is lost to
+the tie-break either, since every other observation is its own conditioned block's `-when` away.
 
-Once the maximal sets have settled a pulse's identity, its general and conditioned blocks follow the same
-rule as a race's: the shortest-prevector situation among those left standing on that identity is the
-general block, and every other survivor is available as a conditioned block of its own.
+§4's combinational-neighbourhood filter remains the one place the engine decides what *not* to report:
+it says a divergence is not the pin pair's fault. Nothing in this section suppresses an observation — it
+decides how each one renders, generally or in its own context.
 
 ## 9. Reporting and rendering
 
@@ -385,6 +389,14 @@ general block, and every other survivor is available as a conditioned block of i
   here, so it carries no diagnostic of its own. Each hazard states the shared metastability risk; an
   oscillation is flagged as annotated only, never modelled as deterministic timing, because it is a
   property of the cell the user must know about, not an arc. (The exact wording is fixed elsewhere.)
+  This report is the run's full account of what was detected — the annotation below is not a second one.
+- **The oscillation annotation.** A ring is annotated on the constraint generated from it, as a comment
+  leading that constraint's block in the emitted Tcl and the `.lib` cell's fragment: the condition the
+  cell rings under, the nodes that ring, and the competing outcomes the ring is torn between. A comment
+  explains what it accompanies, so a ring with no constraint beside it carries none — a ring observed
+  under a lone toggle names one pin, and one edge has nothing to be separated from (§5), and a cell that
+  did not opt into constraint arcs states no constraint at all. Either way the ring reaches the user
+  through the report above.
 - **Constraint arcs.** Off by default; enabled per cell in the spec or globally with a CLI flag. A
   constraint over a pin pair renders its general block as a *pair* of characterisation arcs — the two
   sides are characterised separately — a setup and a hold arc for a directed clock↔data constraint, the
@@ -401,10 +413,10 @@ general block, and every other survivor is available as a conditioned block of i
   pins, and a pulse has one pin. The general block's `-vector` switches the constrained pin alone, along
   the pulse's opening edge, with every other input held at the level it takes in the probed state and the
   internals and outputs marked unknown; `-pin` and `-related_pin` both name that one pin; a conditioned
-  block states the same construction under its own situation's `-when`. The nodes named in the single
-  `-probe` are the ones the maximal-node-set rule (§8) settled on — the widest set no other observation of
-  the same pin and edge strictly contains — and `-ic` states the start condition of every column, as on
-  every block of a state-holding cell. Liberate narrows the pulse until the probed nodes stop behaving,
+  block states the same construction under its own situation's `-when`. A general block's single `-probe`
+  names a maximal node set (§8), a conditioned block's the nodes its own observation decided, and `-ic`
+  states the start condition of every column, as on every block of a state-holding cell. Liberate narrows
+  the pulse until the probed nodes stop behaving,
   and that measurement is what puts the `min_pulse_width_high`/`min_pulse_width_low` groups in Liberate's
   own output library — cellsmith writes no timing group for them into the `.lib` it emits.
 

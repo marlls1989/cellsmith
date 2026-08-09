@@ -48,6 +48,7 @@ use espresso_logic::Symbol;
 use rayon::prelude::*;
 
 use crate::emit::statetable::{build_state_model, EdgeRow, EdgeTok, Next, StateModel};
+use crate::logic::constraint::constrains;
 use crate::logic::hazard::{Cause, Hazard, Outcome};
 use crate::logic::regions::{StateCube, StateRegions};
 use crate::model::AnalysedCell;
@@ -85,16 +86,22 @@ pub fn library_liberty(name: &str, cells: &[AnalysedCell]) -> String {
 }
 
 /// The Liberty `cell (...) { ... }` fragment for a cell, as text (newline-terminated so fragments
-/// concatenate cleanly). A cell with a detected RACE-cause oscillation hazard is prefixed with a
-/// comment recording the racing condition and the competing settled outcomes. A pulse-cause
-/// oscillation names no competing settled state to report here, so this reads race-cause records only.
+/// concatenate cleanly).
+///
+/// The fragment is prefixed with a comment per RACE-cause oscillation the cell generated a constraint
+/// from, recording the racing condition and the competing settled outcomes. A comment explains the thing
+/// it accompanies, so an oscillation the cell states no constraint for is annotated nowhere — a
+/// lone-toggle ring names one pin, and one edge has nothing to be separated from, and a cell that did not
+/// opt into constraint arcs states none at all. What was detected is reported to the user on stderr
+/// either way. A pulse-cause oscillation names no competing settled state to report here, so this reads
+/// race-cause records only.
 pub fn cell_liberty(cell: &AnalysedCell) -> String {
     let mut out = String::new();
-    for a in cell
-        .hazards
-        .iter()
-        .filter(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation)
-    {
+    for a in cell.hazards.iter().filter(|h| {
+        matches!(h.cause, Cause::Race { .. })
+            && h.outcome == Outcome::Oscillation
+            && cell.constraints.iter().any(|c| constrains(c, h))
+    }) {
         let states: Vec<String> = a.settled.iter().map(Hazard::state_str).collect();
         out.push_str(&format!(
             "/* oscillation: {} risks metastability in {}, settling to one of {} */\n",

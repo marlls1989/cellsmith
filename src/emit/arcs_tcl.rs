@@ -41,7 +41,7 @@ use indexmap::IndexMap;
 
 use crate::logic::arcs::{Arc, ArcLevels, Edge, ExposedLevel, HiddenArc};
 use crate::logic::assignment;
-use crate::logic::constraint::{Constraint, ConstraintKind};
+use crate::logic::constraint::{self, Constraint, ConstraintKind};
 use crate::logic::hazard::{Cause, Hazard, Outcome};
 use crate::logic::leakage::LeakageState;
 use crate::logic::literal_product;
@@ -69,12 +69,12 @@ impl Default for ArcsTclOptions {
 
 /// All `define_arc` blocks for a cell, concatenated. The general arcs are ALWAYS emitted — one
 /// representative per transition, rendered without a `-when` line; an arc class the cell selected in
-/// its resolved `when` set ADDS its conditioned blocks on top, so the same arc can appear twice. A cell
-/// with a detected oscillation hazard is prefixed with a comment recording the racing condition and the
-/// competing settled outcomes — the metastability risk timing arcs cannot express. Any derived
-/// constraint arcs the cell opted into — its `constraint_arcs` was set, so generation populated
+/// its resolved `when` set ADDS its conditioned blocks on top, so the same arc can appear twice. Any
+/// derived constraint arcs the cell opted into — its `constraint_arcs` was set, so generation populated
 /// `cell.constraints` — follow the delay arcs, through those same two passes: the setup/hold and non_seq
-/// pairs holding two pins apart, and the single-pin min_pulse_width blocks.
+/// pairs holding two pins apart, and the single-pin min_pulse_width blocks. A constraint an oscillation
+/// motivated leads with a comment recording the racing condition and the competing settled outcomes —
+/// the metastability risk timing arcs cannot express.
 pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     cell_arcs(cell, opts).tcl
 }
@@ -173,7 +173,6 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
     // carrying them as model coordinates, so its arcs, hazards and leakage states are the ones an
     // exposed column can be read off; for every other cell it IS the cell.
     let cell = cell.arc_view();
-    let out = oscillation_comment(cell);
     // Each arc class is emitted in two passes. The GENERAL pass comes out ALWAYS: one representative per
     // transition — a related pin's edge driving an output pin's edge — rendered with no `-when` line, so
     // the block generalises over the side inputs' held levels, the held outputs and the internal state
@@ -214,7 +213,7 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
         h.prevector.len()
     });
     let measured = groups(cell, &[]);
-    let mut blocks = Blocks::new(out);
+    let mut blocks = Blocks::new();
     for group in &measured {
         for (_, arc) in cell
             .arcs
@@ -277,18 +276,23 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
     // a conditioned block per observation on top, the representative's own included. The skip rule is the
     // same too: a representative standing for a single observation, or rendering no `-when`, is already
     // fully characterised by its general block.
-    let constraints = constraint_selection(&cell.constraints);
+    //
+    // Every observation reaches the conditioned pass, an observation another one dominates included: it
+    // renders no general block ([`dominates`]) and is still characterised in the input context it was
+    // observed in, which is the whole point of that pass. A conditioned block can therefore carry a
+    // `-probe` narrower than any general block's.
+    let general_constraints = constraint_selection(&cell.constraints);
     for (i, c) in cell.constraints.iter().enumerate() {
-        if constraints.general.contains_key(&i) {
+        if general_constraints.contains_key(&i) {
             state_constraint(&mut blocks, cell, c, false);
         }
     }
     if cell.when.contains(ArcClass::Constraint) {
         for (i, c) in cell.constraints.iter().enumerate() {
-            let redundant = constraints.general.get(&i).is_some_and(|&cases| {
+            let redundant = general_constraints.get(&i).is_some_and(|&cases| {
                 cases == 1 || constraint_when_str(&constraint_arc(c)).is_none()
             });
-            if constraints.standing.contains(&i) && !redundant {
+            if !redundant {
                 state_constraint(&mut blocks, cell, c, true);
             }
         }
@@ -310,9 +314,9 @@ struct Blocks {
 }
 
 impl Blocks {
-    fn new(out: String) -> Self {
+    fn new() -> Self {
         Blocks {
-            out,
+            out: String::new(),
             index: HashMap::new(),
             arcs: Vec::new(),
         }
@@ -783,17 +787,18 @@ impl ConstraintIdentity {
     }
 }
 
-/// Where an observation stands in the order its identity's representative is the minimum of: the length
-/// of the walk that reached it, then the exploration index of the probed state, then the (cause, outcome)
-/// cell it occupies ([`crate::logic::hazard::Hazard::ordinal`]).
+/// The tie-break among EQUALLY DOMINANT observations: the exploration index of the probed state, then
+/// the (cause, outcome) cell it occupies ([`crate::logic::hazard::Hazard::ordinal`]).
 ///
-/// The three are a TOTAL order. The first two are the shortest-walk rule this engine applies everywhere;
-/// the third is what makes it total, two observations of one probed state tying on both and differing
-/// only in which of the four cells they were read from. So which observation supplies the general block
-/// is fixed however the parallel detection merged them.
+/// What decides which observations supply a general block is containment between their protected node
+/// sets ([`dominates`]); this settles the choice between the ones that come out equally dominant. Neither
+/// component states a preference — `discovered` is a breadth-first exploration index, not stable between
+/// runs, and the ordinal is a fixed numbering of the four (cause, outcome) cells — so this is no quality
+/// judgement. What the pair buys is a TOTAL order, two observations of one probed state tying on the
+/// first and differing only in which of the four cells they were read from: a parallel fold lands on one
+/// answer within a run, and choosing among equally-good representatives is free.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct ConstraintRank {
-    prevector: usize,
     discovered: usize,
     ordinal: u8,
 }
@@ -801,76 +806,60 @@ struct ConstraintRank {
 impl ConstraintRank {
     fn of(c: &Constraint) -> Self {
         ConstraintRank {
-            prevector: c.prevector.len(),
             discovered: c.discovered,
             ordinal: c.ordinal,
         }
     }
 }
 
-/// Does `outer` speak for `inner` — is `inner` an observation of the same pulse under the same outcome,
-/// over a strict subset of the nodes `outer` protects?
+/// Does `outer` speak for `inner` — is `inner` an observation of the same constraint over a strict subset
+/// of the nodes `outer` protects?
 ///
-/// One pin's pulse decides different nodes from different states, and on a cell whose internals form a
+/// The comparison runs within everything that identifies the constraint EXCEPT its protected nodes: the
+/// kind with its payload pins and edges, plus the constrained pin and the edge it makes — which is
+/// [`ConstraintIdentity`] minus its `nodes`, the kind being what decides the `-type`s and the related
+/// pin. What is left to order within such a group is the node sets, by containment.
+///
+/// One constraint decides different nodes from different states, and on a cell whose internals form a
 /// chain those node sets nest — one set per depth the cascade was cut at, every one of them the same
-/// pulse seen from further in. Only the **maximal** sets are rendered: an observation is dropped only
-/// where another observation of the same cause AND outcome decides a strict superset of its nodes, and
-/// two sets that nest neither way both stand. What makes that sound is how the hazard is measured. The
-/// block characterising one names the nodes it protects in Liberate's `-probe`, and Liberate narrows the
-/// pulse until the probed behaviour fails, so the width a probe set reports is the maximum over the nodes
-/// in it. A block probing a strict superset therefore asks a strictly stronger question, and the subset's
-/// answer is contained in it; a superset and an incomparable set ask different questions, and both are
-/// asked. The outcome is part of that key because the argument holds only within one: a divergence
-/// covering a ring's nodes measures how wide the pulse must be to land somewhere definite, which answers
-/// nothing about the ring.
+/// constraint seen from further in. The **maximal** sets under containment are the ones that supply a
+/// general block, which stands for the constraint however it was reached: a block names the nodes it
+/// protects in Liberate's `-probe`, so a block probing a strict superset states everything the subset's
+/// does and more. Two sets that nest neither way ask different questions, so both are maximal and each
+/// supplies a general block of its own.
 ///
-/// What that leaves open is whether the width one node needs can itself differ with the start state it is
-/// characterised from. If it can, a dropped observation's nodes end up measured from the surviving
-/// observation's state rather than from their own, and the collapse trades that conservatism for a
-/// fraction of the characterisation cost.
-///
-/// The whole argument is about how a pulse's width is searched for, so it reaches the minimum pulse
-/// widths and nothing else: a separation is measured by moving two edges together, and a block probing
-/// more nodes there asks a different question rather than a stronger one.
+/// Being dominated is a DEMOTION, not a drop. The observation renders no general block and still renders
+/// its own conditioned block under `--when`, characterised in the input context it was observed in — so
+/// a conditioned block can carry a `-probe` narrower than any general block's.
 fn dominates(outer: &Constraint, inner: &Constraint) -> bool {
-    matches!(outer.kind, ConstraintKind::MinPulseWidth)
-        && matches!(inner.kind, ConstraintKind::MinPulseWidth)
-        && (&outer.pin, outer.pin_edge, outer.ordinal)
-            == (&inner.pin, inner.pin_edge, inner.ordinal)
+    (&outer.kind, &outer.pin, outer.pin_edge) == (&inner.kind, &inner.pin, inner.pin_edge)
         && strictly_within(&protected(inner), &protected(outer))
 }
 
 /// Is every node of `inner` among `outer`'s, with `outer` naming at least one more? Strict on purpose:
-/// two observations over the same nodes are one hazard reached along different walks, settled by the
-/// walk-length tie-break rather than by one displacing the other.
+/// two observations over the same nodes are one constraint reached along different walks, settled by
+/// [`ConstraintRank`] rather than by one displacing the other.
 fn strictly_within(inner: &[Symbol], outer: &[Symbol]) -> bool {
     let inner: BTreeSet<&Symbol> = inner.iter().collect();
     let outer: BTreeSet<&Symbol> = outer.iter().collect();
     inner.len() < outer.len() && inner.is_subset(&outer)
 }
 
-/// Which of a cell's constraints render, and which of them supply the general blocks.
-struct ConstraintSelection {
-    /// Each identity's representative index into the cell's constraints, mapped to the number of
-    /// observations that identity carries — read exactly as the delay arcs read [`generalised`]'s map.
-    general: HashMap<usize, usize>,
-    /// The observations that render at all: those no other observation speaks for ([`dominates`]).
-    standing: HashSet<usize>,
-}
-
-/// Select what a cell's constraints render. An observation another one speaks for renders nothing; what
-/// is left groups by [`ConstraintIdentity`], and each group's representative — the observation the
-/// general block is rendered from — is its minimum [`ConstraintRank`].
-fn constraint_selection(constraints: &[Constraint]) -> ConstraintSelection {
-    let standing: HashSet<usize> = (0..constraints.len())
-        .filter(|&i| !constraints.iter().any(|o| dominates(o, &constraints[i])))
-        .collect();
+/// Which of a cell's constraints supply the general blocks: each such identity's representative index
+/// into the cell's constraints, mapped to the number of observations that identity carries — read
+/// exactly as the delay arcs read [`generalised`]'s map.
+///
+/// An observation another one dominates supplies no general block ([`dominates`]); what is left groups by
+/// [`ConstraintIdentity`], and each group's representative — the observation its general block is
+/// rendered from — is its minimum [`ConstraintRank`]. Every observation renders a conditioned block
+/// regardless, so nothing here decides whether one is characterised, only how.
+fn constraint_selection(constraints: &[Constraint]) -> HashMap<usize, usize> {
     // Per identity: the minimum-rank winner and the observation count.
     let mut groups: HashMap<ConstraintIdentity, (ConstraintRank, usize, usize)> = HashMap::new();
     for (i, c) in constraints
         .iter()
         .enumerate()
-        .filter(|(i, _)| standing.contains(i))
+        .filter(|(_, c)| !constraints.iter().any(|o| dominates(o, c)))
     {
         let rank = ConstraintRank::of(c);
         groups
@@ -884,24 +873,29 @@ fn constraint_selection(constraints: &[Constraint]) -> ConstraintSelection {
             })
             .or_insert((rank, i, 1));
     }
-    ConstraintSelection {
-        general: groups
-            .into_values()
-            .map(|(_, i, count)| (i, count))
-            .collect(),
-        standing,
-    }
+    groups
+        .into_values()
+        .map(|(_, i, count)| (i, count))
+        .collect()
 }
 
 /// State one constraint's blocks: its kind's fan-out, over every alias group whose netlist agrees on the
 /// columns they carry. `with_when` selects the pass, as it does for the measured blocks.
+///
+/// An oscillation's annotation ([`oscillation_note`]) leads the fan-out and rides IN the first block's
+/// text, so the comment and the block it explains stand or fall together: a block a firing already stated
+/// is not stated twice ([`Blocks::state`]), and a comment pushed separately would be left over to explain
+/// whatever block came next.
 fn state_constraint(blocks: &mut Blocks, cell: &AnalysedCell, c: &Constraint, with_when: bool) {
+    let note = oscillation_note(cell, c);
     for group in &groups(cell, &protected(c)) {
-        for block in constraint_blocks(c) {
-            blocks.state(
-                constraint_block(cell, group, &block.arc, block.arc_type.token(), with_when),
-                constraint_firing(&block, &c.state),
-            );
+        for (i, block) in constraint_blocks(c).into_iter().enumerate() {
+            let mut text =
+                constraint_block(cell, group, &block.arc, block.arc_type.token(), with_when);
+            if let (0, Some(note)) = (i, &note) {
+                text.insert_str(0, note);
+            }
+            blocks.state(text, constraint_firing(&block, &c.state));
         }
     }
 }
@@ -1007,25 +1001,31 @@ fn constraint_vector_str(
     )
 }
 
-/// A `#` comment block describing each detected RACE-cause oscillation condition (empty for ordinary
-/// cells). A pulse-cause oscillation names no competing settled state to report here — it is reported
-/// to the user as a warning instead — so this reads race-cause records only.
-fn oscillation_comment(cell: &AnalysedCell) -> String {
-    let mut s = String::new();
-    for a in cell
-        .hazards
-        .iter()
-        .filter(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation)
-    {
-        let states: Vec<String> = a.settled.iter().map(Hazard::state_str).collect();
-        s.push_str(&format!(
-            "# oscillation: {} risks metastability in {{{}}}, settling to one of {}\n",
-            a.condition_str(),
-            a.group.join(", "),
-            states.join(" | "),
-        ));
-    }
-    s
+/// The `#` comment line a constraint block carries where an oscillation motivated it: the condition the
+/// cell rings under, the nodes that ring, and the competing outcomes the ring is torn between. `None`
+/// where no oscillation was observed of the situation `c` constrains ([`crate::logic::constraint`]).
+///
+/// A comment explains what it sits beside, so an oscillation is annotated on the constraint generated
+/// from it and nowhere else; the run's full account of what was detected is the report on stderr. Two
+/// consequences follow from that pairing, both intended. A lone-toggle ring names ONE pin, and one edge
+/// has nothing to be separated from, so it generates no constraint and carries no annotation. A cell that
+/// did not opt into constraint arcs renders no constraint block, so it carries none either.
+///
+/// A pulse-cause oscillation names no competing settled state to report here — it is reported to the
+/// user as a warning instead — so this reads race-cause records only.
+fn oscillation_note(cell: &AnalysedCell, c: &Constraint) -> Option<String> {
+    let hazard = cell.hazards.iter().find(|h| {
+        matches!(h.cause, Cause::Race { .. })
+            && h.outcome == Outcome::Oscillation
+            && constraint::constrains(c, h)
+    })?;
+    let states: Vec<String> = hazard.settled.iter().map(Hazard::state_str).collect();
+    Some(format!(
+        "# oscillation: {} risks metastability in {{{}}}, settling to one of {}\n",
+        hazard.condition_str(),
+        hazard.group.join(", "),
+        states.join(" | "),
+    ))
 }
 
 /// The edge the arc's `related` clock pin makes, read from its value in the end state — the same
@@ -3823,30 +3823,60 @@ B = "!CLK*(!SEL*D + SEL*B) + CLK*B"
         assert_eq!(probes_on(&tcl, "CLK"), ["A", "B"], "{tcl}");
     }
 
-    #[test]
-    fn a_ring_and_a_divergence_of_one_pulse_probe_their_own_nodes() {
-        // The cross-NOR SR with an internal node L latching the set output while S is asserted. A set
-        // pulse rings over {Q, Qn} at one cut and lands somewhere the reference does not over
-        // {Q, Qn, L} at another. The ring's nodes are a strict subset of the divergence's, and the two
-        // blocks both stand: a divergence covering a ring's nodes measures how wide the pulse must be to
-        // land somewhere definite, which answers nothing about the ring. The set pulse observed from the
-        // already-set state decides L alone, and THAT one the {Q, Qn, L} block does speak for.
-        let cell = analyse(
+    /// The cross-NOR SR with an internal node L latching the set output while S is asserted, opting into
+    /// constraint arcs with whatever cell-level keys `extra` adds. A set pulse rings over {Q, Qn} at one
+    /// cut, lands somewhere its reference does not over {Q, Qn, L} at another, and — observed from the
+    /// already-set state — decides L alone: three node sets for the one pin and edge, two of them inside
+    /// the third.
+    fn srl(extra: &str) -> String {
+        format!(
             r#"
 [[cell]]
 name = "SRL"
 inputs = ["S", "R"]
 constraint_arcs = true
-[cell.internal]
+{extra}[cell.internal]
 L = "S*Q + !S*L"
 [cell.outputs]
 Q  = "!(R+Qn)"
 Qn = "!(S+Q)"
-"#,
-        );
-        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+"#
+        )
+    }
+
+    #[test]
+    fn the_widest_probe_set_of_a_pulse_states_its_general_block() {
+        // {Q, Qn} and {L} each sit inside {Q, Qn, L}, so the widest set is the one that stands for the S
+        // pulse however it was reached: a block names what it protects in Liberate's `-probe`, and the
+        // wider probe states everything the narrower ones do and more.
+        let tcl = cell_arcs_tcl(&analyse(&srl("")), ArcsTclOptions::default());
         eprintln!("{tcl}");
-        assert_eq!(probes_on(&tcl, "S"), ["Q Qn", "Q Qn L"], "{tcl}");
+        assert_eq!(probes_on(&tcl, "S"), ["Q Qn L"], "{tcl}");
+    }
+
+    #[test]
+    fn a_dominated_probe_set_returns_as_a_conditioned_block() {
+        // Being contained demotes an observation; it does not drop it. Selecting the constraint class
+        // brings each narrower set back as a conditioned block over its own nodes, characterised in the
+        // input context it was observed in — so a conditioned block can probe less than any general one.
+        let tcl = cell_arcs_tcl(
+            &analyse(&srl("when = \"constraint\"\n")),
+            ArcsTclOptions::default(),
+        );
+        eprintln!("{tcl}");
+        let probed = probes_on(&tcl, "S");
+        for nodes in ["Q Qn", "L"] {
+            assert!(
+                probed.contains(&nodes.to_string()),
+                "the {{{nodes}}} observation is characterised in its own right:\n{tcl}"
+            );
+        }
+        for block in pulse_blocks(&tcl)
+            .iter()
+            .filter(|b| named(b, "-pin") == "S" && braced(b, "-probe") != Some("Q Qn L"))
+        {
+            assert!(has_when(block), "a dominated block is conditioned: {block}");
+        }
     }
 
     /// A same-phase two-stage cascade opting into constraint arcs, with whatever cell-level keys `extra`
@@ -4600,28 +4630,45 @@ Qb = "!Qa * B"
     }
 
     #[test]
-    fn mutex_emits_oscillation_comment_and_input_only_related_pins() {
-        let cell = analyse(
-            r#"
+    fn mutex_annotates_the_oscillation_on_its_constraint_and_relates_inputs_only() {
+        const MUT: &str = r#"
 [[cell]]
 name = "MUT"
 inputs = ["A", "B"]
-[cell.outputs]
+{EXTRA}[cell.outputs]
 Qa = "!Qb * A"
 Qb = "!Qa * B"
-"#,
+"#;
+        let tcl = cell_arcs_tcl(
+            &analyse(&MUT.replace("{EXTRA}", "constraint_arcs = true\n")),
+            ArcsTclOptions::default(),
         );
-        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
-        // Oscillation documented up front.
-        assert!(tcl.contains("# oscillation: A*B risks metastability"));
-        assert!(tcl.contains("Qa, Qb"));
+        // The comment explains the block it leads: the non_seq the A*B ring motivated.
+        let annotated = tcl
+            .split("\n\n")
+            .find(|b| b.starts_with("# oscillation: A*B risks metastability"))
+            .unwrap_or_else(|| panic!("the ring is annotated on its constraint:\n{tcl}"));
+        assert!(annotated.contains("in {Qa, Qb}"), "{annotated}");
+        assert!(
+            annotated.contains("-type non_seq_setup \\"),
+            "the annotation leads the constraint generated from the ring: {annotated}"
+        );
         // Related pins are primary inputs only — never an output (a Qb→Qa arc is a deadlock).
         assert!(!tcl.contains("-related_pin Qa"));
         assert!(!tcl.contains("-related_pin Qb"));
         assert!(tcl.contains("-related_pin A"));
         assert!(tcl.contains("-related_pin B"));
         assert!(tcl.contains("-pinlist {A B Qa Qb}"));
+
+        // The same cell stating no constraint: the ring is still detected and reported to the user, and
+        // there is no block here for a comment to explain, so none is written.
+        let bare = cell_arcs_tcl(
+            &analyse(&MUT.replace("{EXTRA}", "")),
+            ArcsTclOptions::default(),
+        );
+        eprintln!("{bare}");
+        assert!(!bare.contains("# oscillation:"), "{bare}");
     }
 
     #[test]
