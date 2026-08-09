@@ -4565,11 +4565,20 @@ Q = "CLKB*M + !CLKB*Q"
             "the fixture masks arcs:\n{}",
             rendered.tcl
         );
-        for m in &rendered.masked {
-            assert!(
-                matches!(m.kind, MaskedKind::Toggle { .. }),
-                "a toggle no output follows: {m:?}"
-            );
+        // M is also unexposed, so this fixture masks a Leakage block alongside the Toggle one on the
+        // same channel; this test is about the toggle conflation, so it scopes to that kind and leaves
+        // the leakage side to unexposed_latches_conflate_into_one_masked_leakage_block.
+        let toggles: Vec<&MaskedBlock> = rendered
+            .masked
+            .iter()
+            .filter(|m| matches!(m.kind, MaskedKind::Toggle { .. }))
+            .collect();
+        assert!(
+            !toggles.is_empty(),
+            "the fixture masks a toggle:\n{}",
+            rendered.tcl
+        );
+        for m in &toggles {
             assert!(
                 m.block_str().starts_with("hidden "),
                 "it reads as its kind and edge: {}",
