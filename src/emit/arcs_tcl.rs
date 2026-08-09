@@ -41,11 +41,10 @@ use indexmap::IndexMap;
 
 use crate::logic::arcs::{Arc, ArcLevels, Edge, ExposedLevel, HiddenArc};
 use crate::logic::assignment;
-use crate::logic::confluence::{Constraint, ConstraintKind};
+use crate::logic::constraint::{Constraint, ConstraintKind};
 use crate::logic::hazard::{Cause, Hazard, Outcome};
 use crate::logic::leakage::LeakageState;
 use crate::logic::literal_product;
-use crate::logic::width::MinPulseWidth;
 use crate::model::{AnalysedCell, ArcClass};
 
 /// Knobs for the arc emitter.
@@ -74,8 +73,8 @@ impl Default for ArcsTclOptions {
 /// with a detected oscillation hazard is prefixed with a comment recording the racing condition and the
 /// competing settled outcomes — the metastability risk timing arcs cannot express. Any derived
 /// constraint arcs the cell opted into — its `constraint_arcs` was set, so generation populated
-/// `cell.constraints` and `cell.min_pulse_widths` — follow the delay arcs: the setup/hold and non_seq
-/// pairs holding two pins apart, and the single-pin min_pulse_width blocks.
+/// `cell.constraints` — follow the delay arcs: the setup/hold and non_seq pairs holding two pins apart,
+/// and the single-pin min_pulse_width blocks.
 pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     cell_arcs(cell, opts).tcl
 }
@@ -269,24 +268,18 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
     }
     // Constraint arcs emit whatever generation produced: `cell.constraints` is populated only when the
     // cell opted in (per-cell `constraint_arcs`, or the global `--constraints` flag), and is empty
-    // otherwise — so this loop is its own gate.
+    // otherwise — so this loop is its own gate. How many blocks a constraint comes out as is its KIND's
+    // (see [`constraint_blocks`]): a separation is characterised from both sides and a minimum pulse
+    // width from the one it has.
     for c in &cell.constraints {
         let protected: Vec<Symbol> = c.nodes.iter().map(|(node, _)| node.clone()).collect();
         for group in &groups(cell, &protected) {
-            for (arc_type, block) in constraint_types(c)
-                .into_iter()
-                .zip(format_constraint(cell, group, c))
-            {
-                blocks.state(block, constraint_firing(arc_type, c));
+            for block in constraint_blocks(c) {
+                blocks.state(
+                    constraint_block(cell, group, &block.arc, block.arc_type.token()),
+                    constraint_firing(&block, &c.state),
+                );
             }
-        }
-    }
-    // The minimum-pulse-width constraints, under the same opt-in and read the same way: one block each,
-    // a pulse having no second member to characterise the other side of.
-    for pw in &cell.min_pulse_widths {
-        let protected: Vec<Symbol> = pw.nodes.iter().map(|(node, _)| node.clone()).collect();
-        for group in &groups(cell, &protected) {
-            blocks.state(format_pulse_width(cell, group, pw), pulse_firing(pw));
         }
     }
     CellArcs {
@@ -362,31 +355,26 @@ fn hidden_firing(h: &HiddenArc) -> MaskedArc {
     }
 }
 
-/// The firing a constraint block renders, sampled at the state the hazard was probed from.
-fn constraint_firing(arc_type: ArcType, c: &Constraint) -> MaskedArc {
+/// The firing a constraint block renders, at the state `state` the hazard was probed from: the pins the
+/// block switches are what it measures between, so the firing reads them off the block's own arc. Two
+/// constraints probed from states the columns cannot tell apart render the same block, and it is these
+/// states that say what would tell them apart.
+fn constraint_firing(block: &ConstraintBlock<'_>, state: &Minterm<Symbol>) -> MaskedArc {
     MaskedArc {
-        arc_type,
-        kind: MaskedKind::Constraint {
-            related: c.related.clone(),
-            related_edge: c.related_edge,
-            pin: c.pin.clone(),
-            pin_edge: c.pin_edge,
+        arc_type: block.arc_type,
+        kind: match &block.arc.switching {
+            Switching::Pair { related, pin } => MaskedKind::Constraint {
+                related: related.0.clone(),
+                related_edge: related.1,
+                pin: pin.0.clone(),
+                pin_edge: pin.1,
+            },
+            Switching::Single { pin } => MaskedKind::Pulse {
+                pin: pin.0.clone(),
+                edge: pin.1,
+            },
         },
-        states: vec![c.state.clone()],
-    }
-}
-
-/// The firing a minimum-pulse-width block renders, sampled at the state the pulse was probed from. Two
-/// pulses of one pin and edge probed from states the columns cannot tell apart render the same block,
-/// and it is these states that say what would tell them apart.
-fn pulse_firing(pw: &MinPulseWidth) -> MaskedArc {
-    MaskedArc {
-        arc_type: ArcType::MinPulseWidth,
-        kind: MaskedKind::Pulse {
-            pin: pw.pin.clone(),
-            edge: pw.edge,
-        },
-        states: vec![pw.state.clone()],
+        states: vec![state.clone()],
     }
 }
 
@@ -620,14 +608,6 @@ fn groups(cell: &AnalysedCell, extra: &[Symbol]) -> Vec<Group> {
         .collect()
 }
 
-/// The `-type` tokens of a constraint's two blocks, in the order [`format_constraint`] renders them.
-fn constraint_types(c: &Constraint) -> [ArcType; 2] {
-    match c.kind {
-        ConstraintKind::SetupHold => [ArcType::Setup, ArcType::Hold],
-        ConstraintKind::NonSeq => [ArcType::NonSeqSetup, ArcType::NonSeqHold],
-    }
-}
-
 /// The pins a constraint block switches, and the edge each makes: the PAIR a constraint holds apart, or
 /// the SINGLE pin a minimum-pulse-width block constrains — the pulse relating that pin to itself, so the
 /// block names it on both `-related_pin` and `-pin`.
@@ -683,50 +663,55 @@ struct ConstraintArc<'a> {
     levels: &'a ArcLevels,
 }
 
-/// The pair constraint as one rendered arc: the two inputs it holds apart, each in the edge it makes.
-fn pair_arc(c: &Constraint) -> ConstraintArc<'_> {
-    ConstraintArc {
-        switching: Switching::Pair {
-            related: (&c.related, c.related_edge),
-            pin: (&c.pin, c.pin_edge),
-        },
+/// One `define_arc` block a constraint renders: the `-type` it leads with, beside the arc it renders
+/// from. A block carries exactly one type, so how many blocks a constraint fans out to is a property of
+/// its kind rather than of the token.
+struct ConstraintBlock<'a> {
+    arc_type: ArcType,
+    arc: ConstraintArc<'a>,
+}
+
+/// The blocks one constraint renders, in emission order.
+///
+/// A SEPARATION is a pair — the setup member and the hold member, which Liberate characterises as
+/// separate arcs: `setup`/`hold` for a directed clock↔data constraint, `non_seq_setup`/`non_seq_hold`
+/// for a symmetric (oscillation / mutual-exclusion) one. Both members switch the same two pins, each in
+/// the edge it makes.
+///
+/// A MINIMUM PULSE WIDTH is ONE block of `-type min_pulse_width`: the constrained pin's column carries
+/// the pulse's OPENING edge alone, and Liberate searches for the width at which the probed nodes stop
+/// behaving. There is no pair here — a pair's two members are the two sides of a separation between two
+/// pins, and a pulse has one pin, which the block names on both `-related_pin` and `-pin`.
+fn constraint_blocks(c: &Constraint) -> Vec<ConstraintBlock<'_>> {
+    let arc = |switching| ConstraintArc {
+        switching,
         nodes: &c.nodes,
         prevector: &c.prevector,
         levels: &c.levels,
-    }
-}
-
-/// The minimum-pulse-width constraint as one rendered arc: the single constrained pin, in the pulse's
-/// opening edge.
-fn pulse_arc(pw: &MinPulseWidth) -> ConstraintArc<'_> {
-    ConstraintArc {
-        switching: Switching::Single {
-            pin: (&pw.pin, pw.edge),
-        },
-        nodes: &pw.nodes,
-        prevector: &pw.prevector,
-        levels: &pw.levels,
-    }
-}
-
-/// A constraint arc as a pair of `define_arc` blocks — the setup member and the hold member (Liberate
-/// characterises them as separate arcs): `setup`/`hold` for a directed clock↔data constraint,
-/// `non_seq_setup`/`non_seq_hold` for a symmetric (oscillation / mutual-exclusion) one.
-fn format_constraint(cell: &AnalysedCell, group: &Group, c: &Constraint) -> [String; 2] {
-    let [setup, hold] = constraint_types(c);
-    let arc = pair_arc(c);
-    [
-        constraint_block(cell, group, &arc, setup.token()),
-        constraint_block(cell, group, &arc, hold.token()),
-    ]
-}
-
-/// A minimum-pulse-width constraint as ONE `define_arc` of `-type min_pulse_width`: the constrained
-/// pin's column carries the pulse's OPENING edge alone, and Liberate searches for the width at which
-/// the probed nodes stop behaving. There is no pair here — the two members of a setup/hold pair are the
-/// two sides of a separation between two pins, and a pulse has one pin.
-fn format_pulse_width(cell: &AnalysedCell, group: &Group, pw: &MinPulseWidth) -> String {
-    constraint_block(cell, group, &pulse_arc(pw), ArcType::MinPulseWidth.token())
+    };
+    let pin = (&c.pin, c.pin_edge);
+    let (related, types) = match &c.kind {
+        ConstraintKind::SetupHold { clock, clock_edge } => {
+            ((clock, *clock_edge), [ArcType::Setup, ArcType::Hold])
+        }
+        ConstraintKind::NonSeq { other, other_edge } => (
+            (other, *other_edge),
+            [ArcType::NonSeqSetup, ArcType::NonSeqHold],
+        ),
+        ConstraintKind::MinPulseWidth => {
+            return vec![ConstraintBlock {
+                arc_type: ArcType::MinPulseWidth,
+                arc: arc(Switching::Single { pin }),
+            }]
+        }
+    };
+    types
+        .into_iter()
+        .map(|arc_type| ConstraintBlock {
+            arc_type,
+            arc: arc(Switching::Pair { related, pin }),
+        })
+        .collect()
 }
 
 /// One constraint `define_arc` of the given `-type`. Liberate cannot infer how to prepare these
@@ -3228,9 +3213,10 @@ Y = "!W"
 
     #[test]
     fn a_constraint_block_leaves_the_exposed_column_unstated_and_still_initialises_it() {
-        // A constraint block measures nothing the cell does in response to its two edges, so it renders
-        // the exposed column the same `X` it renders every output — while `-ic` carries the level the
-        // node actually starts at, which is what Liberate needs to prepare the cell either way.
+        // A constraint block measures nothing the cell does in response to the edges it states, so it
+        // renders the exposed column the same `X` it renders every output — while `-ic` carries the
+        // level the node actually starts at, which is what Liberate needs to prepare the cell either
+        // way.
         let cell = analyse(C2_EXPOSED);
         let arc = cell.arc_view();
         assert!(
@@ -3240,7 +3226,11 @@ Y = "!W"
         let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
         eprintln!("{tcl}");
         for c in &arc.constraints {
-            let rendered = format_constraint(arc, &whole_for(arc, c), c).concat();
+            let group = whole_for(arc, c);
+            let rendered: String = constraint_blocks(c)
+                .iter()
+                .map(|b| constraint_block(arc, &group, &b.arc, b.arc_type.token()))
+                .collect();
             assert!(
                 tcl.contains(&rendered),
                 "the emitted Tcl carries this constraint's blocks:\n{rendered}"
@@ -3381,10 +3371,19 @@ Y = "!W"
     /// The PAIR constraint blocks of `tcl` — the setup/hold and non_seq members — each truncated at its
     /// own trailing blank line. Every block probing the nodes it protects carries a `-probe`, the
     /// single-pin [`ArcType::MinPulseWidth`] blocks included, so the type is what tells the two apart.
-    fn constraint_blocks(tcl: &str) -> Vec<String> {
+    fn pair_blocks(tcl: &str) -> Vec<String> {
         blocks(tcl)
             .into_iter()
             .filter(|b| b.contains("-probe") && !b.contains(&pulse_type()))
+            .collect()
+    }
+
+    /// The cell's minimum-pulse-width constraints, picked out of its one `constraints` list by their
+    /// kind: the separations sharing that list are rendered as pairs instead.
+    fn width_constraints(cell: &AnalysedCell) -> Vec<&Constraint> {
+        cell.constraints
+            .iter()
+            .filter(|c| matches!(c.kind, ConstraintKind::MinPulseWidth))
             .collect()
     }
 
@@ -3515,22 +3514,22 @@ Qn = "!(S+Q)"
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
         let pblocks = pulse_blocks(&tcl);
+        let widths = width_constraints(&cell);
         assert_eq!(
-            cell.min_pulse_widths.len(),
+            widths.len(),
             2,
-            "asserting S and asserting R are a width hazard each: {:?}",
-            cell.min_pulse_widths
+            "asserting S and asserting R are a width hazard each: {widths:?}"
         );
         assert_eq!(
             pblocks.len(),
-            cell.min_pulse_widths.len(),
+            widths.len(),
             "one block per generated constraint:\n{tcl}"
         );
         let mut constrained: Vec<&str> = pblocks.iter().map(|b| named(b, "-pin")).collect();
         constrained.sort();
         assert_eq!(constrained, ["R", "S"], "{tcl}");
         assert_eq!(
-            constraint_blocks(&tcl).len() % 2,
+            pair_blocks(&tcl).len() % 2,
             0,
             "the cell's two-pin constraints are still rendered in pairs:\n{tcl}"
         );
@@ -3551,7 +3550,7 @@ Y = "!(A*B)"
 "#,
         );
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
-        assert!(cell.min_pulse_widths.is_empty());
+        assert!(width_constraints(&cell).is_empty());
         assert!(pulse_blocks(&tcl).is_empty(), "{tcl}");
     }
 
@@ -3564,7 +3563,7 @@ Y = "!(A*B)"
         let cell = analyse(IC_DFF);
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
-        let cblocks = constraint_blocks(&tcl);
+        let cblocks = pair_blocks(&tcl);
         assert!(
             !cblocks.is_empty(),
             "the flop generates constraints:\n{tcl}"
@@ -3606,7 +3605,7 @@ Qb = "!Qa*B"
         );
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
-        let cblocks = constraint_blocks(&tcl);
+        let cblocks = pair_blocks(&tcl);
         assert_eq!(
             cblocks.len(),
             2,
@@ -3646,7 +3645,7 @@ M = "XI4/m"
         );
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
-        for block in constraint_blocks(&tcl) {
+        for block in pair_blocks(&tcl) {
             let probed = braced(&block, "-probe").expect("a constraint block probes");
             assert!(!probed.contains('M') || probed.contains("/m"), "{block}");
             let node = if block.contains("{ DFFX1 }") {

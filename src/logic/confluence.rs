@@ -1,9 +1,7 @@
-//! Hazard **detection** and constraint **generation** over **confluence** of the asynchronous state
-//! machine. Detection ([`detect`]) probes what two closely-timed input edges do to the machine and files
-//! each observation as a [`Hazard`] whose cause is a **race**, naming the pins whose transitions the
-//! observation was made under; constraint generation (`constrain`) turns each detected hazard into the
-//! timing separation that removes it. Detection happens first; constraint generation follows from each
-//! detected hazard.
+//! Hazard **detection** over **confluence** of the asynchronous state machine. [`detect`] probes what
+//! two closely-timed input edges do to the machine and files each observation as a [`Hazard`] whose
+//! cause is a **race**, naming the pins whose transitions the observation was made under. The timing
+//! that removes a detected hazard is generated downstream, by [`super::constraint`].
 //!
 //! A delay arc ([`super::arcs`]) records a single input edge that *causes* an output edge. A
 //! **constraint** arc instead records that two inputs must not change too close together — a setup/hold
@@ -41,13 +39,8 @@
 //! would otherwise have supplied; ordinary settling of one request before the other is the normal,
 //! hazard-free case.
 //!
-//! `constrain` then generates one [`Constraint`] per detected hazard that names a racing pair. A
-//! constraint's **kind is decided solely by the declared clock**: a pair containing exactly one
-//! declared clock is a directed **setup/hold** (clock ← data — the DFF's `D` around `CLK`); any other
-//! pair is a symmetric **non_seq** (a mutex's `A`/`B`, a C-element's `A↓`/`B↑`, an SR latch's
-//! simultaneous release). Clocks are *declared* inputs; the race geometry is left out of the decision
-//! because inferring a clock from race order would be state-dependent — the same pins read one way from
-//! one held state and the other way from another — so it would distinguish nothing real.
+//! A record's own cause carries the racing pins and the edge each makes, which is what the separation
+//! generated from it ([`super::constraint`]) is built out of.
 //!
 //! The reachable states and the prevector into `s` come from the shared [`machine::explore`], the same
 //! exploration the delay-arc BFS uses.
@@ -55,14 +48,13 @@
 //! **Implementation notes** (concept in `hazard-detection.md`, not restated here): each reachable state's
 //! per-input settle (`single`) is computed once and reused across every pair probe, so [`detect`] costs
 //! O(n) settles per state rather than O(n²). States are probed in parallel and their per-state dedup maps
-//! merged together; the merge is order-independent. Every dedup here — [`detect`]'s two and `constrain`'s
-//! own [`Constraint`] dedup (`constraint_key`) — keeps the min `(prevector.len, discovered)`
-//! representative per canonical key, a total order, so the surviving entry is fixed regardless of merge
-//! order. Each detection key names the pins its record races, so observations made by different probes —
-//! a lone toggle and a pair reaching the same condition, or two different pairs — never collapse onto one
-//! record. All three dedup maps are [`BTreeMap`]s, so iteration order — and hence report/emission order —
-//! is deterministic independent of any hash map's order. A fold may only gain a constraint, never lose
-//! one.
+//! merged together; the merge is order-independent. Both dedups here keep the min
+//! `(prevector.len, discovered)` representative per canonical key, a total order, so the surviving entry
+//! is fixed regardless of merge order. Each detection key names the pins its record races, so
+//! observations made by different probes — a lone toggle and a pair reaching the same condition, or two
+//! different pairs — never collapse onto one record. Both dedup maps are [`BTreeMap`]s, so iteration
+//! order — and hence report/emission order — is deterministic independent of any hash map's order. A
+//! fold may only gain a hazard, never lose one.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -75,95 +67,6 @@ use crate::logic::analysis::Machine;
 use crate::logic::arcs::{ArcLevels, Edge};
 use crate::logic::hazard::{Cause, Hazard, Outcome, Racer};
 use crate::logic::machine;
-
-/// The kind of a constraint arc: a directed setup/hold (clock ← data) or a symmetric non-sequential
-/// (oscillation / mutual-exclusion) relation between two request inputs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConstraintKind {
-    SetupHold,
-    NonSeq,
-}
-
-/// One constraint arc between two **primary inputs**. For [`ConstraintKind::SetupHold`], `related` is
-/// the clock and `pin` the data pin; for [`ConstraintKind::NonSeq`], the two are symmetric requests.
-///
-/// Its single-pin sibling is [`super::width::MinPulseWidth`], which constrains one pin against itself.
-#[derive(Debug, Clone)]
-pub struct Constraint {
-    pub kind: ConstraintKind,
-    pub related: Symbol,
-    pub related_edge: Edge,
-    pub pin: Symbol,
-    pub pin_edge: Edge,
-    /// The prevector: the input-assignment path that drives every state variable into the state where
-    /// the constraint manifests (each node projected onto the inputs).
-    pub prevector: Vec<Minterm<Symbol>>,
-    /// The levels the cell's outputs hold in that state — the constraint arc's `-ic` initial condition,
-    /// sampled at the same probed state as `prevector`.
-    pub levels: ArcLevels,
-    /// The nodes this constraint protects, each with the level it holds at the probed state: the state
-    /// variables whose settled value the hazard puts at risk — a flop's master latch, for the setup
-    /// constraint that separates its clock from its data — in signal declaration order. The emitted
-    /// block gives each a column of its own and names them all in one Liberate `-probe`, so the
-    /// characterisation measures the nodes the constraint is actually about.
-    pub nodes: Vec<(Symbol, bool)>,
-    /// The probed state itself: every input and state variable at the level it holds there. The
-    /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
-    /// emitted column carries.
-    pub state: Minterm<Symbol>,
-}
-
-impl Constraint {
-    /// The input condition under which the hazard this constraint avoids occurs: the two switching
-    /// edges, plus any other inputs held at a fixed value in the pre-toggle state (e.g. `A↓ & B↑ with
-    /// R=0`). `path_to` seeds its chain with the probed node itself, so `prevector` always names at
-    /// least that state's held inputs.
-    pub fn condition(&self) -> String {
-        let mut cond = format!(
-            "{}{} & {}{}",
-            self.related,
-            self.related_edge.arrow(),
-            self.pin,
-            self.pin_edge.arrow()
-        );
-        let state = self
-            .prevector
-            .last()
-            .expect("path_to seeds its chain with the probed node itself");
-        let others = crate::logic::fixed_pairs(state, &[self.related.as_str(), self.pin.as_str()]);
-        if !others.is_empty() {
-            cond.push_str(&format!(" with {}", others.join(", ")));
-        }
-        cond
-    }
-}
-
-/// What a hazard observation sampled at the state it was probed from, which a constraint carries
-/// forward as one: the walk into that state, the levels the cell's pins hold there, and the nodes the
-/// hazard puts at risk with the level each holds. All three are read at the one state, so they travel
-/// together — a surviving representative carries the sample of the very state its prevector walks to.
-struct Probed {
-    prevector: Vec<Minterm<Symbol>>,
-    levels: ArcLevels,
-    nodes: Vec<(Symbol, bool)>,
-    state: Minterm<Symbol>,
-}
-
-/// The nodes a hazard puts at risk, each with the level the observation sampled for it. A record samples
-/// its levels for its own group, at the state it was probed from, so every entry is there.
-///
-/// Shared with [`super::width`], whose hazards name their protected nodes the same way.
-pub(super) fn protected(group: &[Symbol], levels: &BTreeMap<Symbol, bool>) -> Vec<(Symbol, bool)> {
-    group
-        .iter()
-        .map(|node| {
-            let level = *levels
-                .get(node)
-                .expect("a hazard observation samples every node of its own group");
-            (node.clone(), level)
-        })
-        .collect()
-}
 
 /// The level each of `group`'s nodes holds at the probed state — what a constraint block states as the
 /// start condition of the node it protects. A hazard's group holds state variables, which are machine
@@ -205,38 +108,9 @@ fn racer(node: &Minterm<Symbol>, pin: &Symbol) -> Racer {
     }
 }
 
-/// A canonical dedup key: setup/hold is directed; non_seq is unordered over its two pins.
-/// A constraint's protected nodes as one key fragment, in their own order.
-fn names_of(nodes: &[(Symbol, bool)]) -> String {
-    nodes
-        .iter()
-        .map(|(n, _)| n.as_str())
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-fn constraint_key(c: &Constraint) -> String {
-    match c.kind {
-        ConstraintKind::SetupHold => format!(
-            "SH|{}{}|{}{}|{}",
-            c.related,
-            c.related_edge.rf(),
-            c.pin,
-            c.pin_edge.rf(),
-            names_of(&c.nodes)
-        ),
-        ConstraintKind::NonSeq => {
-            let a = format!("{}{}", c.related, c.related_edge.rf());
-            let b = format!("{}{}", c.pin, c.pin_edge.rf());
-            let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
-            format!("NS|{lo}|{hi}|{}", names_of(&c.nodes))
-        }
-    }
-}
-
 /// The detected hazards of one pass over the reachable state machine, split by the outcome observed —
 /// every record carries [`Cause::Race`], the cause this pass probes for. No generated constraint is
-/// nested here — `constrain` turns these into [`Constraint`]s downstream.
+/// nested here — [`super::constraint`] turns these into constraints downstream.
 #[derive(Debug, Default)]
 pub struct DetectedHazards {
     /// [`Outcome::Indeterminate`]: races whose settled state depends on which edge lands first.
@@ -279,9 +153,9 @@ pub(super) fn oscillating_group(cycle: &[Minterm<Symbol>], state_vars: &[Symbol]
 /// (`Machine::arc_eligible`): a state carrying an uninitialised state variable is at an unknown state,
 /// from which nothing can be concluded. Produces one [`Hazard`] per racing cause and observed outcome —
 /// [`Outcome::Indeterminate`] where the settle orders diverge, [`Outcome::Oscillation`] where the
-/// machine never settles — but generates no constraint (that is `constrain`'s job). Empty for confluent
-/// cells (ordinary combinational / self-holding gates that always settle) and for cells with too few
-/// inputs or no state to latch.
+/// machine never settles — but generates no constraint (that is [`super::constraint`]'s job). Empty for
+/// confluent cells (ordinary combinational / self-holding gates that always settle) and for cells with
+/// too few inputs or no state to latch.
 pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> DetectedHazards {
     let cell = m.cell;
     let inputs = &cell.inputs;
@@ -339,9 +213,9 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
         // `path_to` depends only on `s`: compute the prevector into `s` once and clone it per hazard.
         let prevector_s = ex.path_to(s, inputs);
         // The output levels likewise depend only on `s`. Sampling them here — beside the prevector, at
-        // the one probed state — is what keeps the two consistent through `record_constraint`'s
-        // min-by-`(prevector.len, discovered)` dedup: a surviving representative carries the levels of
-        // the very state its prevector walks to.
+        // the one probed state — is what keeps the two consistent through the min-by-`(prevector.len,
+        // discovered)` dedup: a surviving representative carries the levels of the very state its
+        // prevector walks to.
         let levels_s = ArcLevels::at(m, s);
 
         // Each input's single-toggle settle, computed once per state (O(n) instead of O(n²)): reused as
@@ -472,9 +346,9 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
 
                 // Non-confluent and interacting ⇒ the race settles indeterminately: the divergent state
                 // variables and their two competing settled outcomes, at the input condition where the
-                // pair races. The constraint generated from it (see [`constrain`]) has its kind decided
-                // there, solely by the declared clock, since the hazard is a property of the cell rather
-                // than of the declaration.
+                // pair races. The constraint generated from it ([`super::constraint`]) has its kind
+                // decided there, solely by the declared clock, since the hazard is a property of the
+                // cell rather than of the declaration.
                 let group: Vec<Symbol> =
                     state_vars.iter().filter(|w| diverges(w)).cloned().collect();
                 let node_levels = node_levels_at(s, &group);
@@ -532,96 +406,6 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
     DetectedHazards {
         order_dependence: order_dependence.into_values().collect(),
         oscillation: oscillation.into_values().collect(),
-    }
-}
-
-/// Generate the constraints that avoid a cell's detected hazards. One [`Constraint`] is built per
-/// detected [`Hazard`] naming a racing pair — whichever outcome it was observed under — its kind decided
-/// solely by `clock_pins` (a pair with exactly one declared clock is a directed setup/hold, else a
-/// symmetric non_seq). A record naming a single pin generates none: a constraint states a separation
-/// between two edges, and one edge has nothing to be separated from. Deduped by the canonical
-/// [`constraint_key`], keeping the min `(prevector.len, discovered)` representative; BTreeMap gives
-/// deterministic output order.
-///
-/// A pair that both diverges and never settles is ONE situation seen as two phenomena, filed as a record
-/// each ([`detect`] observes the two outcomes independently), and one separation removes both: the
-/// records name the same pins, edges and endangered nodes, so they key alike and meet here as the one
-/// constraint. [`width::constrain`](super::width::constrain) collapses a pulse's pair the same way.
-pub(crate) fn constrain(hz: &DetectedHazards, clock_pins: &[Symbol]) -> Vec<Constraint> {
-    let mut found: BTreeMap<String, (Constraint, usize)> = BTreeMap::new();
-    for hazard in hz.order_dependence.iter().chain(&hz.oscillation) {
-        let [x, y] = racing_pins(hazard) else {
-            continue; // fewer pins than a separation can relate
-        };
-        record_constraint(
-            &mut found,
-            make_constraint(
-                x.pin.as_str(),
-                x.edge,
-                y.pin.as_str(),
-                y.edge,
-                clock_pins,
-                Probed {
-                    prevector: hazard.prevector.clone(),
-                    levels: hazard.levels.clone(),
-                    nodes: protected(&hazard.group, &hazard.node_levels),
-                    state: hazard.state.clone(),
-                },
-            ),
-            hazard.discovered,
-        );
-    }
-    found.into_values().map(|(c, _)| c).collect()
-}
-
-/// Build the constraint that avoids a hazard on pins `x`,`y` with edges taken at the probed state: a
-/// directed setup/hold when exactly one of the pair is a declared clock (clock ← data), else a symmetric
-/// non_seq. `prevector` is the (pre-cloned) path into that state and `levels` the (pre-cloned) output
-/// levels sampled there.
-fn make_constraint(
-    x: &str,
-    x_edge: Edge,
-    y: &str,
-    y_edge: Edge,
-    clock_pins: &[Symbol],
-    probed: Probed,
-) -> Constraint {
-    let Probed {
-        prevector,
-        levels,
-        nodes,
-        state,
-    } = probed;
-    let is_clock = |p: &str| clock_pins.iter().any(|c| c.as_str() == p);
-    if is_clock(x) ^ is_clock(y) {
-        let (clk, clk_edge, data, data_edge) = if is_clock(x) {
-            (x, x_edge, y, y_edge)
-        } else {
-            (y, y_edge, x, x_edge)
-        };
-        Constraint {
-            kind: ConstraintKind::SetupHold,
-            related: Symbol::from(clk),
-            related_edge: clk_edge,
-            pin: Symbol::from(data),
-            pin_edge: data_edge,
-            prevector,
-            levels,
-            nodes,
-            state,
-        }
-    } else {
-        Constraint {
-            kind: ConstraintKind::NonSeq,
-            related: Symbol::from(x),
-            related_edge: x_edge,
-            pin: Symbol::from(y),
-            pin_edge: y_edge,
-            prevector,
-            levels,
-            nodes,
-            state,
-        }
     }
 }
 
@@ -686,27 +470,41 @@ fn record_ring(map: &mut BTreeMap<String, Hazard>, hz: Hazard) {
     record_min(map, key, hz);
 }
 
-/// Record a generated constraint into the dedup map, keeping the min `(prevector.len, discovered)`
-/// representative per canonical key.
-fn record_constraint(
-    found: &mut BTreeMap<String, (Constraint, usize)>,
-    cons: Constraint,
-    discovered: usize,
-) {
-    let key = constraint_key(&cons);
-    // As in `record_order_dependence`: the `Option` is the incumbent, not a value's determinacy.
-    if found
-        .get(&key)
-        .is_none_or(|(e, ed)| (cons.prevector.len(), discovered) < (e.prevector.len(), *ed))
-    {
-        found.insert(key, (cons, discovered));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::logic::constraint::{Constraint, ConstraintKind};
     use crate::model::{analyse_one as analyse, AnalysedCell};
+
+    /// The separations generated from this pass's records, picked out of the cell's one `constraints`
+    /// list by their kind: the minimum pulse widths sharing that list come from pulse-cause hazards.
+    fn separations(cell: &AnalysedCell) -> Vec<&Constraint> {
+        cell.constraints
+            .iter()
+            .filter(|c| !matches!(c.kind, ConstraintKind::MinPulseWidth))
+            .collect()
+    }
+
+    /// The pin a separation holds its own constrained pin apart from, and the edge that pin makes. A
+    /// minimum pulse width relates a pin to itself and names no second one, so it reaches here only
+    /// through a filtering fault.
+    fn related(c: &Constraint) -> (&str, Edge) {
+        match &c.kind {
+            ConstraintKind::SetupHold { clock, clock_edge } => (clock.as_str(), *clock_edge),
+            ConstraintKind::NonSeq { other, other_edge } => (other.as_str(), *other_edge),
+            ConstraintKind::MinPulseWidth => {
+                panic!("a minimum pulse width came through the separation filter")
+            }
+        }
+    }
+
+    /// The two pins a separation holds apart, sorted, so a test pins which pins it relates rather than
+    /// which side of it each landed on.
+    fn apart(c: &Constraint) -> Vec<&str> {
+        let mut pins = vec![related(c).0, c.pin.as_str()];
+        pins.sort();
+        pins
+    }
 
     /// The pins a detected hazard races, sorted: a race is unordered, so a test pins which pins are in
     /// it, not the order the probe happened to take them in.
@@ -757,15 +555,16 @@ Q = "CLK*M + !CLK*Q"
         );
         // …from which a setup/hold constraint of D w.r.t. CLK is generated; because the kind follows the
         // declared clock, not the geometry, nothing on the pair is generated as non_seq.
-        let cons = cell.constraints.clone();
+        let cons = separations(&cell);
         eprintln!("DFF constraints: {cons:#?}");
         assert!(
-            cons.iter().all(|c| c.kind == ConstraintKind::SetupHold),
+            cons.iter()
+                .all(|c| matches!(c.kind, ConstraintKind::SetupHold { .. })),
             "a declared-clock DFF yields only setup/hold, got {cons:?}"
         );
         assert!(
             cons.iter()
-                .any(|c| c.related == "CLK" && c.related_edge == Edge::Rise && c.pin == "D"),
+                .any(|c| related(c) == ("CLK", Edge::Rise) && c.pin == "D"),
             "expected a setup/hold of D around CLK↑, got {cons:?}"
         );
     }
@@ -787,10 +586,11 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 "#,
         );
-        let cons = cell.constraints.clone();
+        let cons = separations(&cell);
         assert!(!cons.is_empty());
         assert!(
-            cons.iter().all(|c| c.kind == ConstraintKind::NonSeq),
+            cons.iter()
+                .all(|c| matches!(c.kind, ConstraintKind::NonSeq { .. })),
             "an undeclared DFF yields only non_seq, got {cons:?}"
         );
     }
@@ -831,17 +631,16 @@ Qb = "!Qa * B"
             indeterminate.is_empty(),
             "a mutex detects no indeterminate race, got {indeterminate:?}"
         );
-        let cons = cell.constraints.clone();
+        let cons = separations(&cell);
         eprintln!("MUT constraints: {cons:#?}");
         assert!(
-            cons.iter().any(|c| c.kind == ConstraintKind::NonSeq
-                && [c.related.as_str(), c.pin.as_str()]
-                    .iter()
-                    .all(|p| *p == "A" || *p == "B")),
+            cons.iter()
+                .any(|c| matches!(c.kind, ConstraintKind::NonSeq { .. }) && apart(c) == ["A", "B"]),
             "expected a non_seq constraint between A and B, got {cons:?}"
         );
         assert!(
-            cons.iter().all(|c| c.kind == ConstraintKind::NonSeq),
+            cons.iter()
+                .all(|c| matches!(c.kind, ConstraintKind::NonSeq { .. })),
             "a mutex yields only non_seq constraints, got {cons:?}"
         );
     }
@@ -872,13 +671,11 @@ Q = "A*B + Q*(A+B)"
             oscillating.is_empty(),
             "a C-element detects no oscillation, got {oscillating:?}"
         );
-        let cons = cell.constraints.clone();
+        let cons = separations(&cell);
         eprintln!("C2 constraints: {cons:#?}");
         assert!(
-            cons.iter().any(|c| c.kind == ConstraintKind::NonSeq
-                && [c.related.as_str(), c.pin.as_str()]
-                    .iter()
-                    .all(|p| *p == "A" || *p == "B")),
+            cons.iter()
+                .any(|c| matches!(c.kind, ConstraintKind::NonSeq { .. }) && apart(c) == ["A", "B"]),
             "expected a non_seq constraint between A and B, got {cons:?}"
         );
     }
@@ -904,10 +701,9 @@ MB = "!CLKB*DB + CLKB*MB"
 Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
 "#,
         );
-        let mut endangered: Vec<Vec<&str>> = cell
-            .constraints
-            .iter()
-            .filter(|c| c.related.as_str() == "CLKB" && c.pin.as_str() == "DB")
+        let mut endangered: Vec<Vec<&str>> = separations(&cell)
+            .into_iter()
+            .filter(|c| related(c).0 == "CLKB" && c.pin.as_str() == "DB")
             .map(|c| c.nodes.iter().map(|(n, _)| n.as_str()).collect())
             .collect();
         endangered.sort();
@@ -937,7 +733,10 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 "#,
         );
-        let mut dff_lens: Vec<usize> = dff.constraints.iter().map(|c| c.prevector.len()).collect();
+        let mut dff_lens: Vec<usize> = separations(&dff)
+            .iter()
+            .map(|c| c.prevector.len())
+            .collect();
         dff_lens.sort();
         // Every DFF seed sits at CLK=0, where δ_M = !CLK*D + CLK*M forces M but δ_Q = CLK*M + !CLK*Q
         // holds Q: Q is undriven there, so no probe starts at a seed. The shortest eligible state a
@@ -955,7 +754,7 @@ constraint_arcs = true
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        let mut c2_lens: Vec<usize> = c2.constraints.iter().map(|c| c.prevector.len()).collect();
+        let mut c2_lens: Vec<usize> = separations(&c2).iter().map(|c| c.prevector.len()).collect();
         c2_lens.sort();
         // C2's single state variable is forced at both seeds, so every state in its explored order is
         // eligible and the minimum is the BFS distance alone.
@@ -980,7 +779,7 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 "#,
         );
-        let cons = cell.constraints.clone();
+        let cons = separations(&cell);
         assert!(!cons.is_empty());
         let outputs: Vec<Symbol> = cell.outputs.iter().map(|o| o.name.clone()).collect();
         for c in &cons {
@@ -1015,10 +814,11 @@ Q = "S + Q*!R"
 Qn = "R + Qn*!S"
 "#,
         );
-        let cons = cell.constraints.clone();
+        let cons = separations(&cell);
         eprintln!("SR constraints: {cons:#?}");
         assert!(
-            cons.iter().any(|c| c.kind == ConstraintKind::NonSeq),
+            cons.iter()
+                .any(|c| matches!(c.kind, ConstraintKind::NonSeq { .. })),
             "expected a non_seq constraint between S and R, got {cons:?}"
         );
     }
@@ -1051,18 +851,14 @@ Q = "!C2*M1 + C2*Q"
             !indeterminate.iter().any(|hz| racing(hz) == ["C1", "C2"]),
             "the C1/C2 divergence is latch-mediated and must be filtered, got {indeterminate:?}"
         );
-        let cons = cell.constraints.clone();
+        let cons = separations(&cell);
         eprintln!("SYNC2 constraints: {cons:#?}");
         assert!(
-            !cons.iter().any(|c| [c.related.as_str(), c.pin.as_str()]
-                .iter()
-                .all(|p| *p == "C1" || *p == "C2")),
+            !cons.iter().any(|c| apart(c) == ["C1", "C2"]),
             "the C1/C2 divergence is latch-mediated and must be filtered, got {cons:?}"
         );
         assert!(
-            cons.iter().any(|c| [c.related.as_str(), c.pin.as_str()]
-                .iter()
-                .all(|p| *p == "C1" || *p == "D")),
+            cons.iter().any(|c| apart(c) == ["C1", "D"]),
             "expected a constraint for the genuine C1/D hazard (direct support of δ_M1), got {cons:?}"
         );
     }

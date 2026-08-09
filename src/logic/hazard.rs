@@ -1,9 +1,9 @@
 //! The **detected hazards** of an asynchronous cell: the report record only.
 //!
 //! Closely-timed input changes can drive a cell into metastability. Detection finds each occasion and
-//! reports it here as a [`Hazard`]; a [`super::confluence::Constraint`] (or a
-//! [`super::width::MinPulseWidth`]) is then *generated* from a detected hazard to specify the timing
-//! that removes it. Detection happens first; constraint generation follows from each detected hazard.
+//! reports it here as a [`Hazard`]; a [`super::constraint::Constraint`] is then *generated* from a
+//! detected hazard to specify the timing that removes it. Detection happens first; constraint
+//! generation follows from each detected hazard.
 //!
 //! A hazard is read on two independent axes — what the timing is between, and what the machine then
 //! does.

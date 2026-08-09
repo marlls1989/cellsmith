@@ -72,94 +72,10 @@ use espresso_logic::bdd::{Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::analysis::Machine;
-use crate::logic::arcs::{ArcLevels, Edge};
-use crate::logic::confluence::{edge_from, node_levels_at, oscillating_group, protected};
+use crate::logic::arcs::ArcLevels;
+use crate::logic::confluence::{edge_from, node_levels_at, oscillating_group};
 use crate::logic::hazard::{Cause, Hazard, Outcome};
 use crate::logic::machine;
-
-/// One **minimum-pulse-width** constraint, generated from a pulse-cause [`Hazard`] to remove it: the
-/// width a pulse on the pin must have for the nodes it names to reach the outcome the reference close
-/// settles to. Liberate measures that width off the emitted block, narrowing the pulse until the probed
-/// behaviour fails. It is a SINGLE-pin constraint — the sibling of
-/// [`Constraint`](crate::logic::confluence::Constraint), which relates two primary inputs — and picking
-/// this struct IS the classification, so it carries neither a kind nor a related pin.
-#[derive(Debug, Clone)]
-pub struct MinPulseWidth {
-    /// The constrained pin, which the emitted block names on BOTH `-pin` and `-related_pin`: the
-    /// constraint relates the pin to itself.
-    pub pin: Symbol,
-    /// The pulse's OPENING polarity — rise means the pulse is high, fall low. The block states that one
-    /// edge, and Liberate searches the width itself.
-    pub edge: Edge,
-    /// The prevector: the input-assignment path that drives every state variable into the state where
-    /// the hazard manifests (each node projected onto the inputs).
-    pub prevector: Vec<Minterm<Symbol>>,
-    /// The levels the cell's outputs hold in that state — the block's `-ic` initial condition, sampled
-    /// at the same probed state as `prevector`.
-    pub levels: ArcLevels,
-    /// The nodes this constraint protects, each with the level it holds at the probed state, exactly as
-    /// [`Constraint::nodes`](crate::logic::confluence::Constraint::nodes) does it: the state variables
-    /// the hazard names, in signal declaration order. The emitted block gives each a column of its own
-    /// and names them all in one Liberate `-probe`.
-    pub nodes: Vec<(Symbol, bool)>,
-    /// The probed state itself: every input and state variable at the level it holds there. The
-    /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
-    /// emitted column carries.
-    pub state: Minterm<Symbol>,
-}
-
-/// Generate the minimum-pulse-width constraints that avoid a cell's pulse-cause hazards: one
-/// [`MinPulseWidth`] per pulse-cause [`Hazard`], protecting the nodes that observation names. The cause
-/// states the pin and the pulse's opening edge; any other cause is another generator's record and is
-/// passed over.
-///
-/// Records meeting in one constraint. A pulse that both rings and lands somewhere its reference does not
-/// is ONE situation seen as two phenomena, and [`detect`] files one record per phenomenon — so the same
-/// pin, opening edge, input condition and protected nodes can arrive twice. One width removes both, and
-/// the pair is that one constraint. Which record's representative it carries is settled the way this
-/// engine settles every representative: the min `(prevector.len, discovered)`, a total order, so the
-/// survivor does not depend on the order the records are folded in.
-///
-/// No `clock_pins` either, unlike [`confluence::constrain`](super::confluence::constrain): a pulse
-/// relates one pin to itself, so there is no pair for a declared clock to direct and nothing for the
-/// declaration to decide.
-pub(crate) fn constrain(hz: &[Hazard]) -> Vec<MinPulseWidth> {
-    let mut found: BTreeMap<String, (MinPulseWidth, usize)> = BTreeMap::new();
-    for h in hz {
-        let Cause::Pulse { pin, edge } = &h.cause else {
-            continue; // a race is another generator's record
-        };
-        let key = format!(
-            "{pin}{}|{}|{}",
-            edge.rf(),
-            crate::logic::literals_str(&h.condition),
-            h.group.join(",")
-        );
-        // The `Option` read here is the incumbent — no entry yet for this constraint, or one this
-        // record beats on `(prevector.len, discovered)` — nothing to do with a state value's
-        // determinacy.
-        if found
-            .get(&key)
-            .is_none_or(|(e, ed)| (h.prevector.len(), h.discovered) < (e.prevector.len(), *ed))
-        {
-            found.insert(
-                key,
-                (
-                    MinPulseWidth {
-                        pin: pin.clone(),
-                        edge: *edge,
-                        prevector: h.prevector.clone(),
-                        levels: h.levels.clone(),
-                        nodes: protected(&h.group, &h.node_levels),
-                        state: h.state.clone(),
-                    },
-                    h.discovered,
-                ),
-            );
-        }
-    }
-    found.into_values().map(|(pw, _)| pw).collect()
-}
 
 /// Why every state value a pulse walk reads is defined, exactly as in [`super::confluence`]: a probe
 /// starts from a state `Machine::arc_eligible` admits, and settling from a fully-initialised state
@@ -411,6 +327,7 @@ fn strictly_within(inner: &[Symbol], outer: &[Symbol]) -> bool {
 #[cfg(test)]
 mod tests {
     use crate::logic::arcs::Edge;
+    use crate::logic::constraint::{Constraint, ConstraintKind};
     use crate::logic::hazard::{Cause, Hazard, Outcome};
     use crate::model::analyse_one as analyse;
     use crate::model::AnalysedCell;
@@ -988,15 +905,24 @@ B = "!CLK*(!SEL*D + SEL*B) + CLK*B"
         );
     }
 
+    /// The constraints generated from this pass's records, picked out of the cell's one `constraints`
+    /// list by their kind: the separations sharing that list come from race-cause hazards.
+    fn widths(cell: &AnalysedCell) -> Vec<&Constraint> {
+        cell.constraints
+            .iter()
+            .filter(|c| matches!(c.kind, ConstraintKind::MinPulseWidth))
+            .collect()
+    }
+
     /// One generated constraint as the triple that identifies it: the constrained pin, the pulse's
     /// opening edge and the nodes it protects. The levels sampled beside those nodes name WHICH probed
     /// state the representative came from, which is a choice the exploration order makes.
     fn constrained(cell: &AnalysedCell) -> BTreeSet<(String, char, String)> {
-        cell.min_pulse_widths
-            .iter()
-            .map(|pw| {
-                let nodes: Vec<&str> = pw.nodes.iter().map(|(n, _)| n.as_str()).collect();
-                (pw.pin.to_string(), pw.edge.rf(), nodes.join(","))
+        widths(cell)
+            .into_iter()
+            .map(|c| {
+                let nodes: Vec<&str> = c.nodes.iter().map(|(n, _)| n.as_str()).collect();
+                (c.pin.to_string(), c.pin_edge.rf(), nodes.join(","))
             })
             .collect()
     }
@@ -1071,10 +997,10 @@ Qn = "!(S+Q)"
             .collect(),
         );
         assert_eq!(
-            cell.min_pulse_widths.len(),
+            widths(&cell).len(),
             2,
             "one constraint per situation, got {:?}",
-            cell.min_pulse_widths
+            widths(&cell)
         );
     }
 
@@ -1088,7 +1014,7 @@ Qn = "!(S+Q)"
             "the flop's clock pulses are width-dependent all the same, got {:?}",
             keys(&cell)
         );
-        assert!(cell.min_pulse_widths.is_empty());
+        assert!(widths(&cell).is_empty());
     }
 
     #[test]

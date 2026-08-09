@@ -13,11 +13,10 @@ use thiserror::Error;
 
 use crate::logic::analysis::Exploration;
 use crate::logic::arcs::{Arc, HiddenArc};
-use crate::logic::confluence::Constraint;
+use crate::logic::constraint::Constraint;
 use crate::logic::hazard::Hazard;
 use crate::logic::leakage::LeakageState;
 use crate::logic::machine::{ExplorationBudget, Explored};
-use crate::logic::width::MinPulseWidth;
 
 /// The whole input file: a list of `[[cell]]` tables.
 #[derive(Debug, Deserialize)]
@@ -544,19 +543,18 @@ pub struct AnalysedCell {
     pub leakage: Vec<LeakageState>,
     /// The cell's detected hazards — one [`Hazard`] per (cause, outcome) pair a probe observes: a race
     /// or a pulse, settling indeterminately or oscillating (empty for cells with no such risk). The
-    /// constraints that avoid them are generated separately into `constraints` and `min_pulse_widths`.
+    /// constraints that avoid them are generated separately into `constraints`.
     /// See [`crate::logic::hazard`].
     pub hazards: Vec<Hazard>,
-    /// Declared clock input pins (`clock = [...]`). See [`crate::logic::confluence`].
+    /// Declared clock input pins (`clock = [...]`). See [`crate::logic::constraint`], which reads them
+    /// to direct a separation, and [`crate::logic::edge`].
     pub clock_pins: Vec<Symbol>,
-    /// The constraints generated to avoid the cell's detected hazards (setup/hold and non_seq). Emission
-    /// is gated by the CLI flag or `constraint_arcs_declared`; the kind of each constraint follows the
-    /// declared clock.
+    /// The constraints generated to avoid the cell's detected hazards: the separations (setup/hold and
+    /// non_seq) holding two pins apart, and the minimum pulse widths holding one pin against itself.
+    /// Emission is gated by the CLI flag or `constraint_arcs_declared`; each constraint's kind follows
+    /// the cause of the hazard it avoids, a separation's being directed by the declared clock. See
+    /// [`crate::logic::constraint`].
     pub constraints: Vec<Constraint>,
-    /// The minimum-pulse-width constraints generated to avoid the cell's width-dependent hazards — one
-    /// per hazard, each constraining a single pin against itself. Gated on the same opt-in as
-    /// `constraints`. See [`crate::logic::width::MinPulseWidth`].
-    pub min_pulse_widths: Vec<MinPulseWidth>,
     /// Whether the cell opted in to constraint-arc emission (`constraint_arcs = true`).
     pub constraint_arcs_declared: bool,
     /// The arc classes whose `-when` arcs are also emitted (per-cell `when` unioned with the global
@@ -584,7 +582,7 @@ pub struct AnalysedCell {
     pub edge: crate::logic::edge::EdgeArcs,
     /// The exploration budget counter that stopped the machine pass, or `None` when the machine was
     /// explored in full. Set ⇒ nothing was derived from the machine: `arcs`, `hidden_arcs`, `leakage`,
-    /// `hazards`, `constraints` and `min_pulse_widths` are all empty and `edge`
+    /// `hazards` and `constraints` are all empty and `edge`
     /// is the default, so the CLI reports the cell instead of emitting arc-free artifacts for it.
     pub unexplored: Option<crate::logic::machine::ExplorationLimit>,
     /// The cell-wide characterisation-template references (delay/power/constraint) carried verbatim from
@@ -814,7 +812,6 @@ impl Cell {
         view.hidden_arcs = analysis.hidden_arcs;
         view.leakage = analysis.leakage;
         view.constraints = analysis.constraints;
-        view.min_pulse_widths = analysis.min_pulse_widths;
         view.hazards = analysis.hazards;
         view.edge = analysis.edge;
         view.unexplored = analysis.unexplored;
@@ -831,7 +828,7 @@ impl Cell {
 
     /// Validate the cell and parse its functions into the pre-minimise [`AnalysedCell`]: every signal's
     /// parse-time support and feedback classification, with all derived analysis fields
-    /// (arcs/hidden_arcs/leakage/hazards/constraints/min_pulse_widths/regions)
+    /// (arcs/hidden_arcs/leakage/hazards/constraints/regions)
     /// still empty. The state-space rewrite and machine/region passes are layered on by
     /// [`Cell::analyse`].
     pub fn analyse_signals(&self) -> Result<AnalysedCell, ModelError> {
@@ -1042,7 +1039,6 @@ impl Cell {
             hazards: Vec::new(),
             clock_pins: self.clock.clone(),
             constraints: Vec::new(),
-            min_pulse_widths: Vec::new(),
             constraint_arcs_declared: self.constraint_arcs,
             when: self.when,
             regions: Vec::new(),
@@ -1150,7 +1146,7 @@ pub(crate) fn analyse_one(src: &str) -> AnalysedCell {
 mod tests {
     use super::*;
     use crate::logic::arcs::Edge;
-    use crate::logic::confluence::ConstraintKind;
+    use crate::logic::constraint::ConstraintKind;
     use crate::logic::hazard::{Cause, Outcome};
     use espresso_logic::{bdd_builder, expr, Minterm};
 
@@ -2042,8 +2038,9 @@ Q = "!QN"
         // Every arc, hidden arc and constraint of BOTH views must carry a real prevector: non-empty,
         // and ending at the record's own start state projected onto the inputs (the pattern at
         // arcs.rs:618). A rebuilt `prev` that breaks `path_to` either empties the prevector — panicking
-        // the `.expect` at confluence.rs:114 — or misaligns the chain, corrupting the `prevector.len()`
-        // constraint-dedup tie-break at confluence.rs:407.
+        // the `.expect` the constraint vector reads its held levels through
+        // (`arcs_tcl::constraint_vector_str`) — or misaligns the chain, corrupting the `prevector.len()`
+        // constraint-dedup tie-break in `constraint::record`.
         let cell = analyse_one(&c_element_src(r#"expose = ["QN"]"#));
         for view in [cell.arc_view(), &cell] {
             assert!(!view.arcs.is_empty(), "the view emits arcs");
@@ -2173,22 +2170,14 @@ Q = "CLK*M + !CLK*Q"
         outputs: Vec<(Symbol, bool)>,
     }
 
-    /// One generated constraint by its identity: the kind and the two pins with their edges.
+    /// One generated constraint by its identity: the pin it constrains with the edge that pin makes,
+    /// the kind — which carries the other pin of a separation, where there is one — and the nodes it
+    /// protects.
     #[derive(Debug, PartialEq, Eq)]
     struct ConstraintRecord {
         kind: ConstraintKind,
-        related: Symbol,
-        related_edge: Edge,
         pin: Symbol,
         pin_edge: Edge,
-    }
-
-    /// One generated minimum-pulse-width constraint by its identity: the constrained pin, the pulse's
-    /// opening edge and the nodes it protects. One pin, so there is no second pin to record.
-    #[derive(Debug, PartialEq, Eq)]
-    struct MinPulseWidthRecord {
-        pin: Symbol,
-        edge: Edge,
         nodes: Vec<Symbol>,
     }
 
@@ -2224,7 +2213,6 @@ Q = "CLK*M + !CLK*Q"
         hidden_arcs: Vec<HiddenArcRecord>,
         leakage: Vec<LeakageRecord>,
         constraints: Vec<ConstraintRecord>,
-        min_pulse_widths: Vec<MinPulseWidthRecord>,
         hazards: Vec<HazardRecord>,
         edge: EdgeRecord,
     }
@@ -2264,20 +2252,10 @@ Q = "CLK*M + !CLK*Q"
                 .constraints
                 .iter()
                 .map(|c| ConstraintRecord {
-                    kind: c.kind,
-                    related: c.related.clone(),
-                    related_edge: c.related_edge,
+                    kind: c.kind.clone(),
                     pin: c.pin.clone(),
                     pin_edge: c.pin_edge,
-                })
-                .collect(),
-            min_pulse_widths: cell
-                .min_pulse_widths
-                .iter()
-                .map(|pw| MinPulseWidthRecord {
-                    pin: pw.pin.clone(),
-                    edge: pw.edge,
-                    nodes: pw.nodes.iter().map(|(node, _)| node.clone()).collect(),
+                    nodes: c.nodes.iter().map(|(node, _)| node.clone()).collect(),
                 })
                 .collect(),
             hazards: cell
@@ -2336,11 +2314,6 @@ Q = "CLK*M + !CLK*Q"
             &a.constraints,
             &b.constraints,
             &format!("cell {cell}: constraints"),
-        );
-        assert_same_records(
-            &a.min_pulse_widths,
-            &b.min_pulse_widths,
-            &format!("cell {cell}: minimum pulse widths"),
         );
         assert_same_records(&a.hazards, &b.hazards, &format!("cell {cell}: hazards"));
         assert_eq!(a.edge, b.edge, "cell {cell}: edge classification");

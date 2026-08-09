@@ -3,6 +3,7 @@
 pub mod analysis;
 pub mod arcs;
 pub mod confluence;
+pub mod constraint;
 pub mod edge;
 pub mod hazard;
 pub mod leakage;

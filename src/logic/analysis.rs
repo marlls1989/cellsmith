@@ -29,10 +29,10 @@ use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::arcs::{self, Arc, HiddenArc};
-use crate::logic::confluence::{self, Constraint};
+use crate::logic::confluence;
+use crate::logic::constraint::{self, Constraint};
 use crate::logic::hazard::Hazard;
 use crate::logic::leakage::{self, LeakageState};
-use crate::logic::width::MinPulseWidth;
 use crate::logic::{machine, resolve, width};
 use crate::model::AnalysedCell;
 
@@ -49,7 +49,6 @@ pub struct MachineAnalysis {
     pub arcs: Vec<Arc>,
     pub hidden_arcs: Vec<HiddenArc>,
     pub constraints: Vec<Constraint>,
-    pub min_pulse_widths: Vec<MinPulseWidth>,
     pub hazards: Vec<Hazard>,
     pub leakage: Vec<LeakageState>,
     pub edge: crate::logic::edge::EdgeArcs,
@@ -298,22 +297,20 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     // none emitted — unless the cell requested it.
     let detected = confluence::detect(&m);
     let width_dependence = width::detect(&m);
-    let (constraints, min_pulse_widths) = if cell.constraint_arcs_declared {
-        (
-            confluence::constrain(&detected, &m.cell.clock_pins),
-            width::constrain(&width_dependence),
-        )
-    } else {
-        (Vec::new(), Vec::new())
-    };
-    // The one `hazards` record set: what the two detection passes returned, concatenated. Taken after
-    // `constrain` above, which only borrows `detected`/`width_dependence`.
+    // The one `hazards` record set: what the two detection passes returned, concatenated. Generation
+    // reads it whole — a constraint follows its record's cause, so both passes' records reach the one
+    // generator.
     let hazards: Vec<Hazard> = detected
         .order_dependence
         .into_iter()
         .chain(detected.oscillation)
         .chain(width_dependence)
         .collect();
+    let constraints = if cell.constraint_arcs_declared {
+        constraint::constrain(&hazards, &m.cell.clock_pins)
+    } else {
+        Vec::new()
+    };
     // Behavioural edge classification is read-only over the explored machine — it mints only
     // already-existing names and mutates nothing (the exploration-unchanged invariant holds BY
     // CONSTRUCTION). The derived `arcs` are its label domain: every timing arc it labels is one of the
@@ -329,7 +326,6 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
         arcs,
         hidden_arcs,
         constraints,
-        min_pulse_widths,
         hazards,
         leakage,
         edge,
@@ -376,10 +372,6 @@ mod tests {
         assert!(
             cell.constraints.is_empty(),
             "an unexplored cell has no constraints"
-        );
-        assert!(
-            cell.min_pulse_widths.is_empty(),
-            "an unexplored cell has no minimum-pulse-width constraints"
         );
         assert!(cell.hazards.is_empty(), "an unexplored cell has no hazards");
         assert!(
@@ -430,10 +422,6 @@ mod tests {
             assert!(
                 view.constraints.is_empty(),
                 "the unexplored {which} has no constraints"
-            );
-            assert!(
-                view.min_pulse_widths.is_empty(),
-                "the unexplored {which} has no minimum-pulse-width constraints"
             );
             assert!(
                 view.hazards.is_empty(),
