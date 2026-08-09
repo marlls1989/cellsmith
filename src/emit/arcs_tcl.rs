@@ -1325,6 +1325,15 @@ fn exposed_levels(levels: &ArcLevels) -> BTreeMap<&str, &ExposedLevel> {
         .collect()
 }
 
+/// One rest state's levels by node name — the lookup [`leakage_vector_str`] indexes as [`vector`] walks
+/// the exposures and then the outputs, each column reading the single level its node holds there.
+fn levels_by_name(levels: &[(Symbol, bool)]) -> BTreeMap<&str, bool> {
+    levels
+        .iter()
+        .map(|(node, level)| (node.as_str(), *level))
+        .collect()
+}
+
 /// One `-ic` column: a `logic_low`/`logic_high` expression rendered so Liberate reads it as a single
 /// list element.
 ///
@@ -1611,13 +1620,8 @@ fn vector_str(cell: &AnalysedCell, arc: &Arc) -> String {
 /// hold states.
 fn leakage_vector_str(cell: &AnalysedCell, l: &LeakageState) -> String {
     let inputs = assignment(&l.inputs);
-    let exposed = exposed_levels(&l.levels);
-    let outputs: BTreeMap<&str, bool> = l
-        .levels
-        .outputs
-        .iter()
-        .map(|(s, b)| (s.as_str(), *b))
-        .collect();
+    let exposed = levels_by_name(&l.levels.exposed);
+    let outputs = levels_by_name(&l.levels.outputs);
 
     vector(
         cell,
@@ -1634,10 +1638,9 @@ fn leakage_vector_str(cell: &AnalysedCell, l: &LeakageState) -> String {
             .to_string()
         },
         |name| {
-            if exposed
+            if *exposed
                 .get(name)
                 .expect("every exposed node is defined at a fully-initialised leakage state")
-                .start
             {
                 "1"
             } else {
@@ -3580,17 +3583,32 @@ Y = "!W"
         // master unstated: no `-when` can name it, so the block forces it through its own `-pinlist` and
         // `-vector` at the level the state actually holds.
         let cell = analyse(DFF_EXPOSED_MASTER);
+        let arc = cell.arc_view();
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
-        let walked = tcl
-            .split("define_leakage")
-            .skip(1)
-            .map(|b| b.split("\n\n").next().unwrap_or(b))
-            .find(|b| b.contains("-pinlist"))
-            .expect("the fixture has a walked rest state");
-        assert_eq!(pinlist_of(walked), ["CLK", "D", "M", "Q"]);
-        let m = vector_values(walked)[column_of(walked, "M")];
-        assert!(["0", "1"].contains(&m), "M column: {walked}");
+        let walked: Vec<&LeakageState> = arc.leakage.iter().filter(|l| !l.input_forced()).collect();
+        assert!(
+            !walked.is_empty(),
+            "premise: the fixture rests in states it has to be walked into"
+        );
+        let group = [whole(arc)];
+        for l in walked {
+            let m = l.state.value_of("M").expect("M fixed at a rest state");
+            let stated = LeakageBlock::of(l).tcl(arc, &group);
+            let [block] = stated.as_slice() else {
+                panic!("one alias group states one block: {stated:?}");
+            };
+            assert!(
+                tcl.contains(block),
+                "the emitted Tcl carries this rest state's block:\n{block}"
+            );
+            assert_eq!(pinlist_of(block), ["CLK", "D", "M", "Q"]);
+            assert_eq!(
+                vector_values(block)[column_of(block, "M")],
+                if m { "1" } else { "0" },
+                "the exposed column is forced to the level the state's own M column fixes:\n{block}"
+            );
+        }
     }
 
     #[test]
