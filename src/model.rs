@@ -2192,15 +2192,14 @@ Q = "CLK*M + !CLK*Q"
         nodes: Vec<Symbol>,
     }
 
-    /// One detected hazard, reduced to what identifies it: the (cause, outcome) cell it occupies, the
-    /// state variables it decides and where the machine lands when the timing is honoured. `cause`
-    /// alone already carries a race's pins or a pulse's pin, so no separate pins/pin record is needed.
+    /// One detected hazard, reduced to what identifies it: the (cause, outcome) cell it occupies and the
+    /// state variables it decides. `cause` alone already carries a race's pins or a pulse's pin, so no
+    /// separate pins/pin record is needed.
     #[derive(Debug, PartialEq, Eq)]
     struct HazardRecord {
         cause: Cause,
         outcome: Outcome,
         group: Vec<Symbol>,
-        settled: Vec<Minterm<Symbol>>,
     }
 
     /// The behavioural edge classification reduced to the node names it carries: the folded masters, the
@@ -2215,9 +2214,10 @@ Q = "CLK*M + !CLK*Q"
     /// Everything one analysed view emits, each record reduced to what identifies it. Two views agreeing
     /// here emit the same arcs, hazards and constraints.
     ///
-    /// A record's prevector, the levels sampled alongside it and its exploration-order index are left
-    /// out. Each names WHICH of several equally-good reachable states the pipeline chose to observe the
-    /// record from, and that choice follows the BFS order — a representative, not behaviour.
+    /// A record's prevector, the levels sampled alongside it, its exploration-order index and a
+    /// hazard's settled state are left out. Each names WHICH of several equally-good reachable states
+    /// the pipeline chose to observe the record from, and that choice follows the BFS order — a
+    /// representative, not behaviour.
     #[derive(Debug)]
     struct CellRecords {
         arcs: Vec<ArcRecord>,
@@ -2287,7 +2287,6 @@ Q = "CLK*M + !CLK*Q"
                     cause: h.cause.clone(),
                     outcome: h.outcome,
                     group: h.group.clone(),
-                    settled: h.settled.clone(),
                 })
                 .collect(),
             edge: EdgeRecord {

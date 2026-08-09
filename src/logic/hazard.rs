@@ -10,7 +10,7 @@
 //!
 //! [`Cause`] is what the timing is between:
 //!
-//! - [`Cause::Race`] — two signals racing each other. The record names the pins observed racing, one
+//! - [`Cause::Race`] — inputs that don't converge when toggled (one or two). The record names the pins observed racing, one
 //!   [`Racer`] per pin, each with the edge it makes.
 //! - [`Cause::Pulse`] — one signal racing itself: the two edges of a single pin. A **pulse** on input
 //!   `p` from a stable state `s` is `p` toggled (the *opening* edge), the cascade that toggle opens left
@@ -54,10 +54,10 @@ pub struct Racer {
     pub edge: Edge,
 }
 
-/// What the hazard's timing is between: two signals racing each other, or one signal racing itself.
+/// What the hazard's timing is between: inputs that don't converge when toggled (one or two), or one signal racing itself.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Cause {
-    /// Two signals racing each other, as observed by a probe that toggles them together.
+    /// Inputs that don't converge when toggled: one input alone, or two together.
     Race {
         /// The pins the probe observed racing: one member when a single toggle was observed not to
         /// converge, two when a pair probe raced them together. Never empty.

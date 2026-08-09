@@ -3,20 +3,21 @@
 //! behavioural Verilog model (sequential UDP + wrapper), and a minimal Liberty fragment (`statetable`
 //! for hysteretic outputs, plain `function` for combinational ones).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeSet, HashMap};
 use std::error::Error;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, Parser};
+use espresso_logic::{Minterm, Symbol};
 use rayon::prelude::*;
 
 use cellsmith::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, CellArcs};
 use cellsmith::emit::define_cell::cell_define_cell;
 use cellsmith::emit::liberty::library_liberty;
 use cellsmith::emit::verilog::cell_verilog;
-use cellsmith::logic::hazard::{Cause, Outcome, Racer};
+use cellsmith::logic::hazard::{Cause, Hazard, Outcome, Racer};
 use cellsmith::logic::machine::{ExplorationBudget, ExplorationLimit};
 use cellsmith::model::{parse_spec, AnalysedCell, ArcClass, ArcClasses};
 
@@ -235,83 +236,19 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     // distinct warnings are separated by a single blank line when printed, so a block reads as a unit.
     let mut warnings: Vec<String> = Vec::new();
 
-    // Diagnose the cell's detected hazards in one pass over `hazards`, dispatching per (cause, outcome)
-    // cell: a race settling indeterminately or oscillating, a pulse settling indeterminately by its
-    // width or leaving nodes ringing. The pass reads the ARC VIEW, the same analysis `cell_arcs`
-    // renders: it is that view's hazards the emitted constraint arcs come from, so reporting the other
-    // view's would describe arcs the run never wrote.
-    // An indeterminate race shares its racing pins across possibly several probed states, so those are
-    // grouped into one warning per set of pins (each hazard its own `-`-bulleted sub-block) rather than
-    // printed as they are found; the other three cells warn as they are found.
-    type Races<'a> = BTreeMap<Vec<&'a str>, Vec<Vec<String>>>;
+    // Diagnose the cell's detected hazards, one warning per SITUATION — one cause, at one input
+    // condition, probed from one state. Detection files a record per (cause, outcome), so a situation
+    // showing both outcomes arrives as two records; they are gathered here into the single entry whose
+    // `detected` field names what was observed there. The pass reads the ARC VIEW, the same analysis
+    // `cell_arcs` renders: it is that view's hazards the emitted constraint arcs come from, so reporting
+    // the other view's would describe arcs the run never wrote.
     for c in &cells {
-        let mut races: Races = BTreeMap::new();
+        let mut situations: HashMap<Situation, Vec<&Hazard>> = HashMap::new();
         for a in &c.arc_view().hazards {
-            match (&a.cause, a.outcome) {
-                (Cause::Race { pins }, Outcome::Indeterminate) => {
-                    races.entry(race_key(pins)).or_default().push(subblock(&[
-                        ("when", a.condition_str()),
-                        ("reached along", a.path_str()),
-                        ("pre-hazard", a.pre_state_str()),
-                        ("orders", orders_str(pins)),
-                    ]));
-                }
-                (Cause::Race { pins }, Outcome::Oscillation) => {
-                    let mut lines = vec![format!(
-                        "cellsmith: warning: cell {:?}: nodes {{{}}} oscillate",
-                        c.repr_name(),
-                        a.group.join(", "),
-                    )];
-                    lines.extend(subblock(&[
-                        ("when", a.condition_str()),
-                        ("reached along", a.path_str()),
-                        ("pre-hazard", a.pre_state_str()),
-                        ("triggered by", trigger_str(pins)),
-                    ]));
-                    warnings.push(lines.join("\n"));
-                }
-                (Cause::Pulse { pin, edge }, Outcome::Indeterminate) => {
-                    // A pulse returns its pin to the value it started from, so the pre-pulse input state
-                    // IS the condition the hazard occurs under — `when` states it, and a separate
-                    // pre-hazard field would only restate it.
-                    let mut lines = vec![format!(
-                        "cellsmith: warning: cell {:?}: a pulse on {}{} decides nodes {{{}}} by its width",
-                        c.repr_name(),
-                        pin,
-                        edge.arrow(),
-                        a.group.join(", "),
-                    )];
-                    lines.extend(subblock(&[
-                        ("when", a.condition_str()),
-                        ("reached along", a.path_str()),
-                        ("outcomes", a.settled_strs().join(" | ")),
-                    ]));
-                    warnings.push(lines.join("\n"));
-                }
-                (Cause::Pulse { pin, edge }, Outcome::Oscillation) => {
-                    let mut lines = vec![format!(
-                        "cellsmith: warning: cell {:?}: a pulse on {}{} leaves nodes {{{}}} ringing",
-                        c.repr_name(),
-                        pin,
-                        edge.arrow(),
-                        a.group.join(", "),
-                    )];
-                    lines.extend(subblock(&[
-                        ("when", a.condition_str()),
-                        ("reached along", a.path_str()),
-                    ]));
-                    warnings.push(lines.join("\n"));
-                }
-            }
+            situations.entry(Situation::of(a)).or_default().push(a);
         }
-        for (pins, blocks) in &races {
-            let mut lines = vec![format!(
-                "cellsmith: warning: cell {:?}: inputs ({}) race",
-                c.repr_name(),
-                pins.join(", "),
-            )];
-            lines.extend(blocks.iter().flatten().cloned());
-            warnings.push(lines.join("\n"));
+        for (situation, records) in &situations {
+            warnings.push(hazard_warning(c, situation, records));
         }
     }
 
@@ -410,12 +347,117 @@ fn subblock(fields: &[(&str, String)]) -> Vec<String> {
         .collect()
 }
 
-/// The racing pins a group of indeterminate-race hazards is keyed on, sorted so the key is stable
-/// regardless of the order the probe happened to name them in.
-fn race_key(pins: &[Racer]) -> Vec<&str> {
-    let mut names: Vec<&str> = pins.iter().map(|r| r.pin.as_str()).collect();
-    names.sort();
-    names
+/// The occasion one hazard warning reports: a cause, the primary-input condition it occurs under, and
+/// the probed state it acts from. Detection files one record per (cause, outcome), so the records
+/// sharing a situation are the outcomes observed there, and the warning names them together.
+#[derive(PartialEq, Eq, Hash)]
+struct Situation<'a> {
+    cause: &'a Cause,
+    condition: &'a Minterm<Symbol>,
+    state: &'a Minterm<Symbol>,
+}
+
+impl<'a> Situation<'a> {
+    /// The situation `hazard` was observed in.
+    fn of(hazard: &'a Hazard) -> Self {
+        Self {
+            cause: &hazard.cause,
+            condition: &hazard.condition,
+            state: &hazard.state,
+        }
+    }
+}
+
+/// One situation's warning: a header naming what causes the hazard, the state it happens at and the
+/// nodes it puts at risk, over the detail sub-block. `records` are the situation's detected hazards, one
+/// per outcome observed; the fields that follow from the situation alone — its condition and the path
+/// into its state — are the same in each, so they are read from the first.
+fn hazard_warning(cell: &AnalysedCell, situation: &Situation, records: &[&Hazard]) -> String {
+    let first = records
+        .first()
+        .expect("a situation is only entered by a record");
+    let outcomes: BTreeSet<Outcome> = records.iter().map(|h| h.outcome).collect();
+    let mut fields = vec![
+        (
+            "detected",
+            outcomes
+                .iter()
+                .map(|o| outcome_str(*o))
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        ("when", first.condition_str()),
+        ("reached along", first.path_str()),
+    ];
+    match situation.cause {
+        Cause::Race { pins } => {
+            fields.push(("pre-hazard", first.pre_state_str()));
+            if outcomes.contains(&Outcome::Indeterminate) {
+                fields.push(("orders", orders_str(pins)));
+            }
+            if outcomes.contains(&Outcome::Oscillation) {
+                fields.push(("triggered by", trigger_str(pins)));
+            }
+        }
+        // A pulse returns its pin to the value it started from, so the pre-pulse input state IS the
+        // condition the hazard occurs under — `when` states it, and a separate pre-hazard field would
+        // only restate it. Where a pulse decides two node sets neither of which contains the other,
+        // detection keeps both observations, so each indeterminate record states its own landings.
+        Cause::Pulse { .. } => fields.extend(
+            records
+                .iter()
+                .filter(|h| h.outcome == Outcome::Indeterminate)
+                .map(|h| ("outcomes", h.settled_strs().join(" | "))),
+        ),
+    }
+    let mut lines = vec![format!(
+        "cellsmith: warning: cell {:?}: {} causes a hazard at {} on nodes {{{}}}",
+        cell.repr_name(),
+        cause_str(situation.cause),
+        Hazard::state_str(situation.state),
+        hazard_nodes(records).join(", "),
+    )];
+    lines.extend(subblock(&fields));
+    lines.join("\n")
+}
+
+/// What causes the hazard, as the header names it: the timing that has to be wrong for the cell to be
+/// at risk, rather than the transition itself. A pulse is a hazard when it is too SHORT — exactly what
+/// the generated minimum pulse width forbids — and a pair of edges when too little separates them, what
+/// the generated setup/hold separation forbids. A lone toggle observed not to converge has no second
+/// edge to be separated from, and no constraint follows from it, so there the transition is the whole of
+/// the condition.
+fn cause_str(cause: &Cause) -> String {
+    match cause {
+        Cause::Pulse { pin, edge } => format!("a short pulse on {pin}{}", edge.arrow()),
+        Cause::Race { pins } => match toggles(pins).as_slice() {
+            [one] => format!("toggling {one}"),
+            many => format!("too little separation between {}", many.join(" and ")),
+        },
+    }
+}
+
+/// The name the `detected` field reports an outcome under.
+fn outcome_str(outcome: Outcome) -> &'static str {
+    match outcome {
+        Outcome::Indeterminate => "indeterminate",
+        Outcome::Oscillation => "oscillation",
+    }
+}
+
+/// The nodes a situation puts at risk: every node its records name, without repeats. Each outcome names
+/// the nodes its own reading decides — a ring is over what cycles, an indeterminate settling over what
+/// the competing landings differ in — and the two need not agree, so the entry names their union.
+fn hazard_nodes<'a>(records: &[&'a Hazard]) -> Vec<&'a str> {
+    let mut nodes: Vec<&str> = Vec::new();
+    for h in records {
+        for n in &h.group {
+            if !nodes.contains(&n.as_str()) {
+                nodes.push(n.as_str());
+            }
+        }
+    }
+    nodes
 }
 
 /// The triggering transitions of an indeterminate race: every order its edges can arrive in, since
@@ -460,14 +502,17 @@ fn orderings(n: usize) -> Vec<Vec<usize>> {
 /// arrive together, which is what drives the cycle (`simultaneous toggle S↓ & R↓`); one arrives with
 /// nothing to coincide with (`toggling A↓`).
 fn trigger_str(pins: &[Racer]) -> String {
-    let toggles: Vec<String> = pins
-        .iter()
-        .map(|r| format!("{}{}", r.pin, r.edge.arrow()))
-        .collect();
-    match toggles.as_slice() {
+    match toggles(pins).as_slice() {
         [one] => format!("toggling {one}"),
-        _ => format!("simultaneous toggle {}", toggles.join(" & ")),
+        many => format!("simultaneous toggle {}", many.join(" & ")),
     }
+}
+
+/// Each racing pin with the edge it makes (`A↓`), in the order the probe named them.
+fn toggles(pins: &[Racer]) -> Vec<String> {
+    pins.iter()
+        .map(|r| format!("{}{}", r.pin, r.edge.arrow()))
+        .collect()
 }
 
 /// The default output base name derived from the spec path (stem), or "cells" for stdin.

@@ -113,28 +113,52 @@ pub struct MinPulseWidth {
 /// states the pin and the pulse's opening edge; any other cause is another generator's record and is
 /// passed over.
 ///
-/// The map is 1:1. [`detect`] keys on the cause together with the outcome and keeps the maximal node
-/// sets under inclusion, so two records of one pulse — its ring and its divergence — can protect the
-/// same nodes and generate the same constraint twice; identical constraints render identical blocks, and
-/// the emitter states a block once however many firings reach it.
+/// Records meeting in one constraint. A pulse that both rings and lands somewhere its reference does not
+/// is ONE situation seen as two phenomena, and [`detect`] files one record per phenomenon — so the same
+/// pin, opening edge, input condition and protected nodes can arrive twice. One width removes both, and
+/// the pair is that one constraint. Which record's representative it carries is settled the way this
+/// engine settles every representative: the min `(prevector.len, discovered)`, a total order, so the
+/// survivor does not depend on the order the records are folded in.
 ///
 /// No `clock_pins` either, unlike [`confluence::constrain`](super::confluence::constrain): a pulse
 /// relates one pin to itself, so there is no pair for a declared clock to direct and nothing for the
 /// declaration to decide.
 pub(crate) fn constrain(hz: &[Hazard]) -> Vec<MinPulseWidth> {
-    hz.iter()
-        .filter_map(|h| match &h.cause {
-            Cause::Pulse { pin, edge } => Some(MinPulseWidth {
-                pin: pin.clone(),
-                edge: *edge,
-                prevector: h.prevector.clone(),
-                levels: h.levels.clone(),
-                nodes: protected(&h.group, &h.node_levels),
-                state: h.state.clone(),
-            }),
-            Cause::Race { .. } => None,
-        })
-        .collect()
+    let mut found: BTreeMap<String, (MinPulseWidth, usize)> = BTreeMap::new();
+    for h in hz {
+        let Cause::Pulse { pin, edge } = &h.cause else {
+            continue; // a race is another generator's record
+        };
+        let key = format!(
+            "{pin}{}|{}|{}",
+            edge.rf(),
+            crate::logic::literals_str(&h.condition),
+            h.group.join(",")
+        );
+        // The `Option` read here is the incumbent — no entry yet for this constraint, or one this
+        // record beats on `(prevector.len, discovered)` — nothing to do with a state value's
+        // determinacy.
+        if found
+            .get(&key)
+            .is_none_or(|(e, ed)| (h.prevector.len(), h.discovered) < (e.prevector.len(), *ed))
+        {
+            found.insert(
+                key,
+                (
+                    MinPulseWidth {
+                        pin: pin.clone(),
+                        edge: *edge,
+                        prevector: h.prevector.clone(),
+                        levels: h.levels.clone(),
+                        nodes: protected(&h.group, &h.node_levels),
+                        state: h.state.clone(),
+                    },
+                    h.discovered,
+                ),
+            );
+        }
+    }
+    found.into_values().map(|(pw, _)| pw).collect()
 }
 
 /// Why every state value a pulse walk reads is defined, exactly as in [`super::confluence`]: a probe
@@ -1011,6 +1035,47 @@ Q = "CLK*M + !CLK*Q"
             .collect(),
         );
         assert_eq!(constrained(&declared), constrained(&plain));
+    }
+
+    #[test]
+    fn a_pulse_that_rings_and_diverges_over_one_node_set_is_one_constraint() {
+        // The cross-NOR SR's set pulse is two records over {Q, Qn}: the interior candidate rings, and
+        // the zero-width one holds the reset state the reference leaves. One S↑ at one condition over
+        // one node set — one situation seen as two phenomena — and the width that removes the ring is
+        // the width that removes the divergence, so the pair is a single constraint. The reset pulse
+        // mirrors it, so the cell constrains two pulses out of four records.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "SR"
+inputs = ["S", "R"]
+constraint_arcs = true
+[cell.outputs]
+Q  = "!(R+Qn)"
+Qn = "!(S+Q)"
+"#,
+        );
+        assert_eq!(
+            pulses(&cell).len(),
+            4,
+            "detection files a record per phenomenon, got {:?}",
+            keys(&cell)
+        );
+        assert_eq!(
+            constrained(&cell),
+            [
+                ("S".to_string(), 'R', "Q,Qn".to_string()),
+                ("R".to_string(), 'R', "Q,Qn".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        assert_eq!(
+            cell.min_pulse_widths.len(),
+            2,
+            "one constraint per situation, got {:?}",
+            cell.min_pulse_widths
+        );
     }
 
     #[test]

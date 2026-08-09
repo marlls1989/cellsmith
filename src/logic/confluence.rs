@@ -542,6 +542,11 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
 /// between two edges, and one edge has nothing to be separated from. Deduped by the canonical
 /// [`constraint_key`], keeping the min `(prevector.len, discovered)` representative; BTreeMap gives
 /// deterministic output order.
+///
+/// A pair that both diverges and never settles is ONE situation seen as two phenomena, filed as a record
+/// each ([`detect`] observes the two outcomes independently), and one separation removes both: the
+/// records name the same pins, edges and endangered nodes, so they key alike and meet here as the one
+/// constraint. [`width::constrain`](super::width::constrain) collapses a pulse's pair the same way.
 pub(crate) fn constrain(hz: &DetectedHazards, clock_pins: &[Symbol]) -> Vec<Constraint> {
     let mut found: BTreeMap<String, (Constraint, usize)> = BTreeMap::new();
     for hazard in hz.order_dependence.iter().chain(&hz.oscillation) {

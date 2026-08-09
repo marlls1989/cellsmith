@@ -143,19 +143,62 @@ fn multi_cell_spec_covers_all_cells() {
     }
 
     let stderr = String::from_utf8(out.stderr).unwrap();
+    // A warning's header names the timing that causes the hazard, and its `detected` field the outcomes
+    // observed there — so a race reads as too little separation between its two edges, a pulse-width
+    // hazard as a short pulse, and an oscillation is named where it was detected.
     assert!(
-        stderr.contains("oscillate"),
+        stderr.contains("oscillation"),
         "no oscillation warning:\n{stderr}"
     );
-    assert!(stderr.contains("race"), "no race warning:\n{stderr}");
     assert!(
-        stderr.contains("by its width"),
+        stderr.contains("too little separation between"),
+        "no race warning:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("a short pulse on"),
         "no width-dependent hazard warning:\n{stderr}"
     );
 
     assert!(
         stdout.contains("min_pulse_width"),
         "no min_pulse_width constraint arcs:\n{stdout}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A situation showing both outcomes is one warning entry. A mutex pulsed on `A↓` from `A*B` both
+/// settles indeterminately and rings, and detection files a record per outcome, so the two reach the
+/// terminal as a single entry whose `detected` field names both and which still carries the settled
+/// states only the indeterminate record has.
+#[test]
+fn both_outcomes_at_one_situation_are_one_entry() {
+    let dir = scratch_dir("one_entry");
+    let spec = dir.join("cells.toml");
+    std::fs::write(&spec, MULTI).unwrap();
+
+    let out = Command::new(BIN)
+        .arg("--stdout")
+        .arg(&spec)
+        .output()
+        .expect("run cellsmith");
+    assert!(out.status.success(), "exit: {:?}", out.status);
+    let stderr = String::from_utf8(out.stderr).unwrap();
+
+    // Warnings are separated by a blank line, so one block is one entry.
+    let entries: Vec<&str> = stderr
+        .split("\n\n")
+        .filter(|e| e.contains("cell \"MUT\"") && e.contains("a short pulse on A↓"))
+        .collect();
+    assert_eq!(entries.len(), 1, "MUT's A↓ pulse is one entry:\n{stderr}");
+    let entry = entries[0];
+    assert!(
+        entry.contains("indeterminate, oscillation"),
+        "the entry names both detected outcomes:\n{entry}"
+    );
+    assert!(
+        entry.contains("outcomes:"),
+        "the indeterminate record's settled states survive the merge:\n{entry}"
     );
 
     std::fs::remove_dir_all(&dir).ok();
