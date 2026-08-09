@@ -71,9 +71,9 @@ Three properties follow from this construction:
 - **input-forced transitions cascade through settling** — in a settable cross-coupled pair, toggling a
   set input flips both the output it forces (rise) and, through the coupling, that output's partner
   (fall); the search discovers both;
-- **a state-holding cell's arcs carry `-ic`**, the start-state voltage of every `-pinlist` entry, and
-  that is the whole of how the start condition reaches Liberate: no `define_arc` emits a `-prevector`.
-  A purely combinational cell has no state to establish and carries neither.
+- **a state-holding cell's arcs carry `-ic`**, the start-state voltage of every `-pinlist` entry, which
+  is the whole of how the start condition reaches Liberate. A purely combinational cell has no state to
+  establish, so its arcs state no start condition.
 
 A cross-coupled cell is also **bistable**: co-asserting a mutex's two requests walks the joint
 next-state around a cycle it never leaves, so the machine reaches no **stable state** — an **oscillation

@@ -2547,9 +2547,9 @@ Q = "CLK*M + !CLK*Q"
             assert_same_cell_records(&exposed, &plain);
 
             // The arcs differ in exactly one way: every ARC block of the exposing run lists the node
-            // among its columns, and no block of the other run does. Leakage is rendered separately
-            // below — its blocks state the cell's own pins, so an exposed node never earns a column
-            // there and they are no part of this claim.
+            // among its columns, and no block of the other run does. Leakage is switched off for this
+            // comparison and asserted on its own below, where a walked block states the exposed node
+            // through its own `-pinlist`.
             let opts = crate::emit::arcs_tcl::ArcsTclOptions {
                 emit_leakage: false,
                 ..Default::default()
