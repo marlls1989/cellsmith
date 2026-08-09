@@ -212,18 +212,18 @@ define_arc \
 define_arc \
 	-type combinational \
 	-pinlist {A B R Q} \
-	-ic "0 $VDD 0 0" \
-	-vector {R 1 0 R} \
-	-related_pin A \
+	-ic "$VDD 0 0 0" \
+	-vector {1 R 0 R} \
+	-related_pin B \
 	-pin Q \
 	{ RCELEM2 }
 
 define_arc \
 	-type combinational \
 	-pinlist {A B R Q} \
-	-ic "$VDD 0 0 0" \
-	-vector {1 R 0 R} \
-	-related_pin B \
+	-ic "0 $VDD 0 0" \
+	-vector {R 1 0 R} \
+	-related_pin A \
 	-pin Q \
 	{ RCELEM2 }
 
@@ -304,14 +304,14 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {A B R} \
-	-prevector {011 010} \
-	-when "!A*B*!Q*!R" \
+	-prevector {101 100} \
+	-when "A*!B*!Q*!R" \
 	{ RCELEM2 }
 
 define_leakage \
 	-prevector_pinlist {A B R} \
-	-prevector {101 100} \
-	-when "A*!B*!Q*!R" \
+	-prevector {011 010} \
+	-when "!A*B*!Q*!R" \
 	{ RCELEM2 }
 
 define_leakage \
@@ -359,8 +359,8 @@ define_arc \
 define_arc \
 	-type combinational \
 	-pinlist {M1 M2 P1 P2 C R Q} \
-	-ic "$VDD $VDD $VDD 0 $VDD 0 0" \
-	-vector {1 1 1 R 1 0 R} \
+	-ic "0 $VDD $VDD 0 $VDD 0 0" \
+	-vector {0 1 1 R 1 0 R} \
 	-related_pin P2 \
 	-pin Q \
 	{ RACELEM21 }
@@ -377,18 +377,18 @@ define_arc \
 define_arc \
 	-type combinational \
 	-pinlist {M1 M2 P1 P2 C R Q} \
-	-ic "0 $VDD 0 $VDD $VDD 0 0" \
-	-vector {0 1 R 1 1 0 R} \
-	-related_pin P1 \
+	-ic "$VDD 0 $VDD $VDD 0 0 $VDD" \
+	-vector {F 0 1 1 0 0 F} \
+	-related_pin M1 \
 	-pin Q \
 	{ RACELEM21 }
 
 define_arc \
 	-type combinational \
 	-pinlist {M1 M2 P1 P2 C R Q} \
-	-ic "$VDD 0 $VDD $VDD 0 0 $VDD" \
-	-vector {F 0 1 1 0 0 F} \
-	-related_pin M1 \
+	-ic "0 0 0 $VDD $VDD 0 0" \
+	-vector {0 0 R 1 1 0 R} \
+	-related_pin P1 \
 	-pin Q \
 	{ RACELEM21 }
 
@@ -570,14 +570,8 @@ define_leakage -when "C*M1*M2*P1*P2*!Q*R" { RACELEM21 }
 
 define_leakage \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {111011 111010} \
-	-when "C*M1*M2*P1*!P2*!Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {111110 111100} \
-	-when "!C*M1*M2*P1*P2*Q*!R" \
+	-prevector {001110 001010} \
+	-when "C*!M1*!M2*P1*!P2*Q*!R" \
 	{ RACELEM21 }
 
 define_leakage \
@@ -588,62 +582,8 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {011110 011100} \
-	-when "!C*!M1*M2*P1*P2*Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {011101 011100} \
-	-when "!C*!M1*M2*P1*P2*!Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001011 001010} \
-	-when "C*!M1*!M2*P1*!P2*!Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {011001 011000} \
-	-when "!C*!M1*M2*P1*!P2*!Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {101110 100110} \
-	-when "C*M1*!M2*!P1*P2*Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {101101 101100} \
-	-when "!C*M1*!M2*P1*P2*!Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
 	-prevector {011011 011010} \
 	-when "C*!M1*M2*P1*!P2*!Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001110 001010} \
-	-when "C*!M1*!M2*P1*!P2*Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {111001 111000} \
-	-when "!C*M1*M2*P1*!P2*!Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {101011 101010} \
-	-when "C*M1*!M2*P1*!P2*!Q*!R" \
 	{ RACELEM21 }
 
 define_leakage \
@@ -654,68 +594,38 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {100001 100000} \
-	-when "!C*M1*!M2*!P1*!P2*!Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {100011 100010} \
-	-when "C*M1*!M2*!P1*!P2*!Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {110101 110100} \
-	-when "!C*M1*M2*!P1*P2*!Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {110011 110010} \
-	-when "C*M1*M2*!P1*!P2*!Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {000011 000010} \
-	-when "C*!M1*!M2*!P1*!P2*!Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {011110 010110} \
-	-when "C*!M1*M2*!P1*P2*Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {110001 110000} \
-	-when "!C*M1*M2*!P1*!P2*!Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {010001 010000} \
-	-when "!C*!M1*M2*!P1*!P2*!Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {010111 010110} \
-	-when "C*!M1*M2*!P1*P2*!Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {100111 100110} \
-	-when "C*M1*!M2*!P1*P2*!Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
 	-prevector {010101 010100} \
 	-when "!C*!M1*M2*!P1*P2*!Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 011100} \
+	-when "!C*!M1*M2*P1*P2*Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {001011 001010} \
+	-when "C*!M1*!M2*P1*!P2*!Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111101 111100} \
+	-when "!C*M1*M2*P1*P2*!Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011101 011100} \
+	-when "!C*!M1*M2*P1*P2*!Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 101100} \
+	-when "!C*M1*!M2*P1*P2*Q*!R" \
 	{ RACELEM21 }
 
 define_leakage \
@@ -732,14 +642,56 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {101001 101000} \
-	-when "!C*M1*!M2*P1*!P2*!Q*!R" \
+	-prevector {000111 000110} \
+	-when "C*!M1*!M2*!P1*P2*!Q*!R" \
 	{ RACELEM21 }
 
 define_leakage \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {000111 000110} \
-	-when "C*!M1*!M2*!P1*P2*!Q*!R" \
+	-prevector {011001 011000} \
+	-when "!C*!M1*M2*P1*!P2*!Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111011 111010} \
+	-when "C*M1*M2*P1*!P2*!Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {100011 100010} \
+	-when "C*M1*!M2*!P1*!P2*!Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101011 101010} \
+	-when "C*M1*!M2*P1*!P2*!Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {110001 110000} \
+	-when "!C*M1*M2*!P1*!P2*!Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {000011 000010} \
+	-when "C*!M1*!M2*!P1*!P2*!Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101101 101100} \
+	-when "!C*M1*!M2*P1*P2*!Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {010001 010000} \
+	-when "!C*!M1*M2*!P1*!P2*!Q*!R" \
 	{ RACELEM21 }
 
 define_leakage \
@@ -750,14 +702,74 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {100101 100100} \
+	-when "!C*M1*!M2*!P1*P2*!Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {110101 110100} \
+	-when "!C*M1*M2*!P1*P2*!Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111001 111000} \
+	-when "!C*M1*M2*P1*!P2*!Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101001 101000} \
+	-when "!C*M1*!M2*P1*!P2*!Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {010111 010110} \
+	-when "C*!M1*M2*!P1*P2*!Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 010110} \
+	-when "C*!M1*M2*!P1*P2*Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
 	-prevector {011110 011010} \
 	-when "C*!M1*M2*P1*!P2*Q*!R" \
 	{ RACELEM21 }
 
 define_leakage \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {111101 111100} \
-	-when "!C*M1*M2*P1*P2*!Q*!R" \
+	-prevector {100111 100110} \
+	-when "C*M1*!M2*!P1*P2*!Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 111100} \
+	-when "!C*M1*M2*P1*P2*Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {100001 100000} \
+	-when "!C*M1*!M2*!P1*!P2*!Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {110011 110010} \
+	-when "C*M1*M2*!P1*!P2*!Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 100110} \
+	-when "C*M1*!M2*!P1*P2*Q*!R" \
 	{ RACELEM21 }
 
 define_leakage \
@@ -768,56 +780,8 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {100101 100100} \
-	-when "!C*M1*!M2*!P1*P2*!Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {101110 101100} \
-	-when "!C*M1*!M2*P1*P2*Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {011110 010110 010100} \
-	-when "!C*!M1*M2*!P1*P2*Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {101110 101100 100100} \
+	-prevector {101110 100110 100100} \
 	-when "!C*M1*!M2*!P1*P2*Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {101110 101100 101000} \
-	-when "!C*M1*!M2*P1*!P2*Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {111110 111010 110010} \
-	-when "C*M1*M2*!P1*!P2*Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {101110 101010 100010} \
-	-when "C*M1*!M2*!P1*!P2*Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {001110 001010 000010} \
-	-when "C*!M1*!M2*!P1*!P2*Q*!R" \
-	{ RACELEM21 }
-
-define_leakage \
-	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {011110 011010 010010} \
-	-when "C*!M1*M2*!P1*!P2*Q*!R" \
 	{ RACELEM21 }
 
 define_leakage \
@@ -828,35 +792,70 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {111110 110110 110100} \
+	-prevector {001110 000110 000010} \
+	-when "C*!M1*!M2*!P1*!P2*Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 111010 110010} \
+	-when "C*M1*M2*!P1*!P2*Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {011110 010110 010100} \
+	-when "!C*!M1*M2*!P1*P2*Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 100110 100010} \
+	-when "C*M1*!M2*!P1*!P2*Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 111100 110100} \
 	-when "!C*M1*M2*!P1*P2*Q*!R" \
 	{ RACELEM21 }
 
 define_leakage \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {111110 111010 111000} \
+	-prevector {111110 111100 111000} \
 	-when "!C*M1*M2*P1*!P2*Q*!R" \
 	{ RACELEM21 }
 
 define_leakage \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {011110 011010 011000 010000} \
-	-when "!C*!M1*M2*!P1*!P2*Q*!R" \
+	-prevector {101110 101100 101000} \
+	-when "!C*M1*!M2*P1*!P2*Q*!R" \
 	{ RACELEM21 }
 
 define_leakage \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {111110 111010 111000 110000} \
+	-prevector {011110 011010 010010} \
+	-when "C*!M1*M2*!P1*!P2*Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {101110 101100 101000 100000} \
+	-when "!C*M1*!M2*!P1*!P2*Q*!R" \
+	{ RACELEM21 }
+
+define_leakage \
+	-prevector_pinlist {M1 M2 P1 P2 C R} \
+	-prevector {111110 111100 111000 110000} \
 	-when "!C*M1*M2*!P1*!P2*Q*!R" \
 	{ RACELEM21 }
 
 define_leakage \
 	-prevector_pinlist {M1 M2 P1 P2 C R} \
-	-prevector {101110 101010 100010 100000} \
-	-when "!C*M1*!M2*!P1*!P2*Q*!R" \
+	-prevector {011110 011010 010010 010000} \
+	-when "!C*!M1*M2*!P1*!P2*Q*!R" \
 	{ RACELEM21 }
 
-# oscillation: !S*!R risks metastability in {Q, Qn}, settling to one of {Q=0, Qn=1} | {Q=1, Qn=0}
 define_arc \
 	-type combinational \
 	-pinlist {S R Q Qn} \
@@ -961,7 +960,6 @@ define_leakage \
 	-when "!Q*Qn*!R*!S" \
 	{ SR }
 
-# oscillation: A*B risks metastability in {Qa, Qb}, settling to one of {Qa=0, Qb=1} | {Qa=1, Qb=0}
 define_arc \
 	-type combinational \
 	-pinlist {A B Qa Qb} \
@@ -1069,8 +1067,8 @@ define_leakage \
 define_arc \
 	-type edge \
 	-pinlist {CLK D Q} \
-	-ic "0 0 $VDD" \
-	-vector {R 0 F} \
+	-ic "0 $VDD 0" \
+	-vector {R 1 R} \
 	-related_pin CLK \
 	-pin Q \
 	{ DFF }
@@ -1078,8 +1076,8 @@ define_arc \
 define_arc \
 	-type edge \
 	-pinlist {CLK D Q} \
-	-ic "0 $VDD 0" \
-	-vector {R 1 R} \
+	-ic "0 0 $VDD" \
+	-vector {R 0 F} \
 	-related_pin CLK \
 	-pin Q \
 	{ DFF }
@@ -1154,54 +1152,14 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {CLK D} \
-	-prevector {01 11 10 00} \
-	-when "!CLK*!D*Q" \
-	{ DFF }
-
-define_leakage \
-	-prevector_pinlist {CLK D} \
 	-prevector {00 10 11 01} \
 	-when "!CLK*D*!Q" \
 	{ DFF }
 
-define_arc \
-	-type setup \
-	-pinlist {CLK D M Q} \
-	-ic "0 $VDD $VDD $VDD" \
-	-vector {R F X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ DFF }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D M Q} \
-	-ic "0 $VDD $VDD $VDD" \
-	-vector {R F X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ DFF }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D M Q} \
-	-ic "0 0 0 0" \
-	-vector {R R X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ DFF }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D M Q} \
-	-ic "0 0 0 0" \
-	-vector {R R X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
+define_leakage \
+	-prevector_pinlist {CLK D} \
+	-prevector {01 11 10 00} \
+	-when "!CLK*!D*Q" \
 	{ DFF }
 
 define_arc \
@@ -1217,11 +1175,51 @@ define_arc \
 define_arc \
 	-type min_pulse_width \
 	-pinlist {CLK D Q} \
-	-ic "0 0 $VDD" \
-	-vector {R 0 X} \
+	-ic "0 $VDD 0" \
+	-vector {R 1 X} \
 	-related_pin CLK \
 	-pin CLK \
 	-probe {Q} \
+	{ DFF }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D M Q} \
+	-ic "0 $VDD $VDD $VDD" \
+	-vector {R F X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ DFF }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D M Q} \
+	-ic "0 $VDD $VDD $VDD" \
+	-vector {R F X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ DFF }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D M Q} \
+	-ic "0 0 0 0" \
+	-vector {R R X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ DFF }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D M Q} \
+	-ic "0 0 0 0" \
+	-vector {R R X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
 	{ DFF }
 
 define_arc \
@@ -1271,17 +1269,9 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {G D Q} \
-	-ic "0 $VDD $VDD" \
-	-vector {R 1 1} \
+	-ic "0 0 0" \
+	-vector {R 0 0} \
 	-pin G \
-	{ DLH }
-
-define_arc \
-	-type hidden \
-	-pinlist {G D Q} \
-	-ic "0 $VDD $VDD" \
-	-vector {0 F 1} \
-	-pin D \
 	{ DLH }
 
 define_arc \
@@ -1292,20 +1282,28 @@ define_arc \
 	-pin D \
 	{ DLH }
 
+define_arc \
+	-type hidden \
+	-pinlist {G D Q} \
+	-ic "0 $VDD $VDD" \
+	-vector {0 F 1} \
+	-pin D \
+	{ DLH }
+
 define_leakage -when "!D*G*!Q" { DLH }
 
 define_leakage -when "D*G*Q" { DLH }
 
 define_leakage \
 	-prevector_pinlist {G D} \
-	-prevector {11 01} \
-	-when "D*!G*Q" \
+	-prevector {10 00} \
+	-when "!D*!G*!Q" \
 	{ DLH }
 
 define_leakage \
 	-prevector_pinlist {G D} \
-	-prevector {10 00} \
-	-when "!D*!G*!Q" \
+	-prevector {11 01} \
+	-when "D*!G*Q" \
 	{ DLH }
 
 define_leakage \
@@ -1323,18 +1321,18 @@ define_leakage \
 define_arc \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "0 0 0 $VDD 0 $VDD $VDD $VDD 0 0 0 0" \
-	-vector {R 0 0 1 0 X X X X X X R} \
-	-related_pin CLKA \
+	-ic "$VDD 0 $VDD 0 $VDD 0 0 0 $VDD $VDD $VDD 0" \
+	-vector {1 R 1 0 1 X X X X X X R} \
+	-related_pin CLKB \
 	-pin GCLK \
 	{ ICM }
 
 define_arc \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "0 0 $VDD 0 $VDD 0 0 0 $VDD $VDD $VDD 0" \
-	-vector {0 R 1 0 1 X X X X X X R} \
-	-related_pin CLKB \
+	-ic "0 $VDD 0 $VDD 0 $VDD $VDD $VDD 0 0 0 0" \
+	-vector {R 1 0 1 0 X X X X X X R} \
+	-related_pin CLKA \
 	-pin GCLK \
 	{ ICM }
 
@@ -1359,8 +1357,8 @@ define_arc \
 define_arc \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "$VDD 0 0 $VDD 0 $VDD $VDD $VDD 0 0 0 $VDD" \
-	-vector {F 0 0 1 0 X X X X X X F} \
+	-ic "$VDD $VDD 0 $VDD 0 $VDD $VDD $VDD 0 0 0 $VDD" \
+	-vector {F 1 0 1 0 X X X X X X F} \
 	-related_pin CLKA \
 	-pin GCLK \
 	{ ICM }
@@ -1368,8 +1366,8 @@ define_arc \
 define_arc \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "$VDD 0 0 $VDD 0 $VDD $VDD $VDD 0 0 0 $VDD" \
-	-vector {1 0 R 1 0 X X X X X X F} \
+	-ic "$VDD $VDD 0 $VDD 0 $VDD $VDD $VDD 0 0 0 $VDD" \
+	-vector {1 1 R 1 0 X X X X X X F} \
 	-related_pin RA \
 	-pin GCLK \
 	{ ICM }
@@ -1441,16 +1439,16 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "0 0 0 $VDD 0 $VDD 0 0 0 0 0 0" \
-	-vector {0 0 R 1 0 X X X X X X 0} \
+	-ic "0 $VDD 0 $VDD 0 $VDD 0 0 0 0 0 0" \
+	-vector {0 1 R 1 0 X X X X X X 0} \
 	-pin RA \
 	{ ICM }
 
 define_arc \
 	-type hidden \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "0 $VDD $VDD 0 0 0 0 0 0 0 0 0" \
-	-vector {0 1 1 R 0 X X X X X X 0} \
+	-ic "$VDD 0 $VDD 0 0 0 0 0 0 0 0 0" \
+	-vector {1 0 1 R 0 X X X X X X 0} \
 	-pin RB \
 	{ ICM }
 
@@ -1472,50 +1470,8 @@ define_leakage -when "CLKA*CLKB*!GCLK*RA*RB*S" { ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110 00010} \
-	-when "!CLKA*!CLKB*!GCLK*!RA*RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01111 01011} \
-	-when "!CLKA*CLKB*!GCLK*!RA*RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10110 10010} \
-	-when "CLKA*!CLKB*!GCLK*!RA*RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01110 01100} \
-	-when "!CLKA*CLKB*!GCLK*RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10111 10011} \
-	-when "CLKA*!CLKB*!GCLK*!RA*RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110 00100} \
-	-when "!CLKA*!CLKB*!GCLK*RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10111 10101} \
-	-when "CLKA*!CLKB*!GCLK*RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {11111 11101} \
-	-when "CLKA*CLKB*!GCLK*RA*!RB*S" \
+	-prevector {01110 01010} \
+	-when "!CLKA*CLKB*!GCLK*!RA*RB*!S" \
 	{ ICM }
 
 define_leakage \
@@ -1526,14 +1482,14 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {11111 11011} \
-	-when "CLKA*CLKB*!GCLK*!RA*RB*S" \
+	-prevector {10110 10100} \
+	-when "CLKA*!CLKB*!GCLK*RA*!RB*!S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00111 00101} \
-	-when "!CLKA*!CLKB*!GCLK*RA*!RB*S" \
+	-prevector {10110 10010} \
+	-when "CLKA*!CLKB*!GCLK*!RA*RB*!S" \
 	{ ICM }
 
 define_leakage \
@@ -1544,20 +1500,8 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01111 01101} \
-	-when "!CLKA*CLKB*!GCLK*RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10110 10100} \
-	-when "CLKA*!CLKB*!GCLK*RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01110 01010} \
-	-when "!CLKA*CLKB*!GCLK*!RA*RB*!S" \
+	-prevector {10111 10101} \
+	-when "CLKA*!CLKB*!GCLK*RA*!RB*S" \
 	{ ICM }
 
 define_leakage \
@@ -1568,74 +1512,56 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00010 10010 00010} \
+	-prevector {01111 01101} \
+	-when "!CLKA*CLKB*!GCLK*RA*!RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01100} \
+	-when "!CLKA*CLKB*!GCLK*RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010} \
 	-when "!CLKA*!CLKB*!GCLK*!RA*RB*!S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {11110 11010 11000} \
-	-when "CLKA*CLKB*!GCLK*!RA*!RB*!S" \
+	-prevector {10111 10011} \
+	-when "CLKA*!CLKB*!GCLK*!RA*RB*S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10111 10101 10001} \
-	-when "CLKA*!CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01111 01101 01001} \
-	-when "!CLKA*CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00101 01101 00101} \
-	-when "!CLKA*!CLKB*!GCLK*RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10111 10101 11101} \
+	-prevector {11111 11101} \
 	-when "CLKA*CLKB*!GCLK*RA*!RB*S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110 00010 10010} \
-	-when "CLKA*!CLKB*!GCLK*!RA*RB*!S" \
+	-prevector {00110 00100} \
+	-when "!CLKA*!CLKB*!GCLK*RA*!RB*!S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01110 01010 01000} \
-	-when "!CLKA*CLKB*!GCLK*!RA*!RB*!S" \
+	-prevector {11111 11011} \
+	-when "CLKA*CLKB*!GCLK*!RA*RB*S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01010 11010 01010} \
-	-when "!CLKA*CLKB*!GCLK*!RA*RB*!S" \
+	-prevector {01111 01011} \
+	-when "!CLKA*CLKB*!GCLK*!RA*RB*S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00111 00101 00001} \
-	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01110 01010 11010} \
-	-when "CLKA*CLKB*!GCLK*!RA*RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10110 10100 10000} \
-	-when "CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
+	-prevector {00111 00101} \
+	-when "!CLKA*!CLKB*!GCLK*RA*!RB*S" \
 	{ ICM }
 
 define_leakage \
@@ -1646,14 +1572,38 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {11111 11011 11001} \
-	-when "CLKA*CLKB*!GCLK*!RA*!RB*S" \
+	-prevector {01010 11010 01010} \
+	-when "!CLKA*CLKB*!GCLK*!RA*RB*!S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110 00100 00000} \
-	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
+	-prevector {00101 01101 00101} \
+	-when "!CLKA*!CLKB*!GCLK*RA*!RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10110 10010 10000} \
+	-when "CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00101 00001} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10011 10001} \
+	-when "CLKA*!CLKB*!GCLK*!RA*!RB*S" \
 	{ ICM }
 
 define_leakage \
@@ -1664,26 +1614,56 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00101 01101 01100 00100} \
-	-when "!CLKA*!CLKB*!GCLK*RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01110 01010 11010 11011} \
-	-when "CLKA*CLKB*!GCLK*!RA*RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01110 01010 11010 11000} \
+	-prevector {11110 11010 11000} \
 	-when "CLKA*CLKB*!GCLK*!RA*!RB*!S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10101 11101 10101 11101} \
-	-when "CLKA*CLKB*GCLK*RA*!RB*S" \
+	-prevector {00110 00010 10010} \
+	-when "CLKA*!CLKB*!GCLK*!RA*RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01111 01011 01001} \
+	-when "!CLKA*CLKB*!GCLK*!RA*!RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010} \
+	-when "CLKA*CLKB*!GCLK*!RA*RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10101 11101} \
+	-when "CLKA*CLKB*!GCLK*RA*!RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {11111 11011 11001} \
+	-when "CLKA*CLKB*!GCLK*!RA*!RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01100 01000} \
+	-when "!CLKA*CLKB*!GCLK*!RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00100 00000} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 00001} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*S" \
 	{ ICM }
 
 define_leakage \
@@ -1694,68 +1674,8 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00101 01101 01001 00001} \
-	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110 00100 00000 10000} \
-	-when "CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10111 10101 11101 11001} \
-	-when "CLKA*CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00101 01101 00101 01101} \
-	-when "!CLKA*CLKB*GCLK*RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01010 11010 11011 01011} \
-	-when "!CLKA*CLKB*!GCLK*!RA*RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10111 10101 11101 11100} \
-	-when "CLKA*CLKB*!GCLK*RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10101 11101 11100 10100} \
-	-when "CLKA*!CLKB*!GCLK*RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00010 10010 00010 00000} \
-	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10101 10001 11001 10001} \
-	-when "CLKA*!CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110 00010 10010 10011} \
-	-when "CLKA*!CLKB*!GCLK*!RA*RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00010 10010 00010 10010} \
-	-when "CLKA*!CLKB*GCLK*!RA*RB*!S" \
+	-prevector {00111 00101 01101 01100} \
+	-when "!CLKA*CLKB*!GCLK*RA*!RB*!S" \
 	{ ICM }
 
 define_leakage \
@@ -1766,8 +1686,14 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01010 11010 01010 01000} \
-	-when "!CLKA*CLKB*!GCLK*!RA*!RB*!S" \
+	-prevector {01010 11010 11011 01011} \
+	-when "!CLKA*CLKB*!GCLK*!RA*RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 11101} \
+	-when "CLKA*CLKB*GCLK*RA*!RB*S" \
 	{ ICM }
 
 define_leakage \
@@ -1778,122 +1704,80 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00111 00101 01101 01100} \
-	-when "!CLKA*CLKB*!GCLK*RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01110 01010 11010 11000 11001} \
-	-when "CLKA*CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01010 11010 11011 01011 11011} \
-	-when "CLKA*CLKB*GCLK*!RA*RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00010 10010 10011 10001 00001} \
-	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10101 10001 11001 10001 10000} \
-	-when "CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00101 01101 00101 01101 01100} \
-	-when "!CLKA*CLKB*GCLK*RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00101 01101 01100 00100 01100} \
-	-when "!CLKA*CLKB*GCLK*RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00010 10010 00010 10010 10000} \
-	-when "CLKA*!CLKB*GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00010 10010 10011 00011 10011} \
-	-when "CLKA*!CLKB*GCLK*!RA*RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10101 10001 11001 10001 11001} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10101 11101 10101 11101 11100} \
-	-when "CLKA*CLKB*GCLK*RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00101 01101 00101 01101 01001} \
-	-when "!CLKA*CLKB*GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00111 00101 01101 01100 01000} \
-	-when "!CLKA*CLKB*!GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00101 01101 01100 01000 00000} \
-	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110 00010 10010 10011 10001} \
-	-when "CLKA*!CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10111 10101 11101 11100 11000} \
+	-prevector {01110 01100 01000 11000} \
 	-when "CLKA*CLKB*!GCLK*!RA*!RB*!S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01010 11010 01010 01000 01001} \
-	-when "!CLKA*CLKB*!GCLK*!RA*!RB*S" \
+	-prevector {10101 11101 11100 10100} \
+	-when "CLKA*!CLKB*!GCLK*RA*!RB*!S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10101 11101 11100 10100 11100} \
-	-when "CLKA*CLKB*GCLK*RA*!RB*!S" \
+	-prevector {10111 10101 11101 11001} \
+	-when "CLKA*CLKB*!GCLK*!RA*!RB*S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00010 10010 00010 10010 10011} \
-	-when "CLKA*!CLKB*GCLK*!RA*RB*S" \
+	-prevector {00010 10010 00010 00000} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01010 11010 01010 11010 11000} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
+	-prevector {00010 10010 00010 10010} \
+	-when "CLKA*!CLKB*GCLK*!RA*RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 11000 01000} \
+	-when "!CLKA*CLKB*!GCLK*!RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10101 11101 11100} \
+	-when "CLKA*CLKB*!GCLK*RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 01101} \
+	-when "!CLKA*CLKB*GCLK*RA*!RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00100 00000 10000} \
+	-when "CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10011} \
+	-when "CLKA*!CLKB*!GCLK*!RA*RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 11001 10001} \
+	-when "CLKA*!CLKB*!GCLK*!RA*!RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010 11011} \
+	-when "CLKA*CLKB*!GCLK*!RA*RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 01100 00100} \
+	-when "!CLKA*!CLKB*!GCLK*RA*!RB*!S" \
 	{ ICM }
 
 define_leakage \
@@ -1904,13 +1788,145 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 01100 00100 00000} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 11001 11000 10000} \
+	-when "CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 10101 11101 11100} \
+	-when "CLKA*CLKB*GCLK*RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 11100 10100 11100} \
+	-when "CLKA*CLKB*GCLK*RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 11001 10001 11001} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 11000 01000 11000} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 10011 00011 10011} \
+	-when "CLKA*!CLKB*GCLK*!RA*RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 11011 01011 11011} \
+	-when "CLKA*CLKB*GCLK*!RA*RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00101 01101 01100 01000} \
+	-when "!CLKA*CLKB*!GCLK*!RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10011 10001} \
+	-when "CLKA*!CLKB*!GCLK*!RA*!RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 01101 01001} \
+	-when "!CLKA*CLKB*GCLK*!RA*!RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 01101 01100} \
+	-when "!CLKA*CLKB*GCLK*RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 10010 10011} \
+	-when "CLKA*!CLKB*GCLK*!RA*RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01110 01010 11010 11011 11001} \
+	-when "CLKA*CLKB*!GCLK*!RA*!RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {01010 11010 11000 01000 01001} \
+	-when "!CLKA*CLKB*!GCLK*!RA*!RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 00010 10010 10000} \
+	-when "CLKA*!CLKB*GCLK*!RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 01100 00100 01100} \
+	-when "!CLKA*CLKB*GCLK*RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 10011 10001 00001} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10111 10101 11101 11100 11000} \
+	-when "CLKA*CLKB*!GCLK*!RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00010 10010 10011 10001 00001 10001} \
+	-when "CLKA*!CLKB*GCLK*!RA*!RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 00101 01101 01100 01000} \
+	-when "!CLKA*CLKB*GCLK*!RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00101 01101 01100 01000 11000} \
+	-when "CLKA*CLKB*!GCLK*!RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {10101 11101 11100 10100 11100 11101} \
 	-when "CLKA*CLKB*GCLK*RA*!RB*S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01010 11010 01010 01000 01001 11001} \
+	-prevector {01010 11010 11000 01000 01001 11001} \
 	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
 	{ ICM }
 
@@ -1922,44 +1938,26 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00101 01101 01100 01000 00000 01000} \
+	-prevector {10101 11101 11001 10001 11001 11000} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 01100 00100 01100 01000} \
 	-when "!CLKA*CLKB*GCLK*!RA*!RB*!S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00010 10010 10011 00011 10011 10001} \
+	-prevector {00010 10010 00010 10010 10000 10001} \
 	-when "CLKA*!CLKB*GCLK*!RA*!RB*S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01010 11010 01010 11010 11011 11001} \
+	-prevector {01010 11010 11000 01000 11000 11001} \
 	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00111 00101 01101 01100 01000 11000} \
-	-when "CLKA*CLKB*!GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00010 10010 10011 00011 10011 10010} \
-	-when "CLKA*!CLKB*GCLK*!RA*RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00101 01101 00101 01101 01001 01000} \
-	-when "!CLKA*CLKB*GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00101 01101 01100 00100 01100 01101} \
-	-when "!CLKA*CLKB*GCLK*RA*!RB*S" \
 	{ ICM }
 
 define_leakage \
@@ -1970,44 +1968,20 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00010 10010 00010 10010 10011 10001} \
-	-when "CLKA*!CLKB*GCLK*!RA*!RB*S" \
+	-prevector {00010 10010 10011 00011 10011 10010} \
+	-when "CLKA*!CLKB*GCLK*!RA*RB*!S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10101 11101 10101 11101 11100 11000} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
+	-prevector {00101 01101 01100 00100 01100 01101} \
+	-when "!CLKA*CLKB*GCLK*RA*!RB*S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
 	-prevector {00110 00010 10010 10011 10001 11001} \
 	-when "CLKA*CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110 00010 10010 10011 10001 11001 10001} \
-	-when "CLKA*!CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {01010 11010 11011 01011 11011 11010 11000} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00111 00101 01101 01100 01000 11000 10000} \
-	-when "CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00101 01101 01100 00100 01100 01101 01001} \
-	-when "!CLKA*CLKB*GCLK*!RA*!RB*S" \
 	{ ICM }
 
 define_leakage \
@@ -2024,8 +1998,14 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {10101 11101 11100 10100 11100 11000 11001} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
+	-prevector {01010 11010 11011 01011 11011 11010 11000} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00101 01101 01100 00100 01100 01101 01001} \
+	-when "!CLKA*CLKB*GCLK*!RA*!RB*S" \
 	{ ICM }
 
 define_leakage \
@@ -2036,13 +2016,25 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00111 00101 01101 01100 01000 11000 01000 00000} \
-	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
+	-prevector {00111 00101 01101 01100 01000 11000 10000} \
+	-when "CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110 00010 10010 10011 10001 11001 10001 11001} \
+	-prevector {00110 00010 10010 10011 10001 11001 10001} \
+	-when "CLKA*!CLKB*!GCLK*!RA*!RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {10101 11101 11100 10100 11100 11000 11001} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10011 10001 11001 01001 11001} \
 	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
 	{ ICM }
 
@@ -2060,38 +2052,20 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110 00010 10010 10011 10001 11001 01001 11001} \
+	-prevector {00110 00010 10010 10011 10001 11001 10001 11001} \
 	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110 00010 10010 10011 10001 11001 01001 00001} \
+	-prevector {00110 00010 10010 10011 10001 11001 10001 00001} \
 	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00111 00101 01101 01100 01000 11000 10000 11000 01000} \
-	-when "!CLKA*CLKB*GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110 00010 10010 10011 10001 11001 01001 00001 01001} \
-	-when "!CLKA*CLKB*GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110 00010 10010 10011 10001 11001 10001 11001 11000} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00111 00101 01101 01100 01000 11000 01000 00000 10000} \
-	-when "CLKA*!CLKB*GCLK*!RA*!RB*!S" \
+	-prevector {00111 00101 01101 01100 01000 11000 10000 00000} \
+	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
 	{ ICM }
 
 define_leakage \
@@ -2102,14 +2076,26 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110 00010 10010 10011 10001 11001 01001 11001 11000} \
+	-prevector {00111 00101 01101 01100 01000 11000 01000 11000 11001} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10011 10001 11001 10001 11001 11000} \
 	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110 00010 10010 10011 10001 11001 01001 00001 10001} \
+	-prevector {00110 00010 10010 10011 10001 11001 10001 00001 10001} \
 	-when "CLKA*!CLKB*GCLK*!RA*!RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00111 00101 01101 01100 01000 11000 10000 00000 01000} \
+	-when "!CLKA*CLKB*GCLK*!RA*!RB*!S" \
 	{ ICM }
 
 define_leakage \
@@ -2120,8 +2106,20 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00111 00101 01101 01100 01000 11000 01000 11000 11001} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
+	-prevector {00111 00101 01101 01100 01000 11000 10000 00000 10000} \
+	-when "CLKA*!CLKB*GCLK*!RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10011 10001 11001 10001 00001 01001} \
+	-when "!CLKA*CLKB*GCLK*!RA*!RB*S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10011 10001 11001 01001 11001 11000} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
 	{ ICM }
 
 define_leakage \
@@ -2132,20 +2130,20 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110 00010 10010 10011 10001 11001 10001 11001 01001 01000} \
-	-when "!CLKA*CLKB*GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110 00010 10010 10011 10001 11001 01001 00001 10001 11001} \
+	-prevector {00110 00010 10010 10011 10001 11001 10001 00001 01001 11001} \
 	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00111 00101 01101 01100 01000 11000 01000 00000 10000 11000} \
+	-prevector {00111 00101 01101 01100 01000 11000 10000 00000 10000 11000} \
 	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
+	{ ICM }
+
+define_leakage \
+	-prevector_pinlist {CLKA CLKB RA RB S} \
+	-prevector {00110 00010 10010 10011 10001 11001 10001 11001 01001 11001} \
+	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
 	{ ICM }
 
 define_leakage \
@@ -2162,13 +2160,13 @@ define_leakage \
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110 00010 10010 10011 10001 11001 10001 11001 01001 11001} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
+	-prevector {00110 00010 10010 10011 10001 11001 10001 11001 01001 01000} \
+	-when "!CLKA*CLKB*GCLK*!RA*!RB*!S" \
 	{ ICM }
 
 define_leakage \
 	-prevector_pinlist {CLKA CLKB RA RB S} \
-	-prevector {00110 00010 10010 10011 10001 11001 10001 11001 01001 11001 11000} \
+	-prevector {00110 00010 10010 10011 10001 11001 10001 11001 01001 01000 11000} \
 	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
 	{ ICM }
 
@@ -2177,24 +2175,6 @@ define_leakage \
 	-prevector {00111 00101 01101 01100 01000 11000 01000 11000 11001 10001 11001} \
 	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
 	{ ICM }
-
-define_arc \
-	-type combinational \
-	-pinlist {A B QN Q} \
-	-ic "$VDD 0 $VDD 0" \
-	-vector {1 R X R} \
-	-related_pin B \
-	-pin Q \
-	{ C2GATE }
-
-define_arc \
-	-type combinational \
-	-pinlist {A B QN Q} \
-	-ic "0 $VDD 0 $VDD" \
-	-vector {0 F X F} \
-	-related_pin B \
-	-pin Q \
-	{ C2GATE }
 
 define_arc \
 	-type combinational \
@@ -2208,9 +2188,27 @@ define_arc \
 define_arc \
 	-type combinational \
 	-pinlist {A B QN Q} \
+	-ic "$VDD 0 $VDD 0" \
+	-vector {1 R X R} \
+	-related_pin B \
+	-pin Q \
+	{ C2GATE }
+
+define_arc \
+	-type combinational \
+	-pinlist {A B QN Q} \
 	-ic "0 $VDD $VDD 0" \
 	-vector {R 1 X R} \
 	-related_pin A \
+	-pin Q \
+	{ C2GATE }
+
+define_arc \
+	-type combinational \
+	-pinlist {A B QN Q} \
+	-ic "0 $VDD 0 $VDD" \
+	-vector {0 F X F} \
+	-related_pin B \
 	-pin Q \
 	{ C2GATE }
 
@@ -2252,25 +2250,25 @@ define_leakage -when "A*B*Q" { C2GATE }
 
 define_leakage \
 	-prevector_pinlist {A B} \
-	-prevector {00 10} \
-	-when "A*!B*!Q" \
-	{ C2GATE }
-
-define_leakage \
-	-prevector_pinlist {A B} \
-	-prevector {11 01} \
-	-when "!A*B*Q" \
-	{ C2GATE }
-
-define_leakage \
-	-prevector_pinlist {A B} \
 	-prevector {11 10} \
 	-when "A*!B*Q" \
 	{ C2GATE }
 
 define_leakage \
 	-prevector_pinlist {A B} \
+	-prevector {00 10} \
+	-when "A*!B*!Q" \
+	{ C2GATE }
+
+define_leakage \
+	-prevector_pinlist {A B} \
 	-prevector {00 01} \
 	-when "!A*B*!Q" \
+	{ C2GATE }
+
+define_leakage \
+	-prevector_pinlist {A B} \
+	-prevector {11 01} \
+	-when "!A*B*Q" \
 	{ C2GATE }
 
