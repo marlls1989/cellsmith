@@ -7,8 +7,8 @@
 //! three measured transitions, the hidden arc and the five constraint types — and each renders its whole
 //! `define_arc` block, writing its `-type` word as a literal in its own arm. `LeakageBlock` does the same
 //! for `define_leakage`, a command that carries no `-type`: its two variants are the two forms that
-//! command takes, the walk that primes the cell into a rest state and the condition the inputs alone
-//! settle it at. What the arms have in common they take from helpers naming no kind, `ConstraintColumns`
+//! command takes, the columns holding a rest state at the levels it carries and the condition the
+//! inputs alone settle it at. What the arms have in common they take from helpers naming no kind, `ConstraintColumns`
 //! among them — the columns one constraint block carries, under the model's names and the netlist's
 //! alike, with the level `-ic` starts each probed victim node at.
 //!
@@ -40,11 +40,13 @@
 //! A cell that exposes internal nodes (`expose = [...]`) is rendered from its ARC VIEW
 //! ([`crate::model::AnalysedCell::arc_view`]), the analysis that keeps those nodes as model coordinates.
 //! An exposed node is not a pin, so it earns a `-pinlist` column of its own (see `arc_pinlist_str`)
-//! between the inputs and the outputs, which `-vector` and `-ic` line up with. That column reads `X` in
-//! every `-vector`: the vector is stimulus, and a node the cell drives cannot be forced without
-//! overriding the behaviour being measured — `-ic` carries its start level instead. Only the arc emitter
-//! reads that view — the `define_cell` pinlist (`pinlist_str`) and every other artifact keep to the
-//! cell's actual pins.
+//! between the inputs and the outputs, which `-vector` and `-ic` line up with. On a block MEASURING A
+//! TRANSITION that column reads `X`: the vector is stimulus, and a node the cell drives cannot be forced
+//! without overriding the behaviour being measured — `-ic` carries its start level instead. A
+//! `define_leakage` measures no transition, so its vector states the rest state itself and the column
+//! carries the level the node holds there (see `leakage_vector_str`). Only the arc emitter reads that
+//! view — the `define_cell` pinlist (`pinlist_str`) and every other artifact keep to the cell's actual
+//! pins.
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -68,8 +70,8 @@ pub struct ArcsTclOptions {
     /// Emit hidden (whole-cell internal-power) arcs — an input toggles but no output changes — as
     /// `-type hidden` blocks. **On by default.**
     pub emit_internal: bool,
-    /// Emit `define_leakage` blocks — one per static leakage state (the settled seed states of the
-    /// machine exploration), conditioned on the cell's inputs and settled outputs. **On by default.**
+    /// Emit `define_leakage` blocks — one per rest state of the cell, conditioned on the inputs it holds
+    /// there and the levels its outputs settle at. **On by default.**
     pub emit_leakage: bool,
 }
 
@@ -94,15 +96,16 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     cell_arcs(cell, opts).tcl
 }
 
-/// One arc a cell could not state, because a firing already rendered the identical block. Every block
-/// should express the cell state it measures from, and `-ic` and `-vector` reach exactly the
-/// `-pinlist`: an internal node with no column is in nothing the block says, so two firings that
-/// differ only there are one block. Exposing those nodes is what tells them apart.
+/// One measurement a cell could not state, because a firing already rendered the identical block — an
+/// arc or a rest state alike. Every block should express the cell state it measures from, and `-ic` and
+/// `-vector` reach exactly the `-pinlist`: an internal node with no column is in nothing the block says,
+/// so two firings that differ only there are one block. Exposing those nodes is what tells them apart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaskedArc {
-    /// The block on one line, written by the [`DefineArc`] variant that rendered it: its `-type` word,
-    /// then the pins it measures between. Text for the report on stderr — what kind of block it is is
-    /// the variant, and nothing reads a kind back out of this.
+    /// The block on one line, written by the variant that rendered it: a [`DefineArc`]'s `-type` word
+    /// and the pins it measures between, or `leakage` for a [`LeakageBlock`], which carries neither.
+    /// Text for the report on stderr — what kind of block it is is the variant, and nothing reads a kind
+    /// back out of this.
     pub(crate) arc: String,
     /// The cell states the one emitted block conflates. None of them is the block's: which firing
     /// reached the emitter first decides nothing, since the block says the same of every one. Read
@@ -112,8 +115,8 @@ pub struct MaskedArc {
 }
 
 impl MaskedArc {
-    /// The arc on one line: `combinational A↑ -> Q↓`, `hidden S↑`, `setup CLK↑ & D↑`,
-    /// `min_pulse_width CLK↑`.
+    /// The block on one line: `combinational A↑ -> Q↓`, `hidden S↑`, `setup CLK↑ & D↑`,
+    /// `min_pulse_width CLK↑`, `leakage`.
     pub fn arc_str(&self) -> String {
         self.arc.clone()
     }
@@ -128,8 +131,8 @@ impl MaskedArc {
     }
 }
 
-/// A cell's `define_arc` blocks, with the arcs that went unstated for want of a column to tell them
-/// apart (see [`MaskedArc`]).
+/// A cell's `define_arc` and `define_leakage` blocks, with the measurements that went unstated for want
+/// of a column to tell them apart (see [`MaskedArc`]).
 pub struct CellArcs {
     pub tcl: String,
     pub masked: Vec<MaskedArc>,
@@ -228,11 +231,16 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
             }
         }
     }
-    // A leakage block names no column at all, so no group divides it: one block per rest state, naming
-    // every alias.
+    // A rest state comes out in one of [`LeakageBlock`]'s two forms. A state the inputs alone drive the
+    // cell into is the bare condition — it carries no column, so no group divides it and the one block
+    // names every alias. Every other rest state is stated through the block's own columns, which include
+    // the cell's exposures, so it fans out per group like a measured block does.
     if opts.emit_leakage {
         for l in &cell.leakage {
-            blocks.out.push_str(&LeakageBlock::of(l).render(cell));
+            let block = LeakageBlock::of(l);
+            for tcl in block.tcl(cell, &measured) {
+                blocks.state(tcl, block.firing());
+            }
         }
     }
     // Constraint arcs emit whatever generation produced: `cell.constraints` is populated only when the
@@ -1283,33 +1291,6 @@ fn arc_pinlist_str(cell: &AnalysedCell, exposed: &[Symbol]) -> String {
     pins.join(" ")
 }
 
-/// Render the prevector: one bit-string per walk step (a `0`/`1` per input pin, in declaration
-/// order), steps separated by spaces.
-fn prevector_str(
-    cell: &AnalysedCell,
-    path: &[espresso_logic::Minterm<espresso_logic::Symbol>],
-) -> String {
-    path.iter()
-        .map(|m| {
-            let a = assignment(m);
-            cell.inputs
-                .iter()
-                .map(|i| {
-                    if *a
-                        .get(i)
-                        .expect("every input is assigned in each prevector step")
-                    {
-                        '1'
-                    } else {
-                        '0'
-                    }
-                })
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 /// One symbol per input (cell.inputs order), then one per exposed internal node (declared order), then
 /// one per output (cell.outputs order), joined by " ". This walk is [`arc_pinlist_str`]'s order, and
 /// every line whose columns Liberate reads against the pinlist — `-vector` and `-ic` — comes through it,
@@ -1622,6 +1603,62 @@ fn vector_str(cell: &AnalysedCell, arc: &Arc) -> String {
     )
 }
 
+/// The leakage `-vector`, over the same [`vector`] walk as [`vector_str`], [`hidden_vector_str`] and
+/// [`constraint_vector_str`]: the vector forces the block's own columns to the measured rest state, the
+/// exposed columns pinning internal nodes a `-when` cannot name because an internal node has no pin. A
+/// rest state is static — the block measures no transition — so no column is ever `X`, `R` or `F`; on a
+/// cell whose state variable is its own output the output column is the only one separating the two
+/// hold states.
+fn leakage_vector_str(cell: &AnalysedCell, l: &LeakageState) -> String {
+    let inputs = assignment(&l.inputs);
+    let exposed = exposed_levels(&l.levels);
+    let outputs: BTreeMap<&str, bool> = l
+        .levels
+        .outputs
+        .iter()
+        .map(|(s, b)| (s.as_str(), *b))
+        .collect();
+
+    vector(
+        cell,
+        &cell.exposed,
+        |input| {
+            if *inputs
+                .get(input)
+                .expect("every input is assigned in a leakage state")
+            {
+                "1"
+            } else {
+                "0"
+            }
+            .to_string()
+        },
+        |name| {
+            if exposed
+                .get(name)
+                .expect("every exposed node is defined at a fully-initialised leakage state")
+                .start
+            {
+                "1"
+            } else {
+                "0"
+            }
+            .to_string()
+        },
+        |name| {
+            if *outputs
+                .get(name)
+                .expect("every output is defined at a fully-initialised leakage state")
+            {
+                "1"
+            } else {
+                "0"
+            }
+            .to_string()
+        },
+    )
+}
+
 /// The `-when` condition: the other inputs' fixed values in the end state, as a product of literals
 /// (`*` AND, `!` NOT). `None` when no other input is fixed (the arc is unconditional).
 fn when_str(
@@ -1683,49 +1720,51 @@ fn constraint_when_str(pins: &RacingPins, arc: &ConstraintArc<'_>) -> Option<Str
 }
 
 /// One `define_leakage` block for a static leakage state, in one of two forms. `define_leakage` is a
-/// command of its own: the block carries no `-type` and no `-pinlist`, and names the cell rather than a
-/// [`Group`], so the form it takes is what this type ranges over and the variant IS that form.
+/// command of its own: the block carries no `-type`, so the form it takes is what this type ranges over
+/// and the variant IS that form.
 ///
-/// A leakage block goes straight into the output: leakage needs no equivalent of [`Blocks::state`],
-/// because no two of these blocks can coincide. One block is one rest state — `leakage::derive` reads
-/// `Explored::order`, which holds each reachable state once. Two [`LeakageBlock::Resting`] blocks cannot
-/// collide: walk-free means the inputs alone drive the cell into the state, so the inputs determine it,
-/// and two states resting under one `-when` cannot differ. Two [`LeakageBlock::Primed`] blocks commonly
-/// share a `-when` — the condition names the inputs and every settled output, so two states it cannot
-/// separate differ in an internal node, and the cell leaks differently in each — and with no `-pinlist`
-/// there is no `-ic` to state that node's level, which leaves the walk as the only part of the block
-/// naming which state is meant. The walks do separate them: replaying one re-derives exactly one state,
-/// its first step's inputs settling to the start state and each later step being a single input toggle
-/// settled (`machine::explore`), so two states cannot share a walk.
+/// One block is one rest state — `leakage::derive` reads `Explored::order`, which holds each reachable
+/// state once — but two rest states can render the same block, and [`Blocks::state`] gathers them under
+/// it as it does for a measured block. Two [`LeakageBlock::Resting`] blocks cannot coincide: the inputs
+/// alone drive the cell into the state, so the `-when` naming them names the state, and two states
+/// resting under one condition cannot differ. Two [`LeakageBlock::Held`] blocks coincide where the states
+/// differ only in an internal node the spec did not `expose`, which is a node with no column to hold it
+/// at one level rather than the other.
 enum LeakageBlock<'a> {
-    /// A state the cell must be WALKED into, which runs the walk: the `-prevector` primes the internal
-    /// nodes, which is what distinguishes two rest states sharing an input assignment, and the `-when`
-    /// names the condition the cell rests at. The walk is rendered whole, its last step being the state
-    /// itself.
-    Primed(&'a LeakageState),
+    /// A rest state stated through the block's own columns: `-pinlist` names the inputs, the cell's
+    /// exposed internal nodes and the outputs, and `-vector` holds every one of those columns at the
+    /// level the state carries (see `leakage_vector_str`). Liberate takes a node declared in the
+    /// `-pinlist` like any other pin, so the exposed columns state the internal nodes a `-when` cannot
+    /// name — a condition names pins, and an internal node has none. The state is static, so no column
+    /// is left for an `-ic` to establish and every one of them reads `0` or `1`.
+    Held(&'a LeakageState),
     /// A state the INPUTS drive the cell into on their own, which is the bare condition: `define_leakage
-    /// -when "…" { … }`. There is nothing to prime, so there is nothing to run, and the condition alone
-    /// states it. Its walk is a single step — `Explored::path_to` seeds the chain with the state itself
-    /// — which is the state that condition already names.
+    /// -when "…" { … }`. The condition alone states it, so the block carries no column, and a block
+    /// carrying no column is divided by no [`Group`]: the one block names every alias of the cell.
     Resting(&'a LeakageState),
 }
 
 impl<'a> LeakageBlock<'a> {
-    /// The form a rest state renders as, read off the walk that reaches it.
+    /// The form a rest state renders as, read off the walk that reaches it: the inputs alone driving the
+    /// cell there is what the bare condition needs, and [`LeakageState::input_forced`] states that of the
+    /// walk. The walk itself stays in the model — it is what identifies the state, and the held form's
+    /// columns are read off the state it arrives at.
     fn of(l: &'a LeakageState) -> Self {
-        if l.prevector.len() <= 1 {
+        if l.input_forced() {
             LeakageBlock::Resting(l)
         } else {
-            LeakageBlock::Primed(l)
+            LeakageBlock::Held(l)
         }
     }
 
-    /// The whole block. Both forms rest under the same condition — the input assignment and every
-    /// settled output as one product — so it is stated once here, and each arm carries it where its own
-    /// form puts it.
-    fn render(&self, cell: &AnalysedCell) -> String {
+    /// Every block this rest state states. The held form carries the group's exposed columns under the
+    /// names that group's netlist holds them on, so it fans out per alias group exactly as a measured
+    /// block does; the bare form carries no column, so it is the one block naming every alias.
+    fn tcl(&self, cell: &AnalysedCell, groups: &[Group]) -> Vec<String> {
+        // Both forms rest under the same condition — the input assignment and every settled output as one
+        // product — so it is stated once here, and each arm carries it where its own form puts it.
         let when = match self {
-            LeakageBlock::Primed(l) | LeakageBlock::Resting(l) => {
+            LeakageBlock::Held(l) | LeakageBlock::Resting(l) => {
                 let mut lits: Vec<(Symbol, bool)> = assignment(&l.inputs).into_iter().collect();
                 lits.extend(l.levels.outputs.iter().cloned());
                 lits.sort();
@@ -1733,25 +1772,41 @@ impl<'a> LeakageBlock<'a> {
             }
         };
         match self {
-            LeakageBlock::Resting(_) => format!(
+            LeakageBlock::Resting(_) => vec![format!(
                 "define_leakage -when \"{when}\" {}\n\n",
                 name_block(&cell.name)
-            ),
-            LeakageBlock::Primed(l) => {
-                let mut s = String::from("define_leakage \\\n");
-                s.push_str(&format!(
-                    "\t-prevector_pinlist {{{}}} \\\n",
-                    cell.inputs.join(" ")
-                ));
-                s.push_str(&format!(
-                    "\t-prevector {{{}}} \\\n",
-                    prevector_str(cell, &l.prevector)
-                ));
-                s.push_str(&format!("\t-when \"{when}\" \\\n"));
-                s.push_str(&format!("\t{}\n", name_block(&cell.name)));
-                s.push('\n');
-                s
-            }
+            )],
+            LeakageBlock::Held(l) => groups
+                .iter()
+                .map(|group| {
+                    let mut s = String::from("define_leakage \\\n");
+                    s.push_str(&format!(
+                        "\t-pinlist {{{}}} \\\n",
+                        arc_pinlist_str(cell, &group.exposed)
+                    ));
+                    s.push_str(&format!(
+                        "\t-vector {{{}}} \\\n",
+                        leakage_vector_str(cell, l)
+                    ));
+                    s.push_str(&format!("\t-when \"{when}\" \\\n"));
+                    s.push_str(&format!("\t{}\n", name_block(&group.names)));
+                    s.push('\n');
+                    s
+                })
+                .collect(),
+        }
+    }
+
+    /// The firing this block renders, carrying the FULL machine state — not the input and output levels
+    /// alone: `Explored::path_to` projects each walk step onto the inputs
+    /// (`crate::logic::machine::Explored::path_to`), so a projected step cannot separate two conflated
+    /// rest states; only the state itself can.
+    fn firing(&self) -> MaskedArc {
+        match self {
+            LeakageBlock::Held(l) | LeakageBlock::Resting(l) => MaskedArc {
+                arc: "leakage".to_string(),
+                states: vec![l.state.clone()],
+            },
         }
     }
 }
@@ -3520,6 +3575,25 @@ Y = "!W"
     }
 
     #[test]
+    fn a_walked_leakage_block_forces_the_exposed_master_through_its_own_column() {
+        // Unlike a measured block, a rest state the cell must be WALKED into cannot leave the exposed
+        // master unstated: no `-when` can name it, so the block forces it through its own `-pinlist` and
+        // `-vector` at the level the state actually holds.
+        let cell = analyse(DFF_EXPOSED_MASTER);
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        let walked = tcl
+            .split("define_leakage")
+            .skip(1)
+            .map(|b| b.split("\n\n").next().unwrap_or(b))
+            .find(|b| b.contains("-pinlist"))
+            .expect("the fixture has a walked rest state");
+        assert_eq!(pinlist_of(walked), ["CLK", "D", "M", "Q"]);
+        let m = vector_values(walked)[column_of(walked, "M")];
+        assert!(["0", "1"].contains(&m), "M column: {walked}");
+    }
+
+    #[test]
     fn a_constraint_block_leaves_the_exposed_column_unstated_and_still_initialises_it() {
         // A constraint block measures nothing the cell does in response to the edges it states, so it
         // renders the exposed column the same `X` it renders every output — while `-ic` carries the
@@ -4999,9 +5073,9 @@ Q = "A*B + Q*(A+B)"
         assert!(tcl.contains("-when \"A*B*Q\""));
         assert!(tcl.contains("-when \"!A*!B*!Q\""));
 
-        // The pair that shares an input assignment and differs only in what the cell holds: the
-        // prevector walks in from the forcing input that set Q, which is the only thing telling the
-        // two apart, and the -when carries the level each rests at.
+        // The pair that shares an input assignment and differs only in what the cell holds: no `-when`
+        // can tell the two apart, so the block states the held Q level directly through its own
+        // `-pinlist`/`-vector`.
         let block = |needle: &str| {
             tcl.split("define_leakage")
                 .find(|b| b.contains(needle))
@@ -5009,10 +5083,12 @@ Q = "A*B + Q*(A+B)"
         };
         let high = block("-when \"A*!B*Q\"");
         let low = block("-when \"A*!B*!Q\"");
-        assert!(high.contains("-prevector {11 10}"), "held high: {high}");
-        assert!(low.contains("-prevector {00 10}"), "held low: {low}");
+        assert!(high.contains("-pinlist {A B Q}"), "held high: {high}");
+        assert!(high.contains("-vector {1 0 1}"), "held high: {high}");
+        assert!(low.contains("-pinlist {A B Q}"), "held low: {low}");
+        assert!(low.contains("-vector {1 0 0}"), "held low: {low}");
 
-        // A forcing input drives the cell into its state on its own: nothing to prime, so no run at
+        // A forcing input drives the cell into its state on its own: nothing to prime, so no columns at
         // all and the condition alone states the block.
         for needle in ["A*B*Q", "!A*!B*!Q"] {
             assert!(
@@ -5021,42 +5097,13 @@ Q = "A*B + Q*(A+B)"
             );
         }
 
-        // Every rendered walk ends at the state it names: its last step is that rest state's own
-        // input assignment, which the block's -when spells out literal by literal.
-        let field = |b: &str, tag: &str| -> String {
-            b.lines()
-                .find(|l| l.trim_start().starts_with(tag))
-                .and_then(|l| l.split('{').nth(1))
-                .and_then(|v| v.split('}').next())
-                .unwrap_or_else(|| panic!("block renders a {tag}: {b}"))
-                .to_string()
-        };
-        for b in tcl.split("define_leakage").skip(1) {
-            let b = b.split("\n\n").next().unwrap_or(b);
-            if !b.contains("-prevector ") {
-                continue;
-            }
-            let last = field(b, "-prevector ")
-                .split_whitespace()
-                .last()
-                .expect("a rendered prevector has a step")
-                .to_string();
-            let when = b
-                .lines()
-                .find(|l| l.trim_start().starts_with("-when"))
-                .and_then(|l| l.split('"').nth(1))
-                .unwrap_or_else(|| panic!("block renders a -when: {b}"));
-            let inputs: String = ["A", "B"]
-                .iter()
-                .map(|p| {
-                    if when.contains(&format!("!{p}")) {
-                        '0'
-                    } else {
-                        '1'
-                    }
-                })
-                .collect();
-            assert_eq!(last, inputs, "the walk ends at the state it names: {b}");
+        assert!(!tcl.contains("prevector"), "leakage no longer walks: {tcl}");
+        for block in tcl.split("define_leakage").skip(1) {
+            let block = block.split("\n\n").next().unwrap_or(block);
+            assert!(
+                !block.contains("-ic"),
+                "a leakage block states its rest state through its own columns, not -ic: {block}"
+            );
         }
     }
 
@@ -5084,9 +5131,88 @@ Y = "A*B"
             // cut a walked block's `define_leakage \` header off and assert against nothing.
             let block = block.split("\n\n").next().unwrap_or(block);
             assert!(
-                !block.contains("-prevector"),
-                "no walk-free rest state runs a prevector: {block}"
+                !block.contains("-pinlist"),
+                "every rest state is input-forced, so no block is walked: {block}"
             );
+        }
+    }
+
+    #[test]
+    fn unexposed_latches_conflate_into_one_masked_leakage_block() {
+        // Dual-clock synchroniser: several pairs of rest states share their inputs and every output's
+        // level and differ only in the internal latches no leakage column carries, so each pair conflates
+        // into one block and the shared masked-block channel reports it. Exposing those latches gives
+        // every state its own column and the conflation disappears.
+        const SYNC: &str = r#"
+[[cell]]
+name = "SYNC"
+inputs = ["CLKA", "CLKB", "D"]
+clock = ["CLKA", "CLKB"]
+[cell.internal]
+a1 = "!CLKA*D + CLKA*a1"
+a2 = "CLKA*a1 + !CLKA*a2"
+b1 = "!CLKB*a2 + CLKB*b1"
+[cell.outputs]
+Q = "CLKB*b1 + !CLKB*Q"
+"#;
+        let cell = analyse(SYNC);
+        let rendered = cell_arcs(&cell, ArcsTclOptions::default());
+        eprintln!("{}", rendered.tcl);
+        let leakage: Vec<&MaskedArc> = rendered
+            .masked
+            .iter()
+            .filter(|m| m.arc_str() == "leakage")
+            .collect();
+        assert!(
+            !leakage.is_empty(),
+            "unexposed latches conflate some rest states: {:?}",
+            rendered.masked
+        );
+        for m in &leakage {
+            assert!(m.states.len() > 1, "{m:?}");
+            let distinct: HashSet<&Minterm<Symbol>> = m.states.iter().collect();
+            assert_eq!(
+                distinct.len(),
+                m.states.len(),
+                "the conflated states are pairwise distinct: {m:?}"
+            );
+        }
+
+        const SYNC_EXPOSED: &str = r#"
+[[cell]]
+name = "SYNC"
+inputs = ["CLKA", "CLKB", "D"]
+clock = ["CLKA", "CLKB"]
+expose = ["a1", "a2", "b1"]
+[cell.internal]
+a1 = "!CLKA*D + CLKA*a1"
+a2 = "CLKA*a1 + !CLKA*a2"
+b1 = "!CLKB*a2 + CLKB*b1"
+[cell.outputs]
+Q = "CLKB*b1 + !CLKB*Q"
+"#;
+        let exposed_cell = analyse(SYNC_EXPOSED);
+        let rendered = cell_arcs(&exposed_cell, ArcsTclOptions::default());
+        eprintln!("{}", rendered.tcl);
+        assert!(
+            rendered.masked.iter().all(|m| m.arc_str() != "leakage"),
+            "exposure tells every rest state apart: {:?}",
+            rendered.masked
+        );
+        let walked: Vec<&str> = rendered
+            .tcl
+            .split("define_leakage")
+            .skip(1)
+            .map(|b| b.split("\n\n").next().unwrap_or(b))
+            .filter(|b| b.contains("-pinlist"))
+            .collect();
+        assert!(
+            !walked.is_empty(),
+            "the fixture has walked rest states:\n{}",
+            rendered.tcl
+        );
+        for b in walked {
+            assert_eq!(pinlist_of(b), ["CLKA", "CLKB", "D", "a1", "a2", "b1", "Q"]);
         }
     }
 

@@ -254,16 +254,16 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // Diagnose the arcs no block could state: every arc should express the cell state it measures
-    // from, and `-ic` and `-vector` reach exactly the `-pinlist`, so a firing that differs only in an
+    // Diagnose the measurements no block could state: every block should express the cell state it
+    // measures from, and its columns reach exactly its `-pinlist`, so a firing that differs only in an
     // internal node with no column renders a block already emitted. Exposing those nodes is the remedy,
-    // which is why the warning names the state as well as the arc.
+    // which is why the warning names the state as well as the block.
     for (c, r) in cells.iter().zip(&rendered) {
         if r.masked.is_empty() {
             continue;
         }
         let mut lines = vec![format!(
-            "cellsmith: warning: cell {:?}: {} block(s) conflate {} arcs: too few nodes exposed for -ic to express the cell state",
+            "cellsmith: warning: cell {:?}: {} block(s) conflate {} measurements: too few nodes exposed to express the cell state",
             c.repr_name(),
             r.masked.len(),
             r.masked.iter().map(|m| m.states.len()).sum::<usize>(),
@@ -271,7 +271,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         for m in &r.masked {
             // Every state the block covers, as equals — it expresses none of them, and which firing
             // reached the emitter first is nothing to report. What differs across them wants exposing.
-            let mut fields = vec![("arc", m.arc_str())];
+            let mut fields = vec![("block", m.arc_str())];
             fields.extend(m.state_strs().into_iter().map(|s| ("cell state", s)));
             lines.extend(subblock("  - ", &fields));
         }
