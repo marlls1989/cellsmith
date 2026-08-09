@@ -1,8 +1,9 @@
 //! Hazard **detection** and constraint **generation** over **confluence** of the asynchronous state
 //! machine. Detection ([`detect`]) probes what two closely-timed input edges do to the machine and files
-//! each observation as a [`Hazard`] whose cause is a **race** — two signals racing each other;
-//! constraint generation (`constrain`) turns each detected hazard into the timing separation that
-//! removes it. Detection happens first; constraint generation follows from each detected hazard.
+//! each observation as a [`Hazard`] whose cause is a **race**, naming the pins whose transitions the
+//! observation was made under; constraint generation (`constrain`) turns each detected hazard into the
+//! timing separation that removes it. Detection happens first; constraint generation follows from each
+//! detected hazard.
 //!
 //! A delay arc ([`super::arcs`]) records a single input edge that *causes* an output edge. A
 //! **constraint** arc instead records that two inputs must not change too close together — a setup/hold
@@ -29,23 +30,24 @@
 //!
 //! The same walk observes the other outcome: probed from `s`, the pair applied *simultaneously* (or,
 //! degenerately, a single input toggle) can drive the state into a **periodic oscillation** rather than
-//! a fixpoint ([`machine::settle_or_cycle`] returning the cycle instead of settling), filed as
+//! a convergence point ([`machine::settle_or_cycle`] returning the cycle instead of settling), filed as
 //! [`Outcome::Oscillation`] under the same racing cause. The two outcomes are independent readings of
 //! one probe, so a pair that both diverges and never settles files a record for each, sharing the cause
-//! rather than merging into one record. A lone toggle that never settles has raced nothing against
-//! anything, so its cause names no pin — the empty [`Cause::Race`] pin list — and no constraint follows
-//! from it. A mutex resolves a race by design (that is its function as an arbiter), and the record it
-//! detects is the oscillation at simultaneity, carrying on its own cause the racing pins/edges the
-//! divergence-derived constraint (discarded by the combinational-neighbourhood filter) would otherwise
-//! have supplied; ordinary settling of one request before the other is the normal, hazard-free case.
+//! rather than merging into one record. A lone toggle that never settles was observed under the one pin
+//! it toggled, so its cause names that pin alone; a constraint separates two edges in time, so none
+//! follows from it. A mutex resolves a race by design (that is its function as an arbiter), and the
+//! record it detects is the oscillation at simultaneity, carrying on its own cause the racing
+//! pins/edges the divergence-derived constraint (discarded by the combinational-neighbourhood filter)
+//! would otherwise have supplied; ordinary settling of one request before the other is the normal,
+//! hazard-free case.
 //!
-//! `constrain` then generates one [`Constraint`] per detected hazard. A constraint's **kind is decided
-//! solely by the declared clock**: a pair containing exactly one declared clock is a directed
-//! **setup/hold** (clock ← data — the DFF's `D` around `CLK`); any other pair is a symmetric **non_seq**
-//! (a mutex's `A`/`B`, a C-element's `A↓`/`B↑`, an SR latch's simultaneous release). Clocks are
-//! *declared* inputs; the race geometry is left out of the decision because inferring a clock from race
-//! order would be state-dependent — the same pins read one way from one held state and the other way
-//! from another — so it would distinguish nothing real.
+//! `constrain` then generates one [`Constraint`] per detected hazard that names a racing pair. A
+//! constraint's **kind is decided solely by the declared clock**: a pair containing exactly one
+//! declared clock is a directed **setup/hold** (clock ← data — the DFF's `D` around `CLK`); any other
+//! pair is a symmetric **non_seq** (a mutex's `A`/`B`, a C-element's `A↓`/`B↑`, an SR latch's
+//! simultaneous release). Clocks are *declared* inputs; the race geometry is left out of the decision
+//! because inferring a clock from race order would be state-dependent — the same pins read one way from
+//! one held state and the other way from another — so it would distinguish nothing real.
 //!
 //! The reachable states and the prevector into `s` come from the shared [`machine::explore`], the same
 //! exploration the delay-arc BFS uses.
@@ -350,10 +352,12 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
             .collect();
 
         // Single-toggle capture: a lone input toggle that never settles is itself a non-settling
-        // observation. It races nothing against anything, so its cause names no pin and `settled` is
-        // empty — there is no competing order for the machine to land in, and no constraint follows
-        // from it. Recorded once per input per state, and its empty racing key keeps it apart from the
-        // simultaneous-pair records below even where the two reach the same condition.
+        // observation. The observation was made under one pin's transition, and the cause names it —
+        // which is why a race's `pins` carries one member or two and is never empty. `settled` is empty:
+        // there is no competing order for the machine to land in, and no constraint follows from it
+        // either, a separation needing two edges to separate. Recorded once per input per state, and its
+        // one-pin racing key keeps it apart from the simultaneous-pair records below even where the two
+        // reach the same condition.
         for (i, r) in single.iter().enumerate() {
             if let Err(cycle) = r {
                 let group = oscillating_group(cycle, state_vars);
@@ -362,7 +366,9 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                 record_ring(
                     &mut oscillation,
                     Hazard {
-                        cause: Cause::Race { pins: Vec::new() },
+                        cause: Cause::Race {
+                            pins: vec![racer(s, &inputs[i])],
+                        },
                         outcome: Outcome::Oscillation,
                         group,
                         condition,
@@ -530,51 +536,35 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
 }
 
 /// Generate the constraints that avoid a cell's detected hazards. One [`Constraint`] is built per
-/// [`OrderDependence`] and per oscillation [`Race`], its kind decided solely by `clock_pins` (a pair
-/// with exactly one declared clock is a directed setup/hold, else a symmetric non_seq). Deduped by the
-/// canonical [`constraint_key`], keeping the min `(prevector.len, discovered)` representative; BTreeMap
-/// gives deterministic output order.
+/// detected [`Hazard`] naming a racing pair — whichever outcome it was observed under — its kind decided
+/// solely by `clock_pins` (a pair with exactly one declared clock is a directed setup/hold, else a
+/// symmetric non_seq). A record naming a single pin generates none: a constraint states a separation
+/// between two edges, and one edge has nothing to be separated from. Deduped by the canonical
+/// [`constraint_key`], keeping the min `(prevector.len, discovered)` representative; BTreeMap gives
+/// deterministic output order.
 pub(crate) fn constrain(hz: &DetectedHazards, clock_pins: &[Symbol]) -> Vec<Constraint> {
     let mut found: BTreeMap<String, (Constraint, usize)> = BTreeMap::new();
-    for od in &hz.order_dependence {
+    for hazard in hz.order_dependence.iter().chain(&hz.oscillation) {
+        let [x, y] = racing_pins(hazard) else {
+            continue; // fewer pins than a separation can relate
+        };
         record_constraint(
             &mut found,
             make_constraint(
-                &od.x,
-                od.x_edge,
-                &od.y,
-                od.y_edge,
+                x.pin.as_str(),
+                x.edge,
+                y.pin.as_str(),
+                y.edge,
                 clock_pins,
                 Probed {
-                    prevector: od.prevector.clone(),
-                    levels: od.levels.clone(),
-                    nodes: protected(&od.group, &od.node_levels),
-                    state: od.state.clone(),
+                    prevector: hazard.prevector.clone(),
+                    levels: hazard.levels.clone(),
+                    nodes: protected(&hazard.group, &hazard.node_levels),
+                    state: hazard.state.clone(),
                 },
             ),
-            od.discovered,
+            hazard.discovered,
         );
-    }
-    for osc in &hz.oscillation {
-        for race in &osc.races {
-            record_constraint(
-                &mut found,
-                make_constraint(
-                    &race.x,
-                    race.x_edge,
-                    &race.y,
-                    race.y_edge,
-                    clock_pins,
-                    Probed {
-                        prevector: race.prevector.clone(),
-                        levels: race.levels.clone(),
-                        nodes: protected(&osc.group, &race.node_levels),
-                        state: race.state.clone(),
-                    },
-                ),
-                race.discovered,
-            );
-        }
     }
     found.into_values().map(|(c, _)| c).collect()
 }
@@ -640,8 +630,8 @@ fn racing_pins(hz: &Hazard) -> &[Racer] {
 }
 
 /// A race's pins as one key fragment: each pin with the edge it makes, sorted, so the same unordered
-/// pair keys identically however the probe took it. A lone toggle races nothing, and its empty fragment
-/// is what keeps it apart from the pairs probed at the same condition.
+/// pair keys identically however the probe took it. A lone toggle contributes the one pin it toggled,
+/// which is what keeps it apart from the pairs probed at the same condition.
 fn racers_key(pins: &[Racer]) -> String {
     let mut ids: Vec<String> = pins
         .iter()
@@ -711,7 +701,7 @@ fn record_constraint(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::analyse_one as analyse;
+    use crate::model::{analyse_one as analyse, AnalysedCell};
 
     /// The pins a detected hazard races, sorted: a race is unordered, so a test pins which pins are in
     /// it, not the order the probe happened to take them in.
@@ -719,6 +709,16 @@ mod tests {
         let mut pins: Vec<&str> = racing_pins(hz).iter().map(|r| r.pin.as_str()).collect();
         pins.sort();
         pins
+    }
+
+    /// The cell's detected races settling under `outcome`. A cell carries one hazard list spanning both
+    /// causes, so what this pass detected is read back off it by both axes: the racing cause it probes
+    /// for, and the outcome the test is about.
+    fn races(cell: &AnalysedCell, outcome: Outcome) -> Vec<&Hazard> {
+        cell.hazards
+            .iter()
+            .filter(|hz| matches!(hz.cause, Cause::Race { .. }) && hz.outcome == outcome)
+            .collect()
     }
 
     #[test]
@@ -740,17 +740,15 @@ Q = "CLK*M + !CLK*Q"
 "#,
         );
         // The DFF detects a CLK/D race settling indeterminately.
+        let indeterminate = races(&cell, Outcome::Indeterminate);
         assert!(
-            cell.order_dependence
-                .iter()
-                .any(|hz| racing(hz) == ["CLK", "D"]),
-            "expected an indeterminate CLK/D race, got {:?}",
-            cell.order_dependence
+            indeterminate.iter().any(|hz| racing(hz) == ["CLK", "D"]),
+            "expected an indeterminate CLK/D race, got {indeterminate:?}"
         );
+        let oscillating = races(&cell, Outcome::Oscillation);
         assert!(
-            cell.oscillation.is_empty(),
-            "a DFF detects no oscillation, got {:?}",
-            cell.oscillation
+            oscillating.is_empty(),
+            "a DFF detects no oscillation, got {oscillating:?}"
         );
         // …from which a setup/hold constraint of D w.r.t. CLK is generated; because the kind follows the
         // declared clock, not the geometry, nothing on the pair is generated as non_seq.
@@ -811,22 +809,22 @@ Qb = "!Qa * B"
 "#,
         );
         // Detects exactly one oscillation — the A/B pair probed together — and no indeterminate race.
+        let oscillating = races(&cell, Outcome::Oscillation);
         assert_eq!(
-            cell.oscillation.len(),
+            oscillating.len(),
             1,
-            "expected one oscillation, got {:?}",
-            cell.oscillation
+            "expected one oscillation, got {oscillating:?}"
         );
         assert_eq!(
-            racing(&cell.oscillation[0]),
+            racing(oscillating[0]),
             ["A", "B"],
             "the record's own cause names the racing pair, got {:?}",
-            cell.oscillation[0].cause
+            oscillating[0].cause
         );
+        let indeterminate = races(&cell, Outcome::Indeterminate);
         assert!(
-            cell.order_dependence.is_empty(),
-            "a mutex detects no indeterminate race, got {:?}",
-            cell.order_dependence
+            indeterminate.is_empty(),
+            "a mutex detects no indeterminate race, got {indeterminate:?}"
         );
         let cons = cell.constraints.clone();
         eprintln!("MUT constraints: {cons:#?}");
@@ -859,17 +857,15 @@ Q = "A*B + Q*(A+B)"
 "#,
         );
         // Detects an indeterminate A/B race, and no oscillation.
+        let indeterminate = races(&cell, Outcome::Indeterminate);
         assert!(
-            cell.order_dependence
-                .iter()
-                .any(|hz| racing(hz) == ["A", "B"]),
-            "expected an indeterminate A/B race, got {:?}",
-            cell.order_dependence
+            indeterminate.iter().any(|hz| racing(hz) == ["A", "B"]),
+            "expected an indeterminate A/B race, got {indeterminate:?}"
         );
+        let oscillating = races(&cell, Outcome::Oscillation);
         assert!(
-            cell.oscillation.is_empty(),
-            "a C-element detects no oscillation, got {:?}",
-            cell.oscillation
+            oscillating.is_empty(),
+            "a C-element detects no oscillation, got {oscillating:?}"
         );
         let cons = cell.constraints.clone();
         eprintln!("C2 constraints: {cons:#?}");
@@ -992,9 +988,9 @@ Q = "CLK*M + !CLK*Q"
                 outputs
             );
             assert!(
-                cell.order_dependence
+                races(&cell, Outcome::Indeterminate)
                     .iter()
-                    .any(|od| od.prevector == c.prevector && od.levels == c.levels),
+                    .any(|hz| hz.prevector == c.prevector && hz.levels == c.levels),
                 "constraint {c:?} must carry one probed state's prevector AND its levels"
             );
         }
@@ -1045,13 +1041,10 @@ Q = "!C2*M1 + C2*Q"
         );
         // The (C1, C2) divergence is latch-mediated, so it is filtered at detection — no C1/C2 race is
         // reported.
+        let indeterminate = races(&cell, Outcome::Indeterminate);
         assert!(
-            !cell
-                .order_dependence
-                .iter()
-                .any(|hz| racing(hz) == ["C1", "C2"]),
-            "the C1/C2 divergence is latch-mediated and must be filtered, got {:?}",
-            cell.order_dependence
+            !indeterminate.iter().any(|hz| racing(hz) == ["C1", "C2"]),
+            "the C1/C2 divergence is latch-mediated and must be filtered, got {indeterminate:?}"
         );
         let cons = cell.constraints.clone();
         eprintln!("SYNC2 constraints: {cons:#?}");
@@ -1084,7 +1077,7 @@ Y = "!(A*B)"
 "#,
         );
         assert!(cell.constraints.is_empty());
-        assert!(cell.order_dependence.is_empty());
-        assert!(cell.oscillation.is_empty());
+        assert!(races(&cell, Outcome::Indeterminate).is_empty());
+        assert!(races(&cell, Outcome::Oscillation).is_empty());
     }
 }

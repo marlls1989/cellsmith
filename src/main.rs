@@ -240,44 +240,34 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     // width or leaving nodes ringing. The pass reads the ARC VIEW, the same analysis `cell_arcs`
     // renders: it is that view's hazards the emitted constraint arcs come from, so reporting the other
     // view's would describe arcs the run never wrote.
-    // An indeterminate race shares its racing pin pair across possibly several probed states, so those
-    // are grouped into one warning per pair (each hazard its own `-`-bulleted sub-block) rather than
+    // An indeterminate race shares its racing pins across possibly several probed states, so those are
+    // grouped into one warning per set of pins (each hazard its own `-`-bulleted sub-block) rather than
     // printed as they are found; the other three cells warn as they are found.
-    type RacePairs<'a> = BTreeMap<(&'a str, &'a str), Vec<Vec<String>>>;
+    type Races<'a> = BTreeMap<Vec<&'a str>, Vec<Vec<String>>>;
     for c in &cells {
-        let mut race_pairs: RacePairs = BTreeMap::new();
+        let mut races: Races = BTreeMap::new();
         for a in &c.arc_view().hazards {
             match (&a.cause, a.outcome) {
                 (Cause::Race { pins }, Outcome::Indeterminate) => {
-                    race_pairs
-                        .entry(race_pair_key(pins))
-                        .or_default()
-                        .push(subblock(&[
-                            ("when", a.condition_str()),
-                            ("reached along", a.path_str()),
-                            ("pre-hazard", a.pre_state_str()),
-                            ("orders", orders_str(pins)),
-                        ]));
+                    races.entry(race_key(pins)).or_default().push(subblock(&[
+                        ("when", a.condition_str()),
+                        ("reached along", a.path_str()),
+                        ("pre-hazard", a.pre_state_str()),
+                        ("orders", orders_str(pins)),
+                    ]));
                 }
                 (Cause::Race { pins }, Outcome::Oscillation) => {
-                    // A single-toggle oscillation races nothing against anything, so only `when` is
-                    // shown; a pair-probe oscillation additionally states the path into the pre-hazard
-                    // state and the simultaneous toggle that triggers it.
-                    let mut fields = vec![("when", a.condition_str())];
-                    if !pins.is_empty() {
-                        fields.push(("reached along", a.path_str()));
-                        fields.push(("pre-hazard", a.pre_state_str()));
-                        fields.push((
-                            "triggered by",
-                            format!("simultaneous toggle {}", simultaneous_str(pins)),
-                        ));
-                    }
                     let mut lines = vec![format!(
                         "cellsmith: warning: cell {:?}: nodes {{{}}} oscillate",
                         c.repr_name(),
                         a.group.join(", "),
                     )];
-                    lines.extend(subblock(&fields));
+                    lines.extend(subblock(&[
+                        ("when", a.condition_str()),
+                        ("reached along", a.path_str()),
+                        ("pre-hazard", a.pre_state_str()),
+                        ("triggered by", trigger_str(pins)),
+                    ]));
                     warnings.push(lines.join("\n"));
                 }
                 (Cause::Pulse { pin, edge }, Outcome::Indeterminate) => {
@@ -314,10 +304,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                 }
             }
         }
-        for ((x, y), blocks) in &race_pairs {
+        for (pins, blocks) in &races {
             let mut lines = vec![format!(
-                "cellsmith: warning: cell {:?}: inputs ({x}, {y}) race",
+                "cellsmith: warning: cell {:?}: inputs ({}) race",
                 c.repr_name(),
+                pins.join(", "),
             )];
             lines.extend(blocks.iter().flatten().cloned());
             warnings.push(lines.join("\n"));
@@ -419,41 +410,64 @@ fn subblock(fields: &[(&str, String)]) -> Vec<String> {
         .collect()
 }
 
-/// The two racing pins of an indeterminate-race hazard, sorted so the pair a group of hazards is keyed
-/// on is stable regardless of which pin the probe happened to name first. An indeterminate race always
-/// names exactly two racing pins — the pairwise probe that found it.
-fn race_pair_key(pins: &[Racer]) -> (&str, &str) {
-    let [x, y] = pins else {
-        unreachable!("an indeterminate race hazard always names exactly two racing pins")
-    };
-    let (x, y) = (x.pin.as_str(), y.pin.as_str());
-    if x <= y {
-        (x, y)
-    } else {
-        (y, x)
-    }
+/// The racing pins a group of indeterminate-race hazards is keyed on, sorted so the key is stable
+/// regardless of the order the probe happened to name them in.
+fn race_key(pins: &[Racer]) -> Vec<&str> {
+    let mut names: Vec<&str> = pins.iter().map(|r| r.pin.as_str()).collect();
+    names.sort();
+    names
 }
 
-/// The triggering transitions of an indeterminate race: the two settle orders whose outcomes differ
-/// (`A↓ then B↑ vs B↑ then A↓`).
+/// The triggering transitions of an indeterminate race: every order its edges can arrive in, since
+/// which lands first is what the settled state depends on (`A↓ then B↑ vs B↑ then A↓`).
 fn orders_str(pins: &[Racer]) -> String {
-    let [x, y] = pins else {
-        unreachable!("an indeterminate race hazard always names exactly two racing pins")
-    };
-    let (xp, xe) = (&x.pin, x.edge.arrow());
-    let (yp, ye) = (&y.pin, y.edge.arrow());
-    format!("{xp}{xe} then {yp}{ye} vs {yp}{ye} then {xp}{xe}")
+    orderings(pins.len())
+        .into_iter()
+        .map(|order| {
+            order
+                .into_iter()
+                .map(|i| format!("{}{}", pins[i].pin, pins[i].edge.arrow()))
+                .collect::<Vec<_>>()
+                .join(" then ")
+        })
+        .collect::<Vec<_>>()
+        .join(" vs ")
 }
 
-/// The triggering transition of an oscillating race with a pair-probe backing it: the two racing pins
-/// toggling simultaneously (`S↓ & R↓`).
-fn simultaneous_str(pins: &[Racer]) -> String {
-    let [x, y] = pins else {
-        unreachable!(
-            "an oscillation hazard with a pair-probe backing it names exactly two racing pins"
-        )
-    };
-    format!("{}{} & {}{}", x.pin, x.edge.arrow(), y.pin, y.edge.arrow())
+/// Every ordering of `n` positions, as sequences of indices: each position taken first in turn, each
+/// followed by every ordering of those left, so the identity order comes out first.
+fn orderings(n: usize) -> Vec<Vec<usize>> {
+    if n == 0 {
+        return vec![Vec::new()];
+    }
+    let mut orders: Vec<Vec<usize>> = Vec::new();
+    for first in 0..n {
+        for mut rest in orderings(n - 1) {
+            // `rest` indexes the `n - 1` positions left once `first` is taken, so an index at or past
+            // it names the position one further along.
+            for i in &mut rest {
+                if *i >= first {
+                    *i += 1;
+                }
+            }
+            orders.push(std::iter::once(first).chain(rest).collect());
+        }
+    }
+    orders
+}
+
+/// The triggering transition of an oscillating race: the toggles it was observed under. Two or more
+/// arrive together, which is what drives the cycle (`simultaneous toggle S↓ & R↓`); one arrives with
+/// nothing to coincide with (`toggling A↓`).
+fn trigger_str(pins: &[Racer]) -> String {
+    let toggles: Vec<String> = pins
+        .iter()
+        .map(|r| format!("{}{}", r.pin, r.edge.arrow()))
+        .collect();
+    match toggles.as_slice() {
+        [one] => format!("toggling {one}"),
+        _ => format!("simultaneous toggle {}", toggles.join(" & ")),
+    }
 }
 
 /// The default output base name derived from the spec path (stem), or "cells" for stdin.
