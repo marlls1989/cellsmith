@@ -21,7 +21,53 @@ use espresso_logic::bdd::{Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::analysis::Machine;
-use crate::logic::arcs::ArcLevels;
+
+/// The levels one rest state holds, keyed by name: every output pin's level in `cell.outputs` order,
+/// then every exposed internal node's level in the machine's exposure order.
+///
+/// A rest state is a single settled point of the machine — the block stating it measures no transition —
+/// so a node holds ONE level there, and the type carries one. There is no second end for a level to be
+/// read at.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RestLevels {
+    pub outputs: Vec<(Symbol, bool)>,
+    pub exposed: Vec<(Symbol, bool)>,
+}
+
+impl RestLevels {
+    /// The levels every output and exposed node of `m`'s cell holds at `node`, the state it rests in.
+    ///
+    /// TOTAL, never partial: a rest state is one `Machine::arc_eligible` admits — [`derive`] samples only
+    /// those — and at such a node every state column is determinate. An output or an exposed node is
+    /// either a state variable, which `arc_eligible` requires to be defined, or a combinational signal
+    /// whose support lies within the inputs plus the state variables (minimise invariant I3, asserted in
+    /// `Machine::build` at `analysis.rs`), so every level resolves.
+    pub fn at<B: Brand, C: ManagerCell>(m: &Machine<B, C>, node: &Minterm<Symbol>) -> RestLevels {
+        RestLevels {
+            outputs: m
+                .cell
+                .outputs
+                .iter()
+                .map(|o| {
+                    let level = m
+                        .output_value(&o.name, node)
+                        .expect("every output is defined at a fully-initialised rest state");
+                    (o.name.clone(), level)
+                })
+                .collect(),
+            exposed: m
+                .exposed
+                .iter()
+                .map(|exposed| {
+                    let level = m
+                        .exposed_value(exposed.as_str(), node)
+                        .expect("every exposed node is defined at a fully-initialised rest state");
+                    (exposed.clone(), level)
+                })
+                .collect(),
+        }
+    }
+}
 
 /// One static leakage state: a fully-initialised reachable stable state of the machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,10 +79,9 @@ pub struct LeakageState {
     /// states agreeing on `inputs` and on `levels` still differ here — in a state variable no leakage
     /// column names — which is what a conflation report has to point at.
     pub state: Minterm<Symbol>,
-    /// The levels the cell holds at `state`: every output's settled value in `cell.outputs` order, and
-    /// every exposed internal node's level in the machine's exposure order. Sampled at the one state, so
-    /// each exposed level's `start` equals its `end`.
-    pub levels: ArcLevels,
+    /// The levels the cell holds at `state`: every output's settled value and every exposed internal
+    /// node's level, one apiece — the rest state is the single point they are all read at.
+    pub levels: RestLevels,
     /// The prevector: the input-assignment sequence that drives the cell — its internal nodes included
     /// — into this state.
     pub prevector: Vec<Minterm<Symbol>>,
@@ -65,9 +110,9 @@ pub fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> Vec<LeakageState> 
         .filter(|node| m.arc_eligible(node))
         .map(|node| {
             let inputs = node.project_to(&m.cell.inputs);
-            // Total, never partial: [`ArcLevels::at`] rests its totality on the same `arc_eligible`
+            // Total, never partial: [`RestLevels::at`] rests its totality on the same `arc_eligible`
             // states the filter above keeps, so every output and every exposed node resolves here.
-            let levels = ArcLevels::at(m, node);
+            let levels = RestLevels::at(m, node);
             let prevector = m.explored.path_to(node, &m.cell.inputs);
             LeakageState {
                 inputs,
@@ -85,8 +130,7 @@ mod tests {
 
     use espresso_logic::Symbol;
 
-    use super::LeakageState;
-    use crate::logic::arcs::ExposedLevel;
+    use super::{LeakageState, RestLevels};
     use crate::model::analyse_one as analyse;
 
     /// The (A, B, Q) triples a cell's leakage states record, sorted — the rest states, without the
@@ -247,13 +291,12 @@ Q = "CLK*M + !CLK*Q"
         assert_eq!(leak.len(), 8, "expected eight rest states, got {leak:?}");
         for l in leak {
             let m = l.state.value_of("M").expect("M fixed at a rest state");
+            // The annotation is the claim: a rest state carries one level per node, and the exposed
+            // master's is the one its own state column fixes.
+            let levels: &RestLevels = &l.levels;
             assert_eq!(
-                l.levels.exposed,
-                vec![ExposedLevel {
-                    node: Symbol::from("M"),
-                    start: m,
-                    end: m,
-                }],
+                levels.exposed,
+                vec![(Symbol::from("M"), m)],
                 "the exposed master is measured at the level the state fixes: {l:?}",
             );
         }
