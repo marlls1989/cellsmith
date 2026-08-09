@@ -16,13 +16,13 @@
 //! arrive at the start state; `-ic` states that state outright. Where both can say the same thing,
 //! saying it costs less, and it is said on every block of a state-holding cell — transition, hidden and
 //! constraint alike — giving each `-pinlist` pin the voltage it starts the measured vector at (see
-//! [`ic_str`]). A purely combinational cell has no state to establish and so carries neither.
+//! [`ic_str`]). A purely combinational cell has no state to establish, so its blocks state no start
+//! condition.
 //!
-//! What `-ic` reaches is exactly the `-pinlist`, so the price is that an internal node the spec did not
-//! `expose` has no column and goes unsaid where a walk would have primed it. That is the trade taken,
-//! and it is reported rather than hidden: see [`MaskedBlock`]. The walk still exists in the model — it is
-//! what identifies the start state, and `-ic` and the vector's held columns are read off its last step
-//! — it is simply not rendered.
+//! What `-ic` reaches is exactly the `-pinlist`, so the price is that an internal node the spec does not
+//! `expose` has no column and its level goes unstated. That is the trade taken, and it is reported
+//! rather than hidden: see [`MaskedBlock`]. The walk is internal to the model — it is what identifies
+//! the start state, and `-ic` and the vector's held columns are read off its last step.
 //!
 //! A cell that exposes internal nodes (`expose = [...]`) is rendered from its ARC VIEW
 //! ([`crate::model::AnalysedCell::arc_view`]), the analysis that keeps those nodes as model coordinates.
@@ -4000,8 +4000,8 @@ Q = "A*B + Q*(A+B)"
         assert!(low.contains("-pinlist {A B Q}"), "held low: {low}");
         assert!(low.contains("-vector {1 0 0}"), "held low: {low}");
 
-        // A forcing input drives the cell into its state on its own: nothing to prime, so no columns at
-        // all and the condition alone states the block.
+        // A forcing input drives the cell into its state on its own, so the condition alone states the
+        // block and it carries no columns.
         for needle in ["A*B*Q", "!A*!B*!Q"] {
             assert!(
                 tcl.contains(&format!("define_leakage -when \"{needle}\" {{ C2 }}")),
@@ -4565,9 +4565,17 @@ Q = "CLKB*M + !CLKB*Q"
             "the fixture masks arcs:\n{}",
             rendered.tcl
         );
-        // M is also unexposed, so this fixture masks a Leakage block alongside the Toggle one on the
-        // same channel; this test is about the toggle conflation, so it scopes to that kind and leaves
-        // the leakage side to unexposed_latches_conflate_into_one_masked_leakage_block.
+        // Two kinds are reportable on this fixture: the toggle whose state no column carries, and the
+        // rest states of the same unexposed M. A masked Transition or Constraint here would be a defect,
+        // so every entry is checked against that pair before the toggle-specific claims below.
+        for m in &rendered.masked {
+            assert!(
+                matches!(m.kind, MaskedKind::Toggle { .. } | MaskedKind::Leakage),
+                "the fixture reports only toggles and rest states: {m:?}"
+            );
+        }
+        // The toggle conflation is this test's subject; the leakage side is covered by
+        // unexposed_latches_conflate_into_one_masked_leakage_block.
         let toggles: Vec<&MaskedBlock> = rendered
             .masked
             .iter()

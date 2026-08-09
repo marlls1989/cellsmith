@@ -350,22 +350,20 @@ not the input assignment that reaches it: two rest states can share an input ass
 in what the cell holds internally — a bistable's whole point — so stating the input assignment alone
 would conflate them.
 
-A rest state the inputs alone drive the cell into needs nothing primed to establish it, so it is stated
-by its `-when` alone: the inputs held there and the level every output settles at, with the block that
-one line. A rest state the cell must be walked into instead states itself through the block's own
-columns: `-pinlist` names the inputs, then the cell's exposed internal nodes, then the outputs, and
-`-vector` holds every one of those columns at the level the rest state carries. No column reads `X` — the
-block measures no transition, so nothing is left unresolved to state — and the block carries neither
-`-ic` nor `-prevector`: the vector already states every level the block has.
+A rest state the inputs alone drive the cell into is stated by its `-when`: the inputs held there and
+the level every output settles at, and the block is that one line. A rest state the cell reaches only
+through a sequence of input changes — one it must be walked into — states itself through the block's own
+columns instead. `-pinlist` names the inputs, then the cell's exposed internal nodes, then the outputs,
+and `-vector` holds every one of those columns at the level the rest state carries. Every column is a
+level, because what the block measures is a settled point rather than a transition through one.
 
-Forcing the exposed columns is what tells apart two rest states sharing an input assignment: an internal
-node has no pin, so a `-when` cannot name it, and its column in the `-vector` is what states it instead.
-Two rest states differing only in a node the cell has not exposed still render one block, conflated and
-reported as above.
+The exposed columns are what tell apart two rest states sharing an input assignment: an internal node
+has no pin, so a `-when` cannot name it, and its `-vector` column states it. Two rest states differing
+only in a node the cell does not expose render one block between them, conflated and reported as above.
 
-The BFS walk that reaches a rest state stays a model quantity throughout: it is what `LeakageState`
-identifies the state by, and is what tells an input-forced rest state from a walked one, but no block
-renders it.
+The BFS walk that reaches a rest state is internal to the model: `LeakageState` identifies the state by
+it, and it is what distinguishes a rest state the inputs drive the cell into from one the cell is
+walked into.
 
 ### The shared machine pass
 
