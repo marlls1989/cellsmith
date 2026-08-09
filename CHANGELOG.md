@@ -9,7 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **cellsmith detects the width-dependent hazard and emits minimum-pulse-width constraints.** The width-dependent hazard is a pulse on one input whose settled outcome depends on how far apart the pulse's two edges are. cellsmith generates a single-pin minimum-pulse-width constraint from each detected hazard, emitting a `-type min_pulse_width` Liberate block that probes the nodes whose settled value the width decides.
+- **cellsmith classifies a hazard on two independent axes — cause and outcome — and detects all four combinations.** A hazard's cause is what its timing is between: a race between two inputs (or a single input observed racing alone), or a pulse on one input's own two edges. Its outcome is what the machine then does: settling indeterminately, or oscillating. cellsmith generates a constraint from every hazard whose cause states a timing to hold — a directed setup/hold or symmetric non-sequential separation for a race, a single-pin minimum-pulse-width constraint for a pulse — emitting, for the pulse case, a `-type min_pulse_width` Liberate block that probes the nodes whose settled value the pulse's width decides.
+
+### Changed
+
+- **Detection reports every hazard it observes, and emission decides what actually renders.** A canonical hazard used to be kept only from the state reached along the shortest prevector, with every other reachable state it was also observed from discarded before emission ever saw them; a pulse's nested node-set observations were collapsed the same way. Both collapses now happen in emission instead, which renders one general block per hazard — chosen by the same shortest-prevector rule — and can render every other observation as a conditioned block of its own.
 
 ## [0.5.1] - 2026-08-08
 
