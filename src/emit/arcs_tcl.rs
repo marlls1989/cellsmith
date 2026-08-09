@@ -42,7 +42,7 @@ use indexmap::IndexMap;
 use crate::logic::arcs::{Arc, ArcLevels, Edge, ExposedLevel, HiddenArc};
 use crate::logic::assignment;
 use crate::logic::confluence::{Constraint, ConstraintKind};
-use crate::logic::hazard::Oscillation;
+use crate::logic::hazard::{Cause, Hazard, Outcome};
 use crate::logic::leakage::LeakageState;
 use crate::logic::literal_product;
 use crate::logic::width::MinPulseWidth;
@@ -823,11 +823,17 @@ fn constraint_vector_str(
     )
 }
 
-/// A `#` comment block describing each detected oscillation condition (empty for ordinary cells).
+/// A `#` comment block describing each detected RACE-cause oscillation condition (empty for ordinary
+/// cells). A pulse-cause oscillation names no competing settled state to report here — it is reported
+/// to the user as a warning instead — so this reads race-cause records only.
 fn oscillation_comment(cell: &AnalysedCell) -> String {
     let mut s = String::new();
-    for a in &cell.oscillation {
-        let states: Vec<String> = a.stable.iter().map(Oscillation::state_str).collect();
+    for a in cell
+        .hazards
+        .iter()
+        .filter(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation)
+    {
+        let states: Vec<String> = a.settled.iter().map(Hazard::state_str).collect();
         s.push_str(&format!(
             "# oscillation: {} risks metastability in {{{}}}, settling to one of {}\n",
             a.condition_str(),

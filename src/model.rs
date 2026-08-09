@@ -14,7 +14,7 @@ use thiserror::Error;
 use crate::logic::analysis::Exploration;
 use crate::logic::arcs::{Arc, HiddenArc};
 use crate::logic::confluence::Constraint;
-use crate::logic::hazard::{OrderDependence, Oscillation, WidthDependence};
+use crate::logic::hazard::Hazard;
 use crate::logic::leakage::LeakageState;
 use crate::logic::machine::{ExplorationBudget, Explored};
 use crate::logic::width::MinPulseWidth;
@@ -542,17 +542,11 @@ pub struct AnalysedCell {
     /// precomputed once by the shared machine pass
     /// ([`crate::logic::analysis::analyse_machine`]) and consumed by the arcs emitter.
     pub leakage: Vec<LeakageState>,
-    /// Detected order-dependent hazards — pairs whose settled state depends on which edge lands first
-    /// (empty for confluent cells). A detected hazard, sibling to `oscillation`; the constraints that
-    /// avoid it are generated separately into `constraints`. See [`crate::logic::hazard`].
-    pub order_dependence: Vec<OrderDependence>,
-    /// Detected oscillation hazards — pairs (or single toggles) that drive a periodic, non-settling
-    /// cycle (empty for ordinary combinational or self-holding cells). See [`crate::logic::hazard`].
-    pub oscillation: Vec<Oscillation>,
-    /// Detected width-dependent hazards — pulses on one input whose settled outcome depends on how wide
-    /// the pulse is (empty for cells whose pulses all settle back to where they started). A detected
-    /// hazard, sibling to the two above. See [`crate::logic::hazard`].
-    pub width_dependence: Vec<WidthDependence>,
+    /// The cell's detected hazards — one [`Hazard`] per (cause, outcome) pair a probe observes: a race
+    /// or a pulse, settling indeterminately or oscillating (empty for cells with no such risk). The
+    /// constraints that avoid them are generated separately into `constraints` and `min_pulse_widths`.
+    /// See [`crate::logic::hazard`].
+    pub hazards: Vec<Hazard>,
     /// Declared clock input pins (`clock = [...]`). See [`crate::logic::confluence`].
     pub clock_pins: Vec<Symbol>,
     /// The constraints generated to avoid the cell's detected hazards (setup/hold and non_seq). Emission
@@ -590,8 +584,7 @@ pub struct AnalysedCell {
     pub edge: crate::logic::edge::EdgeArcs,
     /// The exploration budget counter that stopped the machine pass, or `None` when the machine was
     /// explored in full. Set ⇒ nothing was derived from the machine: `arcs`, `hidden_arcs`, `leakage`,
-    /// `order_dependence`, `oscillation`, `width_dependence`, `constraints` and `min_pulse_widths` are
-    /// all empty and `edge`
+    /// `hazards`, `constraints` and `min_pulse_widths` are all empty and `edge`
     /// is the default, so the CLI reports the cell instead of emitting arc-free artifacts for it.
     pub unexplored: Option<crate::logic::machine::ExplorationLimit>,
     /// The cell-wide characterisation-template references (delay/power/constraint) carried verbatim from
@@ -806,9 +799,9 @@ impl Cell {
         recompute_signal_metadata(&mut view, bdds, min);
 
         // Build the cell's state machine once and derive both its transition arcs and its hazards from
-        // the shared exploration over the minimised model: the three detected hazards
-        // (order-dependence, oscillation, width-dependence) and the constraints — setup/hold, non_seq —
-        // generated to avoid them. Clock suppression and emission gating are applied downstream.
+        // the shared exploration over the minimised model: the detected hazards — one per (cause,
+        // outcome) pair — and the constraints — setup/hold, non_seq, min_pulse_width — generated to
+        // avoid them. Clock suppression and emission gating are applied downstream.
         // The opt-out (`no_edge_collapse`, also set for every cell by the global `--no-edge-collapse`)
         // gates the classify() call itself, not just its result — no wasted work when collapse is off.
         let analysis = crate::logic::analysis::analyse_machine(
@@ -822,9 +815,7 @@ impl Cell {
         view.leakage = analysis.leakage;
         view.constraints = analysis.constraints;
         view.min_pulse_widths = analysis.min_pulse_widths;
-        view.order_dependence = analysis.order_dependence;
-        view.oscillation = analysis.oscillation;
-        view.width_dependence = analysis.width_dependence;
+        view.hazards = analysis.hazards;
         view.edge = analysis.edge;
         view.unexplored = analysis.unexplored;
         let explored = analysis.explored;
@@ -840,8 +831,7 @@ impl Cell {
 
     /// Validate the cell and parse its functions into the pre-minimise [`AnalysedCell`]: every signal's
     /// parse-time support and feedback classification, with all derived analysis fields
-    /// (arcs/hidden_arcs/leakage/order_dependence/oscillation/width_dependence/constraints/
-    /// min_pulse_widths/regions)
+    /// (arcs/hidden_arcs/leakage/hazards/constraints/min_pulse_widths/regions)
     /// still empty. The state-space rewrite and machine/region passes are layered on by
     /// [`Cell::analyse`].
     pub fn analyse_signals(&self) -> Result<AnalysedCell, ModelError> {
@@ -1049,9 +1039,7 @@ impl Cell {
             arcs: Vec::new(),
             hidden_arcs: Vec::new(),
             leakage: Vec::new(),
-            order_dependence: Vec::new(),
-            oscillation: Vec::new(),
-            width_dependence: Vec::new(),
+            hazards: Vec::new(),
             clock_pins: self.clock.clone(),
             constraints: Vec::new(),
             min_pulse_widths: Vec::new(),
@@ -1163,7 +1151,7 @@ mod tests {
     use super::*;
     use crate::logic::arcs::Edge;
     use crate::logic::confluence::ConstraintKind;
-    use crate::logic::hazard::PulseOutcome;
+    use crate::logic::hazard::{Cause, Outcome};
     use espresso_logic::{bdd_builder, expr, Minterm};
 
     const SAMPLE: &str = r#"
@@ -1396,8 +1384,11 @@ Q = "CLK*M + !CLK*Q"
         // signals() yields outputs then internals.
         let sig_names: Vec<_> = cell.signals().map(|s| s.name.as_str()).collect();
         assert_eq!(sig_names, ["Q", "M"]);
-        // Not flagged as an arbiter (Q→M is a one-way dependency, no mutual cycle).
-        assert!(cell.oscillation.is_empty());
+        // No oscillation hazard (Q→M is a one-way dependency, no mutual cycle).
+        assert!(!cell
+            .hazards
+            .iter()
+            .any(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation));
     }
 
     #[test]
@@ -2201,36 +2192,15 @@ Q = "CLK*M + !CLK*Q"
         nodes: Vec<Symbol>,
     }
 
-    /// The two racing pins and their edges of one hazard observation.
-    #[derive(Debug, PartialEq, Eq)]
-    struct HazardPins {
-        x: Symbol,
-        x_edge: Edge,
-        y: Symbol,
-        y_edge: Edge,
-    }
-
-    /// One detected hazard: the input condition it occurs under, the state variables that diverge and the
-    /// competing settled states, plus the pins raced to observe it. An [`OrderDependence`] always names a
-    /// pin pair; an [`Oscillation`] names one per pair-probe [`crate::logic::hazard::Race`], and none at
-    /// all when a single input toggle drove it.
+    /// One detected hazard, reduced to what identifies it: the (cause, outcome) cell it occupies, the
+    /// state variables it decides and where the machine lands when the timing is honoured. `cause`
+    /// alone already carries a race's pins or a pulse's pin, so no separate pins/pin record is needed.
     #[derive(Debug, PartialEq, Eq)]
     struct HazardRecord {
-        pins: Option<HazardPins>,
-        condition: Minterm<Symbol>,
+        cause: Cause,
+        outcome: Outcome,
         group: Vec<Symbol>,
-        stable: Vec<Minterm<Symbol>>,
-    }
-
-    /// One detected width-dependent hazard: the pulsed pin with the pulse's opening edge, the nodes the
-    /// width decides and the outcomes it decides between. A pulse relates one pin to itself, so there is
-    /// no pin PAIR to record and [`HazardRecord`] does not fit it.
-    #[derive(Debug, PartialEq, Eq)]
-    struct WidthRecord {
-        pin: Symbol,
-        edge: Edge,
-        group: Vec<Symbol>,
-        outcomes: Vec<PulseOutcome>,
+        settled: Vec<Minterm<Symbol>>,
     }
 
     /// The behavioural edge classification reduced to the node names it carries: the folded masters, the
@@ -2255,36 +2225,13 @@ Q = "CLK*M + !CLK*Q"
         leakage: Vec<LeakageRecord>,
         constraints: Vec<ConstraintRecord>,
         min_pulse_widths: Vec<MinPulseWidthRecord>,
-        order_dependence: Vec<HazardRecord>,
-        oscillation: Vec<HazardRecord>,
-        width_dependence: Vec<WidthRecord>,
+        hazards: Vec<HazardRecord>,
         edge: EdgeRecord,
     }
 
     /// Reduce a view to [`CellRecords`]. Takes the whole shipped [`AnalysedCell`] rather than any piece
     /// of the analysis, so a view routed to the wrong place reads back as a record-set difference.
     fn records(cell: &AnalysedCell) -> CellRecords {
-        let pins = |x: &Symbol, x_edge, y: &Symbol, y_edge| HazardPins {
-            x: x.clone(),
-            x_edge,
-            y: y.clone(),
-            y_edge,
-        };
-        let mut oscillation = Vec::new();
-        for osc in &cell.oscillation {
-            let observed = osc
-                .races
-                .iter()
-                .map(|r| Some(pins(&r.x, r.x_edge, &r.y, r.y_edge)));
-            for raced in observed.chain(osc.races.is_empty().then_some(None)) {
-                oscillation.push(HazardRecord {
-                    pins: raced,
-                    condition: osc.condition.clone(),
-                    group: osc.group.clone(),
-                    stable: osc.stable.clone(),
-                });
-            }
-        }
         CellRecords {
             arcs: cell
                 .arcs
@@ -2333,25 +2280,14 @@ Q = "CLK*M + !CLK*Q"
                     nodes: pw.nodes.iter().map(|(node, _)| node.clone()).collect(),
                 })
                 .collect(),
-            order_dependence: cell
-                .order_dependence
+            hazards: cell
+                .hazards
                 .iter()
-                .map(|od| HazardRecord {
-                    pins: Some(pins(&od.x, od.x_edge, &od.y, od.y_edge)),
-                    condition: od.condition.clone(),
-                    group: od.group.clone(),
-                    stable: od.stable.clone(),
-                })
-                .collect(),
-            oscillation,
-            width_dependence: cell
-                .width_dependence
-                .iter()
-                .map(|wd| WidthRecord {
-                    pin: wd.pin.clone(),
-                    edge: wd.edge,
-                    group: wd.group.clone(),
-                    outcomes: wd.outcomes.clone(),
+                .map(|h| HazardRecord {
+                    cause: h.cause.clone(),
+                    outcome: h.outcome,
+                    group: h.group.clone(),
+                    settled: h.settled.clone(),
                 })
                 .collect(),
             edge: EdgeRecord {
@@ -2407,21 +2343,7 @@ Q = "CLK*M + !CLK*Q"
             &b.min_pulse_widths,
             &format!("cell {cell}: minimum pulse widths"),
         );
-        assert_same_records(
-            &a.order_dependence,
-            &b.order_dependence,
-            &format!("cell {cell}: order dependence"),
-        );
-        assert_same_records(
-            &a.oscillation,
-            &b.oscillation,
-            &format!("cell {cell}: oscillation"),
-        );
-        assert_same_records(
-            &a.width_dependence,
-            &b.width_dependence,
-            &format!("cell {cell}: width dependence"),
-        );
+        assert_same_records(&a.hazards, &b.hazards, &format!("cell {cell}: hazards"));
         assert_eq!(a.edge, b.edge, "cell {cell}: edge classification");
     }
 

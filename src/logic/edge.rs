@@ -1545,6 +1545,7 @@ fn capture_cols(captures: &[(Symbol, Edge, StateRegions)], off_edge: &StateRegio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::logic::hazard::Cause;
     use espresso_logic::sync_bdd_builder;
     use std::collections::BTreeSet;
 
@@ -3136,33 +3137,18 @@ GCLK = "CLK*EL"
             // sampled at the probed state and name the same free representative the arcs do, and
             // `condition` is a FULL input assignment, so it carries the inputs outside the race at
             // whatever the probed state held them — the racing pins and their edges are what the
-            // hazard is. `stable` is a group-projected set the detector sorts, so it stays.
-            let race_shapes = |c: &crate::model::AnalysedCell| {
+            // hazard is. `settled` is a group-projected set the detector sorts, so it stays. Race-cause
+            // hazards only: this equivalence check has never compared pulse-cause ones.
+            let hazard_shapes = |c: &crate::model::AnalysedCell| {
                 let mut v: Vec<String> = c
-                    .order_dependence
+                    .hazards
                     .iter()
-                    .map(|o| {
+                    .filter(|h| matches!(h.cause, Cause::Race { .. }))
+                    .map(|h| {
                         format!(
-                            "{} {:?} {} {:?} {:?} {:?}",
-                            o.x, o.x_edge, o.y, o.y_edge, o.group, o.stable
+                            "{:?} {:?} {:?} {:?}",
+                            h.cause, h.outcome, h.group, h.settled
                         )
-                    })
-                    .collect();
-                v.sort();
-                v
-            };
-            let osc_shapes = |c: &crate::model::AnalysedCell| {
-                let mut v: Vec<String> = c
-                    .oscillation
-                    .iter()
-                    .map(|o| {
-                        let mut r: Vec<String> = o
-                            .races
-                            .iter()
-                            .map(|r| format!("{} {:?} {} {:?}", r.x, r.x_edge, r.y, r.y_edge))
-                            .collect();
-                        r.sort();
-                        format!("{:?} {:?} {:?}", o.group, o.stable, r)
                     })
                     .collect();
                 v.sort();
@@ -3183,14 +3169,9 @@ GCLK = "CLK*EL"
                 v
             };
             assert_eq!(
-                race_shapes(&off),
-                race_shapes(&on),
-                "edge classification changed AnalysedCell::order_dependence",
-            );
-            assert_eq!(
-                osc_shapes(&off),
-                osc_shapes(&on),
-                "edge classification changed AnalysedCell::oscillation",
+                hazard_shapes(&off),
+                hazard_shapes(&on),
+                "edge classification changed AnalysedCell::hazards",
             );
             unchanged!(clock_pins);
             assert_eq!(

@@ -48,7 +48,7 @@ use espresso_logic::Symbol;
 use rayon::prelude::*;
 
 use crate::emit::statetable::{build_state_model, EdgeRow, EdgeTok, Next, StateModel};
-use crate::logic::hazard::Oscillation;
+use crate::logic::hazard::{Cause, Hazard, Outcome};
 use crate::logic::regions::{StateCube, StateRegions};
 use crate::model::AnalysedCell;
 
@@ -85,12 +85,17 @@ pub fn library_liberty(name: &str, cells: &[AnalysedCell]) -> String {
 }
 
 /// The Liberty `cell (...) { ... }` fragment for a cell, as text (newline-terminated so fragments
-/// concatenate cleanly). A cell with a detected oscillation hazard is prefixed with a comment
-/// recording the racing condition and the competing settled outcomes.
+/// concatenate cleanly). A cell with a detected RACE-cause oscillation hazard is prefixed with a
+/// comment recording the racing condition and the competing settled outcomes. A pulse-cause
+/// oscillation names no competing settled state to report here, so this reads race-cause records only.
 pub fn cell_liberty(cell: &AnalysedCell) -> String {
     let mut out = String::new();
-    for a in &cell.oscillation {
-        let states: Vec<String> = a.stable.iter().map(Oscillation::state_str).collect();
+    for a in cell
+        .hazards
+        .iter()
+        .filter(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation)
+    {
+        let states: Vec<String> = a.settled.iter().map(Hazard::state_str).collect();
         out.push_str(&format!(
             "/* oscillation: {} risks metastability in {}, settling to one of {} */\n",
             a.condition_str(),

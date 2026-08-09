@@ -16,6 +16,7 @@ use cellsmith::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, CellArcs};
 use cellsmith::emit::define_cell::cell_define_cell;
 use cellsmith::emit::liberty::library_liberty;
 use cellsmith::emit::verilog::cell_verilog;
+use cellsmith::logic::hazard::{Cause, Outcome, Racer};
 use cellsmith::logic::machine::{ExplorationBudget, ExplorationLimit};
 use cellsmith::model::{parse_spec, AnalysedCell, ArcClass, ArcClasses};
 
@@ -234,87 +235,91 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     // distinct warnings are separated by a single blank line when printed, so a block reads as a unit.
     let mut warnings: Vec<String> = Vec::new();
 
-    // Diagnose detected oscillation hazards: a periodic, non-settling cycle rather than a fixpoint,
-    // naming the nodes (outputs or internals) that oscillate — the user should know, as this is never
-    // expressed as deterministic timing.
-    // All three hazard loops read the ARC VIEW, the same analysis `cell_arcs` renders: it is that view's
-    // hazards the emitted constraint arcs come from, so reporting the other view's would describe arcs
-    // the run never wrote.
-    for c in &cells {
-        for a in &c.arc_view().oscillation {
-            // The condition leads the sub-block as `when` (as in the race warning). How the machine
-            // reached it — path into the pre-hazard state and the simultaneous toggle that triggers the
-            // oscillation — comes from the representative pair-probe race (min by `(prevector.len,
-            // discovered)`, matching the constraint tie-break). A single-toggle oscillation carries no
-            // race, so only `when` is shown.
-            let mut fields = vec![("when", a.condition_str())];
-            if let Some(r) = a
-                .races
-                .iter()
-                .min_by_key(|r| (r.prevector.len(), r.discovered))
-            {
-                fields.push(("reached along", r.path_str()));
-                fields.push(("pre-hazard", r.pre_state_str()));
-                fields.push((
-                    "triggered by",
-                    format!("simultaneous toggle {}", r.transition_str()),
-                ));
-            }
-            let mut lines = vec![format!(
-                "cellsmith: warning: cell {:?}: nodes {{{}}} oscillate",
-                c.repr_name(),
-                a.group.join(", "),
-            )];
-            lines.extend(subblock(&fields));
-            warnings.push(lines.join("\n"));
-        }
-    }
-
-    // Diagnose detected order-dependent hazards, grouped per racing pin pair: the settled state
-    // depends on which of the pair's edges lands first (non-confluence). Each hazard on the pair is its
-    // own `-`-bulleted sub-block (condition, path into the pre-hazard state, and the two settle orders
-    // whose outcomes diverge), so multiple hazards on one pair read as a list.
+    // Diagnose the cell's detected hazards in one pass over `hazards`, dispatching per (cause, outcome)
+    // cell: a race settling indeterminately or oscillating, a pulse settling indeterminately by its
+    // width or leaving nodes ringing. The pass reads the ARC VIEW, the same analysis `cell_arcs`
+    // renders: it is that view's hazards the emitted constraint arcs come from, so reporting the other
+    // view's would describe arcs the run never wrote.
+    // An indeterminate race shares its racing pin pair across possibly several probed states, so those
+    // are grouped into one warning per pair (each hazard its own `-`-bulleted sub-block) rather than
+    // printed as they are found; the other three cells warn as they are found.
     type RacePairs<'a> = BTreeMap<(&'a str, &'a str), Vec<Vec<String>>>;
     for c in &cells {
-        let mut pairs: RacePairs = BTreeMap::new();
-        for od in &c.arc_view().order_dependence {
-            let (x, y) = (od.x.as_str(), od.y.as_str());
-            let key = if x <= y { (x, y) } else { (y, x) };
-            pairs.entry(key).or_default().push(subblock(&[
-                ("when", od.condition_str()),
-                ("reached along", od.path_str()),
-                ("pre-hazard", od.pre_state_str()),
-                ("orders", od.transition_str()),
-            ]));
+        let mut race_pairs: RacePairs = BTreeMap::new();
+        for a in &c.arc_view().hazards {
+            match (&a.cause, a.outcome) {
+                (Cause::Race { pins }, Outcome::Indeterminate) => {
+                    race_pairs
+                        .entry(race_pair_key(pins))
+                        .or_default()
+                        .push(subblock(&[
+                            ("when", a.condition_str()),
+                            ("reached along", a.path_str()),
+                            ("pre-hazard", a.pre_state_str()),
+                            ("orders", orders_str(pins)),
+                        ]));
+                }
+                (Cause::Race { pins }, Outcome::Oscillation) => {
+                    // A single-toggle oscillation races nothing against anything, so only `when` is
+                    // shown; a pair-probe oscillation additionally states the path into the pre-hazard
+                    // state and the simultaneous toggle that triggers it.
+                    let mut fields = vec![("when", a.condition_str())];
+                    if !pins.is_empty() {
+                        fields.push(("reached along", a.path_str()));
+                        fields.push(("pre-hazard", a.pre_state_str()));
+                        fields.push((
+                            "triggered by",
+                            format!("simultaneous toggle {}", simultaneous_str(pins)),
+                        ));
+                    }
+                    let mut lines = vec![format!(
+                        "cellsmith: warning: cell {:?}: nodes {{{}}} oscillate",
+                        c.repr_name(),
+                        a.group.join(", "),
+                    )];
+                    lines.extend(subblock(&fields));
+                    warnings.push(lines.join("\n"));
+                }
+                (Cause::Pulse { pin, edge }, Outcome::Indeterminate) => {
+                    // A pulse returns its pin to the value it started from, so the pre-pulse input state
+                    // IS the condition the hazard occurs under — `when` states it, and a separate
+                    // pre-hazard field would only restate it.
+                    let mut lines = vec![format!(
+                        "cellsmith: warning: cell {:?}: a pulse on {}{} decides nodes {{{}}} by its width",
+                        c.repr_name(),
+                        pin,
+                        edge.arrow(),
+                        a.group.join(", "),
+                    )];
+                    lines.extend(subblock(&[
+                        ("when", a.condition_str()),
+                        ("reached along", a.path_str()),
+                        ("outcomes", a.settled_strs().join(" | ")),
+                    ]));
+                    warnings.push(lines.join("\n"));
+                }
+                (Cause::Pulse { pin, edge }, Outcome::Oscillation) => {
+                    let mut lines = vec![format!(
+                        "cellsmith: warning: cell {:?}: a pulse on {}{} leaves nodes {{{}}} ringing",
+                        c.repr_name(),
+                        pin,
+                        edge.arrow(),
+                        a.group.join(", "),
+                    )];
+                    lines.extend(subblock(&[
+                        ("when", a.condition_str()),
+                        ("reached along", a.path_str()),
+                    ]));
+                    warnings.push(lines.join("\n"));
+                }
+            }
         }
-        for ((x, y), hazards) in &pairs {
+        for ((x, y), blocks) in &race_pairs {
             let mut lines = vec![format!(
                 "cellsmith: warning: cell {:?}: inputs ({x}, {y}) race",
                 c.repr_name(),
             )];
-            lines.extend(hazards.iter().flatten().cloned());
-            warnings.push(lines.join("\n"));
-        }
-    }
-
-    // Diagnose detected width-dependent hazards: a pulse on one input whose settled outcome depends on
-    // how wide the pulse is. A pulse returns its pin to the value it started from, so the pre-pulse
-    // input state IS the condition the hazard occurs under — `when` states it, and a separate
-    // pre-hazard field would only restate it.
-    for c in &cells {
-        for wd in &c.arc_view().width_dependence {
-            let mut lines = vec![format!(
-                "cellsmith: warning: cell {:?}: a pulse on {}{} decides nodes {{{}}} by its width",
-                c.repr_name(),
-                wd.pin,
-                wd.edge.arrow(),
-                wd.group.join(", "),
-            )];
-            lines.extend(subblock(&[
-                ("when", wd.condition_str()),
-                ("reached along", wd.path_str()),
-                ("outcomes", wd.outcome_strs().join(" | ")),
-            ]));
+            lines.extend(blocks.iter().flatten().cloned());
             warnings.push(lines.join("\n"));
         }
     }
@@ -347,9 +352,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         eprintln!("{}", warnings.join("\n\n"));
     }
 
-    // Constraints are the remedy for a hazard already reported by the oscillation, order-dependence
-    // and width-dependence warnings above, so the constraint arcs are emitted (below, gated by the
-    // per-cell opt-in) without a separate diagnostic.
+    // Constraints avoid a hazard already reported by the warnings above, so the constraint arcs are
+    // emitted (below, gated by the per-cell opt-in) without a separate diagnostic.
 
     let base = cli.name.unwrap_or_else(|| base_name(&cli.spec));
     let arcs: String = rendered.iter().map(|r| r.tcl.as_str()).collect();
@@ -413,6 +417,43 @@ fn subblock(fields: &[(&str, String)]) -> Vec<String> {
             format!("{marker}{:<14} {value}", format!("{label}:"))
         })
         .collect()
+}
+
+/// The two racing pins of an indeterminate-race hazard, sorted so the pair a group of hazards is keyed
+/// on is stable regardless of which pin the probe happened to name first. An indeterminate race always
+/// names exactly two racing pins — the pairwise probe that found it.
+fn race_pair_key(pins: &[Racer]) -> (&str, &str) {
+    let [x, y] = pins else {
+        unreachable!("an indeterminate race hazard always names exactly two racing pins")
+    };
+    let (x, y) = (x.pin.as_str(), y.pin.as_str());
+    if x <= y {
+        (x, y)
+    } else {
+        (y, x)
+    }
+}
+
+/// The triggering transitions of an indeterminate race: the two settle orders whose outcomes differ
+/// (`A↓ then B↑ vs B↑ then A↓`).
+fn orders_str(pins: &[Racer]) -> String {
+    let [x, y] = pins else {
+        unreachable!("an indeterminate race hazard always names exactly two racing pins")
+    };
+    let (xp, xe) = (&x.pin, x.edge.arrow());
+    let (yp, ye) = (&y.pin, y.edge.arrow());
+    format!("{xp}{xe} then {yp}{ye} vs {yp}{ye} then {xp}{xe}")
+}
+
+/// The triggering transition of an oscillating race with a pair-probe backing it: the two racing pins
+/// toggling simultaneously (`S↓ & R↓`).
+fn simultaneous_str(pins: &[Racer]) -> String {
+    let [x, y] = pins else {
+        unreachable!(
+            "an oscillation hazard with a pair-probe backing it names exactly two racing pins"
+        )
+    };
+    format!("{}{} & {}{}", x.pin, x.edge.arrow(), y.pin, y.edge.arrow())
 }
 
 /// The default output base name derived from the spec path (stem), or "cells" for stdin.

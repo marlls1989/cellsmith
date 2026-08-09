@@ -11,7 +11,7 @@
 //! **once** and shared through [`Machine`]. It is done once per CELL rather than once per view: a cell
 //! that exposes internal nodes is analysed as two views, and the second one takes the first's explored
 //! states projected onto its own coordinates ([`Exploration`]) instead of exploring again. Only plain
-//! data ([`Arc`]; the detected [`OrderDependence`], [`Oscillation`] and [`WidthDependence`] hazards; the
+//! data ([`Arc`]; the detected [`Hazard`]s; the
 //! generated [`Constraint`]s; the explored states themselves, which are minterms and carry no BDD
 //! handle) escapes
 //! into [`MachineAnalysis`]; the live BDD handles never leave this pass.
@@ -30,16 +30,16 @@ use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::arcs::{self, Arc, HiddenArc};
 use crate::logic::confluence::{self, Constraint};
-use crate::logic::hazard::{OrderDependence, Oscillation, WidthDependence};
+use crate::logic::hazard::Hazard;
 use crate::logic::leakage::{self, LeakageState};
 use crate::logic::width::MinPulseWidth;
 use crate::logic::{machine, resolve, width};
 use crate::model::AnalysedCell;
 
-/// The plain-data outcome of the shared machine pass: the transition arcs, the three detected hazards
-/// (order-dependent, oscillation and width-dependent), and the constraints generated to avoid them.
-/// Everything is empty when the exploration passed a budget ceiling, and `unexplored` then names the
-/// counter that stopped it
+/// The plain-data outcome of the shared machine pass: the transition arcs, the detected hazards — one
+/// [`Hazard`] per (cause, outcome) pair the two detection passes observe — and the constraints generated
+/// to avoid them. Everything is empty when the exploration passed a budget ceiling, and `unexplored`
+/// then names the counter that stopped it
 /// (see [`machine::ExplorationBudget`]).
 ///
 /// `MachineAnalysis` itself never escapes this module: [`analyse_machine`]'s result is copied field-for-
@@ -50,9 +50,7 @@ pub struct MachineAnalysis {
     pub hidden_arcs: Vec<HiddenArc>,
     pub constraints: Vec<Constraint>,
     pub min_pulse_widths: Vec<MinPulseWidth>,
-    pub order_dependence: Vec<OrderDependence>,
-    pub oscillation: Vec<Oscillation>,
-    pub width_dependence: Vec<WidthDependence>,
+    pub hazards: Vec<Hazard>,
     pub leakage: Vec<LeakageState>,
     pub edge: crate::logic::edge::EdgeArcs,
     /// The budget counter that stopped the exploration, or `None` when the machine was explored in
@@ -294,10 +292,10 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     };
     let (arcs, hidden_arcs) = arcs::derive(&m);
     // Detect the hazards, then generate the constraints that avoid them — two separate stages. Every
-    // hazard is always detected — the two confluence ones and the width-dependent one alike (they drive
-    // the warnings and annotations); constraint generation is gated on the cell's opt-in (the per-cell
-    // `constraint_arcs`, also set for every cell by the global `--constraints` flag), so no constraint
-    // is generated — hence none emitted — unless the cell requested it.
+    // hazard is always detected — the race-cause and pulse-cause ones alike (they drive the warnings and
+    // annotations); constraint generation is gated on the cell's opt-in (the per-cell `constraint_arcs`,
+    // also set for every cell by the global `--constraints` flag), so no constraint is generated — hence
+    // none emitted — unless the cell requested it.
     let detected = confluence::detect(&m);
     let width_dependence = width::detect(&m);
     let (constraints, min_pulse_widths) = if cell.constraint_arcs_declared {
@@ -308,6 +306,14 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     } else {
         (Vec::new(), Vec::new())
     };
+    // The one `hazards` record set: what the two detection passes returned, concatenated. Taken after
+    // `constrain` above, which only borrows `detected`/`width_dependence`.
+    let hazards: Vec<Hazard> = detected
+        .order_dependence
+        .into_iter()
+        .chain(detected.oscillation)
+        .chain(width_dependence)
+        .collect();
     // Behavioural edge classification is read-only over the explored machine — it mints only
     // already-existing names and mutates nothing (the exploration-unchanged invariant holds BY
     // CONSTRUCTION). The derived `arcs` are its label domain: every timing arc it labels is one of the
@@ -324,9 +330,7 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
         hidden_arcs,
         constraints,
         min_pulse_widths,
-        order_dependence: detected.order_dependence,
-        oscillation: detected.oscillation,
-        width_dependence,
+        hazards,
         leakage,
         edge,
         unexplored: None,
@@ -341,6 +345,7 @@ mod tests {
     use crate::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
     use crate::emit::liberty::cell_liberty;
     use crate::emit::verilog::cell_verilog;
+    use crate::logic::hazard::{Cause, Outcome};
     use crate::logic::machine::ExplorationLimit;
     use crate::logic::resolve;
     use crate::model::analyse_one;
@@ -376,18 +381,7 @@ mod tests {
             cell.min_pulse_widths.is_empty(),
             "an unexplored cell has no minimum-pulse-width constraints"
         );
-        assert!(
-            cell.oscillation.is_empty(),
-            "an unexplored cell has no oscillation"
-        );
-        assert!(
-            cell.order_dependence.is_empty(),
-            "an unexplored cell has no order-dependent hazards"
-        );
-        assert!(
-            cell.width_dependence.is_empty(),
-            "an unexplored cell has no width-dependent hazards"
-        );
+        assert!(cell.hazards.is_empty(), "an unexplored cell has no hazards");
         assert!(
             cell.leakage.is_empty(),
             "an unexplored cell has no leakage states"
@@ -442,16 +436,8 @@ mod tests {
                 "the unexplored {which} has no minimum-pulse-width constraints"
             );
             assert!(
-                view.oscillation.is_empty(),
-                "the unexplored {which} has no oscillation"
-            );
-            assert!(
-                view.order_dependence.is_empty(),
-                "the unexplored {which} has no order-dependent hazards"
-            );
-            assert!(
-                view.width_dependence.is_empty(),
-                "the unexplored {which} has no width-dependent hazards"
+                view.hazards.is_empty(),
+                "the unexplored {which} has no hazards"
             );
             assert!(
                 view.leakage.is_empty(),
@@ -528,7 +514,10 @@ inputs = ["A"]
 Q = "A + Q"
 "#,
         );
-        assert!(cell.oscillation.is_empty());
+        assert!(!cell
+            .hazards
+            .iter()
+            .any(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation));
         assert_eq!(cell.regions.len(), 1);
         let q = &cell.regions[0];
         assert!(q.hysteretic, "a single-input keeper holds its own state");
@@ -542,7 +531,10 @@ Q = "A + Q"
         // transition, so at every state a pulse may start from Q is already high and A's toggle leaves
         // it there — every cut of every pulse lands back where it started.
         assert!(
-            cell.width_dependence.is_empty(),
+            !cell
+                .hazards
+                .iter()
+                .any(|h| matches!(h.cause, Cause::Pulse { .. })),
             "a single-input keeper's pulses all settle back to where they started"
         );
         // Emission is well-formed: a statetable for the hysteretic output, and no panic on the arcs.
