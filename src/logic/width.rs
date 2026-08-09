@@ -38,33 +38,18 @@
 //! against the reference, not the zero-width one alone: a cascade cut in flight reaches states neither
 //! the narrowest close nor the reference lands on, and those are outcomes of the same hazard.
 //!
-//! One pin's pulse decides different nodes from different states, and on a cell whose internals form a
-//! chain those node sets nest — one set per depth the cascade was cut at, every one of them the same
-//! pulse seen from further in. [`detect`] reports the **maximal** sets alone: an observation is dropped
-//! only where another observation of the same cause AND outcome decides a strict superset of its nodes,
-//! and two sets that nest neither way both stand. What makes that sound is how the hazard is measured.
-//! The block characterising one names the nodes it protects in Liberate's `-probe`, and Liberate narrows
-//! the pulse until the probed behaviour fails, so the width a probe set reports is the maximum over the
-//! nodes in it. A block probing a strict superset therefore asks a strictly stronger question, and the
-//! subset's answer is contained in it; a superset and an incomparable set ask different questions, and
-//! both are asked. The outcome is part of that key because the argument holds only within one: a
-//! divergence covering a ring's nodes measures how wide the pulse must be to land somewhere definite,
-//! which answers nothing about the ring.
+//! **Every observation is reported.** One pin's pulse decides different nodes from different states, and
+//! on a cell whose internals form a chain those node sets nest — one set per depth the cascade was cut
+//! at, every one of them the same pulse seen from further in. Each of them is its own record: this pass
+//! states what it observed, and which of those observations a `define_arc` is rendered from — where a
+//! probe set another one contains asks nothing that is not already asked — is
+//! [`crate::emit::arcs_tcl`]'s to decide.
 //!
-//! What that leaves open is whether the width one node needs can itself differ with the start state it
-//! is characterised from. If it can, a dropped observation's nodes end up measured from the surviving
-//! observation's state rather than from their own, and the collapse trades that conservatism for a
-//! fraction of the characterisation cost.
-//!
-//! **Implementation notes:** states are probed in parallel and their per-state dedup maps merged
-//! together, as in [`super::confluence::detect`]. Merge order cannot move the result: the maximal sets
-//! of a collection are the same however it is accumulated, since an observation dropped against an
-//! incumbent stays dominated when that incumbent is itself dropped — only a strict superset of it
-//! displaces it, and strict inclusion is transitive — and among observations over the SAME nodes the
-//! survivor is the min `(prevector.len, discovered)`, a total order. Both levels of the dedup are
-//! [`BTreeMap`]s, so report order is deterministic independent of any hash map's.
+//! **Implementation notes:** states are probed in parallel and their per-state records concatenated, as
+//! in [`super::confluence::detect`]. Concatenation is associative, so the folded result holds the same
+//! records however the work was split; nothing reads the order they come out in.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use rayon::prelude::*;
 
@@ -84,20 +69,11 @@ use crate::logic::machine;
 const DETERMINATE: &str =
     "a settle from a fully-initialised state leaves every state column determinate";
 
-/// The observations kept under one (cause, outcome) key: one per maximal set of named nodes, keyed by
-/// that set so an observation over nodes already spoken for meets its incumbent rather than joining it.
-type Maximal = BTreeMap<String, Hazard>;
-
-/// Detected pulse-cause hazards under the dedup key [`record`] computes — one probed state's own map, or
-/// the merge of several.
-type Detected = BTreeMap<(Cause, Outcome), Maximal>;
-
 /// Detect a cell's pulse-cause hazards by pulsing every input at every fully-initialised reachable
 /// stable state (`Machine::arc_eligible`: a state carrying an uninitialised state variable is at an
-/// unknown state, from which nothing can be concluded). Produces one [`Hazard`] per (cause, outcome) per
-/// maximal set of named nodes (see the module note on why a set another's strictly contains carries
-/// nothing), keeping the representative reached along the shortest prevector, and generates no
-/// constraint. Empty for cells whose every candidate close agrees with its reference.
+/// unknown state, from which nothing can be concluded). Files a [`Hazard`] for every observation it
+/// makes — one per (cause, outcome) per probed state — and generates no constraint. Empty for cells whose
+/// every candidate close agrees with its reference.
 pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<Hazard> {
     // With no memory every coordinate is a function of the inputs alone, so returning `p` to its
     // pre-pulse value returns the whole machine to `s`: a pulse can leave no net effect for its width to
@@ -115,15 +91,14 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
     let deltas: Vec<machine::Delta<B, C>> = m.coordinate_deltas();
 
     // The per-state probe body: for one reachable state `s` (its BFS index `discovered`), pulse every
-    // input and fill this state's own dedup map. Each state is independent — the parallel unit — and the
-    // maps merge commutatively in the `reduce` below.
-    let per_state = |(discovered, s): (usize, &Minterm<Symbol>)| -> Detected {
-        let mut found = Detected::new();
+    // input and collect this state's own records. Each state is independent — the parallel unit — and the
+    // results merge commutatively in the `reduce` below.
+    let per_state = |(discovered, s): (usize, &Minterm<Symbol>)| -> Vec<Hazard> {
+        let mut found: Vec<Hazard> = Vec::new();
 
         // Both depend only on `s`, so they are computed once here and cloned per hazard. Sampling them
-        // side by side at the one probed state is what keeps them consistent through the
-        // min-`(prevector.len, discovered)` dedup: a surviving representative carries the levels of the
-        // very state its prevector walks to.
+        // side by side at the one probed state is what keeps them consistent wherever the record travels:
+        // a record carries the levels of the very state its prevector walks to.
         let prevector_s = ex.path_to(s, inputs);
         let levels_s = ArcLevels::at(m, s);
 
@@ -222,106 +197,56 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
             // pulse leaves them in is decided by its width: the hazard proper, empty exactly where every
             // candidate that converges agrees with the reference.
             if !diverging.is_empty() {
-                record(
-                    &mut found,
-                    Hazard {
-                        cause: cause.clone(),
-                        outcome: Outcome::Indeterminate,
-                        condition: s.project_to(inputs),
-                        settled: settled(&diverging),
-                        node_levels: node_levels_at(s, &diverging),
-                        group: diverging,
-                        prevector: prevector_s.clone(),
-                        levels: levels_s.clone(),
-                        state: s.clone(),
-                        discovered,
-                    },
-                );
+                found.push(Hazard {
+                    cause: cause.clone(),
+                    outcome: Outcome::Indeterminate,
+                    condition: s.project_to(inputs),
+                    settled: settled(&diverging),
+                    node_levels: node_levels_at(s, &diverging),
+                    group: diverging,
+                    prevector: prevector_s.clone(),
+                    levels: levels_s.clone(),
+                    state: s.clone(),
+                    discovered,
+                });
             }
             // A candidate that rings names at least one state variable — the inputs hold through a
             // settle and a combinational coordinate lies on no dependency cycle (see
             // [`super::resolve`]), so a cycle that moved no held coordinate would be a convergence point
             // — hence a non-empty group here is exactly "some candidate did not converge".
             if !ringing.is_empty() {
-                record(
-                    &mut found,
-                    Hazard {
-                        cause,
-                        outcome: Outcome::Oscillation,
-                        condition: s.project_to(inputs),
-                        settled: settled(&ringing),
-                        node_levels: node_levels_at(s, &ringing),
-                        group: ringing,
-                        prevector: prevector_s.clone(),
-                        levels: levels_s.clone(),
-                        state: s.clone(),
-                        discovered,
-                    },
-                );
+                found.push(Hazard {
+                    cause,
+                    outcome: Outcome::Oscillation,
+                    condition: s.project_to(inputs),
+                    settled: settled(&ringing),
+                    node_levels: node_levels_at(s, &ringing),
+                    group: ringing,
+                    prevector: prevector_s.clone(),
+                    levels: levels_s.clone(),
+                    state: s.clone(),
+                    discovered,
+                });
             }
         }
 
         found
     };
 
-    // Probe every fully-initialised reachable state in parallel, then fold the per-state dedup maps
+    // Probe every fully-initialised reachable state in parallel, then fold the per-state records
     // together. The filter comes AFTER `enumerate`, so `discovered` stays the BFS index of the state —
-    // the tie-break the dedup reads — rather than a position in the filtered sequence. The merge is
-    // associative and commutative (see the module note on why keeping the maximal sets is), so the
-    // folded result equals the sequential one regardless of state/thread order.
+    // the key a downstream reader tells two observations apart by — rather than a position in the
+    // filtered sequence. Concatenation is associative, so the folded result holds the same records
+    // however the work was split.
     ex.order
         .par_iter()
         .enumerate()
         .filter(|(_, s)| m.arc_eligible(s))
         .map(per_state)
-        .reduce(Detected::new, |mut acc, other| {
-            for hz in other.into_values().flat_map(Maximal::into_values) {
-                record(&mut acc, hz);
-            }
+        .reduce(Vec::new, |mut acc, mut other| {
+            acc.append(&mut other);
             acc
         })
-        .into_values()
-        .flat_map(Maximal::into_values)
-        .collect()
-}
-
-/// Record a detected pulse-cause hazard into the dedup map, keeping the observations whose named nodes
-/// no other observation under the same key strictly contains and, among observations over the same
-/// nodes, the min `(prevector.len, discovered)` representative.
-///
-/// The key is the cause — the pulsed pin with its opening edge — TOGETHER WITH the outcome. The outcome
-/// belongs there because the maximal-set collapse only speaks within one: a divergence over a ring's
-/// nodes would otherwise stand for it, and the width that lands the machine somewhere definite says
-/// nothing about the width that leaves it ringing.
-fn record(map: &mut Detected, hz: Hazard) {
-    let nodes = hz.group.join(",");
-    let kept = map.entry((hz.cause.clone(), hz.outcome)).or_default();
-
-    // An incumbent over a strict superset is characterised against these nodes too, so this observation
-    // asks nothing that is not already asked (module note) and it goes; the `retain` is the converse
-    // pass, retiring the incumbents this one has come to speak for. An incumbent over the SAME nodes is
-    // neither case — it is this hazard reached along another walk, and meets the tie-break below.
-    if kept.values().any(|e| strictly_within(&hz.group, &e.group)) {
-        return;
-    }
-    kept.retain(|_, e| !strictly_within(&e.group, &hz.group));
-    // The `Option` read here is the incumbent — no entry yet for these nodes, or one this candidate beats
-    // on `(prevector.len, discovered)` — nothing to do with a state value's determinacy.
-    if kept
-        .get(&nodes)
-        .is_none_or(|e| (hz.prevector.len(), hz.discovered) < (e.prevector.len(), e.discovered))
-    {
-        kept.insert(nodes, hz);
-    }
-}
-
-/// Is every node of `inner` among `outer`'s, with `outer` naming at least one more? Strict on purpose:
-/// two observations over the same nodes are one hazard reached along different walks, settled by the
-/// walk-length tie-break rather than by one displacing the other.
-fn strictly_within(inner: &[Symbol], outer: &[Symbol]) -> bool {
-    let inner: BTreeSet<&Symbol> = inner.iter().collect();
-    let outer: BTreeSet<&Symbol> = outer.iter().collect();
-    inner.len() < outer.len() && inner.is_subset(&outer)
 }
 
 #[cfg(test)]
@@ -374,25 +299,43 @@ mod tests {
             .collect()
     }
 
-    /// The one record on `pin` in `edge` with `outcome`, or a panic naming what was detected instead.
-    fn on<'h>(cell: &'h AnalysedCell, pin: &str, edge: Edge, outcome: Outcome) -> &'h Hazard {
-        let mut found = pulses(cell)
+    /// Every record on `pin` in `edge` with `outcome`, or a panic naming what was detected instead. A
+    /// pulse is probed from every state that carries it and each probe files its own record, so what a
+    /// test states of one observation it states of each.
+    fn on<'h>(cell: &'h AnalysedCell, pin: &str, edge: Edge, outcome: Outcome) -> Vec<&'h Hazard> {
+        let found: Vec<&Hazard> = pulses(cell)
             .into_iter()
-            .filter(|hz| hz.outcome == outcome && pulse(hz) == (pin.to_string(), edge.rf()));
-        let hz = found.next().unwrap_or_else(|| {
-            panic!(
-                "no {outcome:?} {pin}{} hazard in {:?}",
-                edge.rf(),
-                keys(cell)
-            )
-        });
+            .filter(|hz| hz.outcome == outcome && pulse(hz) == (pin.to_string(), edge.rf()))
+            .collect();
         assert!(
-            found.next().is_none(),
-            "more than one {outcome:?} {pin}{} hazard in {:?}",
+            !found.is_empty(),
+            "no {outcome:?} {pin}{} hazard in {:?}",
             edge.rf(),
             keys(cell)
         );
-        hz
+        found
+    }
+
+    /// Every record on `pin` in `edge` with `outcome` over the nodes `nodes` — all four fields of a
+    /// detection key ([`keys`]), which is what tells two observations of one pulse apart.
+    fn on_nodes<'h>(
+        cell: &'h AnalysedCell,
+        pin: &str,
+        edge: Edge,
+        outcome: Outcome,
+        nodes: &str,
+    ) -> Vec<&'h Hazard> {
+        let found: Vec<&Hazard> = on(cell, pin, edge, outcome)
+            .into_iter()
+            .filter(|hz| hz.group.join(",") == nodes)
+            .collect();
+        assert!(
+            !found.is_empty(),
+            "no {outcome:?} {pin}{} hazard over {{{nodes}}} in {:?}",
+            edge.rf(),
+            keys(cell)
+        );
+        found
     }
 
     /// A state written out from `(node, level)` pairs in group order, in the report's spelling.
@@ -477,21 +420,25 @@ Q = "CLK*M + !CLK*Q"
         // CLK↑: the opening cascade rests with Q at M (= !Q at the probed state, the pulse having
         // something to move), and the reference's closing CLK↓ re-opens the master onto D — which the
         // stable probed state already had M at — so Q is where the cascade left it at both waypoints.
-        let rise = on(&cell, "CLK", Edge::Rise, Outcome::Indeterminate);
-        let q_rise = level_at(rise, "Q");
-        assert_eq!(waypoints(rise), held(&[("Q", !q_rise)]),);
+        // The two states carrying this pulse are mirror images, so each record's waypoints are read
+        // against the Q ITS probed state holds.
+        for rise in on(&cell, "CLK", Edge::Rise, Outcome::Indeterminate) {
+            let q_rise = level_at(rise, "Q");
+            assert_eq!(waypoints(rise), held(&[("Q", !q_rise)]),);
+        }
         // CLK↓: the opening cascade rests with M at D (= !M at the probed state) and Q untouched, and
         // only then does the reference's closing CLK↑ walk that M into Q. The two waypoints differ, and
         // they cannot be swapped — Q moves BECAUSE the closing edge follows the opening one.
-        let fall = on(&cell, "CLK", Edge::Fall, Outcome::Indeterminate);
-        let q_fall = level_at(fall, "Q");
-        assert_eq!(
-            waypoints(fall),
-            [
-                state(&[("Q", q_fall), ("M", !q_fall)]),
-                state(&[("Q", !q_fall), ("M", !q_fall)]),
-            ],
-        );
+        for fall in on(&cell, "CLK", Edge::Fall, Outcome::Indeterminate) {
+            let q_fall = level_at(fall, "Q");
+            assert_eq!(
+                waypoints(fall),
+                [
+                    state(&[("Q", q_fall), ("M", !q_fall)]),
+                    state(&[("Q", !q_fall), ("M", !q_fall)]),
+                ],
+            );
+        }
         // A D pulse is inert at either clock level: at CLK=1 nothing reads D at all, and at CLK=0 the
         // transparent master tracks D straight back to where it was, so every candidate lands on the
         // reference.
@@ -532,10 +479,11 @@ Q = "E*D + !E*Q"
             .collect(),
         );
         // The opening edge leaves Q at D (= !Q at the probed state), and the closing edge shuts the latch
-        // on it: both waypoints are the captured value.
-        let hz = on(&cell, "E", Edge::Rise, Outcome::Indeterminate);
-        let q0 = level_at(hz, "Q");
-        assert_eq!(waypoints(hz), held(&[("Q", !q0)]));
+        // on it: both waypoints are the captured value, at each of the states this pulse is observed from.
+        for hz in on(&cell, "E", Edge::Rise, Outcome::Indeterminate) {
+            let q0 = level_at(hz, "Q");
+            assert_eq!(waypoints(hz), held(&[("Q", !q0)]));
+        }
     }
 
     #[test]
@@ -586,24 +534,18 @@ Qn = "!(S+Q)"
         // pulse is observed only from the reset state — from the set state the opening toggle is stable
         // at once, leaving no candidate — so the levels are fixed, not read back off the representative.
         let set = held(&[("Q", true), ("Qn", false)]);
-        assert_eq!(
-            waypoints(on(&cell, "S", Edge::Rise, Outcome::Indeterminate)),
-            set
-        );
-        assert_eq!(
-            waypoints(on(&cell, "S", Edge::Rise, Outcome::Oscillation)),
-            set
-        );
+        for outcome in [Outcome::Indeterminate, Outcome::Oscillation] {
+            for hz in on(&cell, "S", Edge::Rise, outcome) {
+                assert_eq!(waypoints(hz), set);
+            }
+        }
         // The reset pulse mirrors it, from the set state onto the reset one.
         let reset = held(&[("Q", false), ("Qn", true)]);
-        assert_eq!(
-            waypoints(on(&cell, "R", Edge::Rise, Outcome::Indeterminate)),
-            reset
-        );
-        assert_eq!(
-            waypoints(on(&cell, "R", Edge::Rise, Outcome::Oscillation)),
-            reset
-        );
+        for outcome in [Outcome::Indeterminate, Outcome::Oscillation] {
+            for hz in on(&cell, "R", Edge::Rise, outcome) {
+                assert_eq!(waypoints(hz), reset);
+            }
+        }
         // The ringing candidate is a pulse-cause hazard and files no race-cause one: the cell's only
         // race-cause oscillation is still the simultaneous release confluence detects, whose condition —
         // S and R both low — is an input assignment the pair really does ring under, which the pulse's
@@ -662,23 +604,17 @@ Qb = "!Qa * B"
         // Only the co-asserted state carries this hazard — with B down the released grant is simply
         // taken back — so the grants are fixed rather than read off the representative.
         let to_b = held(&[("Qa", false), ("Qb", true)]);
-        assert_eq!(
-            waypoints(on(&cell, "A", Edge::Fall, Outcome::Indeterminate)),
-            to_b
-        );
-        assert_eq!(
-            waypoints(on(&cell, "A", Edge::Fall, Outcome::Oscillation)),
-            to_b
-        );
+        for outcome in [Outcome::Indeterminate, Outcome::Oscillation] {
+            for hz in on(&cell, "A", Edge::Fall, outcome) {
+                assert_eq!(waypoints(hz), to_b);
+            }
+        }
         let to_a = held(&[("Qa", true), ("Qb", false)]);
-        assert_eq!(
-            waypoints(on(&cell, "B", Edge::Fall, Outcome::Indeterminate)),
-            to_a
-        );
-        assert_eq!(
-            waypoints(on(&cell, "B", Edge::Fall, Outcome::Oscillation)),
-            to_a
-        );
+        for outcome in [Outcome::Indeterminate, Outcome::Oscillation] {
+            for hz in on(&cell, "B", Edge::Fall, outcome) {
+                assert_eq!(waypoints(hz), to_a);
+            }
+        }
         // A rise pulse from idle is inert: the grant it takes is handed straight back when the request
         // drops again, so every candidate lands on the reference.
         assert!(
@@ -708,10 +644,9 @@ Qb = "!Qa * B"
         // candidates converge, and the reference converges with L raised, which the reset state the
         // zero-width candidate holds is not. Signal order (outputs first, then internals) is [Q, Qn, L].
         //
-        // So the ring names {Q, Qn} and the divergence {Q, Qn, L}: the ring's nodes are a strict subset,
-        // and only because the outcome is part of the dedup key does it survive rather than being
-        // collapsed onto the wider set — the width that lands the machine somewhere definite answers
-        // nothing about the width that leaves it ringing.
+        // So the ring names {Q, Qn} and the divergence {Q, Qn, L}: different phenomena over their own
+        // nodes, each filed as it was observed — the width that lands the machine somewhere definite
+        // answers nothing about the width that leaves it ringing.
         let cell = analyse(
             r#"
 [[cell]]
@@ -724,7 +659,9 @@ Q  = "!(R+Qn)"
 Qn = "!(S+Q)"
 "#,
         );
-        // The reset pulse walks no L (δ_L = L while S is low), so it names {Q, Qn} under both outcomes.
+        // The set pulse is observed from the already-set state too — the one whose L has not yet followed
+        // Q — and there the cascade moves L alone, so that observation names {L}. The reset pulse walks
+        // no L (δ_L = L while S is low), so it names {Q, Qn} under both outcomes.
         assert_eq!(
             keys(&cell),
             [
@@ -733,6 +670,12 @@ Qn = "!(S+Q)"
                     'R',
                     Outcome::Indeterminate,
                     "Q,Qn,L".to_string()
+                ),
+                (
+                    "S".to_string(),
+                    'R',
+                    Outcome::Indeterminate,
+                    "L".to_string()
                 ),
                 (
                     "S".to_string(),
@@ -758,14 +701,15 @@ Qn = "!(S+Q)"
         );
         // Each record's waypoints are its own nodes' halves of the same two states: the cascade rests
         // set with L raised, and the reference's closing S↓ holds all three there.
-        assert_eq!(
-            waypoints(on(&cell, "S", Edge::Rise, Outcome::Indeterminate)),
-            held(&[("Q", true), ("Qn", false), ("L", true)]),
-        );
-        assert_eq!(
-            waypoints(on(&cell, "S", Edge::Rise, Outcome::Oscillation)),
-            held(&[("Q", true), ("Qn", false)]),
-        );
+        for hz in on_nodes(&cell, "S", Edge::Rise, Outcome::Indeterminate, "Q,Qn,L") {
+            assert_eq!(
+                waypoints(hz),
+                held(&[("Q", true), ("Qn", false), ("L", true)])
+            );
+        }
+        for hz in on_nodes(&cell, "S", Edge::Rise, Outcome::Oscillation, "Q,Qn") {
+            assert_eq!(waypoints(hz), held(&[("Q", true), ("Qn", false)]));
+        }
     }
 
     #[test]
@@ -800,17 +744,18 @@ Q = "!CLK*M + CLK*Q"
             .collect(),
         );
         // Two reachable CLK-high states carry this hazard — one with D=1 over a cleared pair, one with
-        // D=0 over a set pair — and the dedup keeps whichever is reached along the shorter walk. They are
-        // mirror images, so the waypoints are stated relative to the D the surviving representative
-        // holds: the opening CLK↓ leaves both stages transparent and the cascade walks D into M and then
-        // into Q, and the reference's closing CLK↑ freezes both where it found them.
-        let hz = on(&cell, "CLK", Edge::Fall, Outcome::Indeterminate);
-        let d0 = level_at(hz, "D");
-        assert_eq!(waypoints(hz), held(&[("Q", d0), ("M", d0)]),);
+        // D=0 over a set pair — and each is its own record. They are mirror images, so each record's
+        // waypoints are read against the D ITS probed state holds: the opening CLK↓ leaves both stages
+        // transparent and the cascade walks D into M and then into Q, and the reference's closing CLK↑
+        // freezes both where it found them.
+        for hz in on(&cell, "CLK", Edge::Fall, Outcome::Indeterminate) {
+            let d0 = level_at(hz, "D");
+            assert_eq!(waypoints(hz), held(&[("Q", d0), ("M", d0)]),);
+        }
     }
 
     #[test]
-    fn nested_node_sets_collapse_onto_the_widest() {
+    fn nested_node_sets_are_each_reported() {
         // The same cascade as TCASC with its second stage gated: M is transparent while CLK is low, Q
         // follows M while CLK is low AND EN is high, and holds otherwise. Signal order (outputs first) is
         // [Q, M].
@@ -828,11 +773,12 @@ Q = "!CLK*(EN*M + !EN*Q) + CLK*Q"
         // A CLK↓ pulse decides different nodes from different CLK-high states: with EN low the open
         // master moves alone ({M}); with EN high over a master already at D the second stage moves alone
         // ({Q}); with EN high over a master off D the pulse walks both ({Q, M}). All three are the one
-        // CLK↓ cause under the one indeterminate outcome, and the first two decide strict subsets of the
-        // third's nodes, so the widest stands for them and one record is reported on CLK↓.
+        // CLK↓ cause under the one indeterminate outcome, and each is reported as it was observed. The
+        // first two decide strict subsets of the third's nodes, and it is emission that reads that —
+        // `emit::arcs_tcl`'s `dominates` renders the widest alone.
         //
-        // EN↑ is a cause of its own and untouched by that: with CLK low, raising EN opens the second
-        // stage for one step — Q takes M — and dropping EN again holds Q where the pulse left it.
+        // EN↑ is a cause of its own: with CLK low, raising EN opens the second stage for one step — Q
+        // takes M — and dropping EN again holds Q where the pulse left it.
         assert_eq!(
             keys(&cell),
             [
@@ -841,6 +787,18 @@ Q = "!CLK*(EN*M + !EN*Q) + CLK*Q"
                     'F',
                     Outcome::Indeterminate,
                     "Q,M".to_string()
+                ),
+                (
+                    "CLK".to_string(),
+                    'F',
+                    Outcome::Indeterminate,
+                    "Q".to_string()
+                ),
+                (
+                    "CLK".to_string(),
+                    'F',
+                    Outcome::Indeterminate,
+                    "M".to_string()
                 ),
                 (
                     "EN".to_string(),

@@ -198,14 +198,18 @@ impl LogicVoltages {
 }
 
 /// A class of emitted arc, the granularity at which `-when` arcs are opted into. The `clap::ValueEnum`
-/// derive kebab-cases the variants, so the tokens `transition` and `hidden` name the classes on both the
-/// CLI (`--when=<CLASS>`) and in the spec (`when = ...`) — one token table, shared by both surfaces.
+/// derive kebab-cases the variants, so the tokens `transition`, `hidden` and `constraint` name the
+/// classes on both the CLI (`--when=<CLASS>`) and in the spec (`when = ...`) — one token table, shared by
+/// both surfaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 pub enum ArcClass {
     /// The `define_arc` delay/transition arcs: an input edge on a related pin driving an output edge.
     Transition,
     /// The hidden (internal-power) arcs: an input toggle that settles without changing any output.
     Hidden,
+    /// The derived constraint arcs: the setup/hold, non_seq and min_pulse_width blocks generated to
+    /// remove a detected hazard.
+    Constraint,
 }
 
 /// The set of arc classes whose `-when` arcs are also emitted, on top of the always-emitted general
@@ -214,6 +218,7 @@ pub enum ArcClass {
 pub struct ArcClasses {
     transition: bool,
     hidden: bool,
+    constraint: bool,
 }
 
 impl ArcClasses {
@@ -221,6 +226,7 @@ impl ArcClasses {
     pub const ALL: Self = Self {
         transition: true,
         hidden: true,
+        constraint: true,
     };
 
     /// Whether `class`'s `-when` arcs are also emitted.
@@ -228,6 +234,7 @@ impl ArcClasses {
         match class {
             ArcClass::Transition => self.transition,
             ArcClass::Hidden => self.hidden,
+            ArcClass::Constraint => self.constraint,
         }
     }
 
@@ -236,6 +243,7 @@ impl ArcClasses {
         Self {
             transition: self.transition || other.transition,
             hidden: self.hidden || other.hidden,
+            constraint: self.constraint || other.constraint,
         }
     }
 }
@@ -247,6 +255,7 @@ impl FromIterator<ArcClass> for ArcClasses {
             match class {
                 ArcClass::Transition => set.transition = true,
                 ArcClass::Hidden => set.hidden = true,
+                ArcClass::Constraint => set.constraint = true,
             }
         }
         set
@@ -1330,7 +1339,7 @@ Y = "A"
 [[cell]]
 name = "X"
 inputs = ["A"]
-when = ["hidden", "transition"]
+when = ["hidden", "transition", "constraint"]
 [cell.outputs]
 Y = "A"
 "#;

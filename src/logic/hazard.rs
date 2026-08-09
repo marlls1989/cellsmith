@@ -36,10 +36,11 @@
 //! detection runs from a state carrying one. Metastability is the shared physical risk all four create
 //! — the reason a constraint is generated. This module carries only the resulting report record.
 //!
-//! **Implementation note:** deduplication is handled by the detection passes, which keep one
-//! representative per hazard key. `discovered` is the probed state's index in exploration order, the
-//! second component of the `(prevector.len, discovered)` tie-break that fixes which observation
-//! survives; [`Hazard::ordinal`] is the third. See `hazard-detection.md` for the concept.
+//! **Implementation note:** a record is filed for every observation, and which of them a block is
+//! rendered from is [`crate::emit::arcs_tcl`]'s to decide. `discovered` is the probed state's index in
+//! exploration order, the second component of the `(prevector.len, discovered)` tie-break that fixes
+//! which observation supplies a block; [`Hazard::ordinal`] is the third. See `hazard-detection.md` for
+//! the concept.
 
 use std::collections::BTreeMap;
 

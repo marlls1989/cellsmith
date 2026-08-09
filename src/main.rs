@@ -565,7 +565,7 @@ mod tests {
     #[test]
     fn when_repeats_union_their_classes() {
         assert_eq!(
-            when_classes(&["--when=hidden", "--when=transition"]),
+            when_classes(&["--when=hidden", "--when=transition", "--when=constraint"]),
             ArcClasses::ALL,
         );
     }

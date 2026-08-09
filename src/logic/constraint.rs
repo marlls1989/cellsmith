@@ -88,6 +88,12 @@ pub struct Constraint {
     /// Index of the probed state in the sequential BFS exploration order — the secondary tie-break key:
     /// on equal `prevector.len`, the earlier-discovered representative is kept.
     pub discovered: usize,
+    /// Which of the four (cause, outcome) cells the observation this constraint was generated from
+    /// occupies, as [`Hazard::ordinal`] numbers them. The constraint follows the cause alone, so nothing
+    /// here decides what is constrained; emission reads it to tell two observations of one cause apart —
+    /// a ring and a divergence are different phenomena over their own nodes — and as the last component
+    /// of the total order it picks a representative by.
+    pub ordinal: u8,
 }
 
 /// Generate the constraints that avoid a cell's detected hazards: one [`Constraint`] per detected
@@ -125,6 +131,7 @@ fn remedy(hazard: &Hazard, clock_pins: &[Symbol]) -> Option<Constraint> {
         nodes: protected(&hazard.group, &hazard.node_levels),
         state: hazard.state.clone(),
         discovered: hazard.discovered,
+        ordinal: hazard.ordinal(),
     })
 }
 

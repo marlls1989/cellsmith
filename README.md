@@ -339,7 +339,7 @@ Options:
   -o, --outdir <OUTDIR>       Output directory [default: .]
   -n, --name <NAME>           Output base name [default: the spec file stem]
       --when[=<CLASS>]        Also emit `-when`-conditioned arcs; bare = every class, repeatable
-                              [possible values: transition, hidden]
+                              [possible values: transition, hidden, constraint]
       --no-internal           Suppress hidden (internal-power) arcs
       --no-leakage            Suppress `define_leakage` blocks
       --no-cells              Suppress the `<base>_cells.tcl` artifact

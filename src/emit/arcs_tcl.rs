@@ -33,7 +33,7 @@
 //! reads that view — the `define_cell` pinlist ([`pinlist_str`]) and every other artifact keep to the
 //! cell's actual pins.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 
 use espresso_logic::{Minterm, Symbol};
@@ -73,8 +73,8 @@ impl Default for ArcsTclOptions {
 /// with a detected oscillation hazard is prefixed with a comment recording the racing condition and the
 /// competing settled outcomes — the metastability risk timing arcs cannot express. Any derived
 /// constraint arcs the cell opted into — its `constraint_arcs` was set, so generation populated
-/// `cell.constraints` — follow the delay arcs: the setup/hold and non_seq pairs holding two pins apart,
-/// and the single-pin min_pulse_width blocks.
+/// `cell.constraints` — follow the delay arcs, through those same two passes: the setup/hold and non_seq
+/// pairs holding two pins apart, and the single-pin min_pulse_width blocks.
 pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     cell_arcs(cell, opts).tcl
 }
@@ -268,17 +268,28 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
     }
     // Constraint arcs emit whatever generation produced: `cell.constraints` is populated only when the
     // cell opted in (per-cell `constraint_arcs`, or the global `--constraints` flag), and is empty
-    // otherwise — so this loop is its own gate. How many blocks a constraint comes out as is its KIND's
-    // (see [`constraint_blocks`]): a separation is characterised from both sides and a minimum pulse
-    // width from the one it has.
-    for c in &cell.constraints {
-        let protected: Vec<Symbol> = c.nodes.iter().map(|(node, _)| node.clone()).collect();
-        for group in &groups(cell, &protected) {
-            for block in constraint_blocks(c) {
-                blocks.state(
-                    constraint_block(cell, group, &block.arc, block.arc_type.token()),
-                    constraint_firing(&block, &c.state),
-                );
+    // otherwise — so these loops are their own gate. How many blocks a constraint comes out as is its
+    // KIND's (see [`constraint_blocks`]): a separation is characterised from both sides and a minimum
+    // pulse width from the one it has.
+    //
+    // The two passes are the delay arcs': one general block per [`ConstraintIdentity`], rendered from the
+    // representative [`constraint_selection`] picked, and — where the cell selected the constraint class —
+    // a conditioned block per observation on top, the representative's own included. The skip rule is the
+    // same too: a representative standing for a single observation, or rendering no `-when`, is already
+    // fully characterised by its general block.
+    let constraints = constraint_selection(&cell.constraints);
+    for (i, c) in cell.constraints.iter().enumerate() {
+        if constraints.general.contains_key(&i) {
+            state_constraint(&mut blocks, cell, c, false);
+        }
+    }
+    if cell.when.contains(ArcClass::Constraint) {
+        for (i, c) in cell.constraints.iter().enumerate() {
+            let redundant = constraints.general.get(&i).is_some_and(|&cases| {
+                cases == 1 || constraint_when_str(&constraint_arc(c)).is_none()
+            });
+            if constraints.standing.contains(&i) && !redundant {
+                state_constraint(&mut blocks, cell, c, true);
             }
         }
     }
@@ -501,7 +512,7 @@ impl ArcIdentity {
 /// Every `-type` a `define_arc` of this emitter can carry: the four a measured block classifies into,
 /// the four halves of a constraint pair, and the single-pin minimum-pulse-width block, which is one
 /// block rather than half of a pair.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ArcType {
     Async,
     Edge,
@@ -671,58 +682,243 @@ struct ConstraintBlock<'a> {
     arc: ConstraintArc<'a>,
 }
 
-/// The blocks one constraint renders, in emission order.
+/// The pins every block of `c` switches: the pair a separation holds apart, or the one pin a minimum
+/// pulse width constrains against its own second edge. A constraint's members all switch the same pins —
+/// what differs between them is the `-type` — so this is a property of the constraint rather than of the
+/// block.
+fn constraint_switching(c: &Constraint) -> Switching<'_> {
+    let pin = (&c.pin, c.pin_edge);
+    match &c.kind {
+        ConstraintKind::SetupHold { clock, clock_edge } => Switching::Pair {
+            related: (clock, *clock_edge),
+            pin,
+        },
+        ConstraintKind::NonSeq { other, other_edge } => Switching::Pair {
+            related: (other, *other_edge),
+            pin,
+        },
+        ConstraintKind::MinPulseWidth => Switching::Single { pin },
+    }
+}
+
+/// The `-type` each block of `c` leads with — how many blocks its kind fans out to, and which.
 ///
 /// A SEPARATION is a pair — the setup member and the hold member, which Liberate characterises as
 /// separate arcs: `setup`/`hold` for a directed clock↔data constraint, `non_seq_setup`/`non_seq_hold`
-/// for a symmetric (oscillation / mutual-exclusion) one. Both members switch the same two pins, each in
-/// the edge it makes.
+/// for a symmetric (oscillation / mutual-exclusion) one.
 ///
 /// A MINIMUM PULSE WIDTH is ONE block of `-type min_pulse_width`: the constrained pin's column carries
 /// the pulse's OPENING edge alone, and Liberate searches for the width at which the probed nodes stop
 /// behaving. There is no pair here — a pair's two members are the two sides of a separation between two
 /// pins, and a pulse has one pin, which the block names on both `-related_pin` and `-pin`.
-fn constraint_blocks(c: &Constraint) -> Vec<ConstraintBlock<'_>> {
-    let arc = |switching| ConstraintArc {
-        switching,
+fn constraint_types(c: &Constraint) -> Vec<ArcType> {
+    match &c.kind {
+        ConstraintKind::SetupHold { .. } => vec![ArcType::Setup, ArcType::Hold],
+        ConstraintKind::NonSeq { .. } => vec![ArcType::NonSeqSetup, ArcType::NonSeqHold],
+        ConstraintKind::MinPulseWidth => vec![ArcType::MinPulseWidth],
+    }
+}
+
+/// The arc every block of `c` renders from: the pins it switches, the nodes it protects with the level
+/// each holds at the probed state, and the walk into that state with the levels sampled there.
+fn constraint_arc(c: &Constraint) -> ConstraintArc<'_> {
+    ConstraintArc {
+        switching: constraint_switching(c),
         nodes: &c.nodes,
         prevector: &c.prevector,
         levels: &c.levels,
-    };
-    let pin = (&c.pin, c.pin_edge);
-    let (related, types) = match &c.kind {
-        ConstraintKind::SetupHold { clock, clock_edge } => {
-            ((clock, *clock_edge), [ArcType::Setup, ArcType::Hold])
-        }
-        ConstraintKind::NonSeq { other, other_edge } => (
-            (other, *other_edge),
-            [ArcType::NonSeqSetup, ArcType::NonSeqHold],
-        ),
-        ConstraintKind::MinPulseWidth => {
-            return vec![ConstraintBlock {
-                arc_type: ArcType::MinPulseWidth,
-                arc: arc(Switching::Single { pin }),
-            }]
-        }
-    };
-    types
+    }
+}
+
+/// The blocks one constraint renders, in emission order: one per `-type` its kind calls for
+/// ([`constraint_types`]), each rendering from the one arc the constraint states
+/// ([`constraint_arc`]).
+fn constraint_blocks(c: &Constraint) -> Vec<ConstraintBlock<'_>> {
+    constraint_types(c)
         .into_iter()
         .map(|arc_type| ConstraintBlock {
             arc_type,
-            arc: arc(Switching::Pair { related, pin }),
+            arc: constraint_arc(c),
         })
         .collect()
+}
+
+/// The nodes a constraint protects, by name: what its blocks name in one `-probe`, and what the
+/// maximal-node-set rule ([`dominates`]) compares.
+fn protected(c: &Constraint) -> Vec<Symbol> {
+    c.nodes.iter().map(|(node, _)| node.clone()).collect()
+}
+
+/// What an emitted constraint block states of the arc it renders: the `-type`s its kind fans out to, the
+/// pins it relates with the edge each makes, and the nodes it probes. Everything else a block carries —
+/// the `-ic` levels, the `-vector`'s held digits and the `-when` — names the OBSERVATION it was measured
+/// from, so one identity comes out as one general block however many observations were made of it, and
+/// each of those observations returns as its own conditioned block under `--when`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ConstraintIdentity {
+    types: Vec<ArcType>,
+    related: Symbol,
+    related_edge: Edge,
+    pin: Symbol,
+    pin_edge: Edge,
+    nodes: Vec<Symbol>,
+}
+
+impl ConstraintIdentity {
+    fn of(c: &Constraint) -> Self {
+        // A minimum pulse width relates its pin to itself, so the related half of the identity is that
+        // same pin and edge — which is what the block writes on `-related_pin`.
+        let (related, related_edge) = match constraint_switching(c) {
+            Switching::Pair { related, .. } => (related.0.clone(), related.1),
+            Switching::Single { pin } => (pin.0.clone(), pin.1),
+        };
+        ConstraintIdentity {
+            types: constraint_types(c),
+            related,
+            related_edge,
+            pin: c.pin.clone(),
+            pin_edge: c.pin_edge,
+            nodes: protected(c),
+        }
+    }
+}
+
+/// Where an observation stands in the order its identity's representative is the minimum of: the length
+/// of the walk that reached it, then the exploration index of the probed state, then the (cause, outcome)
+/// cell it occupies ([`crate::logic::hazard::Hazard::ordinal`]).
+///
+/// The three are a TOTAL order. The first two are the shortest-walk rule this engine applies everywhere;
+/// the third is what makes it total, two observations of one probed state tying on both and differing
+/// only in which of the four cells they were read from. So which observation supplies the general block
+/// is fixed however the parallel detection merged them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct ConstraintRank {
+    prevector: usize,
+    discovered: usize,
+    ordinal: u8,
+}
+
+impl ConstraintRank {
+    fn of(c: &Constraint) -> Self {
+        ConstraintRank {
+            prevector: c.prevector.len(),
+            discovered: c.discovered,
+            ordinal: c.ordinal,
+        }
+    }
+}
+
+/// Does `outer` speak for `inner` — is `inner` an observation of the same pulse under the same outcome,
+/// over a strict subset of the nodes `outer` protects?
+///
+/// One pin's pulse decides different nodes from different states, and on a cell whose internals form a
+/// chain those node sets nest — one set per depth the cascade was cut at, every one of them the same
+/// pulse seen from further in. Only the **maximal** sets are rendered: an observation is dropped only
+/// where another observation of the same cause AND outcome decides a strict superset of its nodes, and
+/// two sets that nest neither way both stand. What makes that sound is how the hazard is measured. The
+/// block characterising one names the nodes it protects in Liberate's `-probe`, and Liberate narrows the
+/// pulse until the probed behaviour fails, so the width a probe set reports is the maximum over the nodes
+/// in it. A block probing a strict superset therefore asks a strictly stronger question, and the subset's
+/// answer is contained in it; a superset and an incomparable set ask different questions, and both are
+/// asked. The outcome is part of that key because the argument holds only within one: a divergence
+/// covering a ring's nodes measures how wide the pulse must be to land somewhere definite, which answers
+/// nothing about the ring.
+///
+/// What that leaves open is whether the width one node needs can itself differ with the start state it is
+/// characterised from. If it can, a dropped observation's nodes end up measured from the surviving
+/// observation's state rather than from their own, and the collapse trades that conservatism for a
+/// fraction of the characterisation cost.
+///
+/// The whole argument is about how a pulse's width is searched for, so it reaches the minimum pulse
+/// widths and nothing else: a separation is measured by moving two edges together, and a block probing
+/// more nodes there asks a different question rather than a stronger one.
+fn dominates(outer: &Constraint, inner: &Constraint) -> bool {
+    matches!(outer.kind, ConstraintKind::MinPulseWidth)
+        && matches!(inner.kind, ConstraintKind::MinPulseWidth)
+        && (&outer.pin, outer.pin_edge, outer.ordinal)
+            == (&inner.pin, inner.pin_edge, inner.ordinal)
+        && strictly_within(&protected(inner), &protected(outer))
+}
+
+/// Is every node of `inner` among `outer`'s, with `outer` naming at least one more? Strict on purpose:
+/// two observations over the same nodes are one hazard reached along different walks, settled by the
+/// walk-length tie-break rather than by one displacing the other.
+fn strictly_within(inner: &[Symbol], outer: &[Symbol]) -> bool {
+    let inner: BTreeSet<&Symbol> = inner.iter().collect();
+    let outer: BTreeSet<&Symbol> = outer.iter().collect();
+    inner.len() < outer.len() && inner.is_subset(&outer)
+}
+
+/// Which of a cell's constraints render, and which of them supply the general blocks.
+struct ConstraintSelection {
+    /// Each identity's representative index into the cell's constraints, mapped to the number of
+    /// observations that identity carries — read exactly as the delay arcs read [`generalised`]'s map.
+    general: HashMap<usize, usize>,
+    /// The observations that render at all: those no other observation speaks for ([`dominates`]).
+    standing: HashSet<usize>,
+}
+
+/// Select what a cell's constraints render. An observation another one speaks for renders nothing; what
+/// is left groups by [`ConstraintIdentity`], and each group's representative — the observation the
+/// general block is rendered from — is its minimum [`ConstraintRank`].
+fn constraint_selection(constraints: &[Constraint]) -> ConstraintSelection {
+    let standing: HashSet<usize> = (0..constraints.len())
+        .filter(|&i| !constraints.iter().any(|o| dominates(o, &constraints[i])))
+        .collect();
+    // Per identity: the minimum-rank winner and the observation count.
+    let mut groups: HashMap<ConstraintIdentity, (ConstraintRank, usize, usize)> = HashMap::new();
+    for (i, c) in constraints
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| standing.contains(i))
+    {
+        let rank = ConstraintRank::of(c);
+        groups
+            .entry(ConstraintIdentity::of(c))
+            .and_modify(|g| {
+                g.2 += 1;
+                if rank < g.0 {
+                    g.0 = rank;
+                    g.1 = i;
+                }
+            })
+            .or_insert((rank, i, 1));
+    }
+    ConstraintSelection {
+        general: groups
+            .into_values()
+            .map(|(_, i, count)| (i, count))
+            .collect(),
+        standing,
+    }
+}
+
+/// State one constraint's blocks: its kind's fan-out, over every alias group whose netlist agrees on the
+/// columns they carry. `with_when` selects the pass, as it does for the measured blocks.
+fn state_constraint(blocks: &mut Blocks, cell: &AnalysedCell, c: &Constraint, with_when: bool) {
+    for group in &groups(cell, &protected(c)) {
+        for block in constraint_blocks(c) {
+            blocks.state(
+                constraint_block(cell, group, &block.arc, block.arc_type.token(), with_when),
+                constraint_firing(&block, &c.state),
+            );
+        }
+    }
 }
 
 /// One constraint `define_arc` of the given `-type`. Liberate cannot infer how to prepare these
 /// non-standard state-holding cells, so every pin is listed and fully specified: `-ic` states the
 /// pre-toggle condition of every column, and the full `-vector` carries the switching pins as `R`/`F`,
-/// the other inputs at their held value, and the outputs as `X`.
+/// the other inputs at their held value, and the outputs as `X`. `with_when` selects which of the two
+/// passes in [`cell_arcs_tcl`] the block belongs to: the conditioned one, naming the input context this
+/// observation was made in ([`constraint_when_str`]), or the general one, which stands for the constraint
+/// however it was reached and generalises solely by omitting the `-when` line.
 fn constraint_block(
     cell: &AnalysedCell,
     group: &Group,
     arc: &ConstraintArc<'_>,
     arc_type: &str,
+    with_when: bool,
 ) -> String {
     // The nodes the constraint protects are measured, so each needs a column: one `-probe` names them
     // all, and the columns are what `-ic` initialises them through. A node already has a column when
@@ -762,6 +958,9 @@ fn constraint_block(
         "\t-vector {{{}}} \\\n",
         constraint_vector_str(cell, &model, arc)
     ));
+    if let (true, Some(w)) = (with_when, constraint_when_str(arc)) {
+        s.push_str(&format!("\t-when \"{w}\" \\\n"));
+    }
     s.push_str(&format!("\t-related_pin {} \\\n", arc.switching.related()));
     s.push_str(&format!("\t-pin {} \\\n", arc.switching.pin()));
     s.push_str(&format!("\t-probe {{{probe_list}}} \\\n"));
@@ -1373,6 +1572,32 @@ fn hidden_when_str(h: &HiddenArc) -> Option<String> {
         .filter(|(k, _)| *k != h.pin.as_str())
         .collect();
     lits.extend(h.levels.outputs.iter().map(|(s, v)| (s.clone(), *v)));
+    if lits.is_empty() {
+        return None;
+    }
+    lits.sort();
+    Some(crate::logic::literal_product(&lits))
+}
+
+/// The constraint block's `-when` condition: the inputs it does NOT switch, at the level they hold in
+/// the pre-toggle state (the prevector's last step), plus every held output value, as a product of
+/// literals. `None` when no literal is fixed.
+///
+/// Built like [`hidden_when_str`] rather than like [`when_str`], and the held outputs are the whole
+/// reason: a constraint `-vector` marks EVERY output `X` — the block states when the switching edges may
+/// land and measures nothing the cell does in response — so the outputs are exactly what tells two
+/// contexts of a state-holding cell apart, one input assignment reaching each over a different stored
+/// value. Naming their levels is what makes the condition name one observation.
+fn constraint_when_str(arc: &ConstraintArc<'_>) -> Option<String> {
+    let held = arc
+        .prevector
+        .last()
+        .expect("path_to seeds its chain with the probed node itself");
+    let mut lits: Vec<(Symbol, bool)> = assignment(held)
+        .into_iter()
+        .filter(|(k, _)| arc.switching.edge_of(k.as_str()).is_none())
+        .collect();
+    lits.extend(arc.levels.outputs.iter().map(|(s, v)| (s.clone(), *v)));
     if lits.is_empty() {
         return None;
     }
@@ -3229,7 +3454,7 @@ Y = "!W"
             let group = whole_for(arc, c);
             let rendered: String = constraint_blocks(c)
                 .iter()
-                .map(|b| constraint_block(arc, &group, &b.arc, b.arc_type.token()))
+                .map(|b| constraint_block(arc, &group, &b.arc, b.arc_type.token(), false))
                 .collect();
             assert!(
                 tcl.contains(&rendered),
@@ -3533,6 +3758,211 @@ Qn = "!(S+Q)"
             0,
             "the cell's two-pin constraints are still rendered in pairs:\n{tcl}"
         );
+    }
+
+    /// The minimum-pulse-width blocks of `tcl` constraining `pin`, with what each probes — the pairing
+    /// the maximal-node-set rule is read off.
+    fn probes_on(tcl: &str, pin: &str) -> Vec<String> {
+        let mut probed: Vec<String> = pulse_blocks(tcl)
+            .iter()
+            .filter(|b| named(b, "-pin") == pin)
+            .map(|b| {
+                braced(b, "-probe")
+                    .expect("a min_pulse_width block probes")
+                    .to_string()
+            })
+            .collect();
+        probed.sort();
+        probed
+    }
+
+    #[test]
+    fn a_probe_set_another_one_contains_renders_no_block_of_its_own() {
+        // A gated two-stage cascade: M is transparent while CLK is low, Q follows M while CLK is low AND
+        // EN is high. A CLK↓ pulse decides {M} alone from one CLK-high state, {Q} alone from another and
+        // {Q, M} from a third, and detection reports all three. They are the one cause under the one
+        // outcome, so the two narrower probe sets ask nothing the widest does not — Liberate narrows the
+        // pulse until the probed behaviour fails, and the width a probe set reports is the maximum over
+        // its nodes — and only the {Q, M} block is rendered on CLK↓.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "GCASC"
+inputs = ["CLK", "D", "EN"]
+constraint_arcs = true
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "!CLK*(EN*M + !EN*Q) + CLK*Q"
+"#,
+        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        assert_eq!(probes_on(&tcl, "CLK"), ["Q M"], "{tcl}");
+    }
+
+    #[test]
+    fn incomparable_probe_sets_are_a_block_each() {
+        // Two independent latches on one clock, each opened by a level of SEL: A follows D while CLK is
+        // low and SEL high, B while CLK is low and SEL low. A CLK↓ pulse decides A alone where SEL is high
+        // and B alone where it is low. Neither probe set contains the other, so neither block's
+        // measurement answers for the other's node and both are rendered.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "SPLIT"
+inputs = ["CLK", "D", "SEL"]
+constraint_arcs = true
+[cell.outputs]
+A = "!CLK*(SEL*D + !SEL*A) + CLK*A"
+B = "!CLK*(!SEL*D + SEL*B) + CLK*B"
+"#,
+        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        assert_eq!(probes_on(&tcl, "CLK"), ["A", "B"], "{tcl}");
+    }
+
+    #[test]
+    fn a_ring_and_a_divergence_of_one_pulse_probe_their_own_nodes() {
+        // The cross-NOR SR with an internal node L latching the set output while S is asserted. A set
+        // pulse rings over {Q, Qn} at one cut and lands somewhere the reference does not over
+        // {Q, Qn, L} at another. The ring's nodes are a strict subset of the divergence's, and the two
+        // blocks both stand: a divergence covering a ring's nodes measures how wide the pulse must be to
+        // land somewhere definite, which answers nothing about the ring. The set pulse observed from the
+        // already-set state decides L alone, and THAT one the {Q, Qn, L} block does speak for.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "SRL"
+inputs = ["S", "R"]
+constraint_arcs = true
+[cell.internal]
+L = "S*Q + !S*L"
+[cell.outputs]
+Q  = "!(R+Qn)"
+Qn = "!(S+Q)"
+"#,
+        );
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        assert_eq!(probes_on(&tcl, "S"), ["Q Qn", "Q Qn L"], "{tcl}");
+    }
+
+    /// A same-phase two-stage cascade opting into constraint arcs, with whatever cell-level keys `extra`
+    /// adds. Its CLK↓ minimum pulse width is observed from two CLK-high states — one with D high over a
+    /// cleared pair, one with D low over a set pair — so one identity carries two observations.
+    fn tcasc(extra: &str) -> String {
+        format!(
+            r#"
+[[cell]]
+name = "TCASC"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+constraint_arcs = true
+{extra}[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "!CLK*M + CLK*Q"
+"#
+        )
+    }
+
+    #[test]
+    fn a_constraint_is_one_general_block_and_a_conditioned_one_per_observation() {
+        // The general pass states the constraint however it was reached: one block per identity, carrying
+        // no `-when`, whichever observation supplied it.
+        let plain = cell_arcs_tcl(&analyse(&tcasc("")), NO_LEAKAGE);
+        eprintln!("{plain}");
+        let general: Vec<String> = pulse_blocks(&plain);
+        assert_eq!(general.len(), 1, "one general CLK pulse block:\n{plain}");
+        assert!(!has_when(&general[0]), "{}", general[0]);
+
+        // Selecting the constraint class adds a conditioned block per observation on top, the
+        // representative's own included — so the general block is joined by two, not one.
+        let conditioned = cell_arcs_tcl(&analyse(&tcasc("when = \"constraint\"\n")), NO_LEAKAGE);
+        eprintln!("{conditioned}");
+        let blocks = pulse_blocks(&conditioned);
+        assert_eq!(blocks.len(), 3, "{conditioned}");
+        assert_eq!(
+            blocks.iter().filter(|b| has_when(b)).count(),
+            2,
+            "one conditioned block per observation:\n{conditioned}"
+        );
+        // The representative appears in both passes: its conditioned block restates the context its
+        // general block already pins, and the two differ by the `-when` line alone.
+        let stripped: Vec<String> = blocks
+            .iter()
+            .map(|b| {
+                b.lines()
+                    .filter(|l| !l.trim_start().starts_with("-when"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .collect();
+        assert!(
+            stripped
+                .iter()
+                .any(|s| stripped.iter().filter(|o| *o == s).count() == 2),
+            "the representative is stated by both passes:\n{conditioned}"
+        );
+    }
+
+    #[test]
+    fn a_conditioned_constraint_names_the_held_outputs() {
+        // A constraint `-vector` marks every output `X`, so nothing it states tells two stored-value
+        // contexts of one input assignment apart. The `-when` is what names the context: the inputs the
+        // block does not switch, at the level they hold, AND every held output level.
+        let cell = analyse(&tcasc("when = \"constraint\"\n"));
+        let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
+        eprintln!("{tcl}");
+        let conditions: BTreeSet<String> = pulse_blocks(&tcl)
+            .iter()
+            .filter_map(|b| {
+                b.lines()
+                    .find_map(|l| l.trim().strip_prefix("-when "))
+                    .map(|w| {
+                        w.trim_end_matches('\\')
+                            .trim()
+                            .trim_matches('"')
+                            .to_string()
+                    })
+            })
+            .collect();
+        // The two observations are mirror images — a cleared pair under D high, a set pair under D low —
+        // and each condition names the held D beside the held Q. CLK is switched, so it is absent.
+        assert_eq!(
+            conditions,
+            ["D*!Q".to_string(), "!D*Q".to_string()]
+                .into_iter()
+                .collect(),
+            "{tcl}"
+        );
+    }
+
+    #[test]
+    fn selecting_another_class_leaves_the_constraint_blocks_unconditioned() {
+        // The class gates its own pass and no other's: with only the transition class selected the
+        // constraint blocks are the general ones alone.
+        let plain = cell_arcs_tcl(&analyse(&tcasc("")), NO_LEAKAGE);
+        let others = cell_arcs_tcl(&analyse(&tcasc("when = \"transition\"\n")), NO_LEAKAGE);
+        eprintln!("{others}");
+        // Which observation each general block was rendered from is a free choice, so the two runs are
+        // compared by what they state: how many constraint blocks there are, what they probe, and that
+        // none of them carries a condition.
+        assert_eq!(
+            probes_on(&others, "CLK"),
+            probes_on(&plain, "CLK"),
+            "{others}"
+        );
+        assert_eq!(
+            pair_blocks(&others).len(),
+            pair_blocks(&plain).len(),
+            "{others}"
+        );
+        for block in pulse_blocks(&others).iter().chain(&pair_blocks(&others)) {
+            assert!(!has_when(block), "{block}");
+        }
     }
 
     #[test]
