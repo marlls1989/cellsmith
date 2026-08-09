@@ -23,7 +23,8 @@
 //!
 //! - [`Outcome::Indeterminate`] — it settles, but which state it settles to is not determined.
 //! - [`Outcome::Oscillation`] — it never settles: the state walks a periodic cycle instead of reaching a
-//!   fixpoint. Detected when [`super::machine::settle_or_cycle`] returns the cycle instead of settling.
+//!   convergence point (a state `x` with `delta(x) == x`). Detected when
+//!   [`super::machine::settle_or_cycle`] returns the cycle instead of settling.
 //!
 //! The axes are independent, so there are four hazards — a race or a pulse, each settling
 //! indeterminately or not settling at all. One [`Hazard`] carries one (cause, outcome) pair, so a probe
@@ -58,9 +59,8 @@ pub struct Racer {
 pub enum Cause {
     /// Two signals racing each other, as observed by a probe that toggles them together.
     Race {
-        /// The pins the probe observed racing. Observing NONE is a legitimate reading of this field,
-        /// not a missing value: a lone input toggle that never settles has raced nothing against
-        /// anything, and what the field states — which pins were seen racing — is then the empty list.
+        /// The pins the probe observed racing: one member when a single toggle was observed not to
+        /// converge, two when a pair probe raced them together. Never empty.
         pins: Vec<Racer>,
     },
     /// One signal racing itself: the two edges of a single pin, bounding a pulse.
@@ -77,7 +77,8 @@ pub enum Cause {
 pub enum Outcome {
     /// The machine settles, but which state it settles to is not determined.
     Indeterminate,
-    /// The machine never settles: the state walks a periodic cycle instead of reaching a fixpoint.
+    /// The machine never settles: the state walks a periodic cycle instead of reaching a convergence
+    /// point.
     Oscillation,
 }
 
@@ -214,24 +215,34 @@ Qa = "!Qb * A"
 Qb = "!Qa * B"
 "#,
         );
-        let arb = &cell.oscillation;
-        assert_eq!(arb.len(), 1, "exactly one oscillation hazard");
-        let a = &arb[0];
+        let oscillating: Vec<&Hazard> = cell
+            .hazards
+            .iter()
+            .filter(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation)
+            .collect();
+        assert_eq!(oscillating.len(), 1, "exactly one oscillation hazard");
+        let a = oscillating[0];
         assert_eq!(a.group, ["Qa", "Qb"]);
         assert_eq!(a.condition_str(), "A*B");
-        // Exactly one pair-probe race backs the oscillation (the A*B co-assertion), carrying the A/B
-        // pins the generated constraint needs.
-        assert_eq!(a.races.len(), 1, "one pair-probe race, got {:?}", a.races);
-        let race = &a.races[0];
-        assert!(
-            [race.x.as_str(), race.y.as_str()]
-                .iter()
-                .all(|p| *p == "A" || *p == "B"),
-            "the race is between A and B, got {race:?}"
+        // The A*B co-assertion is a pair-probe race, carrying the A/B pins the generated constraint
+        // needs.
+        let pins = match &a.cause {
+            Cause::Race { pins } => pins,
+            Cause::Pulse { .. } => unreachable!("filtered on Cause::Race above"),
+        };
+        assert_eq!(
+            pins.len(),
+            2,
+            "a pair-probe race names both racing pins, got {pins:?}"
         );
-        // Competing stable states: Qa high / Qb low, and the mirror.
-        assert_eq!(a.stable.len(), 2);
-        let states: BTreeSet<String> = a.stable.iter().map(Oscillation::state_str).collect();
+        assert!(
+            pins.iter()
+                .all(|r| r.pin.as_str() == "A" || r.pin.as_str() == "B"),
+            "the race is between A and B, got {pins:?}"
+        );
+        // Competing settled states: Qa high / Qb low, and the mirror.
+        assert_eq!(a.settled.len(), 2);
+        let states: BTreeSet<String> = a.settled.iter().map(Hazard::state_str).collect();
         assert_eq!(
             states,
             ["{Qa=1, Qb=0}".to_string(), "{Qa=0, Qb=1}".to_string()]
@@ -239,10 +250,16 @@ Qb = "!Qa * B"
                 .collect()
         );
         // A mutex detects no order-dependent hazard (its grant divergence is latch-filtered).
+        let order_dependent: Vec<&Hazard> = cell
+            .hazards
+            .iter()
+            .filter(|h| {
+                matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Indeterminate
+            })
+            .collect();
         assert!(
-            cell.order_dependence.is_empty(),
-            "a mutex detects no order-dependent hazard, got {:?}",
-            cell.order_dependence
+            order_dependent.is_empty(),
+            "a mutex detects no order-dependent hazard, got {order_dependent:?}"
         );
     }
 
@@ -258,10 +275,16 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        assert!(cell.oscillation.is_empty());
+        assert!(!cell
+            .hazards
+            .iter()
+            .any(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation));
         // The C-element is order-dependent (A↓ racing B↑), so it detects an order-dependent hazard.
         assert!(
-            !cell.order_dependence.is_empty(),
+            cell.hazards
+                .iter()
+                .any(|h| matches!(h.cause, Cause::Race { .. })
+                    && h.outcome == Outcome::Indeterminate),
             "a C-element detects an order-dependent hazard"
         );
     }
@@ -279,7 +302,10 @@ Q = "S + Q*!R"
 Qn = "R + Qn*!S"
 "#,
         );
-        assert!(cell.oscillation.is_empty());
+        assert!(!cell
+            .hazards
+            .iter()
+            .any(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation));
     }
 
     #[test]
@@ -293,7 +319,13 @@ inputs = ["A", "B"]
 Y = "!(A*B)"
 "#,
         );
-        assert!(cell.oscillation.is_empty());
-        assert!(cell.order_dependence.is_empty());
+        assert!(!cell
+            .hazards
+            .iter()
+            .any(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation));
+        assert!(!cell
+            .hazards
+            .iter()
+            .any(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Indeterminate));
     }
 }

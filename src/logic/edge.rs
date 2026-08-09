@@ -63,14 +63,15 @@
 //!      transitively along the dependency chain.
 //! 2. **The seam set `S`** — per candidate node (every output and internal state variable), the
 //!    `(clock, direction)` toggles on which the node carries an edge SEAM: the typing holds AND the
-//!    delivered value HOLDS through the phase, the last a greatest fixpoint (`seam_fixpoint`) that removes
-//!    `(K, d)` when a non-forcing change of the node inside its delivered phase occurs at a toggle not
-//!    itself an edge of `S`. A node with a non-empty `S` is an edge register; its per-edge next-state
-//!    functions and off-edge are synthesised into [`EdgeArcs::captures`].
+//!    delivered value HOLDS through the phase, the last a greatest convergence point
+//!    (`seam_convergence_point`) that removes `(K, d)` when a non-forcing change of the node inside its
+//!    delivered phase occurs at a toggle not itself an edge of `S`. A node with a non-empty `S` is an
+//!    edge register; its per-edge next-state functions and off-edge are synthesised into
+//!    [`EdgeArcs::captures`].
 //! 3. **Cover synthesis** — `synth_capture`, `generalise` and `regions_from` over one uniform
 //!    header (all inputs except the keying clock plus every candidate), with an ordered drop-loop that
 //!    prefers inputs over internals so the fold-eligible internals drop out of the cover.
-//! 4. **Fold** — internal non-seam nodes fold away as an emission-time reachability fixpoint.
+//! 4. **Fold** — internal non-seam nodes fold away as an emission-time reachability convergence point.
 //!
 //! The capture and off-edge functions are recorded verbatim as ordinary functions — an inverting flop's
 //! next state is simply `!D`, never special-cased.
@@ -334,7 +335,8 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
 
     // Each candidate's forcing pins. Computed BEFORE any synthesis, so the seam set — which decides the
     // fold-eligible internals the drop-loop prefers to shed — is settled first. Forcing plays no part in
-    // typing; it is consumed only by off-edge synthesis and the seam fixpoint's forcing exemption.
+    // typing; it is consumed only by off-edge synthesis and the seam convergence point's forcing
+    // exemption.
     let forcing_of: Vec<BTreeMap<Symbol, (bool, bool)>> = candidates
         .iter()
         .zip(&aggs)
@@ -524,9 +526,9 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     }
 
     // THE SEAM SET per candidate: the `(clock, direction)` toggles the node TYPES EDGE on at some eligible
-    // CHANGED firing (the initial set), tightened by the greatest fixpoint in `seam_fixpoint` — the
-    // delivered value must hold through the phase. A non-empty seam set is an edge register; an empty one is
-    // level (a latch that merely tracks, or a clock gate).
+    // CHANGED firing (the initial set), tightened by the greatest convergence point in
+    // `seam_convergence_point` — the delivered value must hold through the phase. A non-empty seam set is
+    // an edge register; an empty one is level (a latch that merely tracks, or a clock gate).
     let seam_of: Vec<BTreeSet<Arc>> = candidates
         .iter()
         .zip(&aggs)
@@ -547,7 +549,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                     s.insert((clock.clone(), *is_rise));
                 }
             }
-            scan.seam_fixpoint(name.as_str(), node_forcing, &mut s);
+            scan.seam_convergence_point(name.as_str(), node_forcing, &mut s);
             s
         })
         .collect();
@@ -803,15 +805,16 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // mutually-referencing non-seam set that reaches no such sink influences nothing and collapses as one,
     // exactly as a lone self-holding master does.
     //
-    // This is computed as a least-fixpoint liveness marking, which is the complement of the greatest
-    // fixpoint "assume every candidate folds, then reinstate any candidate referenced from OUTSIDE the
-    // folded set": a node's own function only propagates once the node is already live, so self-reference
-    // alone never marks it, while any chain that reaches a live sink strands the whole chain.
+    // This is computed as a least-convergence-point liveness marking, which is the complement of the
+    // greatest convergence point "assume every candidate folds, then reinstate any candidate referenced
+    // from OUTSIDE the folded set": a node's own function only propagates once the node is already live,
+    // so self-reference alone never marks it, while any chain that reaches a live sink strands the whole
+    // chain.
     //
     // The criterion is deliberately NARROWER than early minimisation's, which preserves self-referential
-    // loops so oscillation stays detectable — minimisation is untouched by this. The minimise fixpoint
-    // invariant I3 (`src/logic/minimise.rs`) holds by construction: every kept survivor's support is kept
-    // by closure.
+    // loops so oscillation stays detectable — minimisation is untouched by this. The minimise
+    // convergence-point invariant I3 (`src/logic/minimise.rs`) holds by construction: every kept
+    // survivor's support is kept by closure.
     let ref_reg: BTreeSet<&str> = captures
         .iter()
         .flat_map(|r| r.cols.iter().map(Symbol::as_str))
@@ -840,7 +843,8 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     let mut worklist: Vec<&str> = live.iter().copied().collect();
 
     // Propagate liveness along each live node's raw-function support — semantic BDD support, never equation
-    // shape — until the least fixpoint is reached. A read-gated output propagates through its read support.
+    // shape — until the least convergence point is reached. A read-gated output propagates through its
+    // read support.
     while let Some(l) = worklist.pop() {
         if let Some(sup) = read_support.get(l) {
             for v in sup {
@@ -967,14 +971,15 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
             .collect()
     }
 
-    /// The greatest-fixpoint filter that keeps `s` to the `(clock, direction)` toggles whose DELIVERED VALUE
-    /// HOLDS through the phase. A `(k, d)` is removed when some NON-FORCING change of `node` inside its
-    /// delivered phase (`clock == d`) happens at a toggle that is NOT itself an edge of `s` — live data (a
-    /// non-clock input) or a non-seam clock. A co-resident clock's edge that IS in `s` is another seam of the
-    /// node, not a disqualifier, so iterating to a fixpoint lets one seam's removal cascade to another
-    /// (`MCDFF` loses `(CLKB, Rise)` on live D, then `(CLKA, Fall)` because the in-phase CLKB rise is gone).
-    /// Only ELIGIBLE states, at both ends of a transition, take part.
-    fn seam_fixpoint(
+    /// The greatest-convergence-point filter that keeps `s` to the `(clock, direction)` toggles whose
+    /// DELIVERED VALUE HOLDS through the phase. A `(k, d)` is removed when some NON-FORCING change of
+    /// `node` inside its delivered phase (`clock == d`) happens at a toggle that is NOT itself an edge of
+    /// `s` — live data (a non-clock input) or a non-seam clock. A co-resident clock's edge that IS in `s`
+    /// is another seam of the node, not a disqualifier, so iterating to a convergence point lets one
+    /// seam's removal cascade to another (`MCDFF` loses `(CLKB, Rise)` on live D, then `(CLKA, Fall)`
+    /// because the in-phase CLKB rise is gone). Only ELIGIBLE states, at both ends of a transition, take
+    /// part.
+    fn seam_convergence_point(
         &self,
         node: &str,
         node_forcing: &BTreeMap<Symbol, (bool, bool)>,
@@ -2412,7 +2417,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
                 "M captures !R*!Q (=!R*!M at the pre-fall states), inverting, no special-casing"
             );
             // The ring survives whole: M carries its own falling capture, so it is not an internal non-seam
-            // node and is structurally ineligible for the fold fixpoint.
+            // node and is structurally ineligible for the fold convergence point.
             assert!(
                 folded_list(&es).is_empty(),
                 "a self-referential ring whose master carries a real capture folds nothing, got {:?}",
@@ -3195,9 +3200,10 @@ GCLK = "CLK*EL"
     // generation at Q (Q self-loops only when both clocks are low, and each rise takes it transparent to
     // that clock's master), so both rises carry `-type edge`. But the FALLS are combinational: nothing
     // generates on a fall (each master generates on its own rise), and Q switching away delivers the OTHER
-    // clock's held value, arriving regardless. With no fall seam to hold against, the seam fixpoint empties
-    // Q's set — an in-phase fall of the co-resident clock is a non-seam change — so Q is NOT an edge
-    // register; it models as level rows with edge-labelled rises. The internal masters carry no arcs.
+    // clock's held value, arriving regardless. With no fall seam to hold against, the seam convergence
+    // point empties Q's set — an in-phase fall of the co-resident clock is a non-seam change — so Q is
+    // NOT an edge register; it models as level rows with edge-labelled rises. The internal masters carry
+    // no arcs.
     const DCMUX_TOML: &str = r#"
 [[cell]]
 name = "DCMUX"
@@ -3215,8 +3221,8 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
         with_machine!(DCMUX_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert_captures_faithful(&m, &es);
-            // The seam fixpoint empties Q's set (its falls are combinational, so each in-phase fall is a
-            // non-seam change), so NOTHING is an edge register — the cell is a level model.
+            // The seam convergence point empties Q's set (its falls are combinational, so each in-phase
+            // fall is a non-seam change), so NOTHING is an edge register — the cell is a level model.
             assert!(
                 es.captures.is_empty(),
                 "DCMUX models as level rows, no edge register, got {:?}",
@@ -3570,9 +3576,9 @@ Q = "!( !(M2*!CLKB) * Qn )"
             assert!(qn_on.equivalent_to(&!&builder.var("D")), "Qn captures !D");
 
             // The pass DFF folds its lone master M; the NAND master pair M/Mn is captureless and
-            // MUTUALLY REFERENCING, reaching no output once collapsed, so the reachability fixpoint
-            // folds the pair together — the two forms converge on folding their master(s), the NAND
-            // idiom simply carrying the complement as a second candidate.
+            // MUTUALLY REFERENCING, reaching no output once collapsed, so the reachability convergence
+            // point folds the pair together — the two forms converge on folding their master(s), the
+            // NAND idiom simply carrying the complement as a second candidate.
             let mut ndff_folded = folded_list(&es);
             ndff_folded.sort();
             assert_eq!(

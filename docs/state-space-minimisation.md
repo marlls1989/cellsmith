@@ -29,7 +29,7 @@ since they are never coordinates.
 
 ## The outer loop
 
-The rewrite runs a single fixpoint loop of two output-preserving passes: **dedup first, then fold**,
+The rewrite runs a single convergence-point loop of two output-preserving passes: **dedup first, then fold**,
 repeating until neither pass commits anything. Both prefer to keep output pins and never purge an
 output — a retired output keeps its pin and is re-expressed as a function of its representative.
 
@@ -39,7 +39,7 @@ foldable only *after* another substitution is picked up on the next round (e.g. 
 
 ### Output/state separation is not this pass's job
 
-The fixpoint above is behaviour-preserving, not Liberty-spec-preserving: it may legitimately leave the
+The convergence point above is behaviour-preserving, not Liberty-spec-preserving: it may legitimately leave the
 minimised model with a cyclic output referenced by another output's function (two genuine coordinates,
 each an external pin). That shape is exactly what a Liberty `statetable`/`function` cannot express for
 an output pin — the spec forbids an output referencing another output. Separating output pins from the
@@ -162,7 +162,7 @@ The fold is refused by a **three-clause arity guard**. It declines to fold `s` i
 
 That triple is the emergent-memory signature: `s` and `c` hold no memory individually, so the fold
 would invent a self-loop for `c` and project an oscillation that lived in their *disagreement* onto a
-single-node fixpoint, hiding it. If `c` already self-holds it is a genuine register and folding the
+single-node convergence point, hiding it. If `c` already self-holds it is a genuine register and folding the
 relay into it is safe (only a *new* self-reference is forbidden). **Mutex** is refused; a **ring
 oscillator** whose register already self-holds is allowed.
 
@@ -232,7 +232,7 @@ The two passes partition the aliasing they resolve by a hard interface rule, not
   exactly the fold that would: a 2-cycle consumer `c ∈ vars(δ_s)` that does not already self-hold, the
   sole way a fold can turn a multi-node oscillation into a stable self-hold. Mutex is refused; folding
   a relay into a consumer that already self-holds (ROSC) preserves the dynamics and is allowed.
-- **(I3) Fixpoint invariant.** At termination every surviving signal's signal support is a subset of
+- **(I3) Convergence-point invariant.** At termination every surviving signal's signal support is a subset of
   the primary inputs plus the self-reaching signals: any consumed non-self-holding signal is a fold
   candidate, and a refusal implies a 2-cycle whose members self-reach. So state-variable
   classification identifies exactly the coordinates and the machine's δ is a direct map lookup.
@@ -240,7 +240,7 @@ The two passes partition the aliasing they resolve by a hard interface rule, not
   strictly shrinks) or idempotently aliases an **output** duplicate onto an output representative (the
   output is never purged, so a re-classified output produces no further commit); every fold commit
   removes a signal from every support (a signal re-enters a support only via an alias/demotion, bounded
-  by the output count). So the fixpoint is reached within the asserted bound.
+  by the output count). So the convergence point is reached within the asserted bound.
 - **(I5) Dedup soundness.** Two signals with the *same* BDD compute the same transition function, so
   they are `=` the same underlying coordinate at every state; renaming the retired members onto
   `var(rep)` is exact. Internal retirement is unconditional and purges the internal; output aliasing is

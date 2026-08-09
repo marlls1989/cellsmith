@@ -10,7 +10,7 @@
 //!
 //! # Pipeline
 //!
-//! A single fixpoint loop alternates two passes that both honour the caller's [`Preserved`] set —
+//! A single convergence-point loop alternates two passes that both honour the caller's [`Preserved`] set —
 //! **dedup** (identical-δ merge) then **guarded fold** — over the signals in `signals()` order (outputs
 //! first, then internals as parsed): `loop { dedup_pass; fold_pass; if neither committed break }`.
 //! [`Preserved`] carries the two roles the passes read apart: the cell's external **output** pins, and
@@ -86,19 +86,20 @@
 //! refusing the fold of `s` (all-or-nothing) exactly when `arity(δ_s) > 1` **and** some consumer
 //! `c ∈ vars(δ_s)` **does not already self-hold**: then the fold invents a self-loop for `c` and projects
 //! an oscillation that lived in the *disagreement* of two non-self-holding nodes onto a single-node
-//! fixpoint. Mutex (`δ_Qa = {Qb, A}`, arity 2, `Qb` not self-holding): folding `Qa` gives a stable
+//! convergence point. Mutex (`δ_Qa = {Qb, A}`, arity 2, `Qb` not self-holding): folding `Qa` gives a stable
 //! `δ_Qb` at `A=B=1`, collapsing the `(0,0) ↔ (1,1)` oscillation
 //! [`machine::settle_or_cycle`](super::machine) reads — refused. `ROSC`'s `Q` already self-holds, so
 //! folding the relay `X` re-expresses an existing register rather than inventing one; the oscillation
 //! survives in `Q`'s own self-loop (`δ_Q = !Q` at `A·!B`) — allowed. Only a *new* self-reference is
 //! forbidden, and only a multi-input (arity `> 1`) relay can fabricate one.
 //!
-//! **(I3) fixpoint invariant.** At termination neither pass commits, so every surviving signal's
-//! signal-name support is a subset of the primary inputs plus the self-reaching signals: any consumed
-//! non-self-holding signal is a fold candidate, and a refusal implies a 2-cycle whose members self-reach.
-//! Preservation does not weaken that. The fold composes a preserved relay into **all** of its consumers
-//! exactly as it does a purgeable one and skips only the removal, so a preserved non-self-reaching
-//! signal reaches the fixpoint with **no consumers at all** — its name is in no other signal's support —
+//! **(I3) convergence-point invariant.** At termination neither pass commits, so every surviving
+//! signal's signal-name support is a subset of the primary inputs plus the self-reaching signals: any
+//! consumed non-self-holding signal is a fold candidate, and a refusal implies a 2-cycle whose members
+//! self-reach. Preservation does not weaken that. The fold composes a preserved relay into **all** of
+//! its consumers exactly as it does a purgeable one and skips only the removal, so a preserved
+//! non-self-reaching signal reaches the convergence point with **no consumers at all** — its name is in
+//! no other signal's support —
 //! surviving as an entry whose own support already lies within the inputs plus the self-reaching
 //! signals. The one way a name re-enters a support is a dedup demotion to `var(rep)`, and that gate
 //! fires only on a recurrent group, whose rep self-holds. An exposed internal is therefore either a
@@ -139,11 +140,11 @@
 //! `is_output` first and `is_preserved` only after (which name should carry the coordinate?), so an
 //! exposed internal never outranks a real output pin but does outrank a plain internal. A consumer that
 //! transiently references a combinational rep (e.g. after an internal in the same group already retired
-//! onto it) is resolved before the outer loop's fixpoint: either the same-round fold composes the
-//! reference away, or a refusal forms an `s ↔ c` 2-cycle that forces both members to self-reach — so I3
-//! holds at the fixpoint either way. Genuine independent memories never collide: a real register
-//! self-holds on its **own** variable, so two distinct registers have distinct δ, and two mutex grants
-//! differ (`!Qb·A ≠ !Qa·B`).
+//! onto it) is resolved before the outer loop's convergence point: either the same-round fold composes
+//! the reference away, or a refusal forms an `s ↔ c` 2-cycle that forces both members to self-reach — so
+//! I3 holds at the convergence point either way. Genuine independent memories never collide: a real
+//! register self-holds on its **own** variable, so two distinct registers have distinct δ, and two mutex
+//! grants differ (`!Qb·A ≠ !Qa·B`).
 //!
 //! Output/state separation (no output `function:` naming another output pin) is a Liberty-only
 //! limitation handled at emission time — see `src/emit/liberty.rs`.
@@ -275,7 +276,7 @@ fn alias_target<B: Brand, C: ManagerCell>(
 /// alias-representative choice. The returned
 /// [`Minimised`] names the purged internals and the surviving signals whose function changed.
 ///
-/// The dedup/fold fixpoint (see (I4) above; concept in `state-space-minimisation.md`) is bounded at
+/// The dedup/fold convergence point (see (I4) above; concept in `state-space-minimisation.md`) is bounded at
 /// `2 * order.len() + 2` outer iterations — a `debug_assert` backstop against a runaway loop, not a
 /// behavioural limit reached in practice.
 pub fn minimise_state_space<B: Brand, C: ManagerCell>(
@@ -542,7 +543,7 @@ fn fold_pass<B: Brand, C: ManagerCell>(
         // Guard: refuse only a fold that would *fabricate* a register. A consumer `c` that forms an
         // `s ↔ c` 2-cycle (`c ∈ support(δ_s)`) yet does **not** already self-hold is emergent memory:
         // folding `s` into it invents a self-loop and projects a multi-node oscillation onto a
-        // single-node fixpoint, hiding it (the mutex — `(0,0) ↔ (1,1)` at `A=B=1` collapses to a
+        // single-node convergence point, hiding it (the mutex — `(0,0) ↔ (1,1)` at `A=B=1` collapses to a
         // stable `δ_Qb = Qb`). A consumer that **already self-holds** (e.g. `ROSC`'s `Q = Q·B + X`) is
         // a genuine register; folding the relay into it preserves the dynamics — the oscillation
         // survives in the register's own self-loop (`δ_Q = !Q` at `A·!B`) — so the fold is allowed
@@ -838,7 +839,7 @@ mod tests {
     }
 
     #[test]
-    fn relay_chain_folds_to_fixpoint() {
+    fn relay_chain_folds_to_convergence_point() {
         // W1 → W2 → (input B): a relay chain feeding the self-holding output L. Both internals purge.
         let (b, mut bdds, order, p) = system! {
             outputs: ["L"],
@@ -1211,7 +1212,7 @@ mod tests {
     #[test]
     fn exposed_relay_folds_into_its_consumers_and_survives() {
         // W is an exposed combinational relay. The fold composes it into every consumer exactly as it
-        // would a plain internal and skips only the removal, so W reaches the fixpoint with no
+        // would a plain internal and skips only the removal, so W reaches the convergence point with no
         // consumers left — the I3 shape that keeps the machine's support assert intact.
         let (b, mut bdds, order, p) = system! {
             outputs: ["Z"],
@@ -1379,16 +1380,17 @@ mod tests {
     ];
 
     #[test]
-    fn exposing_a_signal_reaches_the_same_fixpoint_once_it_is_released() {
+    fn exposing_a_signal_reaches_the_same_convergence_point_once_it_is_released() {
         // D5: minimising with a wider preserved set and then re-minimising with the outputs alone must
         // land on the result a single outputs-only run reaches. This is a falsification test — that the
-        // dedup/fold fixpoint is reachable from a partly-minimised start is NOT one of the module's
-        // proved obligations, so a failure here is a finding about the design, not about the fixture.
+        // dedup/fold convergence point is reachable from a partly-minimised start is NOT one of the
+        // module's proved obligations, so a failure here is a finding about the design, not about the
+        // fixture.
         //
         // Every signal of every shape is exposed in turn. For an internal that is the exposure the
         // feature exists for; for an output the union is a no-op, which replays the outputs-only run
-        // against its own fixpoint and so keeps the internal-free shapes (mutex, SR, the complement
-        // pair) in the gate.
+        // against its own convergence point and so keeps the internal-free shapes (mutex, SR, the
+        // complement pair) in the gate.
         for Fixture {
             label,
             outputs: pins,

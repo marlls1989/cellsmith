@@ -74,7 +74,7 @@ from each reachable state, which is what the next section does.
 
 For each reachable stable state, detection settles each input's single toggle **once** and reuses it
 across every pair — so the per-state single-settle cost is O(n), not O(n²). Every settle either reaches a
-fixpoint or reveals a **periodic cycle**: the trajectory it revisits, kept rather than discarded.
+convergence point or reveals a **periodic cycle**: the trajectory it revisits, kept rather than discarded.
 
 For each reachable stable state and each unordered input pair {x, y} (all other inputs held at their
 values in that state), the pair-specific work is one simultaneous settle plus, when both single toggles
@@ -86,8 +86,8 @@ settled, two order follow-ups:
 
 and, when both single toggles settle, two follow-ups that complete the *orders*:
 
-4. **x then y** — toggle y from x's fixpoint
-5. **y then x** — toggle x from y's fixpoint
+4. **x then y** — toggle y from x's convergence point
+5. **y then x** — toggle x from y's convergence point
 
 The two order outcomes are then compared, and the simultaneous settle inspected for a cycle. The outcomes
 classify as:
@@ -154,8 +154,8 @@ carried by the oscillation hazard (§5), from which the next stage generates the
 ## 5. The oscillation hazard
 
 A simultaneous settle that returns a **cycle** — a finite, deterministic transition that revisits a
-non-fixpoint state, so periodic forever after — is an **oscillation hazard**: the cell never settles,
-which is where the metastability risk arises. From the cycle the report is assembled:
+non-convergence-point state, so periodic forever after — is an **oscillation hazard**: the cell never
+settles, which is where the metastability risk arises. From the cycle the report is assembled:
 
 - **group** — the state variables that actually oscillate: those whose *value* differs between any two
   nodes of the cycle. Variables that happen to sit still through the cycle are not blamed.
@@ -195,7 +195,8 @@ genuine order-dependent hazard (§4), just not an oscillation.
 A **pulse** on an input p, applied to a fully-initialised reachable stable state s (§2), is p toggled, the
 cascade that toggle opens left to run some distance, and p toggled back. That distance is the pulse's
 **width**, counted in settling rounds — one round being one evaluation of every δ. Settling the opening
-toggle yields the trace t[0…last]: t[0] is the toggled state itself, t[last] the fixpoint it settles to.
+toggle yields the trace t[0…last]: t[0] is the toggled state itself, t[last] the convergence point it
+settles to.
 Closing the pulse at **cut** i means toggling p back at t[i] and settling from there, so cut i is the
 pulse i rounds wide and a wider pulse is a later cut. What the cuts produce are the pulse's **outcomes**:
 the states they settle to, projected onto the nodes at risk.
@@ -221,10 +222,11 @@ rings the same way. The other is a partial capture — a cascade of latches on o
 pulse was wide enough for the first stage to take the value and not for the second, settling between the
 outcomes the two ends reach (`TCASC` in `examples/sequentials.toml`: three widths, three outcomes).
 
-**No fixpoint is an outcome.** A cut whose close leaves the machine in a periodic cycle reaches no rest
-state at that width — the cell is left ringing rather than at one of the states the other widths settle
-to. That is carried as the outcome `no fixpoint` alongside the settled ones, and the nodes the cycle moves
-join the nodes the width decides, so a hazard whose only interior cut rings still names what to probe.
+**No convergence point is an outcome.** A cut whose close leaves the machine in a periodic cycle reaches
+no rest state at that width — the cell is left ringing rather than at one of the states the other widths
+settle to. That is carried as the outcome `no convergence point` alongside the settled ones, and the
+nodes the cycle moves join the nodes the width decides, so a hazard whose only interior cut rings still
+names what to probe.
 
 Such a cut is **not** also filed as an oscillation hazard (§5). An oscillation's `condition` claims a
 primary-input assignment under which the group oscillates, and a pulse returns p to the assignment it
@@ -239,9 +241,9 @@ Worked example — the master-slave flop M = !CLK·D + CLK·M (the master, trans
 Q = CLK·M + !CLK·Q (the slave, transparent while CLK is high), notation (CLK D | Q M):
 
 - **CLK↑ from (0 0 | 1 0)**, a state whose slave holds a value its master does not. The opening toggle
-  opens the slave; one round copies M into Q, reaching the fixpoint (1 0 | 0 0). Closing there leaves Q
-  at 0, where the zero-width pulse leaves it at 1. The master holds through both (δ_M = M while CLK is
-  high), so the width decides Q alone.
+  opens the slave; one round copies M into Q, reaching the convergence point (1 0 | 0 0). Closing there
+  leaves Q at 0, where the zero-width pulse leaves it at 1. The master holds through both (δ_M = M while
+  CLK is high), so the width decides Q alone.
 - **CLK↓ from (1 0 | 1 1)**, a state whose master holds a value D does not. The opening toggle opens the
   master; one round takes D into M, reaching (0 0 | 1 0). Closing there re-opens the slave, which then
   copies the new M into Q — so the wide pulse moves both nodes and the zero-width pulse moves neither,
@@ -327,9 +329,9 @@ just as a pair constraint's are. Two things a pair constraint has to decide are 
 
 - **stderr.** The detected hazards are reported — the oscillation hazards, the order-dependent hazards
   (grouped per racing input pair, a pair's conditions joined), and the width-dependent hazards (the pulsed
-  pin with its opening edge, the nodes the width decides, and the competing outcomes, `no fixpoint` among
-  them where a cut left the cell ringing). A constraint is the remedy for a hazard reported here, so it
-  carries no diagnostic of its own. Each hazard states the shared metastability risk; an
+  pin with its opening edge, the nodes the width decides, and the competing outcomes, `no convergence
+  point` among them where a cut left the cell ringing). A constraint is the remedy for a hazard reported
+  here, so it carries no diagnostic of its own. Each hazard states the shared metastability risk; an
   oscillation is flagged as annotated only, never modelled as deterministic timing, because it is a
   property of the cell the user must know about, not an arc. (The exact wording is fixed elsewhere.)
 - **Constraint arcs.** Off by default; enabled per cell in the spec or globally with a CLI flag. A

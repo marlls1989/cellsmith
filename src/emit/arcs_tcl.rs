@@ -3930,9 +3930,9 @@ Q = "CLK*L1 + !CLK*L2"
     }
 
     /// DCMUX: two independently-clocked masters merged into one output. Q collapses to a LEVEL model (its
-    /// falls are combinational and the seam fixpoint empties its set), so Q is NOT an edge register, yet
-    /// each clock's RISING Q delay arc still renders `-type edge` (generation at Q). Both clocks therefore
-    /// carry an edge-labelled Q arc; the falls stay combinational.
+    /// falls are combinational and the seam convergence point empties its set), so Q is NOT an edge
+    /// register, yet each clock's RISING Q delay arc still renders `-type edge` (generation at Q). Both
+    /// clocks therefore carry an edge-labelled Q arc; the falls stay combinational.
     #[test]
     fn dcmux_marks_both_clocks_q_arcs_edge_type() {
         let cell = analyse(

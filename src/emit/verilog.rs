@@ -745,10 +745,10 @@ GCLK = "enA*CLKA+enB*CLKB"
 
     #[test]
     fn dcmux_udp_is_a_level_reg() {
-        // DCMUX collapses to a LEVEL model (its falls are combinational and the seam fixpoint empties Q's
-        // set), so Q emits a level `reg` UDP -- it holds while both clocks are low and passes the muxed
-        // masters otherwise, with NO edge rows. Both clocks stay UDP ports; the two rise DELAY arcs render
-        // `-type edge` (covered in the arcs_tcl emitter tests).
+        // DCMUX collapses to a LEVEL model (its falls are combinational and the seam convergence point
+        // empties Q's set), so Q emits a level `reg` UDP -- it holds while both clocks are low and
+        // passes the muxed masters otherwise, with NO edge rows. Both clocks stay UDP ports; the two
+        // rise DELAY arcs render `-type edge` (covered in the arcs_tcl emitter tests).
         let cell = analyse(
             r#"
 [[cell]]

@@ -71,7 +71,7 @@ twins `DLAT` / `DFF` / `HPIPE` — same arcs, same seams, same covers, same fold
 One analysis over the machine's `toggle`/`settle` observations produces both the arc types and the state
 model:
 
-> arc typing (two-birth gate, per arc) → per-node seam set `S` (greatest fixpoint) → edge functions
+> arc typing (two-birth gate, per arc) → per-node seam set `S` (greatest convergence point) → edge functions
 > (uniform header + drop-loop) → off-edge → read-gate factorisation → fold (reachability).
 
 ### 3.1 Arc typing — the two-birth gate
@@ -140,10 +140,10 @@ two-clock interlock clock gate, `GCLK = enA*CLKA + enB*CLKB`) is not the
 toggled clock's associate, so a clock gate's `GCLK` reaches no birth node on either edge and stays
 combinational — the exclusion is causal, a plain absence of any clock-associated birth.
 
-### 3.2 The seam set — the seam fixpoint
+### 3.2 The seam set — the seam convergence point
 
 A candidate node carries an **edge seam** on `(clock, direction)` iff the arc typing holds **and** the
-delivered value holds through the phase, the second computed as a greatest fixpoint over the node's own
+delivered value holds through the phase, the second computed as a greatest convergence point over the node's own
 seam set `S`. Start `S` at every `(clock, direction)` the node types edge on at some eligible changed
 firing, then remove `(clock, direction)` whenever some non-forcing change of the node inside its
 delivered phase occurs at a toggle that is **not** itself an edge of `S` — live data, or a non-seam
@@ -236,14 +236,15 @@ matches `T` up to inversion, so `T` is reused and nothing is minted.
 ## 7. Fold
 
 Folding is decided at **cell level** (`EdgeArcs::folded`), after classification, as a **reachability**
-question: does this value still influence an output once collapsed? It is computed as a liveness fixpoint
-over the graph of raw-function references among the internal non-seam survivors. The seeds are what must
-stay visible: capture-less outputs (never folded) and any candidate named by a surviving capture or
-off-edge cover column — the sinks whose raw function is actually emitted. Liveness then propagates along
-each live node's own function support (semantic BDD support, never equation shape). An internal non-seam
-node folds unless that propagation reaches it; a *mutually-referencing* — or transitively-referencing —
-set of such nodes that reaches no sink folds together, because the set as a whole influences nothing a
-survivor still names. This single reachability rule covers both the single-node case and the group:
+question: does this value still influence an output once collapsed? It is computed as a liveness
+convergence point over the graph of raw-function references among the internal non-seam survivors. The
+seeds are what must stay visible: capture-less outputs (never folded) and any candidate named by a
+surviving capture or off-edge cover column — the sinks whose raw function is actually emitted. Liveness
+then propagates along each live node's own function support (semantic BDD support, never equation shape).
+An internal non-seam node folds unless that propagation reaches it; a *mutually-referencing* — or
+transitively-referencing — set of such nodes that reaches no sink folds together, because the set as a
+whole influences nothing a survivor still names. This single reachability rule covers both the
+single-node case and the group:
 `NDFF`'s NAND master pair `M`/`Mn` and `NHPIPE`'s inner NAND master pair `M1`/`M1n` are capture-less and
 mutually referencing, so both fold together — exactly as the pass-transistor `DFF` and `HPIPE` fold their
 lone `M`/`M1`, pinned by `edge_nand_master_slave_matches_the_pass_gate_flop` and

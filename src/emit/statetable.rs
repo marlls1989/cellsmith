@@ -1148,7 +1148,7 @@ M = "!CLK*D + CLK*M"
     }
 
     // Master/slave pair split across two DIFFERENT declared clocks: M latches on CLKA, Q on CLKB. Q tracks
-    // live data through CLKB's transparent phase, so its seam set empties under the fixpoint: the
+    // live data through CLKB's transparent phase, so its seam set empties under the convergence point: the
     // classifier recognises NO register and Q stays fully level.
     const MCDFF: &str = r#"
 [[cell]]
@@ -1331,9 +1331,9 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
 
     #[test]
     fn dcmux_is_a_level_model_no_edge_rows() {
-        // DCMUX collapses to a LEVEL model: its falls are combinational and the seam fixpoint empties Q's
-        // set, so nothing contributes an edge capture row -- the whole cell renders as level rows. The two
-        // rises stay `-type edge` DELAY arcs (covered in the arcs_tcl emitter tests).
+        // DCMUX collapses to a LEVEL model: its falls are combinational and the seam convergence point
+        // empties Q's set, so nothing contributes an edge capture row -- the whole cell renders as level
+        // rows. The two rises stay `-type edge` DELAY arcs (covered in the arcs_tcl emitter tests).
         let cell = analyse(DCMUX);
         let m = build_state_model(&cell).expect("DCMUX has level state (MA/MB/Q)");
         assert!(
@@ -1576,8 +1576,8 @@ Q = "!R*(CLK*M + !CLK*Q)"
 
     /// Settle the rendered statetable as a next-state machine: apply the joint first-match next-state, with
     /// the toggled input's clock edge live only on the first step (later steps are quiescent settling), to
-    /// a fixpoint. Mirrors the async cell's own `settle`, so the fixpoint is comparable to the machine's
-    /// settled state; an oscillation where the machine settled is a faithfulness failure.
+    /// a convergence point. Mirrors the async cell's own `settle`, so the convergence point is comparable
+    /// to the machine's settled state; an oscillation where the machine settled is a faithfulness failure.
     fn settle_rendered(
         input_names: &[String],
         rows: &[RenderedRow],

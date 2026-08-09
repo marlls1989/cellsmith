@@ -1310,9 +1310,10 @@ Q = "CLK*L1 + !CLK*L2"
 
     #[test]
     fn dcmux_statetable_is_a_level_model() {
-        // DCMUX collapses to a LEVEL model: its falls are combinational and the seam fixpoint empties Q's
-        // set, so the joint statetable renders level rows with NO edge (R/F) token in any column. The two
-        // rise DELAY arcs still render `-type edge` (covered in the arcs_tcl emitter tests).
+        // DCMUX collapses to a LEVEL model: its falls are combinational and the seam convergence point
+        // empties Q's set, so the joint statetable renders level rows with NO edge (R/F) token in any
+        // column. The two rise DELAY arcs still render `-type edge` (covered in the arcs_tcl emitter
+        // tests).
         let cell = analyse(
             r#"
 [[cell]]

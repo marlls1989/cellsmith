@@ -2,7 +2,7 @@
 
 How cellsmith derives Liberate timing arcs for state-holding cells (C-elements, latches, SR pairs,
 mutexes/arbiters, flip-flops with internal state). This document explains the model, the state machine,
-how a state is settled to a fixpoint, and how arcs are discovered — with a full worked example.
+how a state is settled to a convergence point, and how arcs are discovered — with a full worked example.
 
 The functional state-table view of the same signals is documented separately in
 `state-table-regions.md`. The hazard vocabulary this document leans on — the two detected hazards
@@ -36,7 +36,7 @@ Before any construction detail, the whole pipeline in one view. For a cell, cell
    variable** (it holds state) or **combinational** (it does not);
 3. reads, directly from the minimised model, a fixed **transition function** δ — one component δ_v per
    coordinate;
-4. **settles** a state by repeatedly *evaluating* δ until the state stops changing (a fixpoint);
+4. **settles** a state by repeatedly *evaluating* δ until the state stops changing (a convergence point);
 5. **explores** the reachable settled states, toggling one input at a time;
 6. **derives arcs** by re-walking that exploration and watching which input toggles flip an output.
 
@@ -80,7 +80,7 @@ Every term the later sections lean on, pinned here before first use.
     once**.
   - **compose** — perform one substitution, `f[v := g]` — used directly for a guarded relay fold and,
     batched, for an alias/complement class rename (§3.1).
-  - **minimise** — drive substitution to a fixpoint **once**, before the machine is built: collapse
+  - **minimise** — drive substitution to a convergence point **once**, before the machine is built: collapse
     alias/complement chains and fold non-self-holding relays into their consumers. Each δ_v is then the
     minimised model's own function for `v`, read directly; no per-signal composition remains once the
     machine is built.
@@ -94,7 +94,7 @@ reads each state variable's function and each combinational output's function di
 and explore passes (§5–§6) only evaluate them. Constructing δ_v is therefore a direct lookup, not a
 per-analysis composition.
 
-The model was folded by two staged discriminators run to a fixpoint (the algorithm is documented in full
+The model was folded by two staged discriminators run to a convergence point (the algorithm is documented in full
 in `state-space-minimisation.md`; §3.1 below covers the safety guard): **M1** collapses an
 alias/complement chain — a signal whose function is *exactly* another signal or its negation — onto one
 representative coordinate; **M2** composes a non-self-holding relay into each of its consumers and drops
@@ -206,17 +206,17 @@ Two properties make this well-defined:
 2. All v′ are read from the **same** current state before the new one is built, so the round is a genuine
    parallel update, not order-dependent.
 
-### Fixpoint = *step*(state) == state
+### Convergence point = *step*(state) == state
 
 Settling iterates the round: compute the next state; if it equals the current state, that state is a
-fixpoint and settling stops. The comparison is plain minterm equality. **One match is enough to stop, and
-this is exact, not heuristic:** the round is deterministic and pure, so
+convergence point and settling stops. The comparison is plain minterm equality. **One match is enough to
+stop, and this is exact, not heuristic:** the round is deterministic and pure, so
 
 > *step*(x) = x   ⟹   *step*ⁿ(x) = x   for all n.
 
-A fixed point reproduces itself under every further application — iterating again cannot change anything.
-That is the whole reason settling need not "keep going to be sure." The fixpoint **may still leave state
-variables absent** — those the inputs and resolved state do not determine.
+A convergence point reproduces itself under every further application — iterating again cannot change
+anything. That is the whole reason settling need not "keep going to be sure." The convergence point **may
+still leave state variables absent** — those the inputs and resolved state do not determine.
 
 Settling may also be requested in a form that discards the cycle detail and simply yields no state when a
 state never settles.
@@ -243,26 +243,27 @@ A mid-cascade state `(1 0 | 0 1)` fails, so another round is required:
 What if a state never settles? For fixed inputs the reachable state space is **finite** (each state
 variable is `0`, `1`, or absent) and the round is deterministic, so the trajectory
 `s → step(s) → step²(s) → …` must eventually **repeat** a state; once it does it is periodic and can
-never reach a fixpoint.
+never reach a convergence point.
 
 Settling detects that by recording the index at which each visited state first appeared alongside the
 sequence of visited states in order. When a round produces a next state already seen at index p, the
-trajectory slice from p onwards — from the first revisited non-fixpoint — is the periodic cycle.
+trajectory slice from p onwards — from the first revisited non-convergence-point state — is the periodic
+cycle.
 
 When settling is asked only for a stable state, that periodic outcome means "no stable state": the
 trajectory is an **oscillation**, and the BFS simply drops that transition (so no impossible arc is
 fabricated). This is distinct from a settled state that still carries an absent coordinate — an absent
 coordinate is an **uninitialised** state variable, not a non-settling trajectory. Hazard detection
 instead keeps the cycle: probing a reachable stable state with a simultaneous multi-input toggle (a
-mutex's requests co-asserting) and finding a cycle rather than a fixpoint names the varying state
-variables as an oscillating group — an oscillation hazard (`hazard-detection.md`).
+mutex's requests co-asserting) and finding a cycle rather than a convergence point names the varying
+state variables as an oscillating group — an oscillation hazard (`hazard-detection.md`).
 
 Example — mutex under `A=B=1` from `(1 1 | 0 0)`:
 
 `(1 1 | 0 0) → (1 1 | 1 1) → (1 1 | 0 0) → …`
 
 The second `(1 1 | 0 0)` is already recorded ⇒ periodic ⇒ no stable state ⇒ no arc. The same
-equality/visited machinery that confirms a fixpoint also rejects the states that don't have one.
+equality/visited machinery that confirms a convergence point also rejects the states that don't have one.
 
 ## 6. Deriving arcs by re-walking the shared exploration
 
@@ -381,7 +382,7 @@ settle:
 |-------|-------|--------------|--------------|
 | start | `(1 0 \| 0 1)` | !1·1 = **0** | !0·0 = **0** |
 | →     | `(1 0 \| 0 0)` | !0·1 = **1** | !0·0 = **0** |
-| →     | `(1 0 \| 1 0)` | !0·1 = 1 | !1·0 = 0 → **fixpoint** |
+| →     | `(1 0 \| 1 0)` | !0·1 = 1 | !1·0 = 0 → **convergence point** |
 
 Settled `(1 0 | 1 0)`. The two micro-steps are the physical cascade: B drops → Qb falls; with Qb=0 and
 A=1, Qa rises.

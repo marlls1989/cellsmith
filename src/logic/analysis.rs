@@ -135,9 +135,9 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             .filter(|nm| state_set.contains(nm))
             .collect();
 
-        // The minimise fixpoint invariant (I3): every signal's signal-name support is a subset of the
-        // state variables, so a state variable's next-state δ and a combinational output's δ are both a
-        // direct lookup in the shared map — no per-signal composition remains.
+        // The minimise convergence-point invariant (I3): every signal's signal-name support is a subset
+        // of the state variables, so a state variable's next-state δ and a combinational output's δ are
+        // both a direct lookup in the shared map — no per-signal composition remains.
         debug_assert!(
             signals.iter().all(|s| {
                 bdds[&s.name]

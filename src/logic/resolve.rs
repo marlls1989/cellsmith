@@ -9,8 +9,8 @@
 //! no cycle is purely combinational.
 //!
 //! Substitution itself happens once, up front, in [`super::minimise`]: each signal's function is folded
-//! down to a fixpoint over the minimal residual set before this module ever sees it. δ (a state
-//! variable's next-state function) is then a direct lookup in the shared BDD map — there is no
+//! down to a convergence point over the minimal residual set before this module ever sees it. δ (a
+//! state variable's next-state function) is then a direct lookup in the shared BDD map — there is no
 //! resolve/substitution step left to perform here.
 
 use std::collections::{BTreeMap, BTreeSet};
