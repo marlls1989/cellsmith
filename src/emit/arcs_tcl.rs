@@ -5650,7 +5650,20 @@ Q = "CLKB*M + !CLKB*Q"
             "the fixture masks arcs:\n{}",
             rendered.tcl
         );
-        for m in &rendered.masked {
+        // M is unexposed on both channels, so this fixture masks a rest state alongside the toggle.
+        // The toggle conflation is this test's subject; the leakage side is
+        // unexposed_latches_conflate_into_one_masked_leakage_block's.
+        let toggles: Vec<&MaskedArc> = rendered
+            .masked
+            .iter()
+            .filter(|m| m.arc_str().starts_with("hidden "))
+            .collect();
+        assert!(
+            !toggles.is_empty(),
+            "the fixture masks a toggle:\n{}",
+            rendered.tcl
+        );
+        for m in &toggles {
             // The report reads as the block's own kind and toggle, in full: every state the block
             // conflates is one firing of exactly the toggle the description names. Reading the whole
             // string back is what catches one variant rendering another's word — a `hidden` block
