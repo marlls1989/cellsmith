@@ -1,5 +1,6 @@
 //! Hazard **detection** and constraint **generation** over **confluence** of the asynchronous state
-//! machine. Detection ([`detect`]) finds the two hazards two closely-timed input edges can create;
+//! machine. Detection ([`detect`]) probes what two closely-timed input edges do to the machine and files
+//! each observation as a [`Hazard`] whose cause is a **race** — two signals racing each other;
 //! constraint generation (`constrain`) turns each detected hazard into the timing separation that
 //! removes it. Detection happens first; constraint generation follows from each detected hazard.
 //!
@@ -12,8 +13,9 @@
 //! [`detect`] walks the fully-initialised reachable states — the same `Machine::arc_eligible`
 //! measurement gate the arc derivation applies — and, for a stable state `s` and an unordered input pair
 //! `{x, y}` (all other inputs held), settles `x` then `y` (`s_xy`) and `y` then `x` (`s_yx`). If either
-//! oscillates or `s_xy == s_yx`, the pair is **confluent** at `s` — no order-dependent hazard.
-//! Otherwise the state has diverged, but global divergence alone is not the verdict: it must *interact*
+//! oscillates or `s_xy == s_yx`, the pair is **confluent** at `s` — where the machine settles is
+//! determined, so nothing is [`Outcome::Indeterminate`]. Otherwise the state has diverged, but global
+//! divergence alone is not the verdict: it must *interact*
 //! with the racing pair in the immediate combinational neighbourhood — some state variable `w` whose
 //! value differs between `s_xy` and `s_yx` must have **both** `x` and `y` in the direct support of its
 //! transition function `δ_w`. The model minimisation ([`super::minimise`]) composes through
@@ -21,18 +23,21 @@
 //! both pins in `δ_w`'s direct support means the pins meet within one combinational neighbourhood. A
 //! divergence mediated only across a latch boundary — `δ_w` does not itself see both pins — is a settled
 //! snapshot carried across that latch (e.g. the two domains of a dual-clock synchroniser),
-//! design-tolerated rather than a pin-pair hazard. This filter is what stops a mutex's grant divergence
-//! from being reported as an order-dependent hazard.
+//! design-tolerated rather than a pin-pair hazard. The filter gates the divergence alone — a race that
+//! never settles is filed whatever its neighbourhood — and is what stops a mutex's grant divergence from
+//! being reported.
 //!
-//! The same walk detects an **oscillation hazard**: probed from `s`, the pair applied *simultaneously*
-//! (or, degenerately, a single input toggle) can drive the state into a **periodic oscillation** rather
-//! than a fixpoint ([`machine::settle_or_cycle`] returning the cycle instead of settling). That is
-//! reported as an [`Oscillation`]. A mutex is order-dependent by design (that is its function as an
-//! arbiter); the hazard it *detects* is the oscillation at simultaneity; ordinary settling of one
-//! request before the other is the normal, hazard-free case — and each pair-probe observation records a
-//! [`Race`] so the generated
-//! constraint has the racing pins/edges its divergence-derived constraint (discarded by the
-//! combinational-neighbourhood filter) would otherwise have supplied.
+//! The same walk observes the other outcome: probed from `s`, the pair applied *simultaneously* (or,
+//! degenerately, a single input toggle) can drive the state into a **periodic oscillation** rather than
+//! a fixpoint ([`machine::settle_or_cycle`] returning the cycle instead of settling), filed as
+//! [`Outcome::Oscillation`] under the same racing cause. The two outcomes are independent readings of
+//! one probe, so a pair that both diverges and never settles files a record for each, sharing the cause
+//! rather than merging into one record. A lone toggle that never settles has raced nothing against
+//! anything, so its cause names no pin — the empty [`Cause::Race`] pin list — and no constraint follows
+//! from it. A mutex resolves a race by design (that is its function as an arbiter), and the record it
+//! detects is the oscillation at simultaneity, carrying on its own cause the racing pins/edges the
+//! divergence-derived constraint (discarded by the combinational-neighbourhood filter) would otherwise
+//! have supplied; ordinary settling of one request before the other is the normal, hazard-free case.
 //!
 //! `constrain` then generates one [`Constraint`] per detected hazard. A constraint's **kind is decided
 //! solely by the declared clock**: a pair containing exactly one declared clock is a directed
@@ -48,15 +53,14 @@
 //! **Implementation notes** (concept in `hazard-detection.md`, not restated here): each reachable state's
 //! per-input settle (`single`) is computed once and reused across every pair probe, so [`detect`] costs
 //! O(n) settles per state rather than O(n²). States are probed in parallel and their per-state dedup maps
-//! merged together; the merge is order-independent. [`detect`]'s `order_dependence` dedup and
-//! `constrain`'s own [`Constraint`] dedup (`constraint_key`) both keep the min
-//! `(prevector.len, discovered)` representative per canonical key — a total order, so the surviving entry
-//! is fixed regardless of merge order. [`detect`]'s `oscillation` dedup instead keeps an arbitrary colliding
-//! representative — on a collision `group`/`condition` coincide (the key is injective in them) but
-//! `stable` does not, so it UNIONS `stable` as a set (collision-order-independent) and UNIONS the
-//! colliding pair-probe [`Race`]s — races are never dropped. All three dedup maps are [`BTreeMap`]s,
-//! so iteration order — and hence report/emission order — is deterministic independent of any hash map's
-//! order. A fold may only gain a constraint, never lose one.
+//! merged together; the merge is order-independent. Every dedup here — [`detect`]'s two and `constrain`'s
+//! own [`Constraint`] dedup (`constraint_key`) — keeps the min `(prevector.len, discovered)`
+//! representative per canonical key, a total order, so the surviving entry is fixed regardless of merge
+//! order. Each detection key names the pins its record races, so observations made by different probes —
+//! a lone toggle and a pair reaching the same condition, or two different pairs — never collapse onto one
+//! record. All three dedup maps are [`BTreeMap`]s, so iteration order — and hence report/emission order —
+//! is deterministic independent of any hash map's order. A fold may only gain a constraint, never lose
+//! one.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -67,7 +71,7 @@ use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::analysis::Machine;
 use crate::logic::arcs::{ArcLevels, Edge};
-use crate::logic::hazard::{OrderDependence, Oscillation, Race};
+use crate::logic::hazard::{Cause, Hazard, Outcome, Racer};
 use crate::logic::machine;
 
 /// The kind of a constraint arc: a directed setup/hold (clock ← data) or a symmetric non-sequential
@@ -143,9 +147,8 @@ struct Probed {
     state: Minterm<Symbol>,
 }
 
-/// The nodes a hazard puts at risk, each with the level the observation sampled for it. An observation
-/// samples every node of the group it was recorded with — `record_oscillation` keys on that group, so a
-/// race only ever joins an oscillation naming the same nodes — so every entry is there.
+/// The nodes a hazard puts at risk, each with the level the observation sampled for it. A record samples
+/// its levels for its own group, at the state it was probed from, so every entry is there.
 ///
 /// Shared with [`super::width`], whose hazards name their protected nodes the same way.
 pub(super) fn protected(group: &[Symbol], levels: &BTreeMap<Symbol, bool>) -> Vec<(Symbol, bool)> {
@@ -192,6 +195,14 @@ pub(super) fn edge_from(node: &Minterm<Symbol>, name: &str) -> Edge {
     }
 }
 
+/// One racer of a detected race: the pin, and the edge it makes when toggled from `node`.
+fn racer(node: &Minterm<Symbol>, pin: &Symbol) -> Racer {
+    Racer {
+        pin: pin.clone(),
+        edge: edge_from(node, pin.as_str()),
+    }
+}
+
 /// A canonical dedup key: setup/hold is directed; non_seq is unordered over its two pins.
 /// A constraint's protected nodes as one key fragment, in their own order.
 fn names_of(nodes: &[(Symbol, bool)]) -> String {
@@ -221,15 +232,15 @@ fn constraint_key(c: &Constraint) -> String {
     }
 }
 
-/// The detected hazards of one pass over the reachable state machine: the two shapes the metastability
-/// risk takes, reported symmetrically. No generated constraint is nested here — `constrain` turns
-/// these into [`Constraint`]s downstream.
+/// The detected hazards of one pass over the reachable state machine, split by the outcome observed —
+/// every record carries [`Cause::Race`], the cause this pass probes for. No generated constraint is
+/// nested here — `constrain` turns these into [`Constraint`]s downstream.
 #[derive(Debug, Default)]
 pub struct DetectedHazards {
-    /// Order-dependent hazards: pairs whose settled state depends on which edge lands first.
-    pub order_dependence: Vec<OrderDependence>,
-    /// Oscillation hazards: pairs (or single toggles) that drive a periodic, non-settling cycle.
-    pub oscillation: Vec<Oscillation>,
+    /// [`Outcome::Indeterminate`]: races whose settled state depends on which edge lands first.
+    pub order_dependence: Vec<Hazard>,
+    /// [`Outcome::Oscillation`]: pairs (or single toggles) that drive a periodic, non-settling cycle.
+    pub oscillation: Vec<Hazard>,
 }
 
 /// Why every state value the hazard path reads is defined: a settle from a fully-initialised state
@@ -264,10 +275,11 @@ pub(super) fn oscillating_group(cycle: &[Minterm<Symbol>], state_vars: &[Symbol]
 /// Detect a cell's hazards by re-walking its shared state machine ([`Machine`]) and testing pairwise
 /// input-order confluence. Probes only the fully-initialised reachable stable states
 /// (`Machine::arc_eligible`): a state carrying an uninitialised state variable is at an unknown state,
-/// from which nothing can be concluded. Produces the two detected hazards symmetrically —
-/// [`OrderDependence`] and [`Oscillation`] — but generates no constraint (that is `constrain`'s job).
-/// Empty for confluent cells (ordinary combinational / self-holding gates without oscillation) and for
-/// cells with too few inputs or no state to latch.
+/// from which nothing can be concluded. Produces one [`Hazard`] per racing cause and observed outcome —
+/// [`Outcome::Indeterminate`] where the settle orders diverge, [`Outcome::Oscillation`] where the
+/// machine never settles — but generates no constraint (that is `constrain`'s job). Empty for confluent
+/// cells (ordinary combinational / self-holding gates that always settle) and for cells with too few
+/// inputs or no state to latch.
 pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> DetectedHazards {
     let cell = m.cell;
     let inputs = &cell.inputs;
@@ -308,20 +320,19 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
     // independent — the parallel unit — and the maps merge commutatively in the `reduce` below.
     //
     // `order_dependence` deduplicates by its unordered `(pin,edge)|(pin,edge)` key and the nodes the
-    // hazard endangers, keeping the min
-    // `(prevector.len, discovered)` representative; `oscillation` deduplicates by `group|condition`,
-    // keeping the incumbent representative while appending every colliding pair-probe [`Race`]. Both are
+    // hazard endangers; `oscillation` deduplicates by that same racing key, the nodes and the condition
+    // the cycle runs under. Both keep the min `(prevector.len, discovered)` representative, and both are
     // BTreeMaps, so the final iteration order is deterministic regardless of merge order.
     let per_state = |(discovered, s): (usize, &Minterm<Symbol>)| -> (
-        BTreeMap<String, OrderDependence>,
-        BTreeMap<String, Oscillation>,
+        BTreeMap<String, Hazard>,
+        BTreeMap<String, Hazard>,
     ) {
         debug_assert!(
             m.arc_eligible(s),
             "detect: a probe may only start from a fully-initialised state"
         );
-        let mut order_dependence: BTreeMap<String, OrderDependence> = BTreeMap::new();
-        let mut oscillation: BTreeMap<String, Oscillation> = BTreeMap::new();
+        let mut order_dependence: BTreeMap<String, Hazard> = BTreeMap::new();
+        let mut oscillation: BTreeMap<String, Hazard> = BTreeMap::new();
 
         // `path_to` depends only on `s`: compute the prevector into `s` once and clone it per hazard.
         let prevector_s = ex.path_to(s, inputs);
@@ -338,25 +349,30 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
             .map(|x| settle_toggle(s, &[x.as_str()]))
             .collect();
 
-        // Single-toggle oscillation capture: a lone input toggle that never settles is itself an
-        // oscillation (no competing order to report — `stable` is empty, and no [`Race`] is appended:
-        // one toggle names no racing pair, so it generates no constraint). Recorded once per input per
-        // state. Its `group|condition` key shares the report key space with the simultaneous-pair
-        // observations below, so a colliding pair-probe [`Race`] is appended to the surviving entry
-        // (append-never-drop), never dropped; the reported representative is an arbitrary equal-quality
-        // choice, made when merging per-state maps — only the races are exhaustively unioned across
-        // states.
+        // Single-toggle capture: a lone input toggle that never settles is itself a non-settling
+        // observation. It races nothing against anything, so its cause names no pin and `settled` is
+        // empty — there is no competing order for the machine to land in, and no constraint follows
+        // from it. Recorded once per input per state, and its empty racing key keeps it apart from the
+        // simultaneous-pair records below even where the two reach the same condition.
         for (i, r) in single.iter().enumerate() {
             if let Err(cycle) = r {
                 let group = oscillating_group(cycle, state_vars);
-                record_oscillation(
+                let node_levels = node_levels_at(s, &group);
+                let condition = machine::toggle(s, &[inputs[i].as_str()]).project_to(inputs);
+                record_ring(
                     &mut oscillation,
-                    inputs,
-                    s,
-                    &[inputs[i].as_str()],
-                    group,
-                    Vec::new(),
-                    None,
+                    Hazard {
+                        cause: Cause::Race { pins: Vec::new() },
+                        outcome: Outcome::Oscillation,
+                        group,
+                        condition,
+                        settled: Vec::new(),
+                        prevector: prevector_s.clone(),
+                        levels: levels_s.clone(),
+                        node_levels,
+                        state: s.clone(),
+                        discovered,
+                    },
                 );
             }
         }
@@ -371,7 +387,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
 
                 // Compose both settle orders once per pair: x-then-y (`s_xy`) and y-then-x (`s_yx`). Each
                 // is `Some` only when its base single settles and the second toggle settles too. Reused by
-                // the simultaneous-oscillation stable-set and the divergence check.
+                // the settled set an oscillating simultaneous probe reports and by the divergence check.
                 let s_xy = r_x
                     .as_ref()
                     .ok()
@@ -386,37 +402,37 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                 let r_sim = settle_toggle(s, &[x.as_str(), y.as_str()]);
                 if let Err(cycle) = &r_sim {
                     let group = oscillating_group(cycle, state_vars);
-                    let mut stable_set: BTreeSet<Minterm<Symbol>> = BTreeSet::new();
+                    let mut settled_set: BTreeSet<Minterm<Symbol>> = BTreeSet::new();
                     if let Some(sxy) = &s_xy {
-                        stable_set.insert(sxy.project_to(&group));
+                        settled_set.insert(sxy.project_to(&group));
                     }
                     if let Some(syx) = &s_yx {
-                        stable_set.insert(syx.project_to(&group));
+                        settled_set.insert(syx.project_to(&group));
                     }
 
-                    // Record the pair-probe race: the racing pins/edges (taken at `s`) and prevector its
-                    // generated constraint needs. This supplies an oscillating pair's (e.g. a mutex's)
-                    // constraint, standing in for the divergence-derived one the
+                    // The record carries the racing pins/edges (taken at `s`) and the prevector the
+                    // constraint generated from it needs. This is what supplies an oscillating pair's
+                    // (e.g. a mutex's) constraint, standing in for the divergence-derived one the
                     // combinational-neighbourhood filter below discards for it.
-                    let race = Race {
-                        x: x.clone(),
-                        x_edge: edge_from(s, x.as_str()),
-                        y: y.clone(),
-                        y_edge: edge_from(s, y.as_str()),
-                        prevector: prevector_s.clone(),
-                        levels: levels_s.clone(),
-                        node_levels: node_levels_at(s, &group),
-                        state: s.clone(),
-                        discovered,
-                    };
-                    record_oscillation(
+                    let node_levels = node_levels_at(s, &group);
+                    let condition =
+                        machine::toggle(s, &[x.as_str(), y.as_str()]).project_to(inputs);
+                    record_ring(
                         &mut oscillation,
-                        inputs,
-                        s,
-                        &[x.as_str(), y.as_str()],
-                        group,
-                        stable_set.into_iter().collect(),
-                        Some(race),
+                        Hazard {
+                            cause: Cause::Race {
+                                pins: vec![racer(s, x), racer(s, y)],
+                            },
+                            outcome: Outcome::Oscillation,
+                            group,
+                            condition,
+                            settled: settled_set.into_iter().collect(),
+                            prevector: prevector_s.clone(),
+                            levels: levels_s.clone(),
+                            node_levels,
+                            state: s.clone(),
+                            discovered,
+                        },
                     );
                 }
 
@@ -448,7 +464,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                     continue; // divergence real but latch-mediated — no hazard
                 }
 
-                // Non-confluent and interacting ⇒ an order-dependent hazard: the divergent state
+                // Non-confluent and interacting ⇒ the race settles indeterminately: the divergent state
                 // variables and their two competing settled outcomes, at the input condition where the
                 // pair races. The constraint generated from it (see [`constrain`]) has its kind decided
                 // there, solely by the declared clock, since the hazard is a property of the cell rather
@@ -456,20 +472,20 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                 let group: Vec<Symbol> =
                     state_vars.iter().filter(|w| diverges(w)).cloned().collect();
                 let node_levels = node_levels_at(s, &group);
-                let mut stable_set: BTreeSet<Minterm<Symbol>> = BTreeSet::new();
-                stable_set.insert(s_xy.project_to(&group));
-                stable_set.insert(s_yx.project_to(&group));
+                let mut settled_set: BTreeSet<Minterm<Symbol>> = BTreeSet::new();
+                settled_set.insert(s_xy.project_to(&group));
+                settled_set.insert(s_yx.project_to(&group));
                 let condition = machine::toggle(s, &[x.as_str(), y.as_str()]).project_to(inputs);
                 record_order_dependence(
                     &mut order_dependence,
-                    OrderDependence {
-                        x: x.clone(),
-                        x_edge: edge_from(s, x.as_str()),
-                        y: y.clone(),
-                        y_edge: edge_from(s, y.as_str()),
-                        condition,
+                    Hazard {
+                        cause: Cause::Race {
+                            pins: vec![racer(s, x), racer(s, y)],
+                        },
+                        outcome: Outcome::Indeterminate,
                         group,
-                        stable: stable_set.into_iter().collect(),
+                        condition,
+                        settled: settled_set.into_iter().collect(),
                         prevector: prevector_s.clone(),
                         levels: levels_s.clone(),
                         node_levels,
@@ -486,9 +502,8 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
     // Probe every fully-initialised reachable state in parallel, then fold the per-state dedup maps
     // together. The filter comes AFTER `enumerate`, so `discovered` stays the BFS index of the state —
     // the tie-break both dedup reads use — rather than a position in the filtered sequence. The merge is
-    // associative and commutative: `record_order_dependence` keeps the min `(prevector.len, discovered)`
-    // — a total order per key — and `merge_oscillation` unions races into an arbitrary surviving
-    // representative, so the folded result equals the sequential one regardless of state/thread order.
+    // associative and commutative: both recorders keep the min `(prevector.len, discovered)` per key — a
+    // total order — so the folded result equals the sequential one regardless of state/thread order.
     let (order_dependence, oscillation) = ex
         .order
         .par_iter()
@@ -501,8 +516,8 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                 for od in ob.into_values() {
                     record_order_dependence(&mut oa, od);
                 }
-                for (k, o) in oscb {
-                    merge_oscillation(&mut osca, k, o);
+                for osc in oscb.into_values() {
+                    record_ring(&mut osca, osc);
                 }
                 (oa, osca)
             },
@@ -615,80 +630,65 @@ fn make_constraint(
     }
 }
 
-/// Record a detected order-dependent hazard into the dedup map, keyed by its unordered
-/// `(pin,edge)|(pin,edge)` key, keeping the min `(prevector.len, discovered)` representative.
-fn record_order_dependence(map: &mut BTreeMap<String, OrderDependence>, od: OrderDependence) {
-    let a = format!("{}{}", od.x, od.x_edge.rf());
-    let b = format!("{}{}", od.y, od.y_edge.rf());
-    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+/// The pins a detected race names. Every record this pass files is caused by a race — it probes input
+/// pairs and single toggles, never a pulse — so the pulse arm cannot arise here.
+fn racing_pins(hz: &Hazard) -> &[Racer] {
+    match &hz.cause {
+        Cause::Race { pins } => pins,
+        Cause::Pulse { .. } => unreachable!("confluence detects a race, never a pulse"),
+    }
+}
+
+/// A race's pins as one key fragment: each pin with the edge it makes, sorted, so the same unordered
+/// pair keys identically however the probe took it. A lone toggle races nothing, and its empty fragment
+/// is what keeps it apart from the pairs probed at the same condition.
+fn racers_key(pins: &[Racer]) -> String {
+    let mut ids: Vec<String> = pins
+        .iter()
+        .map(|r| format!("{}{}", r.pin, r.edge.rf()))
+        .collect();
+    ids.sort();
+    ids.join("|")
+}
+
+/// Record a detected hazard into the dedup map under `key`, keeping the min
+/// `(prevector.len, discovered)` representative: the shortest walk to a hazard stands for every longer
+/// one, as it does everywhere in this engine, and the pair is a total order, so which observation
+/// survives does not depend on the order the per-state maps merge in.
+fn record_min(map: &mut BTreeMap<String, Hazard>, key: String, hz: Hazard) {
+    // The `Option` read here is the incumbent — no entry yet, or one this candidate beats on
+    // `(prevector.len, discovered)` — nothing to do with a state value's determinacy.
+    if map
+        .get(&key)
+        .is_none_or(|e| (hz.prevector.len(), hz.discovered) < (e.prevector.len(), e.discovered))
+    {
+        map.insert(key, hz);
+    }
+}
+
+/// Record a race that settles indeterminately, keyed by its racing pins and the nodes it endangers.
+fn record_order_dependence(map: &mut BTreeMap<String, Hazard>, hz: Hazard) {
     // The nodes are part of a hazard's identity: the same pair of edges racing under different
     // conditions can endanger DIFFERENT nodes — where a side input holds an output still, an internal's
     // divergence never reaches it — and those are different hazards, each with its own pre-hazard state
     // to characterise from. Keying on the pins alone collapsed them onto whichever was found first.
     // Observations endangering the SAME nodes are the same hazard reached along different walks, and
     // there the shortest walk stands for all of them, as it does everywhere in this engine.
-    let key = format!("{lo}|{hi}|{}", od.group.join(","));
-    // The `Option` read here is the incumbent — no entry yet, or one this candidate beats on
-    // `(prevector.len, discovered)` — nothing to do with a state value's determinacy.
-    if map
-        .get(&key)
-        .is_none_or(|e| (od.prevector.len(), od.discovered) < (e.prevector.len(), e.discovered))
-    {
-        map.insert(key, od);
-    }
+    let key = format!("{}|{}", racers_key(racing_pins(&hz)), hz.group.join(","));
+    record_min(map, key, hz);
 }
 
-/// Record a detected oscillation hazard into one state's LOCAL dedup map, keyed by `group|condition`,
-/// while appending any pair-probe [`Race`] to the surviving entry. The cross-state representative is
-/// chosen later, when folding per-state maps together: [`merge_oscillation`] keeps whichever colliding
-/// representative it sees first (an arbitrary, equal-quality tie) and unions every state's races.
-fn record_oscillation(
-    oscillation: &mut BTreeMap<String, Oscillation>,
-    inputs: &[Symbol],
-    node: &Minterm<Symbol>,
-    names: &[&str],
-    group: Vec<Symbol>,
-    stable: Vec<Minterm<Symbol>>,
-    race: Option<Race>,
-) {
-    let toggled = machine::toggle(node, names);
-    let condition = toggled.project_to(inputs);
+/// Record a race that never settles, keyed by its racing pins, the nodes that oscillate and the input
+/// condition they oscillate under. The condition is part of the key because a cycle is a claim about one
+/// primary-input assignment: two conditions driving the same nodes are two claims, and each is reported.
+fn record_ring(map: &mut BTreeMap<String, Hazard>, hz: Hazard) {
     let key = format!(
-        "{}|{}",
-        group.join(","),
-        crate::logic::literals_str(&condition)
+        "{}|{}|{}",
+        racers_key(racing_pins(&hz)),
+        hz.group.join(","),
+        crate::logic::literals_str(&hz.condition)
     );
-    let entry = oscillation.entry(key).or_insert_with(|| Oscillation {
-        group,
-        condition,
-        stable,
-        races: Vec::new(),
-    });
-    if let Some(race) = race {
-        entry.races.push(race);
-    }
-}
-
-/// Merge one state's oscillation entry into the accumulator when folding the per-state maps. On a key
-/// collision `group`/`condition` coincide (the key is injective in them), but `stable` does *not*: a
-/// single-toggle observation records an empty `stable` while a pair-probe records a non-empty set, and
-/// both share the key space. So keep the incumbent's remaining (key-determined) fields, UNION `stable`
-/// as a set (dedup + canonical sort — collision-order-independent) and UNION the [`Race`]s. Races are
-/// never dropped; they feed [`constrain`].
-fn merge_oscillation(map: &mut BTreeMap<String, Oscillation>, key: String, osc: Oscillation) {
-    match map.entry(key) {
-        std::collections::btree_map::Entry::Vacant(v) => {
-            v.insert(osc);
-        }
-        std::collections::btree_map::Entry::Occupied(mut e) => {
-            let entry = e.get_mut();
-            let mut merged: BTreeSet<Minterm<Symbol>> =
-                std::mem::take(&mut entry.stable).into_iter().collect();
-            merged.extend(osc.stable);
-            entry.stable = merged.into_iter().collect();
-            entry.races.extend(osc.races);
-        }
-    }
+    record_min(map, key, hz);
 }
 
 /// Record a generated constraint into the dedup map, keeping the min `(prevector.len, discovered)`
@@ -713,6 +713,14 @@ mod tests {
     use super::*;
     use crate::model::analyse_one as analyse;
 
+    /// The pins a detected hazard races, sorted: a race is unordered, so a test pins which pins are in
+    /// it, not the order the probe happened to take them in.
+    fn racing(hz: &Hazard) -> Vec<&str> {
+        let mut pins: Vec<&str> = racing_pins(hz).iter().map(|r| r.pin.as_str()).collect();
+        pins.sort();
+        pins
+    }
+
     #[test]
     fn dff_with_declared_clock_yields_only_setup_hold() {
         // Rising-edge DFF with CLK declared a clock: the CLK↔D hazard yields a setup/hold constraint of
@@ -731,19 +739,17 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 "#,
         );
-        // The DFF detects an order-dependent hazard between CLK and D.
+        // The DFF detects a CLK/D race settling indeterminately.
         assert!(
             cell.order_dependence
                 .iter()
-                .any(|od| [od.x.as_str(), od.y.as_str()]
-                    .iter()
-                    .all(|p| *p == "CLK" || *p == "D")),
-            "expected an order-dependent hazard between CLK and D, got {:?}",
+                .any(|hz| racing(hz) == ["CLK", "D"]),
+            "expected an indeterminate CLK/D race, got {:?}",
             cell.order_dependence
         );
         assert!(
             cell.oscillation.is_empty(),
-            "a DFF detects no oscillation hazard, got {:?}",
+            "a DFF detects no oscillation, got {:?}",
             cell.oscillation
         );
         // …from which a setup/hold constraint of D w.r.t. CLK is generated; because the kind follows the
@@ -790,9 +796,9 @@ Q = "CLK*M + !CLK*Q"
     fn mutex_has_non_seq_between_requests() {
         // Cross-coupled mutex: A and B race symmetrically. Their order-divergence is on the coupled
         // grant outputs (Qa/Qb), neither of which has *both* A and B in its own δ's direct support, so
-        // the combinational-neighbourhood filter discards it — the mutex detects no order-dependent
-        // hazard. But the simultaneous A*B toggle drives the state into an oscillation hazard, whose
-        // pair-probe race supplies the pair's generated non_seq constraint.
+        // the combinational-neighbourhood filter discards it — the mutex detects no indeterminate race.
+        // But the simultaneous A*B toggle drives the state into an oscillation, and the racing pins on
+        // that record supply the pair's generated non_seq constraint.
         let cell = analyse(
             r#"
 [[cell]]
@@ -804,23 +810,22 @@ Qa = "!Qb * A"
 Qb = "!Qa * B"
 "#,
         );
-        // Detects exactly one oscillation hazard (backed by a single pair-probe race) and no
-        // order-dependent hazard.
+        // Detects exactly one oscillation — the A/B pair probed together — and no indeterminate race.
         assert_eq!(
             cell.oscillation.len(),
             1,
-            "expected one oscillation hazard, got {:?}",
+            "expected one oscillation, got {:?}",
             cell.oscillation
         );
         assert_eq!(
-            cell.oscillation[0].races.len(),
-            1,
-            "expected one pair-probe race, got {:?}",
-            cell.oscillation[0].races
+            racing(&cell.oscillation[0]),
+            ["A", "B"],
+            "the record's own cause names the racing pair, got {:?}",
+            cell.oscillation[0].cause
         );
         assert!(
             cell.order_dependence.is_empty(),
-            "a mutex detects no order-dependent hazard, got {:?}",
+            "a mutex detects no indeterminate race, got {:?}",
             cell.order_dependence
         );
         let cons = cell.constraints.clone();
@@ -840,9 +845,9 @@ Qb = "!Qa * B"
 
     #[test]
     fn c_element_has_non_seq_constraint() {
-        // A C-element is order-sensitive: A↓ racing B↑ leaves Q history-dependent. That is an
-        // order-dependent hazard (not an oscillation), from which a non_seq constraint between A and B
-        // is generated.
+        // A C-element is order-sensitive: A↓ racing B↑ leaves Q history-dependent. The race settles
+        // indeterminately (it does settle), and from that a non_seq constraint between A and B is
+        // generated.
         let cell = analyse(
             r#"
 [[cell]]
@@ -853,19 +858,17 @@ constraint_arcs = true
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        // Detects an order-dependent hazard between A and B, and no oscillation hazard.
+        // Detects an indeterminate A/B race, and no oscillation.
         assert!(
             cell.order_dependence
                 .iter()
-                .any(|od| [od.x.as_str(), od.y.as_str()]
-                    .iter()
-                    .all(|p| *p == "A" || *p == "B")),
-            "expected an order-dependent hazard between A and B, got {:?}",
+                .any(|hz| racing(hz) == ["A", "B"]),
+            "expected an indeterminate A/B race, got {:?}",
             cell.order_dependence
         );
         assert!(
             cell.oscillation.is_empty(),
-            "a C-element detects no oscillation hazard, got {:?}",
+            "a C-element detects no oscillation, got {:?}",
             cell.oscillation
         );
         let cons = cell.constraints.clone();
@@ -1040,15 +1043,13 @@ M1 = "!C1*D + C1*M1"
 Q = "!C2*M1 + C2*Q"
 "#,
         );
-        // The (C1, C2) divergence is latch-mediated, so it is filtered at detection — no C1/C2
-        // order-dependent hazard is reported.
+        // The (C1, C2) divergence is latch-mediated, so it is filtered at detection — no C1/C2 race is
+        // reported.
         assert!(
             !cell
                 .order_dependence
                 .iter()
-                .any(|od| [od.x.as_str(), od.y.as_str()]
-                    .iter()
-                    .all(|p| *p == "C1" || *p == "C2")),
+                .any(|hz| racing(hz) == ["C1", "C2"]),
             "the C1/C2 divergence is latch-mediated and must be filtered, got {:?}",
             cell.order_dependence
         );
