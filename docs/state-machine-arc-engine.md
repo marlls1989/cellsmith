@@ -379,12 +379,15 @@ A rest state the inputs alone drive the cell into is stated by its `-when`: the 
 the level every output settles at, and the block is that one line. A rest state the cell reaches only
 through a sequence of input changes — one it must be walked into — states itself through the block's own
 columns instead. `-pinlist` names the inputs, then the cell's exposed internal nodes, then the outputs,
-and `-vector` holds every one of those columns at the level the rest state carries. Every column is a
-level, because what the block measures is a settled point rather than a transition through one.
+and `-vector` holds every one of those columns at the level the rest state carries. A `-vector` column
+**forces** its node to the level it names, which is why every column here is a `0` or a `1`. A rest state
+is measured at steady state, so forcing each column to the level the state already rests at states that
+state rather than disturbing it.
 
 The exposed columns are what tell apart two rest states sharing an input assignment: an internal node
-has no pin, so a `-when` cannot name it, and its `-vector` column states it. Two rest states differing
-only in a node the cell does not expose render one block between them, conflated and reported as above.
+has no pin, so a `-when` cannot name it, and Liberate takes a node declared in the `-pinlist` like any
+other, so its `-vector` column is what states it. Two rest states differing only in a node the cell does
+not expose render one block between them, conflated and reported as above.
 
 The BFS walk that reaches a rest state is internal to the model: `LeakageState` identifies the state by
 it, and it is what distinguishes a rest state the inputs drive the cell into from one the cell is
