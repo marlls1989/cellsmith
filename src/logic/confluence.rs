@@ -633,7 +633,7 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
         let mut endangered: Vec<Vec<&str>> = separations(&cell)
             .into_iter()
             .filter(|c| related(c).0 == "CLKB" && c.pin.as_str() == "DB")
-            .map(|c| c.nodes.iter().map(|(n, _)| n.as_str()).collect())
+            .map(|c| c.nodes.iter().map(|p| p.node.as_str()).collect())
             .collect();
         endangered.sort();
         endangered.dedup();

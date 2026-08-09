@@ -41,7 +41,7 @@ use indexmap::IndexMap;
 
 use crate::logic::arcs::{Arc, ArcLevels, Edge, ExposedLevel, HiddenArc};
 use crate::logic::assignment;
-use crate::logic::constraint::{self, Constraint, ConstraintKind};
+use crate::logic::constraint::{self, Constraint, ConstraintKind, ProtectedNode};
 use crate::logic::hazard::{Cause, Hazard, Outcome};
 use crate::logic::leakage::LeakageState;
 use crate::logic::literal_product;
@@ -673,7 +673,7 @@ impl Switching<'_> {
 /// of them share a type, and telling them apart by position is what a name spares the block.
 struct ConstraintArc<'a> {
     switching: Switching<'a>,
-    nodes: &'a [(Symbol, bool)],
+    nodes: &'a [ProtectedNode],
     prevector: &'a [Minterm<Symbol>],
     levels: &'a ArcLevels,
 }
@@ -747,12 +747,6 @@ fn constraint_blocks(c: &Constraint) -> Vec<ConstraintBlock<'_>> {
         .collect()
 }
 
-/// The nodes a constraint protects, by name: what its blocks name in one `-probe`, and what the
-/// maximal-node-set rule ([`dominates`]) compares.
-fn protected(c: &Constraint) -> Vec<Symbol> {
-    c.nodes.iter().map(|(node, _)| node.clone()).collect()
-}
-
 /// What an emitted constraint block states of the arc it renders: the `-type`s its kind fans out to, the
 /// pins it relates with the edge each makes, and the nodes it probes. Everything else a block carries —
 /// the `-ic` levels, the `-vector`'s held digits and the `-when` — names the OBSERVATION it was measured
@@ -765,6 +759,10 @@ struct ConstraintIdentity {
     related_edge: Edge,
     pin: Symbol,
     pin_edge: Edge,
+    /// The nodes probed, by name ([`Constraint::protected_names`]). An identity states WHICH nodes the
+    /// block is about, and the level each holds belongs to the one probed state an observation was
+    /// measured from — so reading the levels here would split the observations of one constraint into an
+    /// identity apiece, each with a general block claiming to stand for the whole of it.
     nodes: Vec<Symbol>,
 }
 
@@ -782,7 +780,7 @@ impl ConstraintIdentity {
             related_edge,
             pin: c.pin.clone(),
             pin_edge: c.pin_edge,
-            nodes: protected(c),
+            nodes: c.protected_names(),
         }
     }
 }
@@ -833,7 +831,7 @@ impl ConstraintRank {
 /// a conditioned block can carry a `-probe` narrower than any general block's.
 fn dominates(outer: &Constraint, inner: &Constraint) -> bool {
     (&outer.kind, &outer.pin, outer.pin_edge) == (&inner.kind, &inner.pin, inner.pin_edge)
-        && strictly_within(&protected(inner), &protected(outer))
+        && strictly_within(&inner.protected_names(), &outer.protected_names())
 }
 
 /// Is every node of `inner` among `outer`'s, with `outer` naming at least one more? Strict on purpose:
@@ -888,7 +886,7 @@ fn constraint_selection(constraints: &[Constraint]) -> HashMap<usize, usize> {
 /// whatever block came next.
 fn state_constraint(blocks: &mut Blocks, cell: &AnalysedCell, c: &Constraint, with_when: bool) {
     let note = oscillation_note(cell, c);
-    for group in &groups(cell, &protected(c)) {
+    for group in &groups(cell, &c.protected_names()) {
         for (i, block) in constraint_blocks(c).into_iter().enumerate() {
             let mut text =
                 constraint_block(cell, group, &block.arc, block.arc_type.token(), with_when);
@@ -921,18 +919,18 @@ fn constraint_block(
     let mut model = cell.exposed.clone();
     let mut listed = group.exposed.clone();
     let mut probed: BTreeMap<Symbol, bool> = BTreeMap::new();
-    for (node, level) in arc.nodes {
-        if cell.exposed.contains(node) || cell.outputs.iter().any(|o| o.name == *node) {
+    for p in arc.nodes {
+        if cell.exposed.contains(&p.node) || cell.outputs.iter().any(|o| o.name == p.node) {
             continue;
         }
-        model.push(node.clone());
-        listed.push(group.probed_name(node));
-        probed.insert(node.clone(), *level);
+        model.push(p.node.clone());
+        listed.push(group.probed_name(&p.node));
+        probed.insert(p.node.clone(), p.level);
     }
     let probe_list = arc
         .nodes
         .iter()
-        .map(|(node, _)| group.probed_name(node).to_string())
+        .map(|p| group.probed_name(&p.node).to_string())
         .collect::<Vec<_>>()
         .join(" ");
 
@@ -1978,8 +1976,7 @@ Y = "A*B"
     /// The same, for a block that also carries the columns `c` protects — what a constraint block
     /// groups on.
     fn whole_for(cell: &AnalysedCell, c: &Constraint) -> Group {
-        let protected: Vec<Symbol> = c.nodes.iter().map(|(node, _)| node.clone()).collect();
-        one_group(cell, &protected)
+        one_group(cell, &c.protected_names())
     }
 
     fn one_group(cell: &AnalysedCell, extra: &[Symbol]) -> Group {

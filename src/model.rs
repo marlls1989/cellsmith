@@ -2264,7 +2264,7 @@ Q = "CLK*M + !CLK*Q"
                     kind: c.kind.clone(),
                     pin: c.pin.clone(),
                     pin_edge: c.pin_edge,
-                    nodes: c.nodes.iter().map(|(node, _)| node.clone()).collect(),
+                    nodes: c.protected_names(),
                 })
                 .collect(),
             hazards: cell

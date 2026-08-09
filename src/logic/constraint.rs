@@ -24,15 +24,15 @@
 //! kind. What a kind adds is the OTHER pin of a separation, which a minimum pulse width does not have.
 //!
 //! **One constraint per situation.** A situation is a cause, at one input condition, over one set of
-//! protected nodes — the three components of `constraint_key`. Several records can read one: two
+//! protected nodes — the three components of `Situation`. Several records can read one: two
 //! phenomena of a single probe, a pair that both diverges and never settles, a pulse that both rings and
 //! lands somewhere its reference does not, and the same claim reached from several probed states. One
-//! constraint removes them all, and they meet here as that constraint: they key alike, and the one that
-//! survives is the min `discovered`. The records collapsing there are readings of one situation and so
-//! equally good; the key exists to land the fold on one of them, not to prefer any. The dedup map is a
-//! [`BTreeMap`], so the generated order is deterministic independent of any hash map's.
+//! constraint removes them all, and they meet here as that constraint: they answer to one `Situation`,
+//! and the one that survives is the min `discovered`. The records collapsing there are readings of one
+//! situation and so equally good; the situation exists to land the fold on one of them, not to prefer
+//! any, and the order the surviving constraints come out in states nothing.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use espresso_logic::{Minterm, Symbol};
 
@@ -53,6 +53,17 @@ pub enum ConstraintKind {
     /// A minimum pulse width on the constrained pin, which the emitted block names on both `-pin` and
     /// `-related_pin`: the constraint relates the pin to itself.
     MinPulseWidth,
+}
+
+/// One node a constraint protects: a state variable whose settled value the hazard puts at risk — a
+/// flop's master latch, for the setup constraint that separates its clock from its data — and the level
+/// it holds at the probed state.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ProtectedNode {
+    /// The state variable itself, which the emitted block names in its `-probe`.
+    pub node: Symbol,
+    /// The level it holds at the probed state, which the block's `-ic` initialises its column to.
+    pub level: bool,
 }
 
 /// One constraint generated to remove a detected hazard, rendered by the arcs emitter as the
@@ -76,12 +87,10 @@ pub struct Constraint {
     /// The levels the cell's outputs hold in that state — the constraint arc's `-ic` initial condition,
     /// sampled at the same probed state as `prevector`.
     pub levels: ArcLevels,
-    /// The nodes this constraint protects, each with the level it holds at the probed state: the state
-    /// variables whose settled value the hazard puts at risk — a flop's master latch, for the setup
-    /// constraint that separates its clock from its data — in signal declaration order. The emitted
-    /// block gives each a column of its own and names them all in one Liberate `-probe`, so the
-    /// characterisation measures the nodes the constraint is actually about.
-    pub nodes: Vec<(Symbol, bool)>,
+    /// The nodes this constraint protects, in signal declaration order. The emitted block gives each a
+    /// column of its own and names them all in one Liberate `-probe`, so the characterisation measures
+    /// the nodes the constraint is actually about.
+    pub nodes: Vec<ProtectedNode>,
     /// The probed state itself: every input and state variable at the level it holds there. The
     /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
     /// emitted column carries.
@@ -97,11 +106,25 @@ pub struct Constraint {
     pub ordinal: u8,
 }
 
+impl Constraint {
+    /// The names alone of the nodes this constraint protects, in `nodes` order — what the emitted
+    /// `-probe` lists, and what emission compares by containment when it decides which observation
+    /// speaks for the constraint.
+    ///
+    /// The level beside each name belongs to the ONE probed state this record was measured from, so two
+    /// observations of the same constraint carry the same names holding whatever their own states hold.
+    /// Whatever identifies a constraint therefore reads the names, and the levels stay here, with the
+    /// state they were sampled at.
+    pub fn protected_names(&self) -> Vec<Symbol> {
+        self.nodes.iter().map(|p| p.node.clone()).collect()
+    }
+}
+
 /// Generate the constraints that avoid a cell's detected hazards: one [`Constraint`] per detected
 /// [`Hazard`] whose cause calls for one, deduplicated per situation (see the module note). `clock_pins`
 /// are the cell's declared clocks, which decide a separation's kind and nothing else.
 pub(crate) fn constrain(hazards: &[Hazard], clock_pins: &[Symbol]) -> Vec<Constraint> {
-    let mut found: BTreeMap<String, Constraint> = BTreeMap::new();
+    let mut found: HashMap<Situation, Constraint> = HashMap::new();
     for hazard in hazards {
         if let Some(c) = remedy(hazard, clock_pins) {
             record(&mut found, c);
@@ -165,14 +188,14 @@ fn separation(x: &Racer, y: &Racer, clock_pins: &[Symbol]) -> (ConstraintKind, S
 
 /// The nodes a hazard puts at risk, each with the level the observation sampled for it. A record samples
 /// its levels for its own group, at the state it was probed from, so every entry is there.
-fn protected(group: &[Symbol], levels: &BTreeMap<Symbol, bool>) -> Vec<(Symbol, bool)> {
+fn protected(group: &[Symbol], levels: &BTreeMap<Symbol, bool>) -> Vec<ProtectedNode> {
     group
         .iter()
-        .map(|node| {
-            let level = *levels
+        .map(|node| ProtectedNode {
+            node: node.clone(),
+            level: *levels
                 .get(node)
-                .expect("a hazard observation samples every node of its own group");
-            (node.clone(), level)
+                .expect("a hazard observation samples every node of its own group"),
         })
         .collect()
 }
@@ -189,64 +212,105 @@ fn protected(group: &[Symbol], levels: &BTreeMap<Symbol, bool>) -> Vec<(Symbol, 
 pub(crate) fn constrains(c: &Constraint, hazard: &Hazard) -> bool {
     c.state == hazard.state
         && c.condition == hazard.condition
-        && c.nodes.iter().map(|(node, _)| node).eq(hazard.group.iter())
+        && c.nodes.iter().map(|p| &p.node).eq(hazard.group.iter())
 }
 
-/// A constraint's protected nodes as one key fragment, in their own order.
-fn names_of(nodes: &[(Symbol, bool)]) -> String {
-    nodes
-        .iter()
-        .map(|(n, _)| n.as_str())
-        .collect::<Vec<_>>()
-        .join(",")
+/// A pin, and the edge it makes, as a [`Situation`] names it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct PinEdge {
+    pin: Symbol,
+    edge: Edge,
 }
 
-/// A canonical dedup key, one keyspace per kind: setup/hold is directed, non_seq is unordered over its
-/// two pins, and a minimum pulse width names the one pin it constrains.
+/// The pins one situation is about, each with the edge it makes: a constraint's kind carrying EVERY pin
+/// it names, the constrained one included, so no pin sits outside the variant that gives it its role.
 ///
-/// Every kind keys on the same three components, which together ARE the situation: the CAUSE (the pins
-/// and edges above), the input CONDITION it was observed under, and the NODES it protects. Two records
-/// agreeing on all three describe one situation and yield one constraint; differing on any one of them
-/// they are separate claims, each stated. The condition carries its own weight — the same edges racing
-/// with a side input held one way put a different question to the characterisation than with it held the
-/// other — and the nodes theirs: the same edges endangering different nodes are different constraints,
-/// each characterised from its own state.
-fn constraint_key(c: &Constraint) -> String {
-    let constrained = format!("{}{}", c.pin, c.pin_edge.rf());
-    let condition = crate::logic::literals_str(&c.condition);
-    match &c.kind {
-        ConstraintKind::SetupHold { clock, clock_edge } => format!(
-            "SH|{clock}{}|{constrained}|{condition}|{}",
-            clock_edge.rf(),
-            names_of(&c.nodes)
-        ),
-        ConstraintKind::NonSeq { other, other_edge } => {
-            let a = format!("{other}{}", other_edge.rf());
-            let (lo, hi) = if a <= constrained {
-                (a, constrained)
-            } else {
-                (constrained, a)
-            };
-            format!("NS|{lo}|{hi}|{condition}|{}", names_of(&c.nodes))
+/// A symmetric separation is symmetric in the type. [`SituationKind::NonSeq`] holds its two ends as one
+/// sorted pair, so the pair a probe reached one way round and the pair another reached the other way
+/// round are the same value by construction, and which end a record calls its constrained pin settles
+/// nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum SituationKind {
+    /// A directed separation. Its two ends have different roles — data held around a declared clock — so
+    /// each keeps a field of its own.
+    SetupHold { data: PinEdge, clock: PinEdge },
+    /// A symmetric separation, as the unordered pair of the two edges it holds apart.
+    NonSeq { pair: [PinEdge; 2] },
+    /// A minimum pulse width, on the one pin it holds against that pin's own second edge.
+    MinPulseWidth { pin: PinEdge },
+}
+
+impl SituationKind {
+    fn of(c: &Constraint) -> Self {
+        let constrained = PinEdge {
+            pin: c.pin.clone(),
+            edge: c.pin_edge,
+        };
+        match &c.kind {
+            ConstraintKind::SetupHold { clock, clock_edge } => SituationKind::SetupHold {
+                data: constrained,
+                clock: PinEdge {
+                    pin: clock.clone(),
+                    edge: *clock_edge,
+                },
+            },
+            ConstraintKind::NonSeq { other, other_edge } => {
+                let mut pair = [
+                    constrained,
+                    PinEdge {
+                        pin: other.clone(),
+                        edge: *other_edge,
+                    },
+                ];
+                pair.sort();
+                SituationKind::NonSeq { pair }
+            }
+            ConstraintKind::MinPulseWidth => SituationKind::MinPulseWidth { pin: constrained },
         }
-        ConstraintKind::MinPulseWidth => {
-            format!("MPW|{constrained}|{condition}|{}", names_of(&c.nodes))
+    }
+}
+
+/// What two observations share when they are readings of ONE situation, and so state one constraint: the
+/// CAUSE (the pins, the edge each makes, and the kind that gives them their roles), the input CONDITION
+/// they were observed under, and the NODES they protect.
+///
+/// Two records agreeing on all three describe one situation and yield one constraint; differing on any
+/// one of them they are separate claims, each stated. The condition carries its own weight — the same
+/// edges racing with a side input held one way put a different question to the characterisation than
+/// with it held the other — and the nodes theirs: the same edges endangering different nodes are
+/// different constraints, each characterised from its own state.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct Situation {
+    kind: SituationKind,
+    condition: Minterm<Symbol>,
+    nodes: Vec<Symbol>,
+}
+
+impl Situation {
+    fn of(c: &Constraint) -> Self {
+        Situation {
+            kind: SituationKind::of(c),
+            condition: c.condition.clone(),
+            nodes: c.protected_names(),
         }
     }
 }
 
 /// Record a generated constraint into the dedup map, keeping the min `discovered` representative per
-/// canonical key.
+/// situation.
 ///
-/// The records that meet on one key are readings of ONE situation, so they are equally good and the key
+/// The records that meet on one situation are readings of it, so they are equally good and the situation
 /// expresses no preference between them: `discovered` is a BFS index, not a quality, and it is not even
 /// stable between runs. What it buys is that a fold lands on one answer within a run, and choosing among
 /// equally-good representatives is free.
-fn record(found: &mut BTreeMap<String, Constraint>, c: Constraint) {
-    let key = constraint_key(&c);
-    // The `Option` read here is the incumbent — no entry yet for this constraint, or one this candidate
+fn record(found: &mut HashMap<Situation, Constraint>, c: Constraint) {
+    let situation = Situation::of(&c);
+    // The `Option` read here is the incumbent — no entry yet for this situation, or one this candidate
     // beats on `discovered` — nothing to do with a state value's determinacy.
-    if found.get(&key).is_none_or(|e| c.discovered < e.discovered) {
-        found.insert(key, c);
+    if found
+        .get(&situation)
+        .is_none_or(|e| c.discovered < e.discovered)
+    {
+        found.insert(situation, c);
     }
 }

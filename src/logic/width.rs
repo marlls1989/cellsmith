@@ -879,7 +879,7 @@ B = "!CLK*(!SEL*D + SEL*B) + CLK*B"
         widths(cell)
             .into_iter()
             .map(|c| {
-                let nodes: Vec<&str> = c.nodes.iter().map(|(n, _)| n.as_str()).collect();
+                let nodes: Vec<&str> = c.nodes.iter().map(|p| p.node.as_str()).collect();
                 (c.pin.to_string(), c.pin_edge.rf(), nodes.join(","))
             })
             .collect()

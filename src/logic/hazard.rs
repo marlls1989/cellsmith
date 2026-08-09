@@ -37,10 +37,10 @@
 //! — the reason a constraint is generated. This module carries only the resulting report record.
 //!
 //! **Implementation note:** a record is filed for every observation, and which of them a block is
-//! rendered from is [`crate::emit::arcs_tcl`]'s to decide. `discovered` is the probed state's index in
-//! exploration order, the second component of the `(prevector.len, discovered)` tie-break that fixes
-//! which observation supplies a block; [`Hazard::ordinal`] is the third. See `hazard-detection.md` for
-//! the concept.
+//! rendered from is [`crate::emit::arcs_tcl`]'s to decide: the observation protecting a maximal set of
+//! nodes under containment supplies one. `discovered` is the probed state's index in exploration order,
+//! and with [`Hazard::ordinal`] it forms the `(discovered, ordinal)` key that settles the choice between
+//! observations dominating equally. See `hazard-detection.md` for the concept.
 
 use std::collections::BTreeMap;
 
@@ -120,8 +120,10 @@ pub struct Hazard {
     /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
     /// emitted column carries.
     pub state: Minterm<Symbol>,
-    /// Index of the probed state in `ex.order` (the sequential BFS exploration order) — the secondary
-    /// tie-break key: on equal `prevector.len`, the earlier-discovered representative is kept.
+    /// Index of the probed state in `ex.order` (the sequential BFS exploration order) — the leading
+    /// component of the tie-break between equally dominant observations: the earlier-discovered one is
+    /// kept. The exploration is breadth-first, so this already orders the observations by the length of
+    /// the walk that reaches them.
     pub discovered: usize,
 }
 
@@ -181,8 +183,8 @@ impl Hazard {
     }
 
     /// A fixed total order over the four (cause, outcome) cells, so that two hazards can be ordered by
-    /// which cell they occupy. It is the third component of the representative tie-break, after
-    /// `prevector.len` and `discovered`: records that tie on both still pick a representative
+    /// which cell they occupy. It is the second component of the representative tie-break, after
+    /// `discovered`: two records read from one probed state still pick a representative
     /// deterministically.
     pub fn ordinal(&self) -> u8 {
         let cause = match self.cause {
