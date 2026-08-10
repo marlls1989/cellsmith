@@ -163,10 +163,7 @@ fn constraints_arg() -> Arg {
         .num_args(0..=1)
         .require_equals(true)
         .action(ArgAction::Append)
-        .help(
-            "Emit derived setup/hold, non_seq & min_pulse_width constraint arcs; bare = every input \
-             pin, repeatable, unioned with each cell's own `constraint_arcs`",
-        )
+        .help("Emit derived constraint arcs; bare = every input pin, repeatable")
 }
 
 impl Args for ConstraintsArg {
