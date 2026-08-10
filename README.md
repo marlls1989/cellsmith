@@ -148,8 +148,10 @@ inputs = ["CLK", "D"]
 clock = ["CLK"]                # optional: input pins that are clocks. A hazard pair holding exactly
                                #   one clock yields a directed setup/hold constraint (clock <- data);
                                #   any other pair yields a symmetric non_seq
-constraint_arcs = true         # optional: opt this cell in to emitting the derived constraint arcs
-                               #   (equivalent to the global --constraints flag, per cell)
+constraint_arcs = true         # optional: the input pins this cell's derived constraint arcs are
+                               #   generated for — true/"D"/["CLK", "D"]; unioned with the CLI's
+                               #   --constraints selection. A pin left out is still probed and its
+                               #   hazards still reported; it just gets no constraint block
 # no_edge_collapse = true      # optional: opt this cell OUT of the edge classification below
                                #   (equivalent to the global --no-edge-collapse flag, per cell)
 # when = true                  # optional: also emit the `-when`-conditioned arcs, per arc class —
@@ -343,7 +345,9 @@ Options:
       --no-internal           Suppress hidden (internal-power) arcs
       --no-leakage            Suppress `define_leakage` blocks
       --no-cells              Suppress the `<base>_cells.tcl` artifact
-      --constraints           Emit derived setup/hold, non_seq & min_pulse_width constraint arcs
+      --constraints[=<PIN>]   Emit derived setup/hold, non_seq & min_pulse_width constraint arcs;
+                              bare = every input pin, repeatable, unioned with each cell's own
+                              `constraint_arcs`
       --no-edge-collapse      Suppress the edge-register annotation
       --logic-low <VOLTAGE>   Voltage for logic `0` [default: 0]
       --logic-high <VOLTAGE>  Voltage for logic `1` [default: $VDD]
@@ -493,7 +497,10 @@ hazard (the settled state depends on how far apart the two edges of one input's 
 pulse too narrow to carry a flop's master through to its slave settles the flop somewhere a wider pulse
 does not). From a detected hazard, cellsmith can **generate** a timing constraint to avoid it — setup/hold
 for a pair holding a declared clock, a symmetric `non_seq` for any other pair, and a single-pin
-`min_pulse_width` for a pulse — gated by the `--constraints` flag or a cell's `constraint_arcs = true`.
+`min_pulse_width` for a pulse — for the input pins the `--constraints` flag and a cell's
+`constraint_arcs` select between them. Selecting pins narrows what is GENERATED: every hazard is
+detected and reported whichever pins are selected, so a pin left out keeps its stderr diagnostic and
+only loses its blocks.
 cellsmith emits four kinds of per-cell stderr diagnostic: the oscillation hazards, the order-dependent
 hazards (grouped per racing input pair, a pair's conditions joined), the width-dependent hazards (the
 pulsed pin and its opening edge, the nodes the width decides, and the competing outcomes), and the arcs

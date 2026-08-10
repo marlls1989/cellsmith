@@ -19,7 +19,7 @@ use cellsmith::emit::liberty::library_liberty;
 use cellsmith::emit::verilog::cell_verilog;
 use cellsmith::logic::hazard::{Cause, Hazard, Outcome, Racer};
 use cellsmith::logic::machine::{ExplorationBudget, ExplorationLimit};
-use cellsmith::model::{parse_spec, AnalysedCell, ArcClass, ArcClasses};
+use cellsmith::model::{parse_spec, AnalysedCell, ArcClass, ArcClasses, ConstraintPins};
 
 /// Generate Cadence Liberate transition arcs, a behavioural Verilog model and a
 /// Liberty fragment for logic cells, including state-holding/hysteretic cells.
@@ -54,9 +54,10 @@ struct Cli {
     #[arg(long)]
     no_cells: bool,
 
-    /// Emit derived setup/hold, non_seq & min_pulse_width constraint arcs.
-    #[arg(long)]
-    constraints: bool,
+    /// The input pins derived constraint arcs are emitted for; the flag's help text lives with
+    /// [`ConstraintsArg`], as clap takes no help from the doc comment of a flattened field.
+    #[command(flatten)]
+    constraints: ConstraintsArg,
 
     /// Suppress the edge-register annotation.
     #[arg(long)]
@@ -140,6 +141,68 @@ impl FromArgMatches for WhenArg {
     }
 }
 
+/// The `--constraints` flag, resolved to the input pins it selects. Every occurrence of the flag is
+/// unioned in, and a bare occurrence — which clap records as an occurrence carrying no value — selects
+/// every pin, so `--constraints --constraints=D` selects every pin in either order. Reading the
+/// occurrence groups back from [`ArgMatches`] is what keeps a bare occurrence visible next to a valued
+/// one, hence the hand-written [`Args`] implementation, as for [`WhenArg`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConstraintsArg {
+    /// The selected pins; [`ConstraintPins::Off`] when the flag is absent.
+    pins: ConstraintPins,
+}
+
+/// The `--constraints` argument definition, shared by both `augment_args` entry points.
+fn constraints_arg() -> Arg {
+    Arg::new("constraints")
+        .long("constraints")
+        .value_name("PIN")
+        // A pin name is any identifier the spec uses, so the parser only rules out the empty one —
+        // `--constraints=` names no pin, and is a mistyped flag rather than a selection.
+        .value_parser(clap::builder::NonEmptyStringValueParser::new())
+        .num_args(0..=1)
+        .require_equals(true)
+        .action(ArgAction::Append)
+        .help(
+            "Emit derived setup/hold, non_seq & min_pulse_width constraint arcs; bare = every input \
+             pin, repeatable, unioned with each cell's own `constraint_arcs`",
+        )
+}
+
+impl Args for ConstraintsArg {
+    fn augment_args(cmd: Command) -> Command {
+        cmd.arg(constraints_arg())
+    }
+
+    fn augment_args_for_update(cmd: Command) -> Command {
+        cmd.arg(constraints_arg())
+    }
+}
+
+impl FromArgMatches for ConstraintsArg {
+    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, clap::Error> {
+        let mut pins = ConstraintPins::Off;
+        for occurrence in matches
+            .get_occurrences::<String>("constraints")
+            .into_iter()
+            .flatten()
+        {
+            let mut values = occurrence.peekable();
+            pins = pins.union(&if values.peek().is_none() {
+                ConstraintPins::All // a bare `--constraints`: every pin
+            } else {
+                ConstraintPins::Named(values.map(|s| Symbol::from(s.as_str())).collect())
+            });
+        }
+        Ok(Self { pins })
+    }
+
+    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
+        *self = Self::from_arg_matches(matches)?;
+        Ok(())
+    }
+}
+
 fn main() {
     if let Err(e) = run(Cli::parse()) {
         eprintln!("cellsmith: {e}");
@@ -150,13 +213,12 @@ fn main() {
 fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     let src = read_spec(&cli.spec)?;
     let mut spec = parse_spec(&src)?;
-    // `--constraints` is a blanket opt-in: it enables constraint-arc generation for every cell,
-    // exactly as if each had declared `constraint_arcs = true`. Applied before analysis so the single
-    // per-cell flag gates both generation and emission downstream.
-    if cli.constraints {
-        for c in &mut spec.cells {
-            c.constraint_arcs = true;
-        }
+    // `--constraints` is a blanket opt-in: every pin selected on the command line is added to each
+    // cell's own `constraint_arcs`, so a cell can ask for constraints on more pins but never opt back
+    // out of a pin the CLI selected. Applied before analysis so the single per-cell selection is what
+    // generation and emission both read downstream.
+    for c in &mut spec.cells {
+        c.constraint_arcs = c.constraint_arcs.union(&cli.constraints.pins);
     }
     // `--no-edge-collapse` is a blanket disable: it opts every cell out of the edge-register collapse,
     // exactly as if each had declared `no_edge_collapse = true`.
@@ -597,6 +659,92 @@ mod tests {
     fn when_does_not_take_a_spaced_value() {
         // `require_equals`: the spaced token is the positional `<SPEC>`, so a second one is unexpected.
         assert!(Cli::try_parse_from(["cellsmith", "--when", "hidden", "s.toml"]).is_err());
+    }
+
+    /// The pins `args` select, parsed through the real CLI.
+    fn constraint_pins(args: &[&str]) -> ConstraintPins {
+        let mut argv = vec!["cellsmith"];
+        argv.extend_from_slice(args);
+        argv.push("s.toml");
+        Cli::try_parse_from(argv).unwrap().constraints.pins
+    }
+
+    #[test]
+    fn constraints_bare_flag_selects_every_pin_and_keeps_positional() {
+        let cli = Cli::try_parse_from(["cellsmith", "--constraints", "s.toml"]).unwrap();
+        assert_eq!(cli.constraints.pins, ConstraintPins::All);
+        // `require_equals` keeps the positional `<SPEC>` from being swallowed as the pin name.
+        assert_eq!(cli.spec, "s.toml");
+    }
+
+    #[test]
+    fn constraints_equals_names_one_pin() {
+        assert_eq!(
+            constraint_pins(&["--constraints=D"]),
+            ConstraintPins::Named(vec![Symbol::from("D")]),
+        );
+    }
+
+    #[test]
+    fn constraints_repeats_union_their_pins() {
+        assert_eq!(
+            constraint_pins(&["--constraints=D", "--constraints=CLK"]),
+            ConstraintPins::Named(vec![Symbol::from("D"), Symbol::from("CLK")]),
+        );
+    }
+
+    #[test]
+    fn constraints_bare_unions_with_a_valued_occurrence_in_either_order() {
+        // The bare occurrence is the superset, so it wins whichever side of the valued one it lands.
+        assert_eq!(
+            constraint_pins(&["--constraints", "--constraints=D"]),
+            ConstraintPins::All,
+        );
+        assert_eq!(
+            constraint_pins(&["--constraints=D", "--constraints"]),
+            ConstraintPins::All,
+        );
+    }
+
+    #[test]
+    fn constraints_absent_selects_no_pin() {
+        let cli = Cli::try_parse_from(["cellsmith", "s.toml"]).unwrap();
+        assert_eq!(cli.constraints.pins, ConstraintPins::Off);
+    }
+
+    #[test]
+    fn constraints_rejects_an_empty_value() {
+        assert!(Cli::try_parse_from(["cellsmith", "--constraints=", "s.toml"]).is_err());
+    }
+
+    #[test]
+    fn constraints_does_not_take_a_spaced_value() {
+        // `require_equals`: the spaced token is the positional `<SPEC>`, so a second one is unexpected.
+        assert!(Cli::try_parse_from(["cellsmith", "--constraints", "D", "s.toml"]).is_err());
+    }
+
+    #[test]
+    fn cli_constraint_pins_are_added_to_the_cells_own() {
+        let mut spec = parse_spec(
+            r#"
+[[cell]]
+name = "X"
+inputs = ["A", "B"]
+constraint_arcs = "A"
+[cell.outputs]
+Y = "A*B"
+"#,
+        )
+        .unwrap();
+        let cli = Cli::try_parse_from(["cellsmith", "--constraints=B", "s.toml"]).unwrap();
+        for c in &mut spec.cells {
+            c.constraint_arcs = c.constraint_arcs.union(&cli.constraints.pins);
+        }
+        assert_eq!(
+            spec.cells[0].constraint_arcs,
+            ConstraintPins::Named(vec![Symbol::from("A"), Symbol::from("B")]),
+            "the flag adds its pin without dropping the cell's own",
+        );
     }
 
     #[test]

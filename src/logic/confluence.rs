@@ -645,10 +645,11 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
 
     #[test]
     fn constraint_prevector_lengths_are_minimal() {
-        // Multiset of per-key minimal prevector lengths — pins the min-by-len quality criterion. The
-        // minimum runs over the fully-initialised probed states (`Machine::arc_eligible`), so a cell
-        // whose seeds leave a state variable undriven measures from further along its BFS. Re-capture
-        // only for a deliberate algorithm change.
+        // Verifies that the constraint prevectors have minimal length as a consequence of BFS exploration
+        // order. The exploration finds shortest paths first because it examines all states at distance d
+        // before distance d+1 from a seed. The minimum is measured over fully-initialised probed states
+        // (`Machine::arc_eligible`), so a cell whose seeds leave a state variable undriven measures from
+        // further along its BFS. Re-capture only for a deliberate algorithm change.
         let dff = analyse(
             r#"
 [[cell]]

@@ -34,7 +34,7 @@ use crate::logic::constraint::{self, Constraint};
 use crate::logic::hazard::Hazard;
 use crate::logic::leakage::{self, LeakageState};
 use crate::logic::{machine, resolve, width};
-use crate::model::AnalysedCell;
+use crate::model::{AnalysedCell, ConstraintPins};
 
 /// The plain-data outcome of the shared machine pass: the transition arcs, the detected hazards — one
 /// [`Hazard`] per (cause, outcome) pair the two detection passes observe — and the constraints generated
@@ -292,9 +292,13 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     let (arcs, hidden_arcs) = arcs::derive(&m);
     // Detect the hazards, then generate the constraints that avoid them — two separate stages. Every
     // hazard is always detected — the race-cause and pulse-cause ones alike (they drive the warnings and
-    // annotations); constraint generation is gated on the cell's opt-in (the per-cell `constraint_arcs`,
-    // also set for every cell by the global `--constraints` flag), so no constraint is generated — hence
-    // none emitted — unless the cell requested it.
+    // annotations); what the cell's selection decides is which of them get a constraint. The selection
+    // (the per-cell `constraint_arcs`, unioned for every cell with the global `--constraints` flag) names
+    // the pins whose constraints are wanted, and it acts on the constraints generation RETURNS, never on
+    // the hazards handed to it: a pin nobody asked constraints for is still probed and still reported,
+    // and only loses its blocks. Emission then picks each general block's representative among exactly
+    // the constraints that come out, so an unselected pin's observations decide nothing about a selected
+    // pin's block.
     let detected = confluence::detect(&m);
     let width_dependence = width::detect(&m);
     // The one `hazards` record set: what the two detection passes returned, concatenated. Generation
@@ -306,10 +310,13 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
         .chain(detected.oscillation)
         .chain(width_dependence)
         .collect();
-    let constraints = if cell.constraint_arcs_declared {
-        constraint::constrain(&hazards, &m.cell.clock_pins)
-    } else {
-        Vec::new()
+    let constraints = match &cell.constraint_arcs_declared {
+        // Nothing is wanted of any pin, so generation is skipped whole rather than run and discarded.
+        ConstraintPins::Off => Vec::new(),
+        selection => constraint::constrain(&hazards, &m.cell.clock_pins)
+            .into_iter()
+            .filter(|c| selection.selects(&c.pin))
+            .collect(),
     };
     // Behavioural edge classification is read-only over the explored machine — it mints only
     // already-existing names and mutates nothing (the exploration-unchanged invariant holds BY
@@ -566,6 +573,78 @@ Q = "!R*(CLK*M + !CLK*Q)"
         );
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         assert!(tcl.contains("define_arc"));
+    }
+
+    #[test]
+    fn a_named_pin_keeps_its_own_constraints_and_leaves_detection_alone() {
+        // A DFF constrains both its pins: `D`, held around the clock it races, and `CLK`, whose own
+        // pulse has a minimum width. Naming one of the two decides which constraints are generated and
+        // nothing else — the hazards behind BOTH are still detected and still reported, so the pin left
+        // out keeps its warning and loses only its blocks.
+        let dff = |selection: &str| {
+            format!(
+                r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+constraint_arcs = {selection}
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#
+            )
+        };
+        // The pins constrained, as a set: which observation supplied a constraint states nothing, so
+        // two runs agree here without agreeing on the records behind it.
+        let constrained = |c: &crate::model::AnalysedCell| {
+            let mut v: Vec<String> = c.constraints.iter().map(|k| k.pin.to_string()).collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+        // What the warnings are rendered from: each detected hazard's cause, named by its pins.
+        let detected = |c: &crate::model::AnalysedCell| {
+            let mut v: Vec<String> = c
+                .hazards
+                .iter()
+                .map(|h| match &h.cause {
+                    Cause::Pulse { pin, .. } => format!("pulse {pin}"),
+                    Cause::Race { pins } => format!(
+                        "race {}",
+                        pins.iter()
+                            .map(|r| r.pin.to_string())
+                            .collect::<Vec<_>>()
+                            .join("+")
+                    ),
+                })
+                .collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+
+        let every = analyse_one(&dff("true"));
+        let data_only = analyse_one(&dff("\"D\""));
+        assert_eq!(constrained(&every), ["CLK", "D"]);
+        assert_eq!(constrained(&data_only), ["D"]);
+        assert_eq!(
+            detected(&data_only),
+            detected(&every),
+            "a pin left out of the selection is still probed and still reported",
+        );
+        assert!(
+            detected(&data_only).contains(&"pulse CLK".to_owned()),
+            "the width hazard behind the dropped constraint is one of them",
+        );
+
+        // And the deck follows the selection: the separation blocks come out, the minimum width the
+        // unselected `CLK` would have carried does not.
+        let tcl = cell_arcs_tcl(&data_only, ArcsTclOptions::default());
+        assert!(tcl.contains("-type setup"));
+        assert!(tcl.contains("-type hold"));
+        assert!(!tcl.contains("-type min_pulse_width"));
     }
 
     #[test]

@@ -68,10 +68,12 @@ pub struct Cell {
     /// [`crate::logic::confluence`].
     #[serde(default, deserialize_with = "de_symbol_vec")]
     pub clock: Vec<Symbol>,
-    /// Optional: opt in to emitting derived constraint arcs (setup/hold, non_seq) for this cell. Off by
-    /// default; also enabled globally by the `--constraints` CLI flag.
-    #[serde(default)]
-    pub constraint_arcs: bool,
+    /// Optional: which of this cell's input pins derived constraint arcs (setup/hold, non_seq,
+    /// min_pulse_width) are generated for. Accepts a bool (`true` = every pin, `false` = none), a scalar
+    /// pin name, or a list of them; absent = none. Unioned with the global `--constraints` CLI flag, and
+    /// every named pin is checked against this cell's inputs at analyse time.
+    #[serde(default, deserialize_with = "de_constraint_pins")]
+    pub constraint_arcs: ConstraintPins,
     /// Optional: opt OUT of the behavioural per-arc edge classification for this cell (see
     /// [`crate::logic::edge`]). Classification is ON by default; setting this true (or the global
     /// `--no-edge-collapse` CLI flag) suppresses it, leaving every arc in its combinational form.
@@ -259,6 +261,62 @@ impl FromIterator<ArcClass> for ArcClasses {
             }
         }
         set
+    }
+}
+
+/// Which of a cell's input pins constraint arcs are generated for, as `constraint_arcs` and the
+/// `--constraints` flag select them.
+///
+/// Picking the variant IS the selection: `Off` asks for none, `All` for every pin the cell's hazards
+/// constrain, and `Named` for the listed pins alone. The selection reaches GENERATION only — detection is
+/// never gated on it, so a pin left out is still probed and its hazards still detected and reported; what
+/// it loses is the constraint block.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ConstraintPins {
+    /// No constraint arcs at all.
+    #[default]
+    Off,
+    /// Constraint arcs for every pin the cell's hazards constrain.
+    All,
+    /// Constraint arcs for the listed input pins only, in declared order.
+    Named(Vec<Symbol>),
+}
+
+impl ConstraintPins {
+    /// Whether constraints on `pin` are generated.
+    pub fn selects(&self, pin: &Symbol) -> bool {
+        match self {
+            Self::Off => false,
+            Self::All => true,
+            Self::Named(pins) => pins.contains(pin),
+        }
+    }
+
+    /// The pins this selection names, which is none under `Off` and `All`: neither states a pin — one
+    /// asks for no constraint, the other for every pin there is. Read by the analyse-time check that a
+    /// named pin is a declared input, the one place a pin's NAME rather than the selection it makes is
+    /// of interest.
+    pub fn named(&self) -> &[Symbol] {
+        match self {
+            Self::Off | Self::All => &[],
+            Self::Named(pins) => pins,
+        }
+    }
+
+    /// The union of two selections: a pin is selected iff either selects it. `All` absorbs anything and
+    /// `Off` adds nothing, so only two `Named` lists genuinely merge, keeping the first occurrence of
+    /// each pin.
+    pub fn union(&self, other: &Self) -> Self {
+        match (self, other) {
+            (Self::All, _) | (_, Self::All) => Self::All,
+            (Self::Off, selection) | (selection, Self::Off) => selection.clone(),
+            (Self::Named(a), Self::Named(b)) => Self::Named(
+                a.iter()
+                    .chain(b.iter().filter(|p| !a.contains(p)))
+                    .cloned()
+                    .collect(),
+            ),
+        }
     }
 }
 
@@ -462,6 +520,28 @@ fn de_when<'de, D: serde::Deserializer<'de>>(d: D) -> Result<ArcClasses, D::Erro
         .collect::<Result<ArcClasses, _>>()
 }
 
+/// Deserialize the per-cell `constraint_arcs` field as a [`ConstraintPins`] selection. Accepts a bool
+/// (`true` = every pin, `false` = none), a scalar pin name (`"D"`), or a list of them (`["CLK", "D"]`).
+/// A name is validated against the cell's inputs at analyse time ([`ModelError::ConstraintNotInput`]),
+/// which is where they are known.
+fn de_constraint_pins<'de, D: serde::Deserializer<'de>>(d: D) -> Result<ConstraintPins, D::Error> {
+    // Bool and scalar-string variants FIRST so a TOML bool or scalar matches `Every`/`One` rather than
+    // being probed as a sequence.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum BoolOrPins {
+        Every(bool),
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match BoolOrPins::deserialize(d)? {
+        BoolOrPins::Every(true) => ConstraintPins::All,
+        BoolOrPins::Every(false) => ConstraintPins::Off,
+        BoolOrPins::One(s) => ConstraintPins::Named(vec![Symbol::from(s)]),
+        BoolOrPins::Many(v) => ConstraintPins::Named(v.into_iter().map(Symbol::from).collect()),
+    })
+}
+
 #[derive(Debug, Error)]
 pub enum ModelError {
     #[error("cannot parse spec: {0}")]
@@ -486,6 +566,8 @@ pub enum ModelError {
     AsyncNotInput { cell: Symbol, pin: Symbol },
     #[error("cell {cell:?}: clock pin {pin:?} is not a declared input")]
     ClockNotInput { cell: Symbol, pin: Symbol },
+    #[error("cell {cell:?}: constraint pin {pin:?} is not a declared input")]
+    ConstraintNotInput { cell: Symbol, pin: Symbol },
     #[error("cell {cell:?}: template override alias {alias:?} is not a declared cell name")]
     UnknownTemplateOverride { cell: Symbol, alias: Symbol },
     #[error("cell {cell:?}: node mapping for {signal:?} is not a declared internal signal")]
@@ -560,12 +642,14 @@ pub struct AnalysedCell {
     pub clock_pins: Vec<Symbol>,
     /// The constraints generated to avoid the cell's detected hazards: the separations (setup/hold and
     /// non_seq) holding two pins apart, and the minimum pulse widths holding one pin against itself.
-    /// Emission is gated by the CLI flag or `constraint_arcs_declared`; each constraint's kind follows
-    /// the cause of the hazard it avoids, a separation's being directed by the declared clock. See
-    /// [`crate::logic::constraint`].
+    /// Only the pins `constraint_arcs_declared` selects are represented here; each constraint's kind
+    /// follows the cause of the hazard it avoids, a separation's being directed by the declared clock.
+    /// See [`crate::logic::constraint`].
     pub constraints: Vec<Constraint>,
-    /// Whether the cell opted in to constraint-arc emission (`constraint_arcs = true`).
-    pub constraint_arcs_declared: bool,
+    /// Which input pins the cell asked for constraint arcs on (`constraint_arcs`, unioned with the
+    /// global `--constraints` flag). Read by generation, which keeps the constraints on a selected pin
+    /// and drops the rest; detection runs whatever it selects.
+    pub constraint_arcs_declared: ConstraintPins,
     /// The arc classes whose `-when` arcs are also emitted (per-cell `when` unioned with the global
     /// `--when`), read by the arcs emitter. One general arc per transition — a related pin's edge driving
     /// an output pin's edge — is always emitted, without a `-when` line, regardless of this set; a
@@ -895,6 +979,17 @@ impl Cell {
                 });
             }
         }
+        // A constraint constrains an input: a block names it on `-pin`, and an output or an internal
+        // node is not something a run can hold to a timing. So a selection naming one is a spec error,
+        // not a selection that quietly matches nothing.
+        for pin in self.constraint_arcs.named() {
+            if !input_set.contains(pin) {
+                return Err(ModelError::ConstraintNotInput {
+                    cell: self.name[0].clone(),
+                    pin: pin.clone(),
+                });
+            }
+        }
 
         // Every template-override key must name one of this cell's (de_name_list-deduped) drive-strength
         // aliases. Iterating in insertion order keeps the reported error deterministic.
@@ -1048,7 +1143,7 @@ impl Cell {
             hazards: Vec::new(),
             clock_pins: self.clock.clone(),
             constraints: Vec::new(),
-            constraint_arcs_declared: self.constraint_arcs,
+            constraint_arcs_declared: self.constraint_arcs.clone(),
             when: self.when,
             regions: Vec::new(),
             state_holding: false,
@@ -1365,6 +1460,116 @@ Y = "A"
         );
     }
 
+    /// A two-input cell carrying `constraint_arcs = {selection}`, or nothing where the selection is
+    /// empty.
+    fn constraint_spec(selection: &str) -> Spec {
+        let s = format!(
+            r#"
+[[cell]]
+name = "X"
+inputs = ["A", "B"]
+{selection}[cell.internal]
+M = "A*B"
+[cell.outputs]
+Y = "M + A"
+"#
+        );
+        parse_spec(&s).unwrap()
+    }
+
+    #[test]
+    fn constraint_arcs_absent_selects_no_pin() {
+        assert_eq!(
+            constraint_spec("").cells[0].constraint_arcs,
+            ConstraintPins::Off
+        );
+    }
+
+    #[test]
+    fn constraint_arcs_true_selects_every_pin() {
+        let spec = constraint_spec("constraint_arcs = true\n");
+        assert_eq!(spec.cells[0].constraint_arcs, ConstraintPins::All);
+        assert!(spec.cells[0].constraint_arcs.selects(&Symbol::from("A")));
+    }
+
+    #[test]
+    fn constraint_arcs_false_selects_no_pin() {
+        let spec = constraint_spec("constraint_arcs = false\n");
+        assert_eq!(spec.cells[0].constraint_arcs, ConstraintPins::Off);
+        assert!(!spec.cells[0].constraint_arcs.selects(&Symbol::from("A")));
+    }
+
+    #[test]
+    fn constraint_arcs_scalar_names_one_pin() {
+        let selection = constraint_spec("constraint_arcs = \"A\"\n")
+            .cells
+            .remove(0)
+            .constraint_arcs;
+        assert_eq!(selection, ConstraintPins::Named(vec![Symbol::from("A")]));
+        assert!(selection.selects(&Symbol::from("A")));
+        assert!(!selection.selects(&Symbol::from("B")));
+    }
+
+    #[test]
+    fn constraint_arcs_list_names_every_pin_in_it() {
+        let selection = constraint_spec("constraint_arcs = [\"B\", \"A\"]\n")
+            .cells
+            .remove(0)
+            .constraint_arcs;
+        assert_eq!(
+            selection,
+            ConstraintPins::Named(vec![Symbol::from("B"), Symbol::from("A")]),
+        );
+        assert!(selection.selects(&Symbol::from("A")));
+        assert!(selection.selects(&Symbol::from("B")));
+    }
+
+    #[test]
+    fn constraint_arcs_rejects_an_output_pin() {
+        // A constraint constrains an input: `Y` is an output, so naming it is a spec error rather than a
+        // selection that matches nothing.
+        let err = constraint_spec("constraint_arcs = [\"A\", \"Y\"]\n")
+            .analyse()
+            .unwrap_err();
+        assert!(
+            matches!(&err, ModelError::ConstraintNotInput { cell, pin } if cell == "X" && pin == "Y"),
+            "unexpected error: {err}",
+        );
+    }
+
+    #[test]
+    fn constraint_arcs_rejects_an_internal_signal() {
+        // `M` is an internal node, which no block can name on `-pin` either.
+        let err = constraint_spec("constraint_arcs = \"M\"\n")
+            .analyse()
+            .unwrap_err();
+        assert!(
+            matches!(&err, ModelError::ConstraintNotInput { cell, pin } if cell == "X" && pin == "M"),
+            "unexpected error: {err}",
+        );
+    }
+
+    #[test]
+    fn constraint_pins_union_takes_every_selected_pin() {
+        let a = ConstraintPins::Named(vec![Symbol::from("A")]);
+        let b = ConstraintPins::Named(vec![Symbol::from("B"), Symbol::from("A")]);
+        assert_eq!(
+            a.union(&b),
+            ConstraintPins::Named(vec![Symbol::from("A"), Symbol::from("B")]),
+            "a pin selected twice is kept once",
+        );
+        // `All` is the top of the selection: it absorbs any list, whichever side it lands on. `Off`
+        // is the bottom and adds nothing.
+        assert_eq!(a.union(&ConstraintPins::All), ConstraintPins::All);
+        assert_eq!(ConstraintPins::All.union(&a), ConstraintPins::All);
+        assert_eq!(a.union(&ConstraintPins::Off), a);
+        assert_eq!(ConstraintPins::Off.union(&a), a);
+        assert_eq!(
+            ConstraintPins::Off.union(&ConstraintPins::Off),
+            ConstraintPins::Off
+        );
+    }
+
     #[test]
     fn internal_signal_is_classified_and_kept_off_the_output_list() {
         // A DFF: internal master latch M, external slave output Q referencing M.
@@ -1538,7 +1743,7 @@ Z = "A"
             expose: vec![],
             async_pins: vec![],
             clock: vec![],
-            constraint_arcs: false,
+            constraint_arcs: ConstraintPins::Off,
             no_edge_collapse: false,
             when: ArcClasses::default(),
             template: None,

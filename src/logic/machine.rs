@@ -437,10 +437,12 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     //
     // The pool, this map, `settle_count`, `depth_sum` and the depth relaxation above are quantities over
     // `coords.state` and `seed_funcs` ALONE — never the combinational coordinates. The ranking fixes the
-    // seed order, hence the BFS discovery order, hence every prevector's length, and `prevector.len()` is
-    // the tie-break the constraint dedup picks its representative by (see `super::confluence`). Ranking
-    // over the combinational δ would move hazard and constraint representatives, and leakage, for EVERY
-    // cell — cells that expose nothing included. Both halves are STEPPED; only `state` is RANKED.
+    // seed order, hence the BFS discovery order, and hence the distance (reported as `prevector.len()`)
+    // of every discovered state from its seed. BFS explores all nodes at distance d before moving to
+    // distance d+1, assigning a consistent path length independent of within-level discovery order.
+    // Ranking over the combinational δ would move hazard and constraint representatives, and leakage,
+    // for EVERY cell — cells that expose nothing included. Both halves are STEPPED; only `state` is
+    // RANKED.
     let settlement = |x: &Minterm<Symbol>| -> Vec<Option<bool>> {
         state_deltas
             .iter()
@@ -493,10 +495,10 @@ pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     // BFS one level at a time: every toggle of the current frontier is settled in parallel, then the
     // level's discoveries are folded in sequentially. Settling a toggle is the whole cost here — the
     // fold is a hash insert — and the toggles of one level are independent, so the level is the unit of
-    // work. A node's LEVEL is its distance from a seed, which is what `path_to` reports as the prevector
-    // and what the constraint dedup reads as `prevector.len()`; taking the frontier whole assigns the
-    // same distance a node-at-a-time walk assigns. Which node inside a level is recorded first, and
-    // which of several same-level parents a node is credited to, are free choices.
+    // work. A node's LEVEL is its distance from a seed, which is what `path_to` reports as the prevector;
+    // taking the frontier whole assigns the same distance a node-at-a-time walk would assign. Which node
+    // inside a level is recorded first, and which of several same-level parents a node is credited to,
+    // are free choices.
     let mut order: Vec<Minterm<Symbol>> = Vec::new();
     while !frontier.is_empty() {
         // `order` holds every state the exploration has recorded, seeds included, so its length is the
