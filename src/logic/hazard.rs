@@ -37,8 +37,8 @@
 //! — the reason a constraint is generated. This module carries only the resulting report record.
 //!
 //! **Implementation note:** a record is filed for every observation, and which of them a block is
-//! rendered from is [`crate::emit::arcs_tcl`]'s to decide: the observation protecting a maximal set of
-//! nodes under containment supplies one. `discovered` is the probed state's index in exploration order,
+//! rendered from is [`crate::emit::arcs_tcl`]'s to decide: the observation naming a maximal set of
+//! victim nodes under containment supplies one. `discovered` is the probed state's index in exploration order,
 //! and with [`Hazard::ordinal`] it forms the `(discovered, ordinal)` key that settles the choice between
 //! observations dominating equally. See `hazard-detection.md` for the concept.
 
@@ -92,9 +92,10 @@ pub struct Hazard {
     /// The state variables the hazard decides — those that diverge across the competing outcomes, or
     /// that oscillate — in signal declaration order.
     pub group: Vec<Symbol>,
-    /// Primary-input condition under which the hazard occurs, as a full input assignment. A pulse
-    /// returns every input to its pre-pulse value, so for [`Cause::Pulse`] this is the pre-pulse input
-    /// state — the prevector's last step.
+    /// The condition the hazard occurs under: the probed state's input projection, which is the standing
+    /// input assignment the probed transition happens FROM. The pins a probe toggles are the ones an
+    /// emitted block writes as edges, and an edge is not part of the condition it fires under, so this is
+    /// the pre-transition assignment under every cause alike — a race's as much as a pulse's.
     pub condition: Minterm<Symbol>,
     /// Where the machine lands when the timing is honoured — separated edges for a race, an adequate
     /// width for a pulse — each state a group-projected minterm (group order).
@@ -114,7 +115,7 @@ pub struct Hazard {
     pub levels: ArcLevels,
     /// The level each node the hazard names holds at the PROBED state, by name. Sampled at the same
     /// state as `prevector` and `levels`, and covering every entry of the hazard's `group`, so the
-    /// constraint generated from this observation can state the start level of the node it protects.
+    /// constraint generated from this observation can state the start level of each node it probes.
     pub node_levels: BTreeMap<Symbol, bool>,
     /// The probed state itself: every input and state variable at the level it holds there. The
     /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
@@ -226,7 +227,10 @@ Qb = "!Qa * B"
         assert_eq!(oscillating.len(), 1, "exactly one oscillation hazard");
         let a = oscillating[0];
         assert_eq!(a.group, ["Qa", "Qb"]);
-        assert_eq!(a.condition_str(), "A*B");
+        // A `when` is the assignment the transition happens FROM, and this ring is A and B toggled
+        // together: the pair rises out of the idle state, where neither request is up. (Co-asserted is
+        // where it rings, and that is the pair's destination, not its condition.)
+        assert_eq!(a.condition_str(), "!A*!B");
         // The A*B co-assertion is a pair-probe race, carrying the A/B pins the generated constraint
         // needs.
         let pins = match &a.cause {

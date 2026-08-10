@@ -3,7 +3,7 @@
 //! behavioural Verilog model (sequential UDP + wrapper), and a minimal Liberty fragment (`statetable`
 //! for hysteretic outputs, plain `function` for combinational ones).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fs;
 use std::io::{self, Read, Write};
@@ -54,10 +54,9 @@ struct Cli {
     #[arg(long)]
     no_cells: bool,
 
-    /// The input pins derived constraint arcs are emitted for; the flag's help text lives with
-    /// [`ConstraintsArg`], as clap takes no help from the doc comment of a flattened field.
-    #[command(flatten)]
-    constraints: ConstraintsArg,
+    /// Emit derived constraint arcs; every input pin.
+    #[arg(long)]
+    constraints: bool,
 
     /// Suppress the edge-register annotation.
     #[arg(long)]
@@ -141,65 +140,6 @@ impl FromArgMatches for WhenArg {
     }
 }
 
-/// The `--constraints` flag, resolved to the input pins it selects. Every occurrence of the flag is
-/// unioned in, and a bare occurrence — which clap records as an occurrence carrying no value — selects
-/// every pin, so `--constraints --constraints=D` selects every pin in either order. Reading the
-/// occurrence groups back from [`ArgMatches`] is what keeps a bare occurrence visible next to a valued
-/// one, hence the hand-written [`Args`] implementation, as for [`WhenArg`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ConstraintsArg {
-    /// The selected pins; [`ConstraintPins::Off`] when the flag is absent.
-    pins: ConstraintPins,
-}
-
-/// The `--constraints` argument definition, shared by both `augment_args` entry points.
-fn constraints_arg() -> Arg {
-    Arg::new("constraints")
-        .long("constraints")
-        .value_name("PIN")
-        // A pin name is any identifier the spec uses, so the parser only rules out the empty one —
-        // `--constraints=` names no pin, and is a mistyped flag rather than a selection.
-        .value_parser(clap::builder::NonEmptyStringValueParser::new())
-        .num_args(0..=1)
-        .require_equals(true)
-        .action(ArgAction::Append)
-        .help("Emit derived constraint arcs; bare = every input pin, repeatable")
-}
-
-impl Args for ConstraintsArg {
-    fn augment_args(cmd: Command) -> Command {
-        cmd.arg(constraints_arg())
-    }
-
-    fn augment_args_for_update(cmd: Command) -> Command {
-        cmd.arg(constraints_arg())
-    }
-}
-
-impl FromArgMatches for ConstraintsArg {
-    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, clap::Error> {
-        let mut pins = ConstraintPins::Off;
-        for occurrence in matches
-            .get_occurrences::<String>("constraints")
-            .into_iter()
-            .flatten()
-        {
-            let mut values = occurrence.peekable();
-            pins = pins.union(&if values.peek().is_none() {
-                ConstraintPins::All // a bare `--constraints`: every pin
-            } else {
-                ConstraintPins::Named(values.map(|s| Symbol::from(s.as_str())).collect())
-            });
-        }
-        Ok(Self { pins })
-    }
-
-    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
-        *self = Self::from_arg_matches(matches)?;
-        Ok(())
-    }
-}
-
 fn main() {
     if let Err(e) = run(Cli::parse()) {
         eprintln!("cellsmith: {e}");
@@ -210,12 +150,15 @@ fn main() {
 fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     let src = read_spec(&cli.spec)?;
     let mut spec = parse_spec(&src)?;
-    // `--constraints` is a blanket opt-in: every pin selected on the command line is added to each
-    // cell's own `constraint_arcs`, so a cell can ask for constraints on more pins but never opt back
-    // out of a pin the CLI selected. Applied before analysis so the single per-cell selection is what
-    // generation and emission both read downstream.
-    for c in &mut spec.cells {
-        c.constraint_arcs = c.constraint_arcs.union(&cli.constraints.pins);
+    // `--constraints` is a blanket opt-in: it asks every cell for constraint arcs on every input pin,
+    // exactly as if each had declared `constraint_arcs = true`. Which pins one cell wants is the spec's
+    // `constraint_arcs` to say, and the flag subsumes any such selection rather than narrowing it.
+    // Applied before analysis so the single per-cell selection is what generation and emission both
+    // read downstream.
+    if cli.constraints {
+        for c in &mut spec.cells {
+            c.constraint_arcs = ConstraintPins::All;
+        }
     }
     // `--no-edge-collapse` is a blanket disable: it opts every cell out of the edge-register collapse,
     // exactly as if each had declared `no_edge_collapse = true`.
@@ -295,19 +238,19 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     // distinct warnings are separated by a single blank line when printed, so a block reads as a unit.
     let mut warnings: Vec<String> = Vec::new();
 
-    // Diagnose the cell's detected hazards, one warning per SITUATION — one cause, at one input
-    // condition, probed from one state. Detection files a record per (cause, outcome), so a situation
-    // showing both outcomes arrives as two records; they are gathered here into the single entry whose
-    // `detected` field names what was observed there. The pass reads the ARC VIEW, the same analysis
-    // `cell_arcs` renders: it is that view's hazards the emitted constraint arcs come from, so reporting
-    // the other view's would describe arcs the run never wrote.
+    // Diagnose the cell's detected hazards, one warning per OCCASION — one cause, which is a transition
+    // out of one starting state. Detection files a record per (cause, outcome), so an occasion showing
+    // both outcomes arrives as two records; they are gathered here into the single entry whose body
+    // names each outcome beside the nodes it puts at risk. The pass reads the ARC VIEW, the same
+    // analysis `cell_arcs` renders: it is that view's hazards the emitted constraint arcs come from, so
+    // reporting the other view's would describe arcs the run never wrote.
     for c in &cells {
-        let mut situations: HashMap<Situation, Vec<&Hazard>> = HashMap::new();
+        let mut occasions: HashMap<Occasion, Vec<&Hazard>> = HashMap::new();
         for a in &c.arc_view().hazards {
-            situations.entry(Situation::of(a)).or_default().push(a);
+            occasions.entry(Occasion::of(a)).or_default().push(a);
         }
-        for (situation, records) in &situations {
-            warnings.push(hazard_warning(c, situation, records));
+        for (occasion, records) in &occasions {
+            warnings.push(hazard_warning(c, occasion, records));
         }
     }
 
@@ -330,7 +273,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             // reached the emitter first is nothing to report. What differs across them wants exposing.
             let mut fields = vec![("arc", m.arc_str())];
             fields.extend(m.state_strs().into_iter().map(|s| ("cell state", s)));
-            lines.extend(subblock(&fields));
+            lines.extend(subblock("  - ", &fields));
         }
         warnings.push(lines.join("\n"));
     }
@@ -392,32 +335,34 @@ fn banner(kind: &str, body: &str) -> String {
     format!("// ===== cellsmith {kind} =====\n{body}\n")
 }
 
-/// Render one hazard detail sub-block as its lines: the first is `-`-bulleted, the rest indented to
-/// align under it. Each is a colon-labelled field whose values are column-aligned (the longest label,
-/// `reached along:`, sets the column). No trailing newline — callers join a warning's lines with `\n`.
-fn subblock(fields: &[(&str, String)]) -> Vec<String> {
+/// Render one warning detail block as its lines: colon-labelled fields, indented under the header with
+/// their values column-aligned. `lead` opens the first line — a hazard warning states one block and
+/// opens it at the same indent as the rest, while the masked-arc warning states a block per conflated
+/// arc and bullets each so the blocks read apart. No trailing newline — callers join a warning's lines
+/// with `\n`.
+fn subblock(lead: &str, fields: &[(&str, String)]) -> Vec<String> {
     fields
         .iter()
         .enumerate()
         .map(|(i, (label, value))| {
-            let marker = if i == 0 { "  - " } else { "    " };
-            format!("{marker}{:<14} {value}", format!("{label}:"))
+            let marker = if i == 0 { lead } else { "    " };
+            format!("{marker}{:<16} {value}", format!("{label}:"))
         })
         .collect()
 }
 
-/// The occasion one hazard warning reports: a cause, the primary-input condition it occurs under, and
-/// the probed state it acts from. Detection files one record per (cause, outcome), so the records
-/// sharing a situation are the outcomes observed there, and the warning names them together.
+/// The occasion one hazard warning reports — the CAUSE: a transition, made from one starting state, at
+/// the input condition that state stands at. Detection files one record per (cause, outcome), so the
+/// records sharing an occasion are the outcomes observed there, and the warning names them together.
 #[derive(PartialEq, Eq, Hash)]
-struct Situation<'a> {
+struct Occasion<'a> {
     cause: &'a Cause,
     condition: &'a Minterm<Symbol>,
     state: &'a Minterm<Symbol>,
 }
 
-impl<'a> Situation<'a> {
-    /// The situation `hazard` was observed in.
+impl<'a> Occasion<'a> {
+    /// The occasion `hazard` was observed on.
     fn of(hazard: &'a Hazard) -> Self {
         Self {
             cause: &hazard.cause,
@@ -427,56 +372,54 @@ impl<'a> Situation<'a> {
     }
 }
 
-/// One situation's warning: a header naming what causes the hazard, the state it happens at and the
-/// nodes it puts at risk, over the detail sub-block. `records` are the situation's detected hazards, one
-/// per outcome observed; the fields that follow from the situation alone — its condition and the path
-/// into its state — are the same in each, so they are read from the first.
-fn hazard_warning(cell: &AnalysedCell, situation: &Situation, records: &[&Hazard]) -> String {
+/// One occasion's warning: a header naming what causes the hazard and the state it is caused from, over
+/// a detail block that names the effect. `records` are the occasion's detected hazards, one per outcome
+/// observed; the fields that follow from the occasion alone — its condition and the path into its state
+/// — are the same in each, so they are read from the first, while each outcome contributes a field of
+/// its own naming the nodes THAT reading puts at risk.
+fn hazard_warning(cell: &AnalysedCell, occasion: &Occasion, records: &[&Hazard]) -> String {
     let first = records
         .first()
-        .expect("a situation is only entered by a record");
-    let outcomes: BTreeSet<Outcome> = records.iter().map(|h| h.outcome).collect();
+        .expect("an occasion is only entered by a record");
+    // One entry per outcome, over the nodes every record of that outcome names. `Outcome`'s own order
+    // sets the order the fields come out in, so a warning reads the same however detection filed them.
+    let mut victims: BTreeMap<Outcome, Vec<&str>> = BTreeMap::new();
+    for h in records {
+        let named = victims.entry(h.outcome).or_default();
+        for n in &h.group {
+            if !named.contains(&n.as_str()) {
+                named.push(n.as_str());
+            }
+        }
+    }
     let mut fields = vec![
-        (
-            "detected",
-            outcomes
-                .iter()
-                .map(|o| outcome_str(*o))
-                .collect::<Vec<_>>()
-                .join(", "),
-        ),
         ("when", first.condition_str()),
         ("reached along", first.path_str()),
     ];
-    match situation.cause {
-        Cause::Race { pins } => {
-            fields.push(("pre-hazard", first.pre_state_str()));
-            if outcomes.contains(&Outcome::Indeterminate) {
-                fields.push(("orders", orders_str(pins)));
-            }
-            if outcomes.contains(&Outcome::Oscillation) {
-                fields.push(("triggered by", trigger_str(pins)));
-            }
+    // A pulse returns its pin to the value it started from, so the pre-pulse input state IS the
+    // condition the hazard occurs under — `when` states it, and a separate pre-hazard field would only
+    // restate it. A race leaves its pins where they landed, so its own starting state is worth naming.
+    if let Cause::Race { pins } = occasion.cause {
+        fields.push(("pre-hazard", first.pre_state_str()));
+        if victims.contains_key(&Outcome::Indeterminate) {
+            fields.push(("orders", orders_str(pins)));
         }
-        // A pulse returns its pin to the value it started from, so the pre-pulse input state IS the
-        // condition the hazard occurs under — `when` states it, and a separate pre-hazard field would
-        // only restate it. Where a pulse decides two node sets neither of which contains the other,
-        // detection keeps both observations, so each indeterminate record states its own landings.
-        Cause::Pulse { .. } => fields.extend(
-            records
-                .iter()
-                .filter(|h| h.outcome == Outcome::Indeterminate)
-                .map(|h| ("outcomes", h.settled_strs().join(" | "))),
-        ),
+        if victims.contains_key(&Outcome::Oscillation) {
+            fields.push(("triggered by", trigger_str(pins)));
+        }
     }
+    fields.extend(
+        victims
+            .iter()
+            .map(|(outcome, nodes)| (outcome_str(*outcome), format!("{{{}}}", nodes.join(", ")))),
+    );
     let mut lines = vec![format!(
-        "cellsmith: warning: cell {:?}: {} causes a hazard at {} on nodes {{{}}}",
+        "cellsmith: warning: cell {:?}: {} causes a hazard at {}",
         cell.repr_name(),
-        cause_str(situation.cause),
-        Hazard::state_str(situation.state),
-        hazard_nodes(records).join(", "),
+        cause_str(occasion.cause),
+        Hazard::state_str(occasion.state),
     )];
-    lines.extend(subblock(&fields));
+    lines.extend(subblock("    ", &fields));
     lines.join("\n")
 }
 
@@ -496,27 +439,13 @@ fn cause_str(cause: &Cause) -> String {
     }
 }
 
-/// The name the `detected` field reports an outcome under.
+/// The label an outcome's own field carries — the name it is reported under, beside the nodes that
+/// reading puts at risk.
 fn outcome_str(outcome: Outcome) -> &'static str {
     match outcome {
         Outcome::Indeterminate => "indeterminate",
         Outcome::Oscillation => "oscillation",
     }
-}
-
-/// The nodes a situation puts at risk: every node its records name, without repeats. Each outcome names
-/// the nodes its own reading decides — a ring is over what cycles, an indeterminate settling over what
-/// the competing landings differ in — and the two need not agree, so the entry names their union.
-fn hazard_nodes<'a>(records: &[&'a Hazard]) -> Vec<&'a str> {
-    let mut nodes: Vec<&str> = Vec::new();
-    for h in records {
-        for n in &h.group {
-            if !nodes.contains(&n.as_str()) {
-                nodes.push(n.as_str());
-            }
-        }
-    }
-    nodes
 }
 
 /// The triggering transitions of an indeterminate race: every order its edges can arrive in, since
@@ -658,70 +587,29 @@ mod tests {
         assert!(Cli::try_parse_from(["cellsmith", "--when", "hidden", "s.toml"]).is_err());
     }
 
-    /// The pins `args` select, parsed through the real CLI.
-    fn constraint_pins(args: &[&str]) -> ConstraintPins {
-        let mut argv = vec!["cellsmith"];
-        argv.extend_from_slice(args);
-        argv.push("s.toml");
-        Cli::try_parse_from(argv).unwrap().constraints.pins
-    }
-
     #[test]
-    fn constraints_bare_flag_selects_every_pin_and_keeps_positional() {
+    fn constraints_is_a_bare_flag_and_keeps_the_positional() {
         let cli = Cli::try_parse_from(["cellsmith", "--constraints", "s.toml"]).unwrap();
-        assert_eq!(cli.constraints.pins, ConstraintPins::All);
-        // `require_equals` keeps the positional `<SPEC>` from being swallowed as the pin name.
+        assert!(cli.constraints);
         assert_eq!(cli.spec, "s.toml");
     }
 
     #[test]
-    fn constraints_equals_names_one_pin() {
-        assert_eq!(
-            constraint_pins(&["--constraints=D"]),
-            ConstraintPins::Named(vec![Symbol::from("D")]),
-        );
-    }
-
-    #[test]
-    fn constraints_repeats_union_their_pins() {
-        assert_eq!(
-            constraint_pins(&["--constraints=D", "--constraints=CLK"]),
-            ConstraintPins::Named(vec![Symbol::from("D"), Symbol::from("CLK")]),
-        );
-    }
-
-    #[test]
-    fn constraints_bare_unions_with_a_valued_occurrence_in_either_order() {
-        // The bare occurrence is the superset, so it wins whichever side of the valued one it lands.
-        assert_eq!(
-            constraint_pins(&["--constraints", "--constraints=D"]),
-            ConstraintPins::All,
-        );
-        assert_eq!(
-            constraint_pins(&["--constraints=D", "--constraints"]),
-            ConstraintPins::All,
-        );
-    }
-
-    #[test]
-    fn constraints_absent_selects_no_pin() {
+    fn constraints_absent_asks_for_none() {
         let cli = Cli::try_parse_from(["cellsmith", "s.toml"]).unwrap();
-        assert_eq!(cli.constraints.pins, ConstraintPins::Off);
+        assert!(!cli.constraints);
     }
 
     #[test]
-    fn constraints_rejects_an_empty_value() {
-        assert!(Cli::try_parse_from(["cellsmith", "--constraints=", "s.toml"]).is_err());
-    }
-
-    #[test]
-    fn constraints_does_not_take_a_spaced_value() {
-        // `require_equals`: the spaced token is the positional `<SPEC>`, so a second one is unexpected.
+    fn constraints_names_no_pin() {
+        // Which pins one cell wants constraint arcs on is the spec's `constraint_arcs` to say, so the
+        // flag names none: an `=PIN` value is unexpected, and a spaced one is a second positional.
+        assert!(Cli::try_parse_from(["cellsmith", "--constraints=D", "s.toml"]).is_err());
         assert!(Cli::try_parse_from(["cellsmith", "--constraints", "D", "s.toml"]).is_err());
     }
 
     #[test]
-    fn cli_constraint_pins_are_added_to_the_cells_own() {
+    fn cli_constraints_selects_every_pin_over_the_cells_own() {
         let mut spec = parse_spec(
             r#"
 [[cell]]
@@ -733,14 +621,16 @@ Y = "A*B"
 "#,
         )
         .unwrap();
-        let cli = Cli::try_parse_from(["cellsmith", "--constraints=B", "s.toml"]).unwrap();
-        for c in &mut spec.cells {
-            c.constraint_arcs = c.constraint_arcs.union(&cli.constraints.pins);
+        let cli = Cli::try_parse_from(["cellsmith", "--constraints", "s.toml"]).unwrap();
+        if cli.constraints {
+            for c in &mut spec.cells {
+                c.constraint_arcs = ConstraintPins::All;
+            }
         }
         assert_eq!(
             spec.cells[0].constraint_arcs,
-            ConstraintPins::Named(vec![Symbol::from("A"), Symbol::from("B")]),
-            "the flag adds its pin without dropping the cell's own",
+            ConstraintPins::All,
+            "the flag subsumes the cell's own narrower selection",
         );
     }
 

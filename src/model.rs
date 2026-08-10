@@ -1058,8 +1058,8 @@ impl Cell {
         // is a name another may not be mapped onto. This is also what keeps the emitted columns
         // straight — `-vector` and `-ic` are positional against `-pinlist`, so two columns under one
         // name shift every column after them — but the columns are the consequence, not the rule.
-        // Which internals earn one is not even known here: a constraint arc gives the node it protects
-        // a column of its own, and where the hazards are is settled only by exploring the machine.
+        // Which internals earn one is not even known here: a constraint arc gives each victim node a
+        // column of its own, and where the hazards are is settled only by exploring the machine.
         let pin_set: BTreeSet<Symbol> = self
             .inputs
             .iter()
@@ -1934,7 +1934,7 @@ Q = "n"
     #[test]
     fn two_mapped_nodes_may_not_share_a_name() {
         // One node, one name: two internals mapped onto the same netlist node say the netlist holds
-        // both on one, which it does not — neither is exposed or protected here, so this is the rule
+        // both on one, which it does not — neither is exposed nor probed here, so this is the rule
         // itself rather than the columns it keeps straight.
         let s = r#"
 [[cell]]
@@ -1979,9 +1979,9 @@ N = "M"
 
     #[test]
     fn an_unexposed_node_is_checked_for_collisions_too() {
-        // Which nodes take a column is not settled by `expose`: a constraint arc gives the node it
-        // protects one of its own, and that is known only after exploration. So every MAPPED node is
-        // checked, exposed or not — here a flop's master, protected by the setup/hold pair it earns.
+        // Which nodes take a column is not settled by `expose`: a constraint arc gives each victim node
+        // one of its own, and that is known only after exploration. So every MAPPED node is checked,
+        // exposed or not — here a flop's master, the victim of the setup/hold pair it earns.
         let s = r#"
 [[cell]]
 name = "DFF"
@@ -2385,8 +2385,8 @@ Q = "CLK*M + !CLK*Q"
     }
 
     /// One generated constraint by its identity: the pin it constrains with the edge that pin makes,
-    /// the kind — which carries the other pin of a separation, where there is one — and the nodes it
-    /// protects.
+    /// the kind — which carries the other pin of a separation, where there is one — and the victim nodes
+    /// it probes.
     #[derive(Debug, PartialEq, Eq)]
     struct ConstraintRecord {
         kind: ConstraintKind,
@@ -2469,7 +2469,7 @@ Q = "CLK*M + !CLK*Q"
                     kind: c.kind.clone(),
                     pin: c.pin.clone(),
                     pin_edge: c.pin_edge,
-                    nodes: c.protected_names(),
+                    nodes: c.victim_names(),
                 })
                 .collect(),
             hazards: cell

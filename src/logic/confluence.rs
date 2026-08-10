@@ -70,7 +70,7 @@ use crate::logic::hazard::{Cause, Hazard, Outcome, Racer};
 use crate::logic::machine;
 
 /// The level each of `group`'s nodes holds at the probed state — what a constraint block states as the
-/// start condition of the node it protects. A hazard's group holds state variables, which are machine
+/// start condition of each victim node it probes. A hazard's group holds state variables, which are machine
 /// coordinates, and a probed state is fully initialised, so every one of them is defined there.
 ///
 /// Shared with [`super::width`], which samples its pulses' nodes at the pre-pulse state through it.
@@ -158,14 +158,12 @@ pub(super) fn oscillating_group(cycle: &[Minterm<Symbol>], state_vars: &[Symbol]
 /// [`Outcome::Indeterminate`] where the settle orders diverge, [`Outcome::Oscillation`] where the
 /// machine never settles — but generates no constraint (that is [`super::constraint`]'s job). Empty for
 /// confluent cells (ordinary combinational / self-holding gates that always settle) and for cells with
-/// too few inputs or no state to latch.
+/// no state to latch. The input count empties only the PAIR probes: a single toggle races the cell's own
+/// feedback and is probed however few inputs there are.
 pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> DetectedHazards {
     let cell = m.cell;
     let inputs = &cell.inputs;
     let n = inputs.len();
-    if n < 2 {
-        return DetectedHazards::default(); // a hazard relates two inputs
-    }
 
     let state_vars = &m.state_vars;
     let k = state_vars.len();
@@ -213,6 +211,11 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
         // the one probed state — is what keeps the two consistent wherever the record travels: a
         // record carries the levels of the very state its prevector walks to.
         let levels_s = ArcLevels::at(m, s);
+        // The `when` every record of this state states: the standing input assignment the probed
+        // transition happens FROM. It is a projection of `s`, so it depends only on `s` too — the pins a
+        // probe toggles are the ones the emitted block writes as edges, and an edge is not part of the
+        // condition it fires under.
+        let condition_s = s.project_to(inputs);
 
         // Each input's single-toggle settle, computed once per state (O(n) instead of O(n²)): reused as
         // `r_x`/`r_y` across every pair and as the base of the `s_xy`/`s_yx` compositions below.
@@ -230,14 +233,13 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
             if let Err(cycle) = r {
                 let group = oscillating_group(cycle, state_vars);
                 let node_levels = node_levels_at(s, &group);
-                let condition = machine::toggle(s, &[inputs[i].as_str()]).project_to(inputs);
                 oscillation.push(Hazard {
                     cause: Cause::Race {
                         pins: vec![racer(s, &inputs[i])],
                     },
                     outcome: Outcome::Oscillation,
                     group,
-                    condition,
+                    condition: condition_s.clone(),
                     settled: Vec::new(),
                     prevector: prevector_s.clone(),
                     levels: levels_s.clone(),
@@ -246,6 +248,14 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                     discovered,
                 });
             }
+        }
+
+        // The pair probes proper, and the one thing here that needs two inputs: a race between two pins
+        // has no second pin below this count. The single-toggle capture above is deliberately not gated
+        // on it — a lone toggle rings around the cell's own feedback whatever its input count, and it is
+        // the record every downstream claim about a ringing single toggle rests on.
+        if n < 2 {
+            return (order_dependence, oscillation);
         }
 
         for i in 0..n {
@@ -286,15 +296,13 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                     // (e.g. a mutex's) constraint, standing in for the divergence-derived one the
                     // combinational-neighbourhood filter below discards for it.
                     let node_levels = node_levels_at(s, &group);
-                    let condition =
-                        machine::toggle(s, &[x.as_str(), y.as_str()]).project_to(inputs);
                     oscillation.push(Hazard {
                         cause: Cause::Race {
                             pins: vec![racer(s, x), racer(s, y)],
                         },
                         outcome: Outcome::Oscillation,
                         group,
-                        condition,
+                        condition: condition_s.clone(),
                         settled: settled_set.into_iter().collect(),
                         prevector: prevector_s.clone(),
                         levels: levels_s.clone(),
@@ -333,24 +341,23 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                 }
 
                 // Non-confluent and interacting ⇒ the race settles indeterminately: the divergent state
-                // variables and their two competing settled outcomes, at the input condition where the
-                // pair races. The constraint generated from it ([`super::constraint`]) has its kind
-                // decided there, solely by the declared clock, since the hazard is a property of the
-                // cell rather than of the declaration.
+                // variables and their two competing settled outcomes, from the input assignment the
+                // pair races out of. The constraint generated from it ([`super::constraint`]) has its
+                // kind decided there, solely by the declared clock, since the hazard is a property of
+                // the cell rather than of the declaration.
                 let group: Vec<Symbol> =
                     state_vars.iter().filter(|w| diverges(w)).cloned().collect();
                 let node_levels = node_levels_at(s, &group);
                 let mut settled_set: BTreeSet<Minterm<Symbol>> = BTreeSet::new();
                 settled_set.insert(s_xy.project_to(&group));
                 settled_set.insert(s_yx.project_to(&group));
-                let condition = machine::toggle(s, &[x.as_str(), y.as_str()]).project_to(inputs);
                 order_dependence.push(Hazard {
                     cause: Cause::Race {
                         pins: vec![racer(s, x), racer(s, y)],
                     },
                     outcome: Outcome::Indeterminate,
                     group,
-                    condition,
+                    condition: condition_s.clone(),
                     settled: settled_set.into_iter().collect(),
                     prevector: prevector_s.clone(),
                     levels: levels_s.clone(),
@@ -672,7 +679,12 @@ Q = "CLK*M + !CLK*Q"
         // holds Q: Q is undriven there, so no probe starts at a seed. The shortest eligible state a
         // CLK↑ probe can start from is three input states along — CLK low, a pulse that drives Q, and
         // CLK low again.
-        assert_eq!(dff_lens, vec![3, 3]);
+        //
+        // Two lengths per race, because a constraint is keyed on the state it is probed from and the
+        // flop stands at CLK=0 with the master already at D in TWO states — the one whose slave still
+        // holds the old value and the one that has taken the new. Each is its own constraint, and the
+        // second is one input state further along: the walk that flips Q.
+        assert_eq!(dff_lens, vec![3, 3, 4, 4]);
 
         let c2 = analyse(
             r#"
@@ -687,8 +699,10 @@ Q = "A*B + Q*(A+B)"
         let mut c2_lens: Vec<usize> = separations(&c2).iter().map(|c| c.prevector.len()).collect();
         c2_lens.sort();
         // C2's single state variable is forced at both seeds, so every state in its explored order is
-        // eligible and the minimum is the BFS distance alone.
-        assert_eq!(c2_lens, vec![2, 2]);
+        // eligible and the minimum is the BFS distance alone. Four constraints at that one distance: the
+        // A↓/B↑ race and its mirror, each probed from both states the hold region carries — δ_Q = Q with
+        // exactly one request up, so Q high and Q low are both stable under that input assignment.
+        assert_eq!(c2_lens, vec![2, 2, 2, 2]);
     }
 
     #[test]

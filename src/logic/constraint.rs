@@ -23,15 +23,24 @@
 //! [`Constraint::pin`] is the pin the constraint constrains — the emitted block's `-pin` — under every
 //! kind. What a kind adds is the OTHER pin of a separation, which a minimum pulse width does not have.
 //!
-//! **One constraint per situation.** A situation is a cause, at one input condition, over one set of
-//! protected nodes — the three components of `Situation`. Several records can read one: two
-//! phenomena of a single probe, a pair that both diverges and never settles, a pulse that both rings and
-//! lands somewhere its reference does not, and the same claim reached from several probed states. One
-//! constraint removes them all, and they meet here as that constraint: they answer to one `Situation`,
-//! and the one that survives is the min `discovered`. The records collapsing there are readings of one
-//! situation and so equally good; the situation exists to land the fold on one of them, not to prefer
-//! any, and the order the surviving constraints come out in states nothing.
+//! **One constraint per situation, and a situation is a CAUSE.** A cause is a starting state and a
+//! transition, so `Situation` is the kind with its pins and the edge each makes, plus the state the
+//! probe acted from. What is NOT in it is the effect: which node suffers what. Several records read one
+//! situation — a pair that both diverges and never settles, a pulse that both rings and lands somewhere
+//! its reference does not — and one constraint removes them all, because the timing that removes a
+//! cause removes every consequence of it. They meet here as that constraint, whose `nodes` are the
+//! UNION of the victims each of them named: one block, probing every node any outcome of the cause
+//! attacks.
+//!
+//! The STATE is the key, not the input condition it projects to. Every other arc kind in this tool keys
+//! on the state a measurement is taken from, and a state-holding cell reaches one input assignment in
+//! several stored states: keying on the condition would fold those together here, before emission had a
+//! chance to see them. Emission is where that fold belongs — two constraints its `-ic` and `-vector`
+//! cannot tell apart render one block, and the masked-arc warning names them, which is how a spec author
+//! learns that the nodes the cell exposes do not distinguish two situations it is being asked to
+//! characterise.
 
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 
 use espresso_logic::{Minterm, Symbol};
@@ -55,11 +64,11 @@ pub enum ConstraintKind {
     MinPulseWidth,
 }
 
-/// One node a constraint protects: a state variable whose settled value the hazard puts at risk — a
-/// flop's master latch, for the setup constraint that separates its clock from its data — and the level
-/// it holds at the probed state.
+/// One node a hazard attacks: a state variable whose settled value it puts at risk — a flop's master
+/// latch, under the race between its clock and its data — and the level that node holds at the probed
+/// state.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ProtectedNode {
+pub struct VictimNode {
     /// The state variable itself, which the emitted block names in its `-probe`.
     pub node: Symbol,
     /// The level it holds at the probed state, which the block's `-ic` initialises its column to.
@@ -77,9 +86,8 @@ pub struct Constraint {
     /// meaning the pulse is high and fall low. A minimum-pulse-width block states that one edge, and
     /// Liberate searches the width itself.
     pub pin_edge: Edge,
-    /// Primary-input condition under which the hazard this constraint avoids occurs, as a full input
-    /// assignment. A pulse returns every input to its pre-pulse value, so for
-    /// [`ConstraintKind::MinPulseWidth`] this is the pre-pulse input state.
+    /// The condition the hazard this constraint avoids occurs under: the probed state's input
+    /// projection, which is the standing input assignment the constrained transition happens FROM.
     pub condition: Minterm<Symbol>,
     /// The prevector: the input-assignment path that drives every state variable into the state where
     /// the constraint manifests (each node projected onto the inputs).
@@ -87,10 +95,10 @@ pub struct Constraint {
     /// The levels the cell's outputs hold in that state — the constraint arc's `-ic` initial condition,
     /// sampled at the same probed state as `prevector`.
     pub levels: ArcLevels,
-    /// The nodes this constraint protects, in signal declaration order. The emitted block gives each a
-    /// column of its own and names them all in one Liberate `-probe`, so the characterisation measures
-    /// the nodes the constraint is actually about.
-    pub nodes: Vec<ProtectedNode>,
+    /// The nodes the constrained cause attacks, in signal declaration order: the union of the victims
+    /// every outcome of that cause named. The emitted block gives each a column of its own and names them
+    /// all in one Liberate `-probe`, so the characterisation measures every node the cause puts at risk.
+    pub nodes: Vec<VictimNode>,
     /// The probed state itself: every input and state variable at the level it holds there. The
     /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
     /// emitted column carries.
@@ -98,16 +106,15 @@ pub struct Constraint {
     /// Index of the probed state in the sequential BFS exploration order — the tie-break key the
     /// situation collapse and emission's general-block choice both land on one representative by.
     pub discovered: usize,
-    /// Which of the four (cause, outcome) cells the observation this constraint was generated from
-    /// occupies, as [`Hazard::ordinal`] numbers them. The constraint follows the cause alone, so nothing
-    /// here decides what is constrained; emission reads it to tell two observations of one cause apart —
-    /// a ring and a divergence are different phenomena over their own nodes — and as the last component
-    /// of the total order it picks a representative by.
+    /// Which of the four (cause, outcome) cells the observations this constraint was generated from
+    /// occupy, as [`Hazard::ordinal`] numbers them — the lowest, where a cause showed more than one
+    /// outcome. The constraint follows the cause alone, so nothing here decides what is constrained; it
+    /// is the last component of the total order emission picks a representative by.
     pub ordinal: u8,
 }
 
 impl Constraint {
-    /// The names alone of the nodes this constraint protects, in `nodes` order — what the emitted
+    /// The names alone of the nodes this constraint's cause attacks, in `nodes` order — what the emitted
     /// `-probe` lists, and what emission compares by containment when it decides which observation
     /// speaks for the constraint.
     ///
@@ -115,8 +122,8 @@ impl Constraint {
     /// observations of the same constraint carry the same names holding whatever their own states hold.
     /// Whatever identifies a constraint therefore reads the names, and the levels stay here, with the
     /// state they were sampled at.
-    pub fn protected_names(&self) -> Vec<Symbol> {
-        self.nodes.iter().map(|p| p.node.clone()).collect()
+    pub fn victim_names(&self) -> Vec<Symbol> {
+        self.nodes.iter().map(|v| v.node.clone()).collect()
     }
 }
 
@@ -152,7 +159,7 @@ fn remedy(hazard: &Hazard, clock_pins: &[Symbol]) -> Option<Constraint> {
         condition: hazard.condition.clone(),
         prevector: hazard.prevector.clone(),
         levels: hazard.levels.clone(),
-        nodes: protected(&hazard.group, &hazard.node_levels),
+        nodes: victims(&hazard.group, &hazard.node_levels),
         state: hazard.state.clone(),
         discovered: hazard.discovered,
         ordinal: hazard.ordinal(),
@@ -186,12 +193,12 @@ fn separation(x: &Racer, y: &Racer, clock_pins: &[Symbol]) -> (ConstraintKind, S
     }
 }
 
-/// The nodes a hazard puts at risk, each with the level the observation sampled for it. A record samples
-/// its levels for its own group, at the state it was probed from, so every entry is there.
-fn protected(group: &[Symbol], levels: &BTreeMap<Symbol, bool>) -> Vec<ProtectedNode> {
+/// The nodes a hazard attacks, each with the level the observation sampled for it. A record samples its
+/// levels for its own group, at the state it was probed from, so every entry is there.
+fn victims(group: &[Symbol], levels: &BTreeMap<Symbol, bool>) -> Vec<VictimNode> {
     group
         .iter()
-        .map(|node| ProtectedNode {
+        .map(|node| VictimNode {
             node: node.clone(),
             level: *levels
                 .get(node)
@@ -202,17 +209,69 @@ fn protected(group: &[Symbol], levels: &BTreeMap<Symbol, bool>) -> Vec<Protected
 
 /// Does `c` remove `hazard` — is the constraint the remedy generated for that observation?
 ///
-/// The three fields compared name the observation between them: the probed state and the input condition
-/// fix the cause (a race's condition is the probed state with the racing pins toggled, a pulse's is the
-/// state's own input assignment), and a record's `group` is what its constraint protects. So it holds of
-/// the record `c` carries the probed state of, and of every other reading of that same probe: a ring and
-/// a divergence of one situation answer to it alike, whichever of them supplied the representative. An
-/// emitter asks it to annotate a constraint with the phenomenon that motivated it, which is why the
-/// probed state is compared — the annotation describes the very context the block renders.
+/// A constraint answers to its situation, and a situation is the cause: the probed state, and the pins
+/// with the edge each makes. So that is what this compares, and the victim nodes are not in it — one
+/// cause has as many victim sets as it has outcomes, and the constraint covers them all. It therefore
+/// holds of the record `c` was generated from and of every other reading of that same cause: a ring and
+/// a divergence answer to it alike, whichever supplied the representative. An emitter asks it to
+/// annotate a constraint with the phenomenon that motivated it, which is why the probed state is
+/// compared — the annotation describes the very context the block renders.
 pub(crate) fn constrains(c: &Constraint, hazard: &Hazard) -> bool {
-    c.state == hazard.state
-        && c.condition == hazard.condition
-        && c.nodes.iter().map(|p| &p.node).eq(hazard.group.iter())
+    if c.state != hazard.state {
+        return false;
+    }
+    match (&c.kind, &hazard.cause) {
+        (ConstraintKind::MinPulseWidth, Cause::Pulse { pin, edge }) => {
+            c.pin == *pin && c.pin_edge == *edge
+        }
+        (
+            ConstraintKind::SetupHold { .. } | ConstraintKind::NonSeq { .. },
+            Cause::Race { pins },
+        ) => separated(c) == raced(pins),
+        // A pulse constrains no race and a separation no pulse, whatever pins the two happen to share.
+        (ConstraintKind::MinPulseWidth, Cause::Race { .. })
+        | (ConstraintKind::SetupHold { .. } | ConstraintKind::NonSeq { .. }, Cause::Pulse { .. }) => {
+            false
+        }
+    }
+}
+
+/// The two ends of a separation, sorted: which of them the record calls its constrained pin is a
+/// property of the declaration (a declared clock directs the pair), so it settles nothing about which
+/// pins are held apart.
+fn separated(c: &Constraint) -> Vec<PinEdge> {
+    let related = match &c.kind {
+        ConstraintKind::SetupHold { clock, clock_edge } => (clock, *clock_edge),
+        ConstraintKind::NonSeq { other, other_edge } => (other, *other_edge),
+        ConstraintKind::MinPulseWidth => return Vec::new(),
+    };
+    let mut pair = vec![
+        PinEdge {
+            pin: c.pin.clone(),
+            edge: c.pin_edge,
+        },
+        PinEdge {
+            pin: related.0.clone(),
+            edge: related.1,
+        },
+    ];
+    pair.sort();
+    pair
+}
+
+/// The pins a race names, sorted — the same reading [`separated`] takes of the constraint generated from
+/// it. A race is unordered, so a probe that took the pair one way round names the same race as one that
+/// took it the other.
+fn raced(pins: &[Racer]) -> Vec<PinEdge> {
+    let mut pins: Vec<PinEdge> = pins
+        .iter()
+        .map(|r| PinEdge {
+            pin: r.pin.clone(),
+            edge: r.edge,
+        })
+        .collect();
+    pins.sort();
+    pins
 }
 
 /// A pin, and the edge it makes, as a [`Situation`] names it.
@@ -270,47 +329,79 @@ impl SituationKind {
     }
 }
 
-/// What two observations share when they are readings of ONE situation, and so state one constraint: the
-/// CAUSE (the pins, the edge each makes, and the kind that gives them their roles), the input CONDITION
-/// they were observed under, and the NODES they protect.
+/// The CAUSE two observations share when they are readings of ONE situation, and so state one
+/// constraint: the pins with the edge each makes and the kind that gives them their roles, plus the
+/// state the probe acted from.
 ///
-/// Two records agreeing on all three describe one situation and yield one constraint; differing on any
-/// one of them they are separate claims, each stated. The condition carries its own weight — the same
-/// edges racing with a side input held one way put a different question to the characterisation than
-/// with it held the other — and the nodes theirs: the same edges endangering different nodes are
-/// different constraints, each characterised from its own state.
+/// The effect is deliberately absent. Two readings of one cause endanger their own nodes — a ring is not
+/// a disagreement between landing points — and the constraint that removes the cause removes both, so
+/// the victims merge into the one record rather than splitting it in two.
+///
+/// The starting state carries the discrimination the input condition would: a condition is that state's
+/// input projection, and a state-holding cell reaches one condition in several stored states, which the
+/// state tells apart and the condition does not.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Situation {
     kind: SituationKind,
-    condition: Minterm<Symbol>,
-    nodes: Vec<Symbol>,
+    state: Minterm<Symbol>,
 }
 
 impl Situation {
     fn of(c: &Constraint) -> Self {
         Situation {
             kind: SituationKind::of(c),
-            condition: c.condition.clone(),
-            nodes: c.protected_names(),
+            state: c.state.clone(),
         }
     }
 }
 
-/// Record a generated constraint into the dedup map, keeping the min `discovered` representative per
-/// situation.
+/// Record a generated constraint into the dedup map, merging it into any reading of the same situation
+/// already there.
 ///
-/// The records that meet on one situation are readings of it, so they are equally good and the situation
-/// expresses no preference between them: `discovered` is a BFS index, not a quality, and it is not even
-/// stable between runs. What it buys is that a fold lands on one answer within a run, and choosing among
-/// equally-good representatives is free.
+/// A situation keys on the probed state, so every reading of one was measured at that single state and
+/// carries the same prevector, output levels, input condition and exploration index. What two readings
+/// genuinely differ in is the victims they name and which (cause, outcome) cell they were read from: the
+/// victims merge, so the block probes every node any outcome of the cause attacks, and the ordinal keeps
+/// the lower, which lands emission's representative choice on one answer. Neither states a preference —
+/// the merge is a union and the ordinal a fixed numbering of the four cells — and the order the surviving
+/// constraints come out in states nothing.
 fn record(found: &mut HashMap<Situation, Constraint>, c: Constraint) {
-    let situation = Situation::of(&c);
-    // The `Option` read here is the incumbent — no entry yet for this situation, or one this candidate
-    // beats on `discovered` — nothing to do with a state value's determinacy.
-    if found
-        .get(&situation)
-        .is_none_or(|e| c.discovered < e.discovered)
-    {
-        found.insert(situation, c);
+    match found.entry(Situation::of(&c)) {
+        Entry::Occupied(mut e) => {
+            let kept = e.get_mut();
+            kept.nodes = merged_victims(&kept.nodes, &c.nodes, &kept.state);
+            kept.ordinal = kept.ordinal.min(c.ordinal);
+        }
+        Entry::Vacant(e) => {
+            e.insert(c);
+        }
     }
+}
+
+/// The victims of two readings of one situation, merged: every node either names, in the probed state's
+/// own column order — which for a state variable is signal declaration order, the order each reading's
+/// own list is already in.
+///
+/// Both readings were measured at `state`, since the situation keys on it, so a node they share holds one
+/// level and the merge cannot disagree with itself.
+fn merged_victims(
+    kept: &[VictimNode],
+    other: &[VictimNode],
+    state: &Minterm<Symbol>,
+) -> Vec<VictimNode> {
+    let levels: HashMap<&Symbol, bool> = kept
+        .iter()
+        .chain(other)
+        .map(|v| (&v.node, v.level))
+        .collect();
+    state
+        .vars()
+        .iter()
+        .filter_map(|node| {
+            levels.get(node).map(|level| VictimNode {
+                node: node.clone(),
+                level: *level,
+            })
+        })
+        .collect()
 }

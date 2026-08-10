@@ -29,9 +29,10 @@
 //! their own nodes — a ring is not a disagreement between landing points — and each names the nodes its
 //! own reading puts at risk.
 //!
-//! An oscillating candidate is a pulse-cause hazard and is never also filed as a race-cause one: a
-//! race's `condition` claims a primary-input assignment under which the group oscillates, and a pulse
-//! returns `p` to the assignment it started from — which is stable — so that claim would be false.
+//! An oscillating candidate is a pulse-cause hazard and is never also filed as a race-cause one. The
+//! cause is what the timing is between, and here it is one pin's two edges: the ring is reached by
+//! closing the pulse partway through the opening cascade, which no separation between two pins can
+//! forbid and only a wide enough pulse can.
 //!
 //! [`detect`] walks the fully-initialised reachable stable states — the same `Machine::arc_eligible`
 //! measurement gate the arc derivation and [`super::confluence`] apply — and measures every candidate
@@ -547,9 +548,8 @@ Qn = "!(S+Q)"
             }
         }
         // The ringing candidate is a pulse-cause hazard and files no race-cause one: the cell's only
-        // race-cause oscillation is still the simultaneous release confluence detects, whose condition —
-        // S and R both low — is an input assignment the pair really does ring under, which the pulse's
-        // returning edge is not.
+        // race-cause oscillation is still the simultaneous release confluence detects, whose cause is
+        // the S and R edges racing each other rather than one pin's two edges.
         let rings = race_rings(&cell);
         assert_eq!(
             rings.len(),
@@ -557,7 +557,9 @@ Qn = "!(S+Q)"
             "the ringing candidate adds no race-cause record, got {rings:?}"
         );
         assert_eq!(rings[0].group, ["Q", "Qn"]);
-        assert_eq!(rings[0].condition_str(), "!S*!R");
+        // That race is the simultaneous release, so it is toggled FROM the co-asserted state, which is
+        // the assignment its `when` states. (It rings at S=R=0, which is where the release lands.)
+        assert_eq!(rings[0].condition_str(), "S*R");
     }
 
     #[test]
@@ -632,7 +634,9 @@ Qb = "!Qa * B"
             "the ringing candidate adds no race-cause record, got {rings:?}"
         );
         assert_eq!(rings[0].group, ["Qa", "Qb"]);
-        assert_eq!(rings[0].condition_str(), "A*B");
+        // That race is the pair asserted together, so it is toggled FROM the idle state, which is the
+        // assignment its `when` states. (It rings at A=B=1, which is where the pair lands.)
+        assert_eq!(rings[0].condition_str(), "!A*!B");
     }
 
     #[test]
@@ -873,7 +877,7 @@ B = "!CLK*(!SEL*D + SEL*B) + CLK*B"
     }
 
     /// One generated constraint as the triple that identifies it: the constrained pin, the pulse's
-    /// opening edge and the nodes it protects. The levels sampled beside those nodes name WHICH probed
+    /// opening edge and the victim nodes it probes. The levels sampled beside those nodes name WHICH probed
     /// state the representative came from, which is a choice the exploration order makes.
     fn constrained(cell: &AnalysedCell) -> BTreeSet<(String, char, String)> {
         widths(cell)
@@ -924,9 +928,9 @@ Q = "CLK*M + !CLK*Q"
     #[test]
     fn a_pulse_that_rings_and_diverges_over_one_node_set_is_one_constraint() {
         // The cross-NOR SR's set pulse is two records over {Q, Qn}: the interior candidate rings, and
-        // the zero-width one holds the reset state the reference leaves. One S↑ at one condition over
-        // one node set — one situation seen as two phenomena — and the width that removes the ring is
-        // the width that removes the divergence, so the pair is a single constraint. The reset pulse
+        // the zero-width one holds the reset state the reference leaves. One S↑ from one state — one
+        // situation seen as two phenomena — and the width that removes the ring is the width that
+        // removes the divergence, so the pair is a single constraint. The reset pulse
         // mirrors it, so the cell constrains two pulses out of four records.
         let cell = analyse(
             r#"

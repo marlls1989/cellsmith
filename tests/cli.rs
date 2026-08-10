@@ -143,7 +143,7 @@ fn multi_cell_spec_covers_all_cells() {
     }
 
     let stderr = String::from_utf8(out.stderr).unwrap();
-    // A warning's header names the timing that causes the hazard, and its `detected` field the outcomes
+    // A warning's header names the timing that causes the hazard, and its body one field per outcome
     // observed there — so a race reads as too little separation between its two edges, a pulse-width
     // hazard as a short pulse, and an oscillation is named where it was detected.
     assert!(
@@ -167,12 +167,12 @@ fn multi_cell_spec_covers_all_cells() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// A situation showing both outcomes is one warning entry. A mutex pulsed on `A↓` from `A*B` both
+/// One cause showing both outcomes is one warning entry. A mutex pulsed on `A↓` from `A*B` both
 /// settles indeterminately and rings, and detection files a record per outcome, so the two reach the
-/// terminal as a single entry whose `detected` field names both and which still carries the settled
-/// states only the indeterminate record has.
+/// terminal as a single entry whose body gives each outcome a field naming the nodes that reading puts
+/// at risk.
 #[test]
-fn both_outcomes_at_one_situation_are_one_entry() {
+fn both_outcomes_at_one_cause_are_one_entry() {
     let dir = scratch_dir("one_entry");
     let spec = dir.join("cells.toml");
     std::fs::write(&spec, MULTI).unwrap();
@@ -192,13 +192,23 @@ fn both_outcomes_at_one_situation_are_one_entry() {
         .collect();
     assert_eq!(entries.len(), 1, "MUT's A↓ pulse is one entry:\n{stderr}");
     let entry = entries[0];
+    // Each outcome is a field of its own, over the nodes THAT reading decides: the mutex's coupled
+    // grants both ways round.
+    for outcome in ["indeterminate", "oscillation"] {
+        assert!(
+            entry
+                .lines()
+                .any(|l| l.trim_start().starts_with(&format!("{outcome}:"))
+                    && l.contains("{Qa, Qb}")),
+            "the entry names its {outcome} outcome over the nodes it decides:\n{entry}"
+        );
+    }
+    // The header states the cause and the state it acts from; the nodes belong to the outcomes, which
+    // need not agree on them.
+    let header = entry.lines().next().expect("an entry has a header");
     assert!(
-        entry.contains("indeterminate, oscillation"),
-        "the entry names both detected outcomes:\n{entry}"
-    );
-    assert!(
-        entry.contains("outcomes:"),
-        "the indeterminate record's settled states survive the merge:\n{entry}"
+        !header.contains("nodes"),
+        "the header carries no node set:\n{entry}"
     );
 
     std::fs::remove_dir_all(&dir).ok();

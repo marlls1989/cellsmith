@@ -81,6 +81,13 @@ in the explored order as a traversal seed; it is simply never a probe's starting
 start the whole probe stays determinate: settling evaluates each δ over concrete inputs and state values,
 so a total state steps to a total state and every outcome the probes compare is a value.
 
+**The condition — what an emitted block calls its `when` — is the pre-transition input projection.** A
+record's condition is the probed state projected onto the inputs: the standing input assignment the
+transition happens *from*. That holds of every arc cellsmith writes, a delay arc and a hidden arc as much
+as a constraint over a racing pair or a minimum pulse width, because the pins a probe toggles are the ones
+the block writes as edges, and an edge is not part of the condition it fires under. So a mutex's ring is
+filed under A=0·B=0, the idle state its two requests rise out of, not under the A·B they land in.
+
 The exploration itself, however, never *reports* metastability: when a toggle fails to settle it silently
 drops that transition (no impossible arc is fabricated) and moves on. More importantly, it never presents
 the transition that makes an arbiter oscillate: its edges toggle one input at a time, and the trigger for
@@ -180,8 +187,8 @@ cell never settles, which is where the metastability risk arises. From the cycle
 
 - **group** — the state variables that actually oscillate: those whose *value* differs between any two
   nodes of the cycle. Variables that happen to sit still through the cycle are not blamed.
-- **condition** — the primary-input assignment of the probe (the toggled state projected onto the inputs),
-  rendered as a literal product, e.g. A·B.
+- **condition** — the probed state projected onto the inputs (§2): the assignment the pair toggles out of,
+  rendered as a literal product, e.g. !A·!B.
 - **stable outcomes** — the competing outcomes the oscillation is torn between: the settled results of the
   two *orders* (x then y, and y then x), each projected onto the group. For a mutex these are the two
   grants; simultaneity is exactly the boundary between the two orders, so the order outcomes are the states
@@ -205,7 +212,8 @@ Worked example — the mutex Qa = !Qb·A, Qb = !Qa·B, from the idle state (0 0 
 
 - A alone settles to (1 0 | 1 0); B alone to (0 1 | 0 1) — clean single grants, no hazard.
 - Both at once: (1 1 | 0 0) → (1 1 | 1 1) → (1 1 | 0 0) → … — a period-2 cycle.
-- Detected: a race that oscillates with group [Qa, Qb] (both oscillate), condition A·B, competing outcomes
+- Detected: a race that oscillates with group [Qa, Qb] (both oscillate), condition !A·!B — the idle state
+  the pair rises out of — competing outcomes
   {Qa=1, Qb=0} and {Qa=0, Qb=1} (the two order outcomes, projected onto the group); the racing pair {A, B}
   recorded with it. From that pair emission generates the non-sequential constraint A↑/B↑.
 
@@ -244,17 +252,18 @@ rings the same way. The other is a partial capture — a cascade of latches on o
 pulse was wide enough for the first stage to take the value and not for the second, settling between the
 outcomes the two ends reach (`TCASC` in `examples/sequentials.toml`: three widths, three outcomes).
 
-**No convergence point is an outcome.** A cut whose close leaves the machine in a periodic cycle reaches
-no rest state at that width — the cell is left ringing rather than at one of the states the other widths
-settle to. That is carried as the outcome `no convergence point` alongside the settled ones, and the
-nodes the cycle moves join the nodes the width decides, so a hazard whose only interior cut rings still
-names what to probe.
+**A cut that never converges is its own record.** A cut whose close leaves the machine in a periodic
+cycle reaches no rest state at that width — the cell is left ringing rather than at one of the states the
+other widths settle to. It is filed as a pulse that oscillates, over the nodes the cycle moves, beside the
+pulse settling indeterminately over the nodes the width decides. The two are one cause with two outcomes,
+so one constraint covers both and probes the union of what each names (§7): a hazard whose only interior
+cut rings still names what to probe.
 
-Such a cut is **not** filed as a race that oscillates (§5): a race's `condition` claims a primary-input
-assignment under which the group oscillates, and a pulse returns p to the assignment it started from —
-which is stable — so that claim would be false of it. It is instead a pulse that oscillates, its own cell
-of the grid (§1); the ringing is a property of the width, and the width is what the constraint (§7)
-states.
+Such a cut is **not** filed as a race that oscillates (§5). The cause is what the timing is between, and
+here it is one pin's two edges: the ring is reached by closing the pulse partway through the opening
+cascade, which no separation between two pins can forbid and only a wide enough pulse can. It is a pulse
+that oscillates, its own cell of the grid (§1); the ringing is a property of the width, and the width is
+what the constraint (§7) states.
 
 An **opening** toggle that never settles is a different thing: it is the single-toggle race that oscillates,
 which §5 already records — the machine never comes to rest for a second edge to be placed against, so
@@ -281,19 +290,25 @@ Emission is what turns detection's raw report into rendered blocks: first by gen
 every situation whose cause states a timing to hold, then by deciding how each of those constraints
 renders — stating a constraint generally, or only in the context it was observed in (§8).
 
-An **observation** is one hazard record: one probe, from one reachable stable state, under one input
-condition. A **situation** is what one constraint is generated per, and it has three components — the
-hazard's **cause**, the input **condition** it was observed under, and the **nodes** it puts at risk.
-Observations agreeing on all three are independent readings of one probe — a pair that both diverges and
+An **observation** is one hazard record: one probe, from one reachable stable state. A **situation** is
+what one constraint is generated per, and a situation is the **cause**: the kind with the pins it names
+and the edge each makes, plus the **starting state** the probe acted from. A cause is a starting state and
+a transition; an *effect* is which node suffers what, and the effect is deliberately not part of the key.
+Observations agreeing on the cause are independent readings of one probe — a pair that both diverges and
 never settles, a pulse that both rings at one cut and disagrees with its reference at another — and
 **collapse into one constraint**: the timing that removes one removes the other, so nothing is gained by
-stating them twice.
+stating them twice. The victim nodes of the readings that meet there are **merged**, so the one constraint
+probes every node any outcome of its cause attacks.
 
-Each of the three carries its own weight, and differing in any one of them makes two separate claims,
-both stated. The same pins racing with a side input held high put a different question to the
-characterisation than with it held low — where a side input holds an output still, an internal's
-divergence never reaches it — and the same pins endangering different nodes are different constraints,
-each characterised from its own probed state.
+**Why the state is the key, and not the input condition it projects to.** Every arc kind in this tool is
+keyed on the state its measurement is taken from, and a state-holding cell reaches one input assignment in
+several stored states: a C-element sits at A=1·B=0 with its output held high or held low, and a flop sits
+at CLK=0 with its master loaded and its slave either side of the value. Keying a constraint on the
+condition would fold those together here, before emission ever saw them. Emission is where that fold
+belongs: two constraints whose `-ic` and `-vector` cannot tell one state from the other render one block,
+and the masked-arc warning names them — which is how a spec author learns that the nodes the cell exposes
+do not distinguish two situations it is being asked to characterise. What to do about it is the author's
+call, and it can only be made if the two reach that point separately.
 
 Every situation whose cause states a timing to hold — a race naming two pins, or a pulse — generates a
 constraint. Every **pair** constraint is built the same way, whichever outcome its situation shows:
@@ -312,10 +327,11 @@ constraint. Every **pair** constraint is built the same way, whichever outcome i
   variable at the level it holds there, including the internal nodes no column carries. The rendered
   human-readable form is the two switching edges plus any other inputs held fixed, e.g. A↓ & B↑ with R=0.
 
-- **Protected nodes** are the state variables the hazard puts at risk — its `group`, the nodes whose
-  settled value depends on the arrival order, sampled with the level each holds at the probed state. A
-  constraint carries them because the arc it renders measures them: they are what the constraint is
-  about.
+- **Victim nodes** are the state variables the hazard attacks — its `group`, the nodes whose settled
+  value depends on the arrival order, sampled with the level each holds at the probed state, and unioned
+  over every outcome the cause showed. A constraint carries them because the arc it renders measures them:
+  they are what the constraint is about. *Victim* names what the hazard does to the node; whether the
+  constraint succeeds in keeping it safe is Liberate's measurement to make, not this record's claim.
 
 A race settling indeterminately takes its cause from the racing pins and the edge each makes; a race that
 oscillates takes it the same way, from the racing pair its record carries (§5). Whether the constraints so
@@ -323,7 +339,7 @@ generated all reach the output, and as what, is §8's.
 
 A **minimum-pulse-width** constraint relates one pin to itself, and carries the pulsed pin, the pulse's
 **opening** edge alone — Liberate searches the width, so no closing edge is stated — the nodes the
-hazard's width decides as its protected nodes, and the prevector, probed state and output levels sampled
+hazard's width decides as its victim nodes, and the prevector, probed state and output levels sampled
 just as a pair constraint's are. Two things a pair constraint has to decide are not decisions here:
 
 - **The kind is not one.** A declared clock directs a pair by naming which of its two members is the
@@ -345,7 +361,7 @@ constraints generated from situations (§7) rather than over an arc's contexts.
 
 A constraint's **identity** is what its block states of the arc it renders: the kind — which decides the
 Liberate `-type`s the block fans out to and which pin it relates — the pins it holds apart with the edge
-each makes, and the **protected nodes** it names in a single `-probe`. Everything else a block carries
+each makes, and the **victim nodes** it names in a single `-probe`. Everything else a block carries
 (its `-ic` levels, the held digits of its `-vector`, its `-when`) names the observation it was measured
 from.
 
@@ -353,14 +369,14 @@ from.
 whose second stage is gated, a CLK↓ pulse moves the master alone from one state and walks master and
 slave from another; a clock racing its data endangers an internal latch alone where a side input holds
 the output still, and the latch and the output together where it does not. So the observations are
-grouped by everything that identifies the constraint EXCEPT its protected nodes, and within a group their
+grouped by everything that identifies the constraint EXCEPT its victim nodes, and within a group their
 node sets are ordered by **containment**. Each set that no other in its group strictly contains — each
 **maximal** set — supplies a general block. Two sets that nest neither way are both maximal, and each
 gets one.
 
-What makes containment the right order is how a block is measured. The block names the nodes it protects
-in Liberate's `-probe` (§9), so a block probing a strict superset states everything the contained set's
-does and more, and it is the one that stands for the constraint however it was reached. A set that
+What makes containment the right order is how a block is measured. The block names its victim nodes in
+Liberate's `-probe` (§9), so a block probing a strict superset states everything the contained set's does
+and more, and it is the one that stands for the constraint however it was reached. A set that
 neither contains nor is contained asks a different question, so it is asked in its own right.
 
 **Being contained is a demotion, not a drop.** An observation whose node set another one strictly
@@ -371,8 +387,8 @@ than any general block's.
 
 **The tie-break.** Several observations can be equally dominant: the same identity, the same maximal node
 set, reached from different probed states. One of them supplies the general block, chosen by the probed
-state's index in exploration order and then by which of the four (cause, outcome) cells the observation
-was read from. Neither component states a preference — the index is a breadth-first position, not stable
+state's index in exploration order and then by the lowest-numbered of the four (cause, outcome) cells its
+readings came from. Neither component states a preference — the index is a breadth-first position, not stable
 between runs — so this is no quality judgement. What the pair buys is a total order: a parallel fold
 lands on one answer within a run, and choosing among equally-good alternatives is free. Nothing is lost to
 the tie-break either, since every other observation is its own conditioned block's `-when` away.
@@ -383,9 +399,11 @@ decides how each one renders, generally or in its own context.
 
 ## 9. Reporting and rendering
 
-- **stderr.** The detected hazards are reported, grouped by situation: the racing pins or the pulsed pin
-  (with its opening edge), the condition it was observed under, the nodes at risk, and which outcomes —
-  indeterminate, oscillation, or both — were seen there. A constraint is the remedy for a hazard reported
+- **stderr.** The detected hazards are reported one entry per cause and starting state. The header names
+  the cause — the racing pins, or the pulsed pin with its opening edge — and the state it goes wrong from;
+  the body names the condition, the walk into that state, and then one field per outcome observed there,
+  each listing the victim nodes THAT reading names. The two outcomes need not agree on them, which is why
+  neither the header nor a shared field carries a node set. A constraint is the remedy for a hazard reported
   here, so it carries no diagnostic of its own. Each hazard states the shared metastability risk; an
   oscillation is flagged as annotated only, never modelled as deterministic timing, because it is a
   property of the cell the user must know about, not an arc. (The exact wording is fixed elsewhere.)
@@ -401,13 +419,13 @@ decides how each one renders, generally or in its own context.
   constraint over a pin pair renders its general block as a *pair* of characterisation arcs — the two
   sides are characterised separately — a setup and a hold arc for a directed clock↔data constraint, the
   two non-sequential sides for a symmetric one; a conditioned block, where rendered, follows the same
-  split, one `-when` per situation. The vector toggles the two racing pins along their recorded edges,
+  split, one `-when` per constraint. The vector toggles the two racing pins along their recorded edges,
   holds every other input at its prevector value — the general block's from its representative situation,
   a conditioned block's from its own — and marks all outputs unknown (a constraint arc measures no output
-  transition). Each block names the nodes it protects in a single `-probe`, so the characterisation
-  measures them rather than inferring the violation from the pins; a protected node with no pin of its
-  own — a flop's master latch — is given a column on that block alone, which is what its `-ic` states
-  the start level through.
+  transition). Each block names its victim nodes in a single `-probe`, so the characterisation measures
+  them rather than inferring the violation from the pins; a victim node with no pin of its own — a flop's
+  master latch — is given a column on that block alone, which is what its `-ic` states the start level
+  through.
 - **Minimum-pulse-width arcs.** Under the same opt-in, and one `define_arc` of `-type min_pulse_width`
   rather than a pair: the two members of a setup/hold pair are the two sides of a separation between two
   pins, and a pulse has one pin. The general block's `-vector` switches the constrained pin alone, along
@@ -426,9 +444,12 @@ decides how each one renders, generally or in its own context.
   inputs alone, so every input order is confluent, and returning a pulsed pin to its pre-pulse value
   returns the whole machine to the state it started from — a pulse can leave no net effect for its width
   to decide. Detection returns an empty result at that early-out before probing anything.
-- A cell with **fewer than two inputs** has no pair to race, so the pair probes (§3) early out there too.
-  That rule is theirs alone: a pulse relates one pin to itself, so the pulse probes (§6) run on a
-  single-input cell like any other.
+- A cell with **fewer than two inputs** has no pair to race, so the *pair* probes (§3) early out there
+  too. That rule is theirs alone. The single-toggle probes run at any input count — one pin races the
+  cell's own feedback, and a lone toggle that never settles is a hazard however few other pins the cell
+  has — and so do the pulse probes (§6), which relate one pin to itself. §6's reference close rests on
+  that: it is the closing edge alone toggled from a convergence point, which is exactly the single-toggle
+  race §5 records, and the record has to be there at one input as much as at ten.
 - Within a cell that clears those early-outs, the probed population is filtered per state: only a
   fully-initialised reachable stable state is probed from (§2). The filter is applied after the states are
   numbered, so a hazard's `discovered` index — the tie-break emission's general-block selection reads (§7,

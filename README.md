@@ -74,14 +74,15 @@ Three properties follow from this construction:
   that is the whole of how the start condition reaches Liberate: no `define_arc` emits a `-prevector`.
   A purely combinational cell has no state to establish and carries neither.
 
-A cross-coupled cell is also **bistable**: under some input condition (`A·B` for a mutex) the
-joint next-state has two stable states, and the physical cell picks one non-deterministically instead
-of settling — an **oscillation hazard**, whose physical risk is metastability. cellsmith detects this
-during analysis and annotates both the arcs and the Liberty stub with a generic comment naming the
-condition, the group of nodes involved and the states it can settle to:
+A cross-coupled cell is also **bistable**: co-asserting a mutex's two requests walks the joint
+next-state around a cycle it never leaves, so the machine reaches no state that is its own next state
+— an **oscillation hazard**, whose physical risk is metastability. cellsmith detects this during
+analysis and annotates both the arcs and the Liberty stub with a generic comment naming the condition
+the pair toggles OUT of, the group of nodes involved and the states honouring the timing settles them
+to:
 
 ```
-# oscillation: A*B risks metastability in {Qa, Qb}, settling to one of {Qa=0, Qb=1} | {Qa=1, Qb=0}
+# oscillation: !A*!B risks metastability in {Qa, Qb}, settling to one of {Qa=0, Qb=1} | {Qa=1, Qb=0}
 ```
 
 (and the equivalent `/* oscillation: ... */` form in the `.lib`). cellsmith always emits a stderr
@@ -149,8 +150,8 @@ clock = ["CLK"]                # optional: input pins that are clocks. A hazard 
                                #   one clock yields a directed setup/hold constraint (clock <- data);
                                #   any other pair yields a symmetric non_seq
 constraint_arcs = true         # optional: the input pins this cell's derived constraint arcs are
-                               #   generated for — true/"D"/["CLK", "D"]; unioned with the CLI's
-                               #   --constraints selection. A pin left out is still probed and its
+                               #   generated for — true/"D"/["CLK", "D"]; --constraints selects every
+                               #   input pin of every cell. A pin left out is still probed and its
                                #   hazards still reported; it just gets no constraint block
 # no_edge_collapse = true      # optional: opt this cell OUT of the edge classification below
                                #   (equivalent to the global --no-edge-collapse flag, per cell)
@@ -345,7 +346,7 @@ Options:
       --no-internal           Suppress hidden (internal-power) arcs
       --no-leakage            Suppress `define_leakage` blocks
       --no-cells              Suppress the `<base>_cells.tcl` artifact
-      --constraints[=<PIN>]   Emit derived constraint arcs; bare = every input pin, repeatable
+      --constraints           Emit derived constraint arcs; every input pin
       --no-edge-collapse      Suppress the edge-register annotation
       --logic-low <VOLTAGE>   Voltage for logic `0` [default: 0]
       --logic-high <VOLTAGE>  Voltage for logic `1` [default: $VDD]
@@ -487,28 +488,35 @@ through settling, and the walk into an arc's start state drives every state vari
 included) to its value there; a state-holding cell's `-ic` line is what carries that start condition
 into the measured vector.
 
-The engine detects three kinds of hazard: an **order-dependent** hazard (non-confluence — the settled
-state depends on which of a racing input pair's edges lands first; seen on C-elements, DFFs and SR
-latches), an **oscillation** hazard (a bistable condition where the machine picks a settled state
-non-deterministically instead of converging on one, as in a mutex/arbiter), and a **width-dependent**
-hazard (the settled state depends on how far apart the two edges of one input's *pulse* are — a clock
-pulse too narrow to carry a flop's master through to its slave settles the flop somewhere a wider pulse
-does not). From a detected hazard, cellsmith can **generate** a timing constraint to avoid it — setup/hold
-for a pair holding a declared clock, a symmetric `non_seq` for any other pair, and a single-pin
-`min_pulse_width` for a pulse — for the input pins the `--constraints` flag and a cell's
-`constraint_arcs` select between them. Selecting pins narrows what is GENERATED: every hazard is
-detected and reported whichever pins are selected, so a pin left out keeps its stderr diagnostic and
-only loses its blocks.
-cellsmith emits four kinds of per-cell stderr diagnostic: the oscillation hazards, the order-dependent
-hazards (grouped per racing input pair, a pair's conditions joined), the width-dependent hazards (the
-pulsed pin and its opening edge, the nodes the width decides, and the competing outcomes), and the arcs
-whose blocks conflate several cell states — firings a block cannot tell apart because the state that
-separates them has no column, which naming those nodes in `expose` would fix.
+A hazard is read on two independent axes. Its **cause** is what the timing is between: a **race**,
+input edges that do not converge when toggled (a C-element's `A↓` against `B↑`, a DFF's data against
+its clock, an SR latch's simultaneous release), or a **pulse**, the two edges of one input racing each
+other (a clock pulse too narrow to carry a flop's master through to its slave leaves the flop somewhere
+a wider pulse does not). Its **outcome** is what the machine then does: **indeterminate** — it settles,
+but which state it settles to is not determined — or **oscillation** — it never settles, walking a
+periodic cycle instead of reaching a state that is its own next state, as a mutex/arbiter does when both
+requests arrive together. The axes are independent, so one cause showing both outcomes is reported under
+each.
 
-Each emitted constraint arc names the nodes it protects — the state variables whose settled value the
-hazard puts at risk — in a single `-probe`, so Liberate measures the node the constraint is about. A
-protected node with no pin of its own, such as a flop's master latch, is given a `-pinlist` column on
-that block alone, which its `-ic` states the start level through.
+A **cause** is a starting state and a transition; an **effect** is which node suffers what. From a
+detected hazard, cellsmith can **generate** a timing constraint to remove it, and the constraint follows
+the cause alone — setup/hold for a racing pair holding a declared clock, a symmetric `non_seq` for any
+other pair, and a single-pin `min_pulse_width` for a pulse. Which pins get one is selected by a cell's
+`constraint_arcs`, or by `--constraints` for every input pin of every cell. Selecting pins narrows what
+is GENERATED: every hazard is detected and reported whichever pins are selected, so a pin left out keeps
+its stderr diagnostic and only loses its blocks.
+
+cellsmith emits two kinds of per-cell stderr diagnostic. The detected hazards come out one entry per
+cause — a header naming the timing and the state it goes wrong from, over a body that names the
+condition, the walk into that state, and one field per outcome observed listing the nodes THAT reading
+puts at risk. The masked arcs come out as the blocks that conflate several cell states — firings a
+block cannot tell apart because the state that separates them has no column, which naming those nodes
+in `expose` would fix.
+
+Each emitted constraint arc names its **victim nodes** — the state variables whose settled value the
+hazard puts at risk, over every outcome the cause showed — in a single `-probe`, so Liberate measures
+the nodes the constraint is about. A victim node with no pin of its own, such as a flop's master latch,
+is given a `-pinlist` column on that block alone, which its `-ic` states the start level through.
 
 ## Known issues
 
