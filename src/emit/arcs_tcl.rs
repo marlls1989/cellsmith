@@ -3,7 +3,7 @@
 //! A block states its start condition and its stimulus, and nothing about how the cell was walked
 //! there: `-type` leads, then the pins in declaration order.
 //!
-//! Arc typing follows the per-arc labels in [`crate::logic::edge`], which are SOURCED FROM the arc
+//! Arc typing follows the per-arc labels in `crate::logic::edge`, which are SOURCED FROM the arc
 //! pipeline itself: each emitted delay arc looks up its own `(output, related clock, clock direction)`
 //! key in `crate::logic::edge::EdgeArcs::labels`. A labelled arc is a clock edge after which the value
 //! holds independently of the clock level, and Liberate has one token for it: `-type edge`. An

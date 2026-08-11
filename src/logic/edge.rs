@@ -81,7 +81,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
-use espresso_logic::{Anonymous, Cover, CoverType, CubeType, Minimizable, Minterm, Symbol};
+use espresso_logic::{Cover, CoverType, CubeType, Minimizable, Minterm, Symbol};
 use rayon::prelude::*;
 
 use crate::logic::analysis::Machine;
@@ -175,13 +175,10 @@ pub(crate) struct EdgeArcs {
 /// factored content matches an ALREADY-DECLARED register (up to inversion — `DETP`'s buried `T`), that
 /// register is reused and nothing is minted; the entry then only records the reading output's function.
 #[derive(Debug, Clone)]
-pub struct DerivedRegister {
+pub(crate) struct DerivedRegister {
     /// The register node's name — a freshly minted, collision-checked name, or the name of the reused
     /// declared register when a match was found (nothing minted).
     pub(crate) name: Symbol,
-    /// The register's value over machine coordinates, evaluable at any explored stable state — the harness
-    /// resolves the derived node's value through this instead of `Machine::output_value`.
-    pub content: Cover<Symbol, Anonymous>,
     /// Per read-gated output that reads this register: the output's combinational read function, as
     /// state-table regions over the register node and the gate pins.
     pub(crate) reads: Vec<(Symbol, StateRegions)>,
@@ -778,12 +775,10 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                 });
             }
 
-            let content = regions::minimise_bdd(&content_bdd);
             derived_map
                 .entry(reg_name.clone())
                 .or_insert_with(|| DerivedRegister {
                     name: reg_name.clone(),
-                    content,
                     reads: Vec::new(),
                 })
                 .reads
@@ -1640,6 +1635,76 @@ mod tests {
             .collect()
     }
 
+    /// Every MINTED read-gate register's value as a function of machine coordinates, keyed by node name.
+    /// A minted register is not itself a machine coordinate, so no state column carries its value; it is
+    /// read off the reading output's δ with the read-gates RELEASED. Releasing a gate cannot move the
+    /// held content — that a pin never moves the output's cone state is exactly what makes it a read-gate
+    /// — and at the released levels the output shows that content unaltered. The released levels are the
+    /// ones the emitted read function is SENSITIVE to the register column at: an asserted gate pins the
+    /// output to a constant, so the two register cofactors differ on the released cube and nowhere else. A
+    /// register the factorisation REUSED is a declared one, still a machine coordinate, so it is absent
+    /// here and resolves through [`Machine::output_value`].
+    fn derived_values<B: Brand, C: ManagerCell + Send + Sync>(
+        m: &Machine<B, C>,
+        es: &EdgeArcs,
+    ) -> BTreeMap<Symbol, Bdd<B, C>> {
+        let mut values: BTreeMap<Symbol, Bdd<B, C>> = BTreeMap::new();
+        let Some((_, any)) = m.deltas.first() else {
+            return values; // no state variables, so nothing was factored out
+        };
+        let b = any.builder();
+        let mut fn_of: BTreeMap<&str, &Bdd<B, C>> = BTreeMap::new();
+        for (n, d) in &m.deltas {
+            fn_of.insert(n.as_str(), d);
+        }
+        for (n, d) in m.combinational_outputs() {
+            fn_of.insert(n.as_str(), d);
+        }
+        let is_machine_node = |name: &Symbol| {
+            m.state_set.contains(name.as_str()) || m.cell.outputs.iter().any(|o| &o.name == name)
+        };
+        for d in es.derived.iter().filter(|d| !is_machine_node(&d.name)) {
+            // A minted register is minted from ONE output's cofactored content — the mint takes that
+            // output's own name — so its read function is the one that reveals the register.
+            let (out, sr) = d
+                .reads
+                .first()
+                .expect("a derived register carries its reading output");
+            let read = b.build_cover(&sr.on_cover);
+            let sensitive = read
+                .cofactor(d.name.as_str(), true)
+                .xor(&read.cofactor(d.name.as_str(), false));
+            assert!(
+                !sensitive.is_contradiction(),
+                "the read function of {out} never reveals {}",
+                d.name
+            );
+            // Sensitivity is the conjunction of the released levels, so exactly one level of each gate
+            // survives it: at the other the output is constant and the two cofactors coincide.
+            let gates: Vec<Symbol> = sensitive.variables().collect();
+            let released: Vec<(&str, Option<bool>)> = gates
+                .iter()
+                .map(|g| {
+                    let high = !sensitive.cofactor(g.as_str(), true).is_contradiction();
+                    let low = !sensitive.cofactor(g.as_str(), false).is_contradiction();
+                    assert!(
+                        high != low,
+                        "gate {g} must release {} at exactly one level",
+                        d.name
+                    );
+                    (g.as_str(), Some(high))
+                })
+                .collect();
+            let released: Minterm<Symbol> =
+                Minterm::with_labels(&released).expect("distinct read-gate pins");
+            let dy = fn_of
+                .get(out.as_str())
+                .expect("a read-gated output is a machine coordinate");
+            values.insert(d.name.clone(), dy.restrict_to(&released));
+        }
+        values
+    }
+
     /// Replay-faithfulness harness: prove the emitted edge arcs against the machine's own
     /// [`machine::toggle`]/[`machine::settle`] behaviour over every reachable stable state. The arcs plus
     /// the off-edge are read as ONE joint model — in an OPEN (genuinely transparent) phase the node equals
@@ -1706,20 +1771,12 @@ mod tests {
             false
         };
 
-        // The read-gate factorisation's MINTED registers are not machine nodes, so their value is resolved
-        // through their content cover (built once on the harness builder) rather than `output_value`. A
-        // declared register reused by the factorisation stays a machine node and resolves normally. This is
-        // what makes the derived register's captures and off-edge replay for real against the machine below,
-        // rather than passing vacuously on an all-`None` value.
-        let is_machine_node = |name: &Symbol| {
-            m.state_set.contains(name.as_str()) || m.cell.outputs.iter().any(|o| &o.name == name)
-        };
-        let derived_content: BTreeMap<Symbol, Bdd<B, C>> = es
-            .derived
-            .iter()
-            .filter(|d| !is_machine_node(&d.name))
-            .map(|d| (d.name.clone(), builder.build_cover(&d.content)))
-            .collect();
+        // The read-gate factorisation's MINTED registers are not machine nodes, so their value comes from
+        // [`derived_values`] rather than `output_value`. A declared register reused by the factorisation
+        // stays a machine node and resolves normally. This is what makes the derived register's captures
+        // and off-edge replay for real against the machine below, rather than passing vacuously on an
+        // all-`None` value.
+        let derived_content = derived_values(m, es);
 
         for r in &es.captures {
             let node = r.node.as_str();
@@ -1969,9 +2026,9 @@ mod tests {
 
     /// Replay-faithfulness for the read-gate factorisation's READ FUNCTIONS: at every reachable stable
     /// state, the emitted read cover — evaluated with the factored register resolved through its own value
-    /// (a minted register through its content cover, a reused declared register through `output_value`) and
-    /// the gate pins at their state values — reproduces the machine's output. This is the semantic
-    /// correctness gate for `Y = state_function(register, gates)`, stronger than any literal SOP match.
+    /// ([`derived_values`] for a minted register, `output_value` for a reused declared one) and the gate
+    /// pins at their state values — reproduces the machine's output. This is the semantic correctness gate
+    /// for `Y = state_function(register, gates)`, stronger than any literal SOP match.
     fn assert_reads_faithful<B: Brand, C: ManagerCell + Send + Sync>(
         m: &Machine<B, C>,
         es: &EdgeArcs,
@@ -1980,16 +2037,12 @@ mod tests {
             return;
         };
         let b = any.builder();
-        let is_machine = |n: &str| {
-            m.state_set.contains(n) || m.cell.outputs.iter().any(|o| o.name.as_str() == n)
-        };
+        let derived = derived_values(m, es);
         for d in &es.derived {
-            let content = b.build_cover(&d.content);
             let reg_value = |s: &Minterm<Symbol>| -> Option<bool> {
-                if is_machine(d.name.as_str()) {
-                    m.output_value(d.name.as_str(), s)
-                } else {
-                    content.evaluate_fast(s)
+                match derived.get(&d.name) {
+                    Some(content) => content.evaluate_fast(s),
+                    None => m.output_value(d.name.as_str(), s),
                 }
             };
             for (o, sr) in &d.reads {
@@ -2736,24 +2789,47 @@ Y = "!(Q*A)"
 
     #[test]
     fn edge_read_gate_corrupted_cover_teeth() {
-        // The harness has teeth on the DERIVED registers: corrupt a derived content cover and the
-        // replay must fail. A test that cannot fail on the bug it targets is not a test.
+        // The harness has teeth on the DERIVED registers: corrupt what the factorisation emits for one and
+        // the replay must fail. A test that cannot fail on the bug it targets is not a test. Both halves of
+        // the emitted model are corrupted in turn — the register's own capture cover, replayed against the
+        // machine, and the read function the reading output is rendered as.
+        fn fails(f: impl FnOnce()) -> bool {
+            let prev = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {}));
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+            std::panic::set_hook(prev);
+            result.is_err()
+        }
+
+        // Invert a captured next-state cover of the minted register: the replay now predicts `D` on that
+        // edge where the machine delivers `!D`.
         with_machine!(BDET_TOML, |builder, _a, _m2, m| {
             let mut es = classify(&m);
             assert!(!es.derived.is_empty(), "BDET factors a derived register");
-            // Invert the minted register's content: the resolver now reads the wrong held value.
-            let good = builder.build_cover(&es.derived[0].content);
-            es.derived[0].content = regions::minimise_bdd(&!&good);
-
-            let prev = std::panic::take_hook();
-            std::panic::set_hook(Box::new(|_| {}));
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                assert_captures_faithful(&m, &es)
-            }));
-            std::panic::set_hook(prev);
+            let name = es.derived[0].name.clone();
+            let er = es
+                .captures
+                .iter_mut()
+                .find(|ec| ec.node == name)
+                .expect("the minted register carries edge captures");
+            let good = builder.build_cover(&er.captures[0].2.on_cover);
+            er.captures[0].2.on_cover = regions::minimise_bdd(&!&good);
             assert!(
-                result.is_err(),
-                "corrupting a derived cover must make the replay harness fail"
+                fails(|| assert_captures_faithful(&m, &es)),
+                "corrupting a derived register's capture cover must make the replay harness fail"
+            );
+        });
+
+        // Invert the read function: the output is now rendered as the complement of what it reads, which
+        // the read replay catches wherever the register's value reaches the output.
+        with_machine!(BDET_TOML, |builder, _a, _m2, m| {
+            let mut es = classify(&m);
+            let sr = &mut es.derived[0].reads[0].1;
+            let good = builder.build_cover(&sr.on_cover);
+            sr.on_cover = regions::minimise_bdd(&!&good);
+            assert!(
+                fails(|| assert_reads_faithful(&m, &es)),
+                "corrupting a derived register's read function must make the read harness fail"
             );
         });
     }

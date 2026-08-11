@@ -111,7 +111,7 @@ pub(crate) struct EdgeRow {
 /// The joint state-table model of a sequential cell: the input-node and internal-node column headers,
 /// the original-signal → node-name map, and the deduplicated, sorted joint rows.
 #[derive(Debug)]
-pub struct StateModel {
+pub(crate) struct StateModel {
     /// Primary-input columns, ordered by the cell's input-pin order.
     pub(crate) input_nodes: Vec<Symbol>,
     /// State-node columns (`current`/`next` order) under their TABLE-NODE names — what the statetable
@@ -120,9 +120,16 @@ pub struct StateModel {
     /// keep their column.
     pub(crate) internal_nodes: Vec<Symbol>,
     /// The same columns in the same order under their SIGNAL names — what the covers, the minterm keys
-    /// and the machine are written in. `internal_nodes[i]` is the table node of `state_signals[i]`;
-    /// anything querying the machine or a region by column must read this list, not `internal_nodes`.
-    pub state_signals: Vec<Symbol>,
+    /// and the machine are written in. `internal_nodes[i]` is the table node of `state_signals[i]`, so a
+    /// harness addressing a rendered column by signal name reads this list, not `internal_nodes`.
+    ///
+    /// That harness is the only reader, which is why the field is gated on `#[cfg(test)]` — the data sits
+    /// where its consumer is, absent from every other build. `#[cfg(test)]` silences `dead_code` exactly
+    /// as `#[allow]` does, so it is honest only where the reader could not reach the information any other
+    /// way: here it could not, short of inverting [`node_of`](Self::node_of) at each use. Where a
+    /// production route already answers the question, the field is deleted rather than gated.
+    #[cfg(test)]
+    state_signals: Vec<Symbol>,
     /// Each state signal's ORIGINAL name → its state-table node name.
     pub(crate) node_of: BTreeMap<Symbol, Symbol>,
     /// The joint level (level-sensitive) next-state rows, deduplicated and sorted.
@@ -426,6 +433,7 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     Some(StateModel {
         input_nodes,
         internal_nodes,
+        #[cfg(test)]
         state_signals: state_orig,
         node_of,
         rows,

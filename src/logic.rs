@@ -4,7 +4,7 @@ pub mod analysis;
 pub mod arcs;
 pub mod confluence;
 pub(crate) mod constraint;
-pub mod edge;
+pub(crate) mod edge;
 pub mod hazard;
 pub mod leakage;
 pub mod machine;

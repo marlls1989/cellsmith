@@ -6,7 +6,7 @@
 //! signal (primary inputs + other outputs) as an input column, so a self-holding cell keeps its
 //! hysteresis as `-` (no-change) rows. Pins are emitted in declaration order.
 //!
-//! A signal recognised as an edge-triggered register ([`crate::logic::edge`]) emits an
+//! A signal recognised as an edge-triggered register (`crate::logic::edge`) emits an
 //! **edge-sensitive** UDP instead: the level-latch rows are replaced by clock-edge (`(01)`/`(10)`)
 //! capture rows — one group per active `(clock, edge)`, so a dual-edge register captures on both — plus
 //! async set/clear level rows, a no-change row for each clock's inactive edge and no-change rows for

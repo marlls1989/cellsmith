@@ -75,7 +75,7 @@ pub struct Cell {
     #[serde(default, deserialize_with = "de_constraint_pins")]
     pub constraint_arcs: ConstraintPins,
     /// Optional: opt OUT of the behavioural per-arc edge classification for this cell (see
-    /// [`crate::logic::edge`]). Classification is ON by default; setting this true (or the global
+    /// `crate::logic::edge`). Classification is ON by default; setting this true (or the global
     /// `--no-edge-collapse` CLI flag) suppresses it, leaving every arc in its combinational form.
     #[serde(default)]
     pub no_edge_collapse: bool,
