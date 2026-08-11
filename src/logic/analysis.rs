@@ -3,16 +3,16 @@
 //! same exploration.
 //!
 //! A cell is a state machine over `inputs × coordinates` — every signal surviving the minimisation, the
-//! state variables and the combinational survivors alike (see [`machine`] and [`resolve`]). The
+//! state variables and the combinational survivors alike (see [`machine`] and `resolve`). The
 //! signals' BDDs are built and minimised once in [`crate::model::Cell::analyse`]; this pass reads that
 //! shared map. After the fold every coordinate's next-state δ **is** its entry in the map — a direct
 //! lookup, no per-signal composition. Only the one
-//! [`machine::explore`] BFS is set up here, and it is the same setup for both derivations, so it is done
+//! `machine::explore` BFS is set up here, and it is the same setup for both derivations, so it is done
 //! **once** and shared through [`Machine`]. It is done once per CELL rather than once per view: a cell
 //! that exposes internal nodes is analysed as two views, and the second one takes the first's explored
 //! states projected onto its own coordinates ([`Exploration`]) instead of exploring again. Only plain
 //! data ([`Arc`]; the detected [`Hazard`]s; the
-//! generated [`Constraint`]s; the explored states themselves, which are minterms and carry no BDD
+//! generated `Constraint`s; the explored states themselves, which are minterms and carry no BDD
 //! handle) escapes
 //! into [`MachineAnalysis`]; the live BDD handles never leave this pass.
 //!
@@ -46,12 +46,12 @@ use crate::model::{AnalysedCell, ConstraintPins};
 /// field into the matching [`crate::model::AnalysedCell`] fields by `Cell::analyse` (see `model.rs`).
 #[derive(Debug, Default)]
 pub struct MachineAnalysis {
-    pub arcs: Vec<Arc>,
-    pub hidden_arcs: Vec<HiddenArc>,
-    pub constraints: Vec<Constraint>,
-    pub hazards: Vec<Hazard>,
-    pub leakage: Vec<LeakageState>,
-    pub edge: crate::logic::edge::EdgeArcs,
+    pub(crate) arcs: Vec<Arc>,
+    pub(crate) hidden_arcs: Vec<HiddenArc>,
+    pub(crate) constraints: Vec<Constraint>,
+    pub(crate) hazards: Vec<Hazard>,
+    pub(crate) leakage: Vec<LeakageState>,
+    pub(crate) edge: crate::logic::edge::EdgeArcs,
     /// The budget counter that stopped the exploration, or `None` when the machine was explored in
     /// full. Set ⇒ every field above is empty, because nothing was derived.
     ///
@@ -59,11 +59,11 @@ pub struct MachineAnalysis {
     /// to completion in the view that performed it — so this is set only for a view that explored
     /// ([`Exploration::Fresh`]) or for one mirroring the ceiling that stopped the exploration it would
     /// have reused.
-    pub unexplored: Option<machine::ExplorationLimit>,
+    pub(crate) unexplored: Option<machine::ExplorationLimit>,
     /// The exploration this pass performed, handed back so a second view of the same cell projects it
     /// onto its own coordinates instead of repeating it. `None` when the pass reused an exploration, and
     /// when a budget ceiling stopped one.
-    pub explored: Option<machine::Explored>,
+    pub(crate) explored: Option<machine::Explored>,
 }
 
 /// Where a view's explored states come from.

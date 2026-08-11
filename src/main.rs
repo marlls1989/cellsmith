@@ -372,25 +372,44 @@ impl<'a> Occasion<'a> {
     }
 }
 
+/// What one outcome does at an occasion: the nodes that reading puts at risk, and the states the
+/// machine lands at once the timing is honoured. Both are gathered over the occasion's records of that
+/// outcome — the victims unioned, each kept at the position it was first named, and the landings kept in
+/// the order the records state them, since a pulse's are a sequence and a race's alternatives.
+#[derive(Default)]
+struct Effect<'a> {
+    victims: Vec<&'a str>,
+    landings: Vec<String>,
+}
+
 /// One occasion's warning: a header naming what causes the hazard and the state it is caused from, over
 /// a detail block that names the effect. `records` are the occasion's detected hazards, one per outcome
 /// observed; the fields that follow from the occasion alone — its condition and the path into its state
 /// — are the same in each, so they are read from the first, while each outcome contributes a field of
-/// its own naming the nodes THAT reading puts at risk.
+/// its own naming the nodes THAT reading puts at risk and where it leaves them.
 fn hazard_warning(cell: &AnalysedCell, occasion: &Occasion, records: &[&Hazard]) -> String {
     let first = records
         .first()
         .expect("an occasion is only entered by a record");
-    // One entry per outcome, over the nodes every record of that outcome names. `Outcome`'s own order
-    // sets the order the fields come out in, so a warning reads the same however detection filed them.
-    let mut victims: BTreeMap<Outcome, Vec<&str>> = BTreeMap::new();
+    // One entry per outcome, over the nodes and landing states every record of that outcome names.
+    // `Outcome`'s own order sets the order the fields come out in, so a warning reads the same however
+    // detection filed them.
+    let mut effects: BTreeMap<Outcome, Effect> = BTreeMap::new();
     for h in records {
-        let named = victims.entry(h.outcome).or_default();
+        let effect = effects.entry(h.outcome).or_default();
         for n in &h.group {
-            if !named.contains(&n.as_str()) {
-                named.push(n.as_str());
+            if !effect.victims.contains(&n.as_str()) {
+                effect.victims.push(n.as_str());
             }
         }
+        effect.landings.extend(h.settled_strs());
+    }
+    // Successive landings naming the same state are one place the machine comes to rest: a pulse's two
+    // waypoints coincide wherever the closing edge moves nothing the outcome names, and reporting that
+    // state twice would offer the reader two landings to tell apart where there is only one. A race's
+    // are already distinct, detection holding them as a set.
+    for effect in effects.values_mut() {
+        effect.landings.dedup();
     }
     let mut fields = vec![
         ("when", first.condition_str()),
@@ -401,17 +420,17 @@ fn hazard_warning(cell: &AnalysedCell, occasion: &Occasion, records: &[&Hazard])
     // restate it. A race leaves its pins where they landed, so its own starting state is worth naming.
     if let Cause::Race { pins } = occasion.cause {
         fields.push(("pre-hazard", first.pre_state_str()));
-        if victims.contains_key(&Outcome::Indeterminate) {
+        if effects.contains_key(&Outcome::Indeterminate) {
             fields.push(("orders", orders_str(pins)));
         }
-        if victims.contains_key(&Outcome::Oscillation) {
+        if effects.contains_key(&Outcome::Oscillation) {
             fields.push(("triggered by", trigger_str(pins)));
         }
     }
     fields.extend(
-        victims
+        effects
             .iter()
-            .map(|(outcome, nodes)| (outcome_str(*outcome), format!("{{{}}}", nodes.join(", ")))),
+            .map(|(outcome, effect)| (outcome_str(*outcome), effect_str(occasion.cause, effect))),
     );
     let mut lines = vec![format!(
         "cellsmith: warning: cell {:?}: {} causes a hazard at {}",
@@ -446,6 +465,31 @@ fn outcome_str(outcome: Outcome) -> &'static str {
         Outcome::Indeterminate => "indeterminate",
         Outcome::Oscillation => "oscillation",
     }
+}
+
+/// One outcome's field value: the nodes it puts at risk, and — where the records name any — the states
+/// the machine lands at once the timing IS honoured, which for a short pulse is where it would have gone
+/// had the pulse been wide enough.
+///
+/// The landings are joined by what the cause makes them. A race's are ALTERNATIVES: either winner is a
+/// legitimate result of separating the edges, and nothing orders them among themselves, so they read as
+/// `or`. A pulse's are the two waypoints a wide enough one walks through — where the opening edge's own
+/// cascade comes to rest, and then where the closing edge leaves the machine — so they read with the
+/// same `→` the path field uses for a sequence.
+///
+/// The clause is absent, rather than empty, where the records name no landing at all: a lone toggle has
+/// no second edge to be separated from, and a pair whose every order rings has no timing that brings the
+/// machine to rest either. The header and `triggered by` already say which of the two it is.
+fn effect_str(cause: &Cause, effect: &Effect) -> String {
+    let victims = format!("{{{}}}", effect.victims.join(", "));
+    if effect.landings.is_empty() {
+        return victims;
+    }
+    let separator = match cause {
+        Cause::Race { .. } => " or ",
+        Cause::Pulse { .. } => " → ",
+    };
+    format!("{victims} lands at {}", effect.landings.join(separator))
 }
 
 /// The triggering transitions of an indeterminate race: every order its edges can arrive in, since

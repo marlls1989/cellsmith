@@ -36,7 +36,7 @@ pub struct Cell {
     pub name: Vec<Symbol>,
     /// Primary input pins. Order matters: it defines the pinlist/vector order.
     #[serde(deserialize_with = "de_symbol_vec")]
-    pub inputs: Vec<Symbol>,
+    pub(crate) inputs: Vec<Symbol>,
     /// Output pin name -> Boolean function, parsed at deserialise time. Entries arrive in the order
     /// the TOML parser yields them — sorted by name, not as written in the file — and that order is
     /// stable from then on.
@@ -46,28 +46,28 @@ pub struct Cell {
     /// Precedence, tightest first: NOT > AND > XOR > OR. Identifiers are a letter/`_` followed by
     /// letters/digits/`_` (so pin names like `M1`, `P2`, `Q` are fine).
     #[serde(deserialize_with = "de_symbol_expr_map")]
-    pub outputs: IndexMap<Symbol, BoolExpr>,
+    pub(crate) outputs: IndexMap<Symbol, BoolExpr>,
     /// Optional: internal state variable name -> Boolean function, parsed at deserialise time (same
     /// grammar and name-sorted ordering as [`Cell::outputs`]). An internal signal is referenceable by other
     /// functions and is a driven state variable (modelled in the Verilog and the Liberty state
     /// table), but emits **no** external output pin and is never an arc source or target.
     #[serde(default, deserialize_with = "de_symbol_expr_map")]
-    pub internal: IndexMap<Symbol, BoolExpr>,
+    pub(crate) internal: IndexMap<Symbol, BoolExpr>,
     /// Optional: the internal nodes listed in the Liberate arcs' `-pinlist`, in declared order (the
     /// declared order fixes their pinlist position). Each is preserved through the state-space
     /// minimisation so the arcs can drive it (`-ic`) and observe it (`-vector`). Spec-only: like
     /// `template`/`template_overrides` above, there is no CLI counterpart.
     #[serde(default, deserialize_with = "de_symbol_vec")]
-    pub expose: Vec<Symbol>,
+    pub(crate) expose: Vec<Symbol>,
     /// Optional: input pins that force the output regardless of held state (async set/reset),
     /// so their arcs are emitted as `-type async` rather than combinational.
     #[serde(rename = "async", default, deserialize_with = "de_symbol_vec")]
-    pub async_pins: Vec<Symbol>,
+    pub(crate) async_pins: Vec<Symbol>,
     /// Optional: input pins that are clocks. A hazard on a pin pair holding a declared clock yields a
     /// directed setup/hold constraint (clock ← data); any other pair yields a symmetric non_seq. See
     /// [`crate::logic::confluence`].
     #[serde(default, deserialize_with = "de_symbol_vec")]
-    pub clock: Vec<Symbol>,
+    pub(crate) clock: Vec<Symbol>,
     /// Optional: which of this cell's input pins derived constraint arcs (setup/hold, non_seq,
     /// min_pulse_width) are generated for. Accepts a bool (`true` = every pin, `false` = none), a scalar
     /// pin name, or a list of them; absent = none. Unioned with the global `--constraints` CLI flag, and
@@ -91,24 +91,24 @@ pub struct Cell {
     /// (delay/power/constraint). Structural only — the template names come from the spec, never
     /// generated. `None` fields carry through unset.
     #[serde(default)]
-    pub template: Option<TemplateSpec>,
+    pub(crate) template: Option<TemplateSpec>,
     /// Optional: per-drive-strength-alias template overrides, keyed by a name from this cell's `name`
     /// list. Each alias's [`TemplateSpec`] is merged per-field over the cell-wide `template`. Keys are
     /// validated against the cell's declared names at analyse time.
     #[serde(default, deserialize_with = "de_template_overrides")]
-    pub template_overrides: IndexMap<Symbol, TemplateSpec>,
+    pub(crate) template_overrides: IndexMap<Symbol, TemplateSpec>,
     /// Optional: the netlist node each internal signal stands for. A spec is written in names that read
     /// well in the behavioural model, while the node a cell actually holds its state on may be spelled
     /// however the netlist spells it (`XI7/m`); this says which is which. See [`NodeNames`].
     #[serde(default, deserialize_with = "de_nodes")]
-    pub nodes: NodeNames,
+    pub(crate) nodes: NodeNames,
     /// Optional: override the low-logic-level (`0`) voltage expression the exposed nodes' `-ic` renders.
-    /// Falls back to the `--logic-low` CLI default, then to [`LogicVoltages::default`]'s `"0"`. A Tcl
+    /// Falls back to the `--logic-low` CLI default, then to `LogicVoltages::default`'s `"0"`. A Tcl
     /// variable is as good as a literal: the arcs emitter renders the value as one `-ic` column.
     #[serde(default)]
     pub logic_low: Option<String>,
     /// Optional: override the high-logic-level (`1`) voltage expression, mirroring `logic_low`. Falls
-    /// back to the `--logic-high` CLI default, then to [`LogicVoltages::default`]'s `"$VDD"`.
+    /// back to the `--logic-high` CLI default, then to `LogicVoltages::default`'s `"$VDD"`.
     #[serde(default)]
     pub logic_high: Option<String>,
 }
@@ -123,17 +123,17 @@ pub struct Cell {
 /// a different node in each alias's netlist. Resolution is per signal: the alias's own entry if it has
 /// one, else the cell-wide entry, else the signal's own name ([`Self::of`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct NodeNames {
+pub(crate) struct NodeNames {
     /// The cell-wide mapping, in declared order.
-    pub cell: IndexMap<Symbol, Symbol>,
+    pub(crate) cell: IndexMap<Symbol, Symbol>,
     /// Per-alias mappings, keyed by a name from the cell's `name` list, each in declared order.
-    pub aliases: IndexMap<Symbol, IndexMap<Symbol, Symbol>>,
+    pub(crate) aliases: IndexMap<Symbol, IndexMap<Symbol, Symbol>>,
 }
 
 impl NodeNames {
     /// The netlist node `signal` stands for under drive-strength alias `alias`: the alias's own entry,
     /// else the cell-wide entry, else `signal` itself.
-    pub fn of(&self, alias: &Symbol, signal: &Symbol) -> Symbol {
+    pub(crate) fn of(&self, alias: &Symbol, signal: &Symbol) -> Symbol {
         self.aliases
             .get(alias)
             .and_then(|m| m.get(signal))
@@ -148,14 +148,14 @@ impl NodeNames {
 /// only — each name is taken verbatim from the spec, never generated; an absent field is `None`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct TemplateSpec {
+pub(crate) struct TemplateSpec {
     #[serde(default, deserialize_with = "de_opt_symbol")]
-    pub delay: Option<Symbol>,
+    pub(crate) delay: Option<Symbol>,
     #[serde(default, deserialize_with = "de_opt_symbol")]
-    pub power: Option<Symbol>,
+    pub(crate) power: Option<Symbol>,
     /// Also accepted under the `constrain` spelling.
     #[serde(default, alias = "constrain", deserialize_with = "de_opt_symbol")]
-    pub constraint: Option<Symbol>,
+    pub(crate) constraint: Option<Symbol>,
 }
 
 /// The voltage expressions the Liberate arcs' `-ic` renders for the two logic levels (`low` for `0`,
@@ -164,9 +164,9 @@ pub struct TemplateSpec {
 /// model uses for names. Each is carried here exactly as written; making it one `-ic` column is the arcs
 /// emitter's job, that being a question about the Tcl line it renders rather than about the cell.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LogicVoltages {
-    pub low: String,
-    pub high: String,
+pub(crate) struct LogicVoltages {
+    pub(crate) low: String,
+    pub(crate) high: String,
 }
 
 impl Default for LogicVoltages {
@@ -181,7 +181,7 @@ impl Default for LogicVoltages {
 
 impl LogicVoltages {
     /// The voltage expression for `level` (`false` → low, `true` → high).
-    pub fn of(&self, level: bool) -> &str {
+    pub(crate) fn of(&self, level: bool) -> &str {
         if level {
             &self.high
         } else {
@@ -284,7 +284,7 @@ pub enum ConstraintPins {
 
 impl ConstraintPins {
     /// Whether constraints on `pin` are generated.
-    pub fn selects(&self, pin: &Symbol) -> bool {
+    pub(crate) fn selects(&self, pin: &Symbol) -> bool {
         match self {
             Self::Off => false,
             Self::All => true,
@@ -296,26 +296,10 @@ impl ConstraintPins {
     /// asks for no constraint, the other for every pin there is. Read by the analyse-time check that a
     /// named pin is a declared input, the one place a pin's NAME rather than the selection it makes is
     /// of interest.
-    pub fn named(&self) -> &[Symbol] {
+    pub(crate) fn named(&self) -> &[Symbol] {
         match self {
             Self::Off | Self::All => &[],
             Self::Named(pins) => pins,
-        }
-    }
-
-    /// The union of two selections: a pin is selected iff either selects it. `All` absorbs anything and
-    /// `Off` adds nothing, so only two `Named` lists genuinely merge, keeping the first occurrence of
-    /// each pin.
-    pub fn union(&self, other: &Self) -> Self {
-        match (self, other) {
-            (Self::All, _) | (_, Self::All) => Self::All,
-            (Self::Off, selection) | (selection, Self::Off) => selection.clone(),
-            (Self::Named(a), Self::Named(b)) => Self::Named(
-                a.iter()
-                    .chain(b.iter().filter(|p| !a.contains(p)))
-                    .cloned()
-                    .collect(),
-            ),
         }
     }
 }
@@ -599,39 +583,39 @@ pub struct AnalysedOutput {
     pub name: Symbol,
     /// The parsed function, regenerated from the minimised BDD when the rewrite changed it.
     /// DISPLAY-ONLY — analysis reads the shared BDD map, never this field.
-    pub expr: BoolExpr,
-    pub vars: BTreeSet<Symbol>,
+    pub(crate) expr: BoolExpr,
+    pub(crate) vars: BTreeSet<Symbol>,
     /// Signal names (outputs then internals) referenced by this function — its feedback/state — in
     /// the cell's signal order.
-    pub feedback: Vec<Symbol>,
+    pub(crate) feedback: Vec<Symbol>,
 }
 
 /// A cell after validation/analysis.
 #[derive(Debug)]
 pub struct AnalysedCell {
-    pub name: Vec<Symbol>,
-    pub inputs: Vec<Symbol>,
+    pub(crate) name: Vec<Symbol>,
+    pub(crate) inputs: Vec<Symbol>,
     pub outputs: Vec<AnalysedOutput>,
     /// Internal state variables: driven state signals with no external pin. Referenceable by any
     /// function; never an arc source or target. Relay/alias internals are folded away by the
     /// state-space minimisation in [`Cell::analyse`], so only genuine-memory internals survive here.
-    pub internals: Vec<AnalysedOutput>,
+    pub(crate) internals: Vec<AnalysedOutput>,
     /// The internal nodes named in the spec's `expose` list, in declared order, carried verbatim from
     /// `Cell::expose` (validated to be declared internal signals). Some may later be folded away by the
     /// state-space minimisation — see [`AnalysedCell::exposed_signals`] for the survivors in this view.
-    pub exposed: Vec<Symbol>,
-    pub async_pins: Vec<Symbol>,
+    pub(crate) exposed: Vec<Symbol>,
+    pub(crate) async_pins: Vec<Symbol>,
     /// The transition arcs derived for the cell's outputs, precomputed once by the shared machine pass
     /// ([`crate::logic::analysis::analyse_machine`]) and consumed by the arcs emitter.
-    pub arcs: Vec<Arc>,
+    pub(crate) arcs: Vec<Arc>,
     /// The whole-cell internal-power ('hidden') arcs — single input toggles that settle but leave every
     /// output unchanged — precomputed once by the shared machine pass
     /// ([`crate::logic::analysis::analyse_machine`]) and consumed by the arcs emitter.
-    pub hidden_arcs: Vec<HiddenArc>,
+    pub(crate) hidden_arcs: Vec<HiddenArc>,
     /// The cell's static leakage states — the settled seed states of the machine exploration —
     /// precomputed once by the shared machine pass
     /// ([`crate::logic::analysis::analyse_machine`]) and consumed by the arcs emitter.
-    pub leakage: Vec<LeakageState>,
+    pub(crate) leakage: Vec<LeakageState>,
     /// The cell's detected hazards — one [`Hazard`] per (cause, outcome) pair a probe observes: a race
     /// or a pulse, settling indeterminately or oscillating (empty for cells with no such risk). The
     /// constraints that avoid them are generated separately into `constraints`.
@@ -639,32 +623,32 @@ pub struct AnalysedCell {
     pub hazards: Vec<Hazard>,
     /// Declared clock input pins (`clock = [...]`). See [`crate::logic::constraint`], which reads them
     /// to direct a separation, and [`crate::logic::edge`].
-    pub clock_pins: Vec<Symbol>,
+    pub(crate) clock_pins: Vec<Symbol>,
     /// The constraints generated to avoid the cell's detected hazards: the separations (setup/hold and
     /// non_seq) holding two pins apart, and the minimum pulse widths holding one pin against itself.
     /// Only the pins `constraint_arcs_declared` selects are represented here; each constraint's kind
     /// follows the cause of the hazard it avoids, a separation's being directed by the declared clock.
     /// See [`crate::logic::constraint`].
-    pub constraints: Vec<Constraint>,
+    pub(crate) constraints: Vec<Constraint>,
     /// Which input pins the cell asked for constraint arcs on (`constraint_arcs`, unioned with the
     /// global `--constraints` flag). Read by generation, which keeps the constraints on a selected pin
     /// and drops the rest; detection runs whatever it selects.
-    pub constraint_arcs_declared: ConstraintPins,
+    pub(crate) constraint_arcs_declared: ConstraintPins,
     /// The arc classes whose `-when` arcs are also emitted (per-cell `when` unioned with the global
     /// `--when`), read by the arcs emitter. One general arc per transition — a related pin's edge driving
     /// an output pin's edge — is always emitted, without a `-when` line, regardless of this set; a
     /// selected class adds that class's `-when` arcs on top, so an arc can appear both with and without
     /// its condition. Raw carry — analysis never reads it.
-    pub when: ArcClasses,
+    pub(crate) when: ArcClasses,
     /// Each signal's state-table regions, precomputed once and cached in `signals()` order (outputs
     /// then internals), so emitters don't rebuild the BDDs per call site.
-    pub regions: Vec<crate::logic::regions::StateRegions>,
+    pub(crate) regions: Vec<crate::logic::regions::StateRegions>,
     /// Whether the cell holds state: at least one of its minimised signals is a state variable — a
     /// signal on a dependency cycle ([`crate::logic::resolve::state_variables`]). The Liberate arc
     /// emitter gates the `-ic` initial condition on it: no block renders a walk, so `-ic` is the whole
     /// of how a cell with memory is told what state its measured vector begins in. A combinational cell
     /// has no state to establish and gets no `-ic`.
-    pub state_holding: bool,
+    pub(crate) state_holding: bool,
     /// The cell's behavioural edge classification ([`crate::logic::edge::EdgeArcs`]): the per-node edge
     /// seams (`captures`), the per-arc `-type edge` labels (`labels`) — the field the Liberate arc emitter
     /// reads to type each arc — the cell-level set of internal non-seam master nodes folded away
@@ -672,7 +656,7 @@ pub struct AnalysedCell {
     /// which the Liberty, Verilog and state-table emitters read to render a read-gated register as its own
     /// internal node. Default (empty) when the cell opted out (`no_edge_collapse`). Computed purely from
     /// the already-explored machine — it never alters the exploration.
-    pub edge: crate::logic::edge::EdgeArcs,
+    pub(crate) edge: crate::logic::edge::EdgeArcs,
     /// The exploration budget counter that stopped the machine pass, or `None` when the machine was
     /// explored in full. Set ⇒ nothing was derived from the machine: `arcs`, `hidden_arcs`, `leakage`,
     /// `hazards` and `constraints` are all empty and `edge`
@@ -681,21 +665,21 @@ pub struct AnalysedCell {
     /// The cell-wide characterisation-template references (delay/power/constraint) carried verbatim from
     /// the spec for the `define_cell` emitter. `None` when the cell declares no `template`. Raw carry —
     /// analysis never reads or synthesises it.
-    pub template: Option<TemplateSpec>,
+    pub(crate) template: Option<TemplateSpec>,
     /// Per-drive-strength-alias template overrides carried verbatim from the spec, keyed by an alias
     /// from `name`. Merged per-field over `template` by the `define_cell` emitter. Keys are validated
     /// against the declared names in [`Cell::analyse_signals`]; raw carry otherwise.
     ///
     /// (`nodes` below is validated in the same place and carried the same way.)
-    pub template_overrides: IndexMap<Symbol, TemplateSpec>,
+    pub(crate) template_overrides: IndexMap<Symbol, TemplateSpec>,
     /// Which netlist node each internal signal stands for, carried verbatim from the spec for the arcs
     /// emitter. Analysis never reads it: the machine is built and explored in the spec's own names, and
     /// only the Liberate artifacts are rendered in the netlist's.
-    pub nodes: NodeNames,
+    pub(crate) nodes: NodeNames,
     /// The voltage expressions the Liberate arcs' `-ic` renders for the two logic levels, resolved from
     /// the cell's `logic_low`/`logic_high` overrides (falling back to [`LogicVoltages::default`]). Raw
     /// carry — analysis never reads it, like `template`.
-    pub voltages: LogicVoltages,
+    pub(crate) voltages: LogicVoltages,
     /// The arc view of this cell: the same cell analysed with its exposed nodes preserved as model
     /// coordinates, so an arc can drive one (`-ic`) and observe it (`-vector`). Present only when the
     /// cell exposes something, and itself never carrying a further view.
@@ -716,7 +700,7 @@ pub struct AnalysedCell {
     /// minimised coordinates. The model view's machine sees only the exposed nodes that survived its own
     /// minimisation ([`AnalysedCell::exposed_signals`], empty in the usual case where the release retires
     /// them), which costs it nothing: it never emits an exposure.
-    pub exposed_view: Option<Box<AnalysedCell>>,
+    pub(crate) exposed_view: Option<Box<AnalysedCell>>,
 }
 
 impl AnalysedCell {
@@ -740,7 +724,7 @@ impl AnalysedCell {
     /// The exposed nodes surviving in this view, in declared order. `exposed` keeps every declared
     /// node (they are preserved through the state-space minimisation), while this keeps only those that
     /// also survive the outputs-only minimisation reflected in `internals`.
-    pub fn exposed_signals(&self) -> impl Iterator<Item = &Symbol> {
+    pub(crate) fn exposed_signals(&self) -> impl Iterator<Item = &Symbol> {
         self.exposed
             .iter()
             .filter(|e| self.internals.iter().any(|s| s.name == **e))
@@ -748,7 +732,7 @@ impl AnalysedCell {
 
     /// Each signal paired with its cached state-table regions, in `signals()` order (outputs then
     /// internals).
-    pub fn signal_regions(
+    pub(crate) fn signal_regions(
         &self,
     ) -> impl Iterator<Item = (&AnalysedOutput, &crate::logic::regions::StateRegions)> {
         self.signals().zip(self.regions.iter())
@@ -756,19 +740,14 @@ impl AnalysedCell {
 }
 
 impl Spec {
-    /// Validate cross-cell name uniqueness, then analyse every cell.
+    /// Validate cross-cell name uniqueness, then analyse every cell under `budget`.
     ///
     /// The union of all cells' name lists must contain no name twice: a collision would emit duplicate
     /// Liberty `cell()` groups, duplicate Verilog modules and conflicting `define_arc` trailers. Intra-cell
     /// duplicates are already deduped by `de_name_list`, so the set-insert here catches inter-cell
     /// collisions (an alias colliding with another cell's name included). The per-cell analyses then run
-    /// in parallel, matching the single machine pass minted per cell in [`Cell::analyse`].
-    pub fn analyse(&self) -> Result<Vec<AnalysedCell>, ModelError> {
-        self.analyse_with(&ExplorationBudget::default())
-    }
-
-    /// [`Spec::analyse`] with an explicit exploration budget for every cell — the CLI's entry point,
-    /// carrying the `--max-candidates` / `--max-states` ceilings.
+    /// in parallel, matching the single machine pass minted per cell in [`Cell::analyse`]. `budget` is the
+    /// CLI's `--max-candidates` / `--max-states` ceilings, applied to every cell alike.
     pub fn analyse_with(
         &self,
         budget: &ExplorationBudget,
@@ -799,7 +778,10 @@ impl Cell {
     /// [`Cell::analyse`] with an explicit exploration budget: the ceilings bound the machine pass, and
     /// an exploration stopped by one of them leaves every machine-derived field empty with the counter
     /// recorded in [`AnalysedCell::unexplored`].
-    pub fn analyse_with(&self, budget: &ExplorationBudget) -> Result<AnalysedCell, ModelError> {
+    pub(crate) fn analyse_with(
+        &self,
+        budget: &ExplorationBudget,
+    ) -> Result<AnalysedCell, ModelError> {
         let analysed = self.analyse_signals()?;
 
         // One-shot state-space rewrite: mint the cell's single builder, build every signal's BDD once,
@@ -1181,7 +1163,7 @@ pub fn build_signal_bdds<B: Brand, C: ManagerCell>(
 /// signal from its folded BDD: its support (now semantic, not the parse-time syntactic support) and the
 /// feedback/state references among the survivors. The display expression is regenerated only when the
 /// rewrite actually changed the function.
-pub fn recompute_signal_metadata<B: Brand, C: ManagerCell>(
+pub(crate) fn recompute_signal_metadata<B: Brand, C: ManagerCell>(
     cell: &mut AnalysedCell,
     bdds: &BTreeMap<Symbol, Bdd<B, C>>,
     min: &crate::logic::minimise::Minimised,
@@ -1529,7 +1511,7 @@ Y = "M + A"
         // A constraint constrains an input: `Y` is an output, so naming it is a spec error rather than a
         // selection that matches nothing.
         let err = constraint_spec("constraint_arcs = [\"A\", \"Y\"]\n")
-            .analyse()
+            .analyse_with(&ExplorationBudget::default())
             .unwrap_err();
         assert!(
             matches!(&err, ModelError::ConstraintNotInput { cell, pin } if cell == "X" && pin == "Y"),
@@ -1541,32 +1523,11 @@ Y = "M + A"
     fn constraint_arcs_rejects_an_internal_signal() {
         // `M` is an internal node, which no block can name on `-pin` either.
         let err = constraint_spec("constraint_arcs = \"M\"\n")
-            .analyse()
+            .analyse_with(&ExplorationBudget::default())
             .unwrap_err();
         assert!(
             matches!(&err, ModelError::ConstraintNotInput { cell, pin } if cell == "X" && pin == "M"),
             "unexpected error: {err}",
-        );
-    }
-
-    #[test]
-    fn constraint_pins_union_takes_every_selected_pin() {
-        let a = ConstraintPins::Named(vec![Symbol::from("A")]);
-        let b = ConstraintPins::Named(vec![Symbol::from("B"), Symbol::from("A")]);
-        assert_eq!(
-            a.union(&b),
-            ConstraintPins::Named(vec![Symbol::from("A"), Symbol::from("B")]),
-            "a pin selected twice is kept once",
-        );
-        // `All` is the top of the selection: it absorbs any list, whichever side it lands on. `Off`
-        // is the bottom and adds nothing.
-        assert_eq!(a.union(&ConstraintPins::All), ConstraintPins::All);
-        assert_eq!(ConstraintPins::All.union(&a), ConstraintPins::All);
-        assert_eq!(a.union(&ConstraintPins::Off), a);
-        assert_eq!(ConstraintPins::Off.union(&a), a);
-        assert_eq!(
-            ConstraintPins::Off.union(&ConstraintPins::Off),
-            ConstraintPins::Off
         );
     }
 
@@ -1705,7 +1666,10 @@ inputs = ["A"]
 [cell.outputs]
 Z = "A"
 "#;
-        let err = parse_spec(s).unwrap().analyse().unwrap_err();
+        let err = parse_spec(s)
+            .unwrap()
+            .analyse_with(&ExplorationBudget::default())
+            .unwrap_err();
         assert!(matches!(err, ModelError::DuplicateCellName { name } if name == "DUP"));
     }
 
@@ -1725,7 +1689,10 @@ inputs = ["A"]
 [cell.outputs]
 Z = "A"
 "#;
-        let err = parse_spec(s).unwrap().analyse().unwrap_err();
+        let err = parse_spec(s)
+            .unwrap()
+            .analyse_with(&ExplorationBudget::default())
+            .unwrap_err();
         assert!(matches!(err, ModelError::DuplicateCellName { name } if name == "BAR"));
     }
 
@@ -1753,7 +1720,9 @@ Z = "A"
             logic_high: None,
         };
         let spec = Spec { cells: vec![cell] };
-        let err = spec.analyse().unwrap_err();
+        let err = spec
+            .analyse_with(&ExplorationBudget::default())
+            .unwrap_err();
         assert!(matches!(err, ModelError::EmptyName));
     }
 
@@ -1773,7 +1742,10 @@ inputs = ["A"]
 [cell.outputs]
 Z = "A"
 "#;
-        let cells = parse_spec(s).unwrap().analyse().unwrap();
+        let cells = parse_spec(s)
+            .unwrap()
+            .analyse_with(&ExplorationBudget::default())
+            .unwrap();
         assert_eq!(cells.len(), 2);
     }
 

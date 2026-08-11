@@ -5,7 +5,7 @@
 //!
 //! Arc typing follows the per-arc labels in [`crate::logic::edge`], which are SOURCED FROM the arc
 //! pipeline itself: each emitted delay arc looks up its own `(output, related clock, clock direction)`
-//! key in [`crate::logic::edge::EdgeArcs::labels`]. A labelled arc is a clock edge after which the value
+//! key in `crate::logic::edge::EdgeArcs::labels`. A labelled arc is a clock edge after which the value
 //! holds independently of the clock level, and Liberate has one token for it: `-type edge`. An
 //! unlabelled arc — a data change propagating through an already-transparent latch, or a clock acting by
 //! its level rather than being held — stays `-type combinational`, and a declared-async related pin
@@ -16,7 +16,7 @@
 //! arrive at the start state; `-ic` states that state outright. Where both can say the same thing,
 //! saying it costs less, and it is said on every block of a state-holding cell — transition, hidden and
 //! constraint alike — giving each `-pinlist` pin the voltage it starts the measured vector at (see
-//! [`ic_str`]). A purely combinational cell has no state to establish and so carries neither.
+//! `ic_str`). A purely combinational cell has no state to establish and so carries neither.
 //!
 //! What `-ic` reaches is exactly the `-pinlist`, so the price is that an internal node the spec did not
 //! `expose` has no column and goes unsaid where a walk would have primed it. That is the trade taken,
@@ -26,11 +26,11 @@
 //!
 //! A cell that exposes internal nodes (`expose = [...]`) is rendered from its ARC VIEW
 //! ([`crate::model::AnalysedCell::arc_view`]), the analysis that keeps those nodes as model coordinates.
-//! An exposed node is not a pin, so it earns a `-pinlist` column of its own (see [`arc_pinlist_str`])
+//! An exposed node is not a pin, so it earns a `-pinlist` column of its own (see `arc_pinlist_str`)
 //! between the inputs and the outputs, which `-vector` and `-ic` line up with. That column reads `X` in
 //! every `-vector`: the vector is stimulus, and a node the cell drives cannot be forced without
 //! overriding the behaviour being measured — `-ic` carries its start level instead. Only the arc emitter
-//! reads that view — the `define_cell` pinlist ([`pinlist_str`]) and every other artifact keep to the
+//! reads that view — the `define_cell` pinlist (`pinlist_str`) and every other artifact keep to the
 //! cell's actual pins.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -86,9 +86,9 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaskedArc {
     /// The `-type` the block carries.
-    pub arc_type: ArcType,
+    pub(crate) arc_type: ArcType,
     /// The pins the block measures between.
-    pub kind: MaskedKind,
+    pub(crate) kind: MaskedKind,
     /// The cell states the one emitted block conflates. None of them is the block's: which firing
     /// reached the emitter first decides nothing, since the block says the same of every one. Read
     /// against each other they agree on what the block states and differ on what it cannot — and what
@@ -98,7 +98,7 @@ pub struct MaskedArc {
 
 /// The pins a block measures between, which differ by what kind of block it is.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MaskedKind {
+pub(crate) enum MaskedKind {
     /// A transition arc: a related pin's edge driving an output pin's edge.
     Transition {
         related: Symbol,
@@ -517,7 +517,7 @@ impl ArcIdentity {
 /// the four halves of a constraint pair, and the single-pin minimum-pulse-width block, which is one
 /// block rather than half of a pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ArcType {
+pub(crate) enum ArcType {
     Async,
     Edge,
     Combinational,
@@ -531,7 +531,7 @@ pub enum ArcType {
 
 impl ArcType {
     /// The Liberate keyword, as it is written after `-type`.
-    pub fn token(self) -> &'static str {
+    pub(crate) fn token(self) -> &'static str {
         match self {
             ArcType::Async => "async",
             ArcType::Edge => "edge",

@@ -27,8 +27,8 @@
 //! consequently IMPLEMENTATION-STYLE INVARIANT: the NAND-implemented `NDLAT` / `NDFF` / `NHPIPE`
 //! fixtures characterise identically to their pass-transistor twins `DLAT` / `DFF` / `HPIPE`.
 //!
-//! [`classify`] is a **post-exploration** read-only pass over the shared [`Machine`]: it re-walks the
-//! exploration with [`machine::toggle`]/[`machine::settle`], mirroring [`super::arcs::derive`]'s
+//! `classify` is a **post-exploration** read-only pass over the shared [`Machine`]: it re-walks the
+//! exploration with `machine::toggle`/`machine::settle`, mirroring [`super::arcs::derive`]'s
 //! per-node walk, and only ADDS an edge annotation. It never re-derives the exploration, the
 //! prevectors or the hazards — those stay byte-identical whether the annotation is on or off.
 //!
@@ -42,7 +42,7 @@
 //! state, reading a node only where that node's own value is determinate there.) NO machine state is ever
 //! coerced, defaulted or re-settled under a held value — an oscillating configuration is an invalid state
 //! and never participates in any test; everything is read off the combinational stable-state machinery
-//! [`machine::explore`]/[`machine::settle`] already produce.
+//! `machine::explore`/`machine::settle` already produce.
 //!
 //! The pipeline is one analysis over the machine's `toggle`/`settle` observations:
 //!
@@ -67,7 +67,7 @@
 //!    (`seam_convergence_point`) that removes `(K, d)` when a non-forcing change of the node inside its
 //!    delivered phase occurs at a toggle not itself an edge of `S`. A node with a non-empty `S` is an
 //!    edge register; its per-edge next-state functions and off-edge are synthesised into
-//!    [`EdgeArcs::captures`].
+//!    `EdgeArcs::captures`.
 //! 3. **Cover synthesis** — `synth_capture`, `generalise` and `regions_from` over one uniform
 //!    header (all inputs except the keying clock plus every candidate), with an ordered drop-loop that
 //!    prefers inputs over internals so the fold-eligible internals drop out of the cover.
@@ -92,25 +92,25 @@ use crate::logic::regions::{self, StateRegions};
 /// The edge arcs carried by one node: the node re-expressed as an edge seam on one or more clocks, each
 /// edge making the node capture-and-hold a next-state value.
 #[derive(Debug, Clone)]
-pub struct EdgeCaptures {
+pub(crate) struct EdgeCaptures {
     /// The node the edge arcs belong to.
-    pub node: Symbol,
+    pub(crate) node: Symbol,
     /// The captured next-state function per active edge, as combinational state-table regions (total —
     /// off is the complement of on, empty hold). Each capture carries ITS OWN clock. Grouped by clock in
     /// cell input-pin order, `Rise` before `Fall` within a clock; a single-clock node keeps one entry per
     /// active edge (two for a dual-edge node with `Rise` first).
-    pub captures: Vec<(Symbol, Edge, StateRegions)>,
+    pub(crate) captures: Vec<(Symbol, Edge, StateRegions)>,
     /// The off-edge (hold) function as state-table regions, keyed by the clock set's phase vector: on/off
     /// are the set/clear covers, hold is the quiescent region. A phase-agreed forcing drops the clocks
     /// from its cover; a phase-conditioned one keeps its gating clock literal (`CLK*R`).
-    pub off_edge: StateRegions,
+    pub(crate) off_edge: StateRegions,
     /// The node's column set: the first-appearance union of the captures' cols then `off_edge.cols`.
-    pub cols: Vec<Symbol>,
+    pub(crate) cols: Vec<Symbol>,
 }
 
 impl EdgeCaptures {
     /// The distinct clocks the edge arcs key off, in first-appearance (capture) order.
-    pub fn clocks(&self) -> Vec<&Symbol> {
+    pub(crate) fn clocks(&self) -> Vec<&Symbol> {
         let mut out: Vec<&Symbol> = Vec::new();
         for (clock, _, _) in &self.captures {
             if !out.contains(&clock) {
@@ -134,9 +134,9 @@ impl EdgeCaptures {
 /// arc but no capture (its seam set is empty). Both are real timing arcs and both emit Liberate
 /// `-type edge`.
 #[derive(Debug, Default)]
-pub struct EdgeArcs {
-    pub captures: Vec<EdgeCaptures>,
-    pub folded: Vec<Symbol>,
+pub(crate) struct EdgeArcs {
+    pub(crate) captures: Vec<EdgeCaptures>,
+    pub(crate) folded: Vec<Symbol>,
     /// The set of the cell's CLOCK-RELATED delay arcs that are EDGE arcs, by full arc identity —
     /// `(output, related clock, the clock's own direction, machine start minterm)`, the same identity
     /// [`super::arcs::derive`] keys an [`super::arcs::Arc`] on. SOURCED FROM the derived arcs: an entry
@@ -153,12 +153,12 @@ pub struct EdgeArcs {
     /// hand at the reading end: the probe is the same `arc.start` of the same derived arc, and a
     /// [`Minterm`] compares and hashes by label-aligned value, an absent column reading as the don't-care
     /// it would carry anyway. Widening the coordinates therefore widens key and probe together.
-    pub labels: HashSet<(Symbol, Symbol, Edge, Minterm<Symbol>)>,
+    pub(crate) labels: HashSet<(Symbol, Symbol, Edge, Minterm<Symbol>)>,
     /// The read-gate factorisations recognised across the cell's outputs (see [`DerivedRegister`]). Empty
     /// for every cell that carries no read-gated register output. Each entry names a state-holding register
     /// the emitters render as a first-class internal node, and carries the combinational read function(s)
     /// of the output(s) that read it through a gate.
-    pub derived: Vec<DerivedRegister>,
+    pub(crate) derived: Vec<DerivedRegister>,
 }
 
 /// A post-processing derived internal edge register: content is a function of already-explored state,
@@ -169,7 +169,7 @@ pub struct EdgeArcs {
 /// releases; instead the state-holding register is factored out as its own node (`Y_st`) with native edge
 /// capture, and the output becomes a combinational [`state_function`](crate::emit::liberty) over it.
 ///
-/// The register additionally carries an ordinary [`EdgeCaptures`] entry on [`EdgeArcs::captures`] (its
+/// The register additionally carries an ordinary `EdgeCaptures` entry on `EdgeArcs::captures` (its
 /// captures are the output's already-synthesised covers cofactored at the read-gates' pass levels), so the
 /// entire downstream edge-row / UDP machinery — which is name-driven — flows through unchanged. When the
 /// factored content matches an ALREADY-DECLARED register (up to inversion — `DETP`'s buried `T`), that
@@ -178,13 +178,13 @@ pub struct EdgeArcs {
 pub struct DerivedRegister {
     /// The register node's name — a freshly minted, collision-checked name, or the name of the reused
     /// declared register when a match was found (nothing minted).
-    pub name: Symbol,
+    pub(crate) name: Symbol,
     /// The register's value over machine coordinates, evaluable at any explored stable state — the harness
     /// resolves the derived node's value through this instead of `Machine::output_value`.
     pub content: Cover<Symbol, Anonymous>,
     /// Per read-gated output that reads this register: the output's combinational read function, as
     /// state-table regions over the register node and the gate pins.
-    pub reads: Vec<(Symbol, StateRegions)>,
+    pub(crate) reads: Vec<(Symbol, StateRegions)>,
 }
 
 /// A single clock edge's observations for one candidate: whether any sample changed the value (the
@@ -240,7 +240,7 @@ type Arc = (Symbol, bool);
 /// delay arcs per arc. Read-only over the shared [`Machine`]: it re-walks the exploration and only ADDS
 /// an annotation, mirroring [`super::arcs::derive`] — whose derived arcs are also the SOURCE of the
 /// label domain: only an observed arc is ever labelled.
-pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
+pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     m: &Machine<B, C>,
     delay_arcs: &[DelayArc],
 ) -> EdgeArcs {

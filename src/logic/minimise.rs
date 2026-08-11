@@ -183,9 +183,9 @@ use espresso_logic::Symbol;
 pub struct Minimised {
     /// Signals removed from the map entirely (dead or relay/alias internals). A preserved signal — an
     /// output pin or an exposed internal — is never purged.
-    pub purged: BTreeSet<Symbol>,
+    pub(crate) purged: BTreeSet<Symbol>,
     /// Surviving signals whose BDD differs from the originally parsed one.
-    pub changed: BTreeSet<Symbol>,
+    pub(crate) changed: BTreeSet<Symbol>,
 }
 
 impl Minimised {
@@ -197,7 +197,7 @@ impl Minimised {
     /// Both fields union, then the closing rule [`minimise_state_space`] applies at its own end applies
     /// again: a signal the first run rewrote and the second purged is gone, so `changed` keeps only the
     /// survivors.
-    pub fn then(mut self, next: Minimised) -> Minimised {
+    pub(crate) fn then(mut self, next: Minimised) -> Minimised {
         self.purged.extend(next.purged);
         self.changed.extend(next.changed);
         let purged = &self.purged;
@@ -228,7 +228,7 @@ impl Preserved {
     }
 
     /// Preserve the external output pins plus `exposed`, the internal nodes that must keep their names.
-    pub fn with_exposed(outputs: BTreeSet<Symbol>, exposed: BTreeSet<Symbol>) -> Self {
+    pub(crate) fn with_exposed(outputs: BTreeSet<Symbol>, exposed: BTreeSet<Symbol>) -> Self {
         let preserved: BTreeSet<Symbol> = outputs.union(&exposed).cloned().collect();
         debug_assert!(
             outputs.is_subset(&preserved),
@@ -238,12 +238,12 @@ impl Preserved {
     }
 
     /// Whether `name` is an external output pin — the first choice for a merged group's coordinate.
-    pub fn is_output(&self, name: &Symbol) -> bool {
+    pub(crate) fn is_output(&self, name: &Symbol) -> bool {
         self.outputs.contains(name)
     }
 
     /// Whether `name` must survive the minimisation, as an output pin or as an exposed internal.
-    pub fn is_preserved(&self, name: &Symbol) -> bool {
+    pub(crate) fn is_preserved(&self, name: &Symbol) -> bool {
         self.preserved.contains(name)
     }
 }

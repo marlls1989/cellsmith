@@ -53,7 +53,7 @@ use crate::logic::hazard::{Cause, Hazard, Racer};
 /// Picking the variant IS the classification — a minimum pulse width holds one pin against its own
 /// second edge, so there is no second pin for it to name.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConstraintKind {
+pub(crate) enum ConstraintKind {
     /// A directed separation: the constrained pin is data, and this is the declared clock it is held
     /// around.
     SetupHold { clock: Symbol, clock_edge: Edge },
@@ -68,49 +68,46 @@ pub enum ConstraintKind {
 /// latch, under the race between its clock and its data — and the level that node holds at the probed
 /// state.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct VictimNode {
+pub(crate) struct VictimNode {
     /// The state variable itself, which the emitted block names in its `-probe`.
-    pub node: Symbol,
+    pub(crate) node: Symbol,
     /// The level it holds at the probed state, which the block's `-ic` initialises its column to.
-    pub level: bool,
+    pub(crate) level: bool,
 }
 
 /// One constraint generated to remove a detected hazard, rendered by the arcs emitter as the
 /// `define_arc` block(s) its kind calls for.
 #[derive(Debug, Clone)]
-pub struct Constraint {
-    pub kind: ConstraintKind,
+pub(crate) struct Constraint {
+    pub(crate) kind: ConstraintKind,
     /// The pin this constraint constrains — the block's `-pin`.
-    pub pin: Symbol,
+    pub(crate) pin: Symbol,
     /// The edge that pin makes: the data edge of a separation, or the pulse's OPENING polarity, rise
     /// meaning the pulse is high and fall low. A minimum-pulse-width block states that one edge, and
     /// Liberate searches the width itself.
-    pub pin_edge: Edge,
-    /// The condition the hazard this constraint avoids occurs under: the probed state's input
-    /// projection, which is the standing input assignment the constrained transition happens FROM.
-    pub condition: Minterm<Symbol>,
+    pub(crate) pin_edge: Edge,
     /// The prevector: the input-assignment path that drives every state variable into the state where
     /// the constraint manifests (each node projected onto the inputs).
-    pub prevector: Vec<Minterm<Symbol>>,
+    pub(crate) prevector: Vec<Minterm<Symbol>>,
     /// The levels the cell's outputs hold in that state — the constraint arc's `-ic` initial condition,
     /// sampled at the same probed state as `prevector`.
-    pub levels: ArcLevels,
+    pub(crate) levels: ArcLevels,
     /// The nodes the constrained cause attacks, in signal declaration order: the union of the victims
     /// every outcome of that cause named. The emitted block gives each a column of its own and names them
     /// all in one Liberate `-probe`, so the characterisation measures every node the cause puts at risk.
-    pub nodes: Vec<VictimNode>,
+    pub(crate) nodes: Vec<VictimNode>,
     /// The probed state itself: every input and state variable at the level it holds there. The
     /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
     /// emitted column carries.
-    pub state: Minterm<Symbol>,
+    pub(crate) state: Minterm<Symbol>,
     /// Index of the probed state in the sequential BFS exploration order — the tie-break key the
     /// situation collapse and emission's general-block choice both land on one representative by.
-    pub discovered: usize,
+    pub(crate) discovered: usize,
     /// Which of the four (cause, outcome) cells the observations this constraint was generated from
     /// occupy, as [`Hazard::ordinal`] numbers them — the lowest, where a cause showed more than one
     /// outcome. The constraint follows the cause alone, so nothing here decides what is constrained; it
     /// is the last component of the total order emission picks a representative by.
-    pub ordinal: u8,
+    pub(crate) ordinal: u8,
 }
 
 impl Constraint {
@@ -122,7 +119,7 @@ impl Constraint {
     /// observations of the same constraint carry the same names holding whatever their own states hold.
     /// Whatever identifies a constraint therefore reads the names, and the levels stay here, with the
     /// state they were sampled at.
-    pub fn victim_names(&self) -> Vec<Symbol> {
+    pub(crate) fn victim_names(&self) -> Vec<Symbol> {
         self.nodes.iter().map(|v| v.node.clone()).collect()
     }
 }
@@ -156,7 +153,6 @@ fn remedy(hazard: &Hazard, clock_pins: &[Symbol]) -> Option<Constraint> {
         kind,
         pin,
         pin_edge,
-        condition: hazard.condition.clone(),
         prevector: hazard.prevector.clone(),
         levels: hazard.levels.clone(),
         nodes: victims(&hazard.group, &hazard.node_levels),

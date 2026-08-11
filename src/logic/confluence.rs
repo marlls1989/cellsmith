@@ -1,7 +1,7 @@
 //! Hazard **detection** over **confluence** of the asynchronous state machine. [`detect`] probes what
 //! two closely-timed input edges do to the machine and files each observation as a [`Hazard`] whose
 //! cause is a **race**, naming the pins whose transitions the observation was made under. The timing
-//! that removes a detected hazard is generated downstream, by [`super::constraint`].
+//! that removes a detected hazard is generated downstream, by `super::constraint`.
 //!
 //! A delay arc ([`super::arcs`]) records a single input edge that *causes* an output edge. A
 //! **constraint** arc instead records that two inputs must not change too close together — a setup/hold
@@ -28,7 +28,7 @@
 //!
 //! The same walk observes the other outcome: probed from `s`, the pair applied *simultaneously* (or,
 //! degenerately, a single input toggle) can drive the state into a **periodic oscillation** rather than
-//! a convergence point ([`machine::settle_or_cycle`] returning the cycle instead of settling), filed as
+//! a convergence point (`machine::settle_or_cycle` returning the cycle instead of settling), filed as
 //! [`Outcome::Oscillation`] under the same racing cause. The two outcomes are independent readings of
 //! one probe, so a pair that both diverges and never settles files a record for each, sharing the cause
 //! rather than merging into one record. A lone toggle that never settles was observed under the one pin
@@ -40,9 +40,9 @@
 //! hazard-free case.
 //!
 //! A record's own cause carries the racing pins and the edge each makes, which is what the separation
-//! generated from it ([`super::constraint`]) is built out of.
+//! generated from it (`super::constraint`) is built out of.
 //!
-//! The reachable states and the prevector into `s` come from the shared [`machine::explore`], the same
+//! The reachable states and the prevector into `s` come from the shared `machine::explore`, the same
 //! exploration the delay-arc BFS uses.
 //!
 //! **Every observation is reported**, under either outcome. A pair probed from ten reachable states that
@@ -111,15 +111,15 @@ fn racer(node: &Minterm<Symbol>, pin: &Symbol) -> Racer {
 
 /// The detected hazards of one pass over the reachable state machine, split by the outcome observed —
 /// every record carries [`Cause::Race`], the cause this pass probes for. No generated constraint is
-/// nested here — [`super::constraint`] turns these into constraints downstream.
+/// nested here — `super::constraint` turns these into constraints downstream.
 #[derive(Debug, Default)]
 pub struct DetectedHazards {
     /// [`Outcome::Indeterminate`]: races whose settled state depends on which edge lands first — one
     /// record per observation, a pair diverging from several states filing one for each.
-    pub order_dependence: Vec<Hazard>,
+    pub(crate) order_dependence: Vec<Hazard>,
     /// [`Outcome::Oscillation`]: pairs (or single toggles) that drive a periodic, non-settling cycle —
     /// one record per observation, a pair ringing from several states filing one for each.
-    pub oscillation: Vec<Hazard>,
+    pub(crate) oscillation: Vec<Hazard>,
 }
 
 /// Why every state value the hazard path reads is defined: a settle from a fully-initialised state
@@ -156,7 +156,7 @@ pub(super) fn oscillating_group(cycle: &[Minterm<Symbol>], state_vars: &[Symbol]
 /// (`Machine::arc_eligible`): a state carrying an uninitialised state variable is at an unknown state,
 /// from which nothing can be concluded. Files a [`Hazard`] for every observation it makes —
 /// [`Outcome::Indeterminate`] where the settle orders diverge, [`Outcome::Oscillation`] where the
-/// machine never settles — but generates no constraint (that is [`super::constraint`]'s job). Empty for
+/// machine never settles — but generates no constraint (that is `super::constraint`'s job). Empty for
 /// confluent cells (ordinary combinational / self-holding gates that always settle) and for cells with
 /// no state to latch. The input count empties only the PAIR probes: a single toggle races the cell's own
 /// feedback and is probed however few inputs there are.

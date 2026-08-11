@@ -3,14 +3,14 @@
 pub mod analysis;
 pub mod arcs;
 pub mod confluence;
-pub mod constraint;
+pub(crate) mod constraint;
 pub mod edge;
 pub mod hazard;
 pub mod leakage;
 pub mod machine;
 pub mod minimise;
 pub mod regions;
-pub mod resolve;
+pub(crate) mod resolve;
 pub mod width;
 
 use std::collections::BTreeMap;
@@ -19,7 +19,7 @@ use espresso_logic::{Minterm, Symbol};
 
 /// The fixed (non-don't-care) assignments of a minterm as a `name -> value` map. Used by the arcs
 /// emitter to read an arc's input vectors.
-pub fn assignment(m: &Minterm<Symbol>) -> BTreeMap<Symbol, bool> {
+pub(crate) fn assignment(m: &Minterm<Symbol>) -> BTreeMap<Symbol, bool> {
     m.vars()
         .iter()
         .zip(m.iter())

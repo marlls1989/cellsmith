@@ -3,7 +3,7 @@
 //!
 //! A cell's hysteretic signals (its **state variables**: outputs and internal nodes on a dependency
 //! cycle, as classified in [`crate::logic::regions`]) are folded into ONE joint next-state table. Each
-//! [`StateRow`] pairs a primary-input pattern and a current-state pattern with a per-node next-state
+//! `StateRow` pairs a primary-input pattern and a current-state pattern with a per-node next-state
 //! action (`H`/`L`/`N` = drive-high/drive-low/hold, or `-` = unconstrained here). Every state variable,
 //! whether output or internal, keeps its own name as its state-table node.
 //!
@@ -34,7 +34,7 @@
 //!   register keep their own names.
 //!
 //! EDGE REGISTERS. When [`crate::logic::edge`] has recognised a node as an edge-triggered register, that
-//! register's node keeps its column but its rows come from the annotation ([`EdgeRow`]) rather than the
+//! register's node keeps its column but its rows come from the annotation (`EdgeRow`) rather than the
 //! level cover pass: a capture cube stamps the active edge token (`R`/`F`) with the register's next
 //! action, an off-edge cube the hold/async action. A single-edge register prints the off-edge on its
 //! inactive face (`~R`/`~F`); a dual-edge register (both edges capture) prints its off-edge with a
@@ -54,7 +54,7 @@ use crate::model::AnalysedCell;
 
 /// A single state node's next-state action in a joint row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Next {
+pub(crate) enum Next {
     /// Drive the node high (the signal's `on` region — Liberty `H`).
     High,
     /// Drive the node low (the signal's `off` region — Liberty `L`).
@@ -70,17 +70,17 @@ pub enum Next {
 /// is a definite action and `None` is a node this row leaves unconstrained (`-`, deferred to a
 /// lower-priority row per Liberty's per-output resolution).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct StateRow {
-    pub inputs: Vec<Option<bool>>,
-    pub current: Vec<Option<bool>>,
-    pub next: Vec<Option<Next>>,
+pub(crate) struct StateRow {
+    pub(crate) inputs: Vec<Option<bool>>,
+    pub(crate) current: Vec<Option<bool>>,
+    pub(crate) next: Vec<Option<Next>>,
 }
 
 /// The clock-edge token an [`EdgeRow`] prints in its clock column: the active edge (`Rise`/`Fall`) of a
 /// capture row, the inactive face (`NotRise`/`NotFall`) of a single-edge register's off-edge (hold /
 /// async) row, or `Level` for a dual-edge register's off-edge row (which owns neither clock face).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum EdgeTok {
+pub(crate) enum EdgeTok {
     /// Rising clock edge — Liberty `R`.
     Rise,
     /// Falling clock edge — Liberty `F`.
@@ -100,12 +100,12 @@ pub enum EdgeTok {
 /// `inputs` as a `None` placeholder; the renderer prints `token` in that column instead of a level. Every
 /// next slot other than the register's own stays `None` (`-`, deferred), exactly as for the level rows.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct EdgeRow {
-    pub clock: Symbol,
-    pub token: EdgeTok,
-    pub inputs: Vec<Option<bool>>,
-    pub current: Vec<Option<bool>>,
-    pub next: Vec<Option<Next>>,
+pub(crate) struct EdgeRow {
+    pub(crate) clock: Symbol,
+    pub(crate) token: EdgeTok,
+    pub(crate) inputs: Vec<Option<bool>>,
+    pub(crate) current: Vec<Option<bool>>,
+    pub(crate) next: Vec<Option<Next>>,
 }
 
 /// The joint state-table model of a sequential cell: the input-node and internal-node column headers,
@@ -113,23 +113,23 @@ pub struct EdgeRow {
 #[derive(Debug)]
 pub struct StateModel {
     /// Primary-input columns, ordered by the cell's input-pin order.
-    pub input_nodes: Vec<Symbol>,
+    pub(crate) input_nodes: Vec<Symbol>,
     /// State-node columns (`current`/`next` order) under their TABLE-NODE names — what the statetable
     /// header prints. A state output's node is minted (`Q` -> `Q_st`); an internal state node and a
     /// derived register keep their own name. Folded masters are excluded; recognised edge-register nodes
     /// keep their column.
-    pub internal_nodes: Vec<Symbol>,
+    pub(crate) internal_nodes: Vec<Symbol>,
     /// The same columns in the same order under their SIGNAL names — what the covers, the minterm keys
     /// and the machine are written in. `internal_nodes[i]` is the table node of `state_signals[i]`;
     /// anything querying the machine or a region by column must read this list, not `internal_nodes`.
     pub state_signals: Vec<Symbol>,
     /// Each state signal's ORIGINAL name → its state-table node name.
-    pub node_of: BTreeMap<Symbol, Symbol>,
+    pub(crate) node_of: BTreeMap<Symbol, Symbol>,
     /// The joint level (level-sensitive) next-state rows, deduplicated and sorted.
-    pub rows: Vec<StateRow>,
+    pub(crate) rows: Vec<StateRow>,
     /// The edge-triggered rows contributed by the cell's recognised edge registers, after the level rows
     /// in register (`signals()`) order. Empty for a cell with no collapsed master-slave pair.
-    pub edge_rows: Vec<EdgeRow>,
+    pub(crate) edge_rows: Vec<EdgeRow>,
 }
 
 /// Build the joint state-table model of a cell, or `None` if the cell has no state variable (a purely
@@ -138,7 +138,7 @@ pub struct StateModel {
 /// State signals are the cell's hysteretic [`signal_regions`](AnalysedCell::signal_regions) entries —
 /// identical to [`crate::logic::resolve::state_variables`] by construction, so this reads the cached
 /// `hysteretic` flag rather than re-running the classifier.
-pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
+pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     // Behavioural edge annotation: the cell's recognised edge registers and the cell-level set of
     // internal level-sensitive masters folded away (empty when the cell opted out). A folded master
     // vanishes entirely — no node, no column, no rows; an edge-register node keeps its column but its

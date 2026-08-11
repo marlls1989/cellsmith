@@ -2,7 +2,7 @@
 //!
 //! A cell is a state machine over `inputs × coordinates`, where the **coordinates** are every signal
 //! surviving the minimisation — the state variables plus the combinational signals kept alongside them
-//! ([`Coordinates`]). A **node** is a self-describing [`Minterm<Symbol>`] — it carries its own ordered
+//! (`Coordinates`). A **node** is a self-describing [`Minterm<Symbol>`] — it carries its own ordered
 //! columns ([`Minterm::vars`]), so there is no shared header object. Every input carries a concrete value
 //! and each coordinate is either **defined** (a concrete `0`/`1`) or **absent** — encoded as the
 //! don't-care `-`. Power-on is the inputs-only node: no coordinate fixed. The next-state map settles the
@@ -12,7 +12,7 @@
 //! (its δ provably does not depend on it yet, so `evaluate` returns `Err`). A node is *stable* when it
 //! is its own next-state.
 //!
-//! Start states are not assumed: [`explore`] discovers them from the forced on/off covers of the signal
+//! Start states are not assumed: `explore` discovers them from the forced on/off covers of the signal
 //! functions over the cell inputs ([`Bdd::cover_over_fr`]) — input vectors that force a signal
 //! regardless of the undefined power-on state — so a state-holding cell whose state is undefined
 //! at the all-zero input (its reset is an input sequence, not a level) is initialised by the sequence
@@ -25,7 +25,7 @@
 //!
 //! # Exploration budgets
 //!
-//! [`explore`] is bounded by two counters, carried together in [`ExplorationBudget`] and charged against
+//! `explore` is bounded by two counters, carried together in [`ExplorationBudget`] and charged against
 //! the work the call actually performs — never against the cell's declared shape (a cell is not turned
 //! away for having many inputs or many state variables). Whichever counter trips is the returned
 //! [`ExplorationLimit`] variant, carrying the ceiling it passed.
@@ -38,7 +38,7 @@
 //!   [`Cube::expand_to`](espresso_logic::Cube::expand_to) yields a cube's minterms lazily and knows its
 //!   own length up front, so each cube is charged before it is expanded and an over-budget pool is
 //!   counted without ever being materialised.
-//! * **`states`** counts the reachable stable states the BFS records in [`Explored::order`]. That vector
+//! * **`states`** counts the reachable stable states the BFS records in `Explored::order`. That vector
 //!   is what the downstream passes re-walk: [`super::arcs::derive`] at O(|order| · inputs) settles and
 //!   [`super::confluence::detect`] at O(|order| · inputs²), so a machine that explores unboundedly many
 //!   states is one whose hazard detection does not finish.
@@ -51,7 +51,7 @@ use espresso_logic::{Minterm, Symbol};
 use rayon::prelude::*;
 
 /// A coordinate paired with its next-state function δ (over inputs + state variables).
-pub type Delta<B, C> = (Symbol, Bdd<B, C>);
+pub(crate) type Delta<B, C> = (Symbol, Bdd<B, C>);
 
 /// The machine's coordinates — every signal surviving the minimisation — split by the role [`explore`]
 /// gives each half.
@@ -65,17 +65,17 @@ pub type Delta<B, C> = (Symbol, Bdd<B, C>);
 /// BOTH halves are stepped ([`Self::stepped`]) and both are node columns ([`Self::names`]). Only `state`
 /// is measured by [`explore`]'s candidate ranking and its depth tie-break, so a combinational coordinate
 /// cannot change which states the BFS reaches, nor in which order.
-pub struct Coordinates<'d, B: Brand, C: ManagerCell> {
+pub(crate) struct Coordinates<'d, B: Brand, C: ManagerCell> {
     /// The state variables' δ, in signal order.
-    pub state: &'d [Delta<B, C>],
+    pub(crate) state: &'d [Delta<B, C>],
     /// The combinational survivors' δ, in signal order.
-    pub combinational: &'d [Delta<B, C>],
+    pub(crate) combinational: &'d [Delta<B, C>],
 }
 
 impl<B: Brand, C: ManagerCell> Coordinates<'_, B, C> {
     /// The coordinate names in node-column order: the state variables, then the combinational
     /// survivors.
-    pub fn names(&self) -> Vec<Symbol> {
+    pub(crate) fn names(&self) -> Vec<Symbol> {
         self.state
             .iter()
             .chain(self.combinational)
@@ -84,7 +84,7 @@ impl<B: Brand, C: ManagerCell> Coordinates<'_, B, C> {
     }
 
     /// Every coordinate's δ, in the same order as [`Self::names`] — what one [`step`] writes.
-    pub fn stepped(&self) -> Vec<Delta<B, C>> {
+    pub(crate) fn stepped(&self) -> Vec<Delta<B, C>> {
         self.state
             .iter()
             .chain(self.combinational)
@@ -93,14 +93,14 @@ impl<B: Brand, C: ManagerCell> Coordinates<'_, B, C> {
     }
 }
 
-/// What one [`explore`] call may spend, in the two quantities that drive its cost (see the module
+/// What one `explore` call may spend, in the two quantities that drive its cost (see the module
 /// documentation): the seed minterms pooled as initialisation candidates and the reachable stable states
 /// the BFS records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExplorationBudget {
     /// Ceiling on the candidate pool's seed minterms, charged per expanded FR cube.
     pub candidates: usize,
-    /// Ceiling on the reachable stable states recorded in [`Explored::order`].
+    /// Ceiling on the reachable stable states recorded in `Explored::order`.
     pub states: usize,
 }
 
@@ -116,7 +116,7 @@ impl Default for ExplorationBudget {
     }
 }
 
-/// The counter that stopped an [`explore`] call, carrying the ceiling it passed.
+/// The counter that stopped an `explore` call, carrying the ceiling it passed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExplorationLimit {
     /// The candidate pool passed this many seed minterms.
@@ -127,7 +127,7 @@ pub enum ExplorationLimit {
 
 /// Build a fully-fixed node over `names` from a `name -> value` lookup (called once per variable).
 #[cfg(test)]
-pub fn node_from(names: &[&str], value: impl Fn(&str) -> bool) -> Minterm<Symbol> {
+pub(crate) fn node_from(names: &[&str], value: impl Fn(&str) -> bool) -> Minterm<Symbol> {
     Minterm::with_labels(
         &names
             .iter()
@@ -141,14 +141,17 @@ pub fn node_from(names: &[&str], value: impl Fn(&str) -> bool) -> Minterm<Symbol
 /// **absent** (unresolved, encoded `-`), `Some(v)` fixes it. Inputs are always `Some`, state variables
 /// may be either.
 #[cfg(test)]
-pub fn node_from_opt(names: &[&str], value: impl Fn(&str) -> Option<bool>) -> Minterm<Symbol> {
+pub(crate) fn node_from_opt(
+    names: &[&str],
+    value: impl Fn(&str) -> Option<bool>,
+) -> Minterm<Symbol> {
     Minterm::with_labels(&names.iter().map(|n| (*n, value(n))).collect::<Vec<_>>())
         .expect("distinct labels")
 }
 
 /// `node` with each name in `names` flipped in value; an absent field (`-`) stays absent, everything
 /// else keeps its current field. Clones the node and mutates the named columns in place.
-pub fn toggle(node: &Minterm<Symbol>, names: &[&str]) -> Minterm<Symbol> {
+pub(crate) fn toggle(node: &Minterm<Symbol>, names: &[&str]) -> Minterm<Symbol> {
     let mut next = node.clone();
     for nm in names {
         if let Some(v) = node.value_of(*nm) {
@@ -181,7 +184,10 @@ fn step<B: Brand, C: ManagerCell>(
 /// Whether `node` is stable: one [`step`] leaves it unchanged (every defined state variable already
 /// equals its δ, and no absent one has become forced).
 #[cfg(test)]
-pub fn is_stable<B: Brand, C: ManagerCell>(deltas: &[Delta<B, C>], node: &Minterm<Symbol>) -> bool {
+pub(crate) fn is_stable<B: Brand, C: ManagerCell>(
+    deltas: &[Delta<B, C>],
+    node: &Minterm<Symbol>,
+) -> bool {
     step(deltas, node) == *node
 }
 
@@ -189,7 +195,7 @@ pub fn is_stable<B: Brand, C: ManagerCell>(deltas: &[Delta<B, C>], node: &Minter
 /// with `step(x) == x`. The convergence point may still leave state variables absent — those the inputs
 /// (and resolved state) do not determine. Returns `None` if the state oscillates without settling (an
 /// oscillation hazard, which risks metastability).
-pub fn settle<B: Brand, C: ManagerCell>(
+pub(crate) fn settle<B: Brand, C: ManagerCell>(
     deltas: &[Delta<B, C>],
     node: &Minterm<Symbol>,
 ) -> Option<Minterm<Symbol>> {
@@ -201,7 +207,7 @@ pub fn settle<B: Brand, C: ManagerCell>(
 /// concept is in `state-machine-arc-engine.md` §5; the mechanics: `pos` maps each visited state to its
 /// index in `trace` (an O(1) revisit check), and `trace` preserves visitation order, so a revisit of a
 /// state already at index `p` slices the cycle out as `trace[p..]`.
-pub fn settle_or_cycle<B: Brand, C: ManagerCell>(
+pub(crate) fn settle_or_cycle<B: Brand, C: ManagerCell>(
     deltas: &[Delta<B, C>],
     node: &Minterm<Symbol>,
 ) -> Result<Minterm<Symbol>, Vec<Minterm<Symbol>>> {
@@ -215,7 +221,7 @@ pub fn settle_or_cycle<B: Brand, C: ManagerCell>(
 /// Like [`settle_or_cycle`], but on a convergence point returns the whole settling trace rather than
 /// just its end: `t[0]` is `node` itself (unstepped), `t[last]` is the convergence point, so the round
 /// count is `t.len() - 1`. On oscillation the error arm is unchanged — the periodic cycle.
-pub fn settle_trace<B: Brand, C: ManagerCell>(
+pub(crate) fn settle_trace<B: Brand, C: ManagerCell>(
     deltas: &[Delta<B, C>],
     node: &Minterm<Symbol>,
 ) -> Result<Vec<Minterm<Symbol>>, Vec<Minterm<Symbol>>> {
@@ -238,30 +244,24 @@ pub fn settle_trace<B: Brand, C: ManagerCell>(
     }
 }
 
-/// The reachable **stable** states of a cell's state machine, in the order [`explore`] discovered them,
+/// The reachable **stable** states of a cell's state machine, in the order `explore` discovered them,
 /// with a predecessor map for prevector reconstruction.
 #[derive(Debug)]
 pub struct Explored {
     /// Reachable stable nodes in BFS dequeue order (each appears once).
-    pub order: Vec<Minterm<Symbol>>,
+    pub(crate) order: Vec<Minterm<Symbol>>,
     /// Predecessor of each reachable node (`None` at a start node).
-    pub prev: HashMap<Minterm<Symbol>, Option<Minterm<Symbol>>>,
+    pub(crate) prev: HashMap<Minterm<Symbol>, Option<Minterm<Symbol>>>,
 }
 
 impl Explored {
-    /// The settled BFS start states (the seeds), in discovery order: reachable stable nodes with no
-    /// predecessor. Seeds are inserted into `prev` with `None` before the BFS begins and entries are
-    /// never overwritten (Vacant-only insertion), so `prev[n] == None` identifies exactly the
-    /// deduplicated seed set.
-    pub fn seeds(&self) -> impl Iterator<Item = &Minterm<Symbol>> {
-        self.order
-            .iter()
-            .filter(|n| matches!(self.prev.get(*n), Some(None)))
-    }
-
     /// The input-projected BFS path into `node` (the prevector): walk predecessors back to a start,
     /// reverse, and project each step onto `input_names`.
-    pub fn path_to(&self, node: &Minterm<Symbol>, input_names: &[Symbol]) -> Vec<Minterm<Symbol>> {
+    pub(crate) fn path_to(
+        &self,
+        node: &Minterm<Symbol>,
+        input_names: &[Symbol],
+    ) -> Vec<Minterm<Symbol>> {
         let mut chain = vec![node.clone()];
         let mut cur = node.clone();
         while let Some(Some(p)) = self.prev.get(&cur) {
@@ -280,9 +280,9 @@ impl Explored {
     /// Nothing is re-evaluated, so a don't-know projects to a don't-know.
     ///
     /// The predecessor chain keeps its shape — a projected node's predecessor is the projection of its
-    /// own predecessor here, never re-derived — so [`Self::seeds`], [`Self::path_to`] and every
+    /// own predecessor here, never re-derived — so the seed set, [`Self::path_to`] and every
     /// prevector, its length included, read the same on the projection as on this exploration.
-    pub fn project_to(&self, names: &[Symbol]) -> Explored {
+    pub(crate) fn project_to(&self, names: &[Symbol]) -> Explored {
         // `order` holds each node once, and it still does after the projection: two stable nodes
         // differing only in a released column cannot both be stable, because stability forces that
         // column to equal its δ, which the surviving columns determine. So no two entries meet.
@@ -336,7 +336,7 @@ impl Explored {
 /// `budget` bounds the two costs the exploration incurs — the pooled seed minterms and the recorded
 /// stable states (see the module documentation) — and the counter that passes its ceiling comes back as
 /// the [`ExplorationLimit`] error.
-pub fn explore<B: Brand, C: ManagerCell + Send + Sync>(
+pub(crate) fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     coords: Coordinates<'_, B, C>,
     seed_funcs: &[Bdd<B, C>],
     input_names: &[Symbol],
@@ -583,7 +583,15 @@ mod tests {
         )
         .expect("a 2-input C-element is well inside the default budget");
 
-        let seeds: Vec<Minterm<Symbol>> = explored.seeds().cloned().collect();
+        // The start states, in discovery order: a seed is inserted into `prev` with `None` before the
+        // BFS begins and entries are never overwritten (Vacant-only insertion), so `prev[n] == None`
+        // identifies exactly the deduplicated seed set.
+        let seeds: Vec<Minterm<Symbol>> = explored
+            .order
+            .iter()
+            .filter(|n| matches!(explored.prev.get(*n), Some(None)))
+            .cloned()
+            .collect();
         let on = node_from(&["A", "B", "Q"], |_| true);
         let off = node_from(&["A", "B", "Q"], |_| false);
         assert_eq!(seeds.len(), 2, "expected exactly two seeds, got {seeds:?}");

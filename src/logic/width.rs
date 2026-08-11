@@ -4,7 +4,7 @@
 //! OPENING edge), the cascade that toggle opens left to run some distance, and `p` toggled back (the
 //! CLOSING edge). That distance is the pulse's **width**, counted here in next-state rounds of the
 //! [`machine`]: writing `t[0..last]` for the settling trace of the opening toggle
-//! ([`machine::settle_trace`] — `t[0]` the toggle itself, `t[last]` its convergence point), closing the
+//! (`machine::settle_trace` — `t[0]` the toggle itself, `t[last]` its convergence point), closing the
 //! pulse after `i` rounds is the **cut** `i`, which settles `toggle(t[i], [p])`, and a wider pulse is a
 //! later cut.
 //!

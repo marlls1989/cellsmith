@@ -169,8 +169,8 @@ fn multi_cell_spec_covers_all_cells() {
 
 /// One cause showing both outcomes is one warning entry. A mutex pulsed on `A↓` from `A*B` both
 /// settles indeterminately and rings, and detection files a record per outcome, so the two reach the
-/// terminal as a single entry whose body gives each outcome a field naming the nodes that reading puts
-/// at risk.
+/// terminal as a single entry whose body gives each outcome a field of its own, naming the nodes that
+/// reading puts at risk and where it leaves them.
 #[test]
 fn both_outcomes_at_one_cause_are_one_entry() {
     let dir = scratch_dir("one_entry");
@@ -210,6 +210,97 @@ fn both_outcomes_at_one_cause_are_one_entry() {
         !header.contains("nodes"),
         "the header carries no node set:\n{entry}"
     );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The value of the `label:` field in the one hazard entry whose header contains `header`. Warnings are
+/// separated by a blank line, so an entry is one block of the split.
+fn hazard_field<'a>(stderr: &'a str, header: &str, label: &str) -> &'a str {
+    let entries: Vec<&str> = stderr
+        .split("\n\n")
+        .filter(|e| e.contains(header))
+        .collect();
+    assert_eq!(entries.len(), 1, "{header} names one entry:\n{stderr}");
+    let prefix = format!("{label}:");
+    entries[0]
+        .lines()
+        .find_map(|l| l.trim_start().strip_prefix(&prefix))
+        .unwrap_or_else(|| panic!("no {label} field:\n{}", entries[0]))
+        .trim_start()
+}
+
+/// Every hazard kind names where the machine lands, beside the nodes it attacks. That landing is
+/// `Hazard::settled` — for a race the results of its two orders, alternatives joined by `or`; for a
+/// pulse the two waypoints one wide enough walks through, in causal order and joined by `→`. Each
+/// expectation below is derived from the cell's own equations, and all four kinds are covered:
+/// race→indeterminate, race→oscillation, pulse→indeterminate and pulse→oscillation.
+#[test]
+fn every_hazard_kind_names_where_the_machine_lands() {
+    let dir = scratch_dir("landings");
+    let spec = dir.join("cells.toml");
+    std::fs::write(&spec, MULTI).unwrap();
+
+    let out = Command::new(BIN)
+        .arg("--stdout")
+        .arg(&spec)
+        .output()
+        .expect("run cellsmith");
+    assert!(out.status.success(), "exit: {:?}", out.status);
+    let stderr = String::from_utf8(out.stderr).unwrap();
+
+    // C2 (`Q = A*B + Q*(A+B)`) raced from `{A=1, B=0, Q=0}`: A↓ first leaves both inputs low, so Q stays
+    // 0 and the later B↑ cannot lift it; B↑ first co-asserts the pair, which drives Q to 1, and the
+    // later A↓ leaves Q holding on B. Either order is a legitimate settling, so the two read as
+    // alternatives.
+    assert_eq!(
+        hazard_field(
+            &stderr,
+            r#"cell "C2": too little separation between A↓ and B↑ causes a hazard at {A=1, B=0, Q=0}"#,
+            "indeterminate",
+        ),
+        "{Q} lands at {Q=0} or {Q=1}",
+    );
+
+    // MUT (`Qa = !Qb*A`, `Qb = !Qa*B`) with A↑ and B↑ separated from the idle state: whichever request
+    // rises first takes its grant and locks the other out, so the ring settles to one grant or the
+    // mirror.
+    assert_eq!(
+        hazard_field(
+            &stderr,
+            r#"cell "MUT": too little separation between A↑ and B↑ causes a hazard at {A=0, B=0, Qa=0, Qb=0}"#,
+            "oscillation",
+        ),
+        "{Qa, Qb} lands at {Qa=0, Qb=1} or {Qa=1, Qb=0}",
+    );
+
+    // DFF (`M = !CLK*D + CLK*M`, `Q = CLK*M + !CLK*Q`) pulsed low on CLK from `{CLK=1, D=1, Q=0, M=0}`:
+    // the opening CLK↓ opens the master and it takes D, resting at `{Q=0, M=1}`; the closing CLK↑ then
+    // hands that to the slave, leaving `{Q=1, M=1}`. The two waypoints differ, and the pulse walks the
+    // first to reach the second.
+    assert_eq!(
+        hazard_field(
+            &stderr,
+            r#"cell "DFF": a short pulse on CLK↓ causes a hazard at {CLK=1, D=1, Q=0, M=0}"#,
+            "indeterminate",
+        ),
+        "{Q, M} lands at {Q=0, M=1} → {Q=1, M=1}",
+    );
+
+    // MUT pulsed low on A from `{A=1, B=1, Qa=1, Qb=0}`: A↓ drops A's grant and B's, waiting, takes it;
+    // A↑ back finds B holding, so the machine is already where the closing edge leaves it and the two
+    // waypoints name one landing. Both outcomes are observed here and both state it.
+    for outcome in ["indeterminate", "oscillation"] {
+        assert_eq!(
+            hazard_field(
+                &stderr,
+                r#"cell "MUT": a short pulse on A↓ causes a hazard at {A=1, B=1, Qa=1, Qb=0}"#,
+                outcome,
+            ),
+            "{Qa, Qb} lands at {Qa=0, Qb=1}",
+            "the {outcome} outcome states where a wide enough pulse lands",
+        );
+    }
 
     std::fs::remove_dir_all(&dir).ok();
 }

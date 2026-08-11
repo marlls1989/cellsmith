@@ -4,7 +4,7 @@
 //! A sequential library cell carries **exactly one** state table (Liberty 2017.06 Vol.1 §5 p.5-23: "a
 //! sequential library cell can have only one state table"); every state variable of the cell is one
 //! column of that single table. The joint model is built at emission time by
-//! [`crate::emit::statetable::build_state_model`], which folds the cell's hysteretic signals (its
+//! `crate::emit::statetable::build_state_model`, which folds the cell's hysteretic signals (its
 //! **state variables**: outputs and internal nodes on a dependency cycle) into one next-state table.
 //! Within a table field node values are **space-separated**; whole rows are **comma-separated**. The
 //! next-state action per node is `H` (drive high = on region) / `L` (drive low = off) / `N` (hold =

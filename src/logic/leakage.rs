@@ -1,5 +1,5 @@
 //! Static leakage states for Cadence Liberate `define_leakage`, one per **fully-initialised reachable
-//! stable state** of the machine exploration (see [`machine::explore`](super::machine::explore)).
+//! stable state** of the machine exploration (see `machine::explore`).
 //!
 //! A cell leaks differently in each state it can rest in, and two rest states can share an input
 //! assignment while differing in what the cell holds — a bistable's whole point — so the state, not the
@@ -21,12 +21,12 @@ use crate::logic::analysis::Machine;
 pub struct LeakageState {
     /// The state's primary-input assignment (inputs are always fully fixed at a node), projected onto
     /// `cell.inputs`.
-    pub inputs: Minterm<Symbol>,
+    pub(crate) inputs: Minterm<Symbol>,
     /// EVERY output's settled value at the state, in `cell.outputs` order.
-    pub outputs: Vec<(Symbol, bool)>,
+    pub(crate) outputs: Vec<(Symbol, bool)>,
     /// The prevector: the input-assignment sequence that drives the cell — its internal nodes included
     /// — into this state.
-    pub prevector: Vec<Minterm<Symbol>>,
+    pub(crate) prevector: Vec<Minterm<Symbol>>,
 }
 
 /// Derive the cell's static leakage states: every reachable stable state `Machine::arc_eligible`

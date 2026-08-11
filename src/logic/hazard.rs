@@ -1,7 +1,7 @@
 //! The **detected hazards** of an asynchronous cell: the report record only.
 //!
 //! Closely-timed input changes can drive a cell into metastability. Detection finds each occasion and
-//! reports it here as a [`Hazard`]; a [`super::constraint::Constraint`] is then *generated* from a
+//! reports it here as a [`Hazard`]; a `super::constraint::Constraint` is then *generated* from a
 //! detected hazard to specify the timing that removes it. Detection happens first; constraint
 //! generation follows from each detected hazard.
 //!
@@ -24,7 +24,7 @@
 //! - [`Outcome::Indeterminate`] — it settles, but which state it settles to is not determined.
 //! - [`Outcome::Oscillation`] — it never settles: the state walks a periodic cycle instead of reaching a
 //!   convergence point (a state `x` with `delta(x) == x`). Detected when
-//!   [`super::machine::settle_or_cycle`] returns the cycle instead of settling.
+//!   `super::machine::settle_or_cycle` returns the cycle instead of settling.
 //!
 //! The axes are independent, so there are four hazards — a race or a pulse, each settling
 //! indeterminately or not settling at all. One [`Hazard`] carries one (cause, outcome) pair, so a probe
@@ -39,7 +39,7 @@
 //! **Implementation note:** a record is filed for every observation, and which of them a block is
 //! rendered from is [`crate::emit::arcs_tcl`]'s to decide: the observation naming a maximal set of
 //! victim nodes under containment supplies one. `discovered` is the probed state's index in exploration order,
-//! and with [`Hazard::ordinal`] it forms the `(discovered, ordinal)` key that settles the choice between
+//! and with `Hazard::ordinal` it forms the `(discovered, ordinal)` key that settles the choice between
 //! observations dominating equally. See `hazard-detection.md` for the concept.
 
 use std::collections::BTreeMap;
@@ -109,14 +109,14 @@ pub struct Hazard {
     pub settled: Vec<Minterm<Symbol>>,
     /// The prevector: the input-assignment path that drives every state variable into the probed state
     /// (each node projected onto the inputs).
-    pub prevector: Vec<Minterm<Symbol>>,
+    pub(crate) prevector: Vec<Minterm<Symbol>>,
     /// The levels the cell's outputs hold at the probed state — sampled at the SAME state as
     /// `prevector`, so the pair the constraint carries is consistent.
-    pub levels: ArcLevels,
+    pub(crate) levels: ArcLevels,
     /// The level each node the hazard names holds at the PROBED state, by name. Sampled at the same
     /// state as `prevector` and `levels`, and covering every entry of the hazard's `group`, so the
     /// constraint generated from this observation can state the start level of each node it probes.
-    pub node_levels: BTreeMap<Symbol, bool>,
+    pub(crate) node_levels: BTreeMap<Symbol, bool>,
     /// The probed state itself: every input and state variable at the level it holds there. The
     /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
     /// emitted column carries.
@@ -125,7 +125,7 @@ pub struct Hazard {
     /// component of the tie-break between equally dominant observations: the earlier-discovered one is
     /// kept. The exploration is breadth-first, so this already orders the observations by the length of
     /// the walk that reaches them.
-    pub discovered: usize,
+    pub(crate) discovered: usize,
 }
 
 /// One input state as a brace-wrapped literal product (`{S=1, R=0}`).
@@ -187,7 +187,7 @@ impl Hazard {
     /// which cell they occupy. It is the second component of the representative tie-break, after
     /// `discovered`: two records read from one probed state still pick a representative
     /// deterministically.
-    pub fn ordinal(&self) -> u8 {
+    pub(crate) fn ordinal(&self) -> u8 {
         let cause = match self.cause {
             Cause::Race { .. } => 0,
             Cause::Pulse { .. } => 2,
