@@ -82,7 +82,7 @@ fn read_functions(cell: &AnalysedCell) -> BTreeMap<&str, &StateRegions> {
     cell.edge
         .derived
         .iter()
-        .flat_map(|d| d.reads.iter().map(|(o, sr)| (o.as_str(), sr)))
+        .flat_map(|d| d.reads.iter().map(|r| (r.output.as_str(), &r.function)))
         .collect()
 }
 

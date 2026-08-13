@@ -137,28 +137,43 @@ impl EdgeCaptures {
 pub(crate) struct EdgeArcs {
     pub(crate) captures: Vec<EdgeCaptures>,
     pub(crate) folded: Vec<Symbol>,
-    /// The set of the cell's CLOCK-RELATED delay arcs that are EDGE arcs, by full arc identity —
-    /// `(output, related clock, the clock's own direction, machine start minterm)`, the same identity
-    /// [`super::arcs::derive`] keys an [`super::arcs::Arc`] on. SOURCED FROM the derived arcs: an entry
-    /// exists only where the pipeline observed the transition (so a masked edge — a `DFF`'s fall,
-    /// `ICM`'s competing branch reaching an internal latch — has none by construction, and internal
-    /// nodes carrying no delay arc are never labelled). An arc whose identity is ABSENT stays
+    /// The set of the cell's CLOCK-RELATED delay arcs that are EDGE arcs, each at the full identity an
+    /// [`EdgeLabel`] carries. SOURCED FROM the derived arcs: an entry exists only where the pipeline
+    /// observed the transition (so a masked edge — a `DFF`'s fall, `ICM`'s competing branch reaching an
+    /// internal latch — has none by construction, and internal nodes carrying no delay arc are never
+    /// labelled). An arc whose identity is ABSENT stays
     /// `-type combinational`: it acts by the clock's LEVEL, or propagates data through an
     /// already-transparent latch. Membership is PER FIRING, so two firings of one
     /// `(output, clock, direction)` that differ only in internal state can type differently. Every reader
     /// asks the set whether an identity is a member, so it is a [`HashSet`].
-    ///
-    /// The start minterm is the machine's own node, so it is as wide as the machine's coordinates — a
-    /// column per state variable and per combinational survivor. That width never has to be matched by
-    /// hand at the reading end: the probe is the same `arc.start` of the same derived arc, and a
-    /// [`Minterm`] compares and hashes by label-aligned value, an absent column reading as the don't-care
-    /// it would carry anyway. Widening the coordinates therefore widens key and probe together.
-    pub(crate) labels: HashSet<(Symbol, Symbol, Edge, Minterm<Symbol>)>,
+    pub(crate) labels: HashSet<EdgeLabel>,
     /// The read-gate factorisations recognised across the cell's outputs (see [`DerivedRegister`]). Empty
     /// for every cell that carries no read-gated register output. Each entry names a state-holding register
     /// the emitters render as a first-class internal node, and carries the combinational read function(s)
     /// of the output(s) that read it through a gate.
     pub(crate) derived: Vec<DerivedRegister>,
+}
+
+/// One EDGE-typed delay arc at full identity — the identity [`super::arcs::derive`] keys an
+/// [`super::arcs::Arc`] on. The two pins are the arc's ends and are not interchangeable: `output` is where
+/// the transition lands, `clock` the related pin it came from, and `clock_edge` the direction the CLOCK
+/// moves in, which is not in general the direction the output moves in.
+///
+/// The start minterm is the machine's own node, so it is as wide as the machine's coordinates — a
+/// column per state variable and per combinational survivor. That width never has to be matched by
+/// hand at the reading end: the probe is the same `arc.start` of the same derived arc, and a
+/// [`Minterm`] compares and hashes by label-aligned value, an absent column reading as the don't-care
+/// it would carry anyway. Widening the coordinates therefore widens key and probe together.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct EdgeLabel {
+    /// The output pin the arc lands on.
+    pub(crate) output: Symbol,
+    /// The related pin, a declared clock.
+    pub(crate) clock: Symbol,
+    /// The clock's own direction across the firing.
+    pub(crate) clock_edge: Edge,
+    /// The stable state the firing started from: `super::arcs::Arc::start` verbatim.
+    pub(crate) start: Minterm<Symbol>,
 }
 
 /// A post-processing derived internal edge register: content is a function of already-explored state,
@@ -179,9 +194,17 @@ pub(crate) struct DerivedRegister {
     /// The register node's name — a freshly minted, collision-checked name, or the name of the reused
     /// declared register when a match was found (nothing minted).
     pub(crate) name: Symbol,
-    /// Per read-gated output that reads this register: the output's combinational read function, as
-    /// state-table regions over the register node and the gate pins.
-    pub(crate) reads: Vec<(Symbol, StateRegions)>,
+    /// Every read-gated output that reads this register, each with the function it reads it through.
+    pub(crate) reads: Vec<RegisterRead>,
+}
+
+/// One read-gated output rendered as a combinational read of a [`DerivedRegister`].
+#[derive(Debug, Clone)]
+pub(crate) struct RegisterRead {
+    /// The output pin the read function belongs to.
+    pub(crate) output: Symbol,
+    /// The read function, as state-table regions over the register node and the gate pins.
+    pub(crate) function: StateRegions,
 }
 
 /// A single clock edge's observations for one candidate: whether any sample changed the value (the
@@ -232,6 +255,16 @@ type Synthesised = (Vec<(Symbol, Edge, StateRegions)>, StateRegions);
 /// One candidate edge arc on a node: `(clock, is_rise)`. The decision core's whole currency — each arc on
 /// a node is typed independently, so edge and combinational arcs coexist freely on one output.
 type Arc = (Symbol, bool);
+
+/// A latch taken in one phase of one clock: what the opacity memo is keyed on. The two names carry
+/// different roles — `latch` is a state variable, `clock` an input the phase belongs to — and `level` is
+/// the clock's level, never the latch's value.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct LatchPhase {
+    latch: Symbol,
+    clock: Symbol,
+    level: bool,
+}
 
 /// Discover each node's edge arcs from the cell's toggle-and-settle behaviour and label the cell's
 /// delay arcs per arc. Read-only over the shared [`Machine`]: it re-walks the exploration and only ADDS
@@ -362,7 +395,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         .filter(|p| scan.clock_set.contains(p.as_str()))
         .collect();
     let live_succ = scan.live_successors();
-    let mut opaque_of: HashMap<(Symbol, Symbol, bool), bool> = HashMap::new();
+    let mut opaque_of: HashMap<LatchPhase, bool> = HashMap::new();
     for w in &m.state_vars {
         for clock in &clocks {
             for level in [false, true] {
@@ -371,7 +404,14 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                         && s.value_of(clock.as_str()) == Some(level)
                         && reaches_self(&live_succ[i], w)
                 });
-                opaque_of.insert((w.clone(), (*clock).clone(), level), v);
+                opaque_of.insert(
+                    LatchPhase {
+                        latch: w.clone(),
+                        clock: (*clock).clone(),
+                        level,
+                    },
+                    v,
+                );
             }
         }
     }
@@ -384,7 +424,12 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // (`RDFF`'s `R`, pinning `Q` at 0 across its whole phase) from reading as a generating edge, while a
     // clock-latched constant whose phase does vary (`SETLR`) stays a genuine opening.
     let transparent = |w: &Symbol, clock: &Symbol, level: bool| -> bool {
-        if opaque_of[&(w.clone(), clock.clone(), level)] {
+        let phase = LatchPhase {
+            latch: w.clone(),
+            clock: clock.clone(),
+            level,
+        };
+        if opaque_of[&phase] {
             return false;
         }
         let mut seen: Option<bool> = None;
@@ -410,11 +455,20 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // delivered level (`d`). It is K-ASSOCIATED when its opacity differs across `K`'s two phases (a real latch
     // on `K` — the generator that opens on `d`, or the closer that shuts).
     let generates = |w: &Symbol, clock: &Symbol, is_rise: bool| -> bool {
-        opaque_of[&(w.clone(), clock.clone(), !is_rise)] && transparent(w, clock, is_rise)
+        let source = LatchPhase {
+            latch: w.clone(),
+            clock: clock.clone(),
+            level: !is_rise,
+        };
+        opaque_of[&source] && transparent(w, clock, is_rise)
     };
     let k_assoc = |w: &Symbol, clock: &Symbol| -> bool {
-        opaque_of[&(w.clone(), clock.clone(), false)]
-            != opaque_of[&(w.clone(), clock.clone(), true)]
+        let phase = |level: bool| LatchPhase {
+            latch: w.clone(),
+            clock: clock.clone(),
+            level,
+        };
+        opaque_of[&phase(false)] != opaque_of[&phase(true)]
     };
     // A node's DIRECT-SUPPORT K-LATCHES: the state variables `δ_node` reads in ONE step that are
     // K-associated (a real latch on `clock`). Used SOLELY by the closer-exposure birth test to pick a
@@ -506,7 +560,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // `arcs::derive`, or from an ineligible start — has no identity to add. The start minterm keyed on is
     // `a.start` VERBATIM, which is what makes the key line up with the emitter's probe whatever the
     // machine's coordinates are (see [`EdgeArcs::labels`]).
-    let mut labels: HashSet<(Symbol, Symbol, Edge, Minterm<Symbol>)> = HashSet::new();
+    let mut labels: HashSet<EdgeLabel> = HashSet::new();
     for a in delay_arcs {
         if !scan.clock_set.contains(a.related.as_str()) || !scan.is_eligible(&a.start) {
             continue;
@@ -518,7 +572,12 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         };
         if types_edge(&a.output, &a.related, is_rise, &sp) {
             let edge = if is_rise { Edge::Rise } else { Edge::Fall };
-            labels.insert((a.output.clone(), a.related.clone(), edge, a.start.clone()));
+            labels.insert(EdgeLabel {
+                output: a.output.clone(),
+                clock: a.related.clone(),
+                clock_edge: edge,
+                start: a.start.clone(),
+            });
         }
     }
 
@@ -782,7 +841,10 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                     reads: Vec::new(),
                 })
                 .reads
-                .push((y.clone(), reads_sr));
+                .push(RegisterRead {
+                    output: y.clone(),
+                    function: reads_sr,
+                });
             read_support.insert(y.clone(), read_header);
             factored.insert(y);
         }
@@ -1619,7 +1681,7 @@ mod tests {
         let mut v: Vec<(&str, &str, Edge)> = es
             .labels
             .iter()
-            .map(|(n, c, e, _)| (n.as_str(), c.as_str(), *e))
+            .map(|l| (l.output.as_str(), l.clock.as_str(), l.clock_edge))
             .collect();
         v.sort();
         v.dedup();
@@ -1644,6 +1706,14 @@ mod tests {
     /// output to a constant, so the two register cofactors differ on the released cube and nowhere else. A
     /// register the factorisation REUSED is a declared one, still a machine coordinate, so it is absent
     /// here and resolves through [`Machine::output_value`].
+    ///
+    /// That argument is exact over the output's TRUE read function. What is cofactored is the SYNTHESISED
+    /// cover — fit to the ELIGIBLE REACHABLE samples, with the unwitnessed remainder minimised as a
+    /// don't-care set (`synth_capture` through `generalise`) — so it carries a precondition: every gate
+    /// assignment must be sampled. An assignment the exploration never reaches is a don't-care espresso is
+    /// free to expand into, and expanding over a gate drops that gate's literal, taking the level the
+    /// resolution restricts at with it. The assert below holds the precondition to account instead of
+    /// assuming it.
     fn derived_values<B: Brand, C: ManagerCell + Send + Sync>(
         m: &Machine<B, C>,
         es: &EdgeArcs,
@@ -1666,11 +1736,12 @@ mod tests {
         for d in es.derived.iter().filter(|d| !is_machine_node(&d.name)) {
             // A minted register is minted from ONE output's cofactored content — the mint takes that
             // output's own name — so its read function is the one that reveals the register.
-            let (out, sr) = d
+            let reveal = d
                 .reads
                 .first()
                 .expect("a derived register carries its reading output");
-            let read = b.build_cover(&sr.on_cover);
+            let out = &reveal.output;
+            let read = b.build_cover(&reveal.function.on_cover);
             let sensitive = read
                 .cofactor(d.name.as_str(), true)
                 .xor(&read.cofactor(d.name.as_str(), false));
@@ -1697,6 +1768,16 @@ mod tests {
                 .collect();
             let released: Minterm<Symbol> =
                 Minterm::with_labels(&released).expect("distinct read-gate pins");
+            // The cube IS the resolution: `restrict_to` on an empty one is the identity, and δ_out
+            // unrestricted would then pass for held content without a word — the read function reproduces
+            // the machine either way, so nothing downstream would notice. Sensitivity must therefore BE
+            // this cube: non-empty, and revealing the register nowhere outside it.
+            assert!(
+                !gates.is_empty() && sensitive.equivalent_to(&cube_bdd(&b, &released)),
+                "the read function of {out} must reveal {} on a cube of released gate levels and \
+                 nowhere else, released {released:?}",
+                d.name
+            );
             let dy = fn_of
                 .get(out.as_str())
                 .expect("a read-gated output is a machine coordinate");
@@ -1970,14 +2051,15 @@ mod tests {
         let read_gated: BTreeSet<&str> = es
             .derived
             .iter()
-            .flat_map(|d| d.reads.iter().map(|(o, _)| o.as_str()))
+            .flat_map(|d| d.reads.iter().map(|r| r.output.as_str()))
             .collect();
         for d in &es.derived {
-            for (o, sr) in &d.reads {
-                for col in &sr.cols {
+            for r in &d.reads {
+                for col in &r.function.cols {
                     assert!(
                         !folded.contains(col.as_str()),
-                        "dropped reference: read function of {o} names folded node {col}, folded {:?}",
+                        "dropped reference: read function of {} names folded node {col}, folded {:?}",
+                        r.output,
                         folded_list(es)
                     );
                 }
@@ -2045,7 +2127,11 @@ mod tests {
                     None => m.output_value(d.name.as_str(), s),
                 }
             };
-            for (o, sr) in &d.reads {
+            for RegisterRead {
+                output: o,
+                function: sr,
+            } in &d.reads
+            {
                 let read = b.build_cover(&sr.on_cover);
                 let mut exercised = false;
                 for s in &m.explored.order {
@@ -2667,12 +2753,97 @@ Y = "!(T*A)"
             let reads: Vec<&str> = es.derived[0]
                 .reads
                 .iter()
-                .map(|(o, _)| o.as_str())
+                .map(|r| r.output.as_str())
                 .collect();
             assert_eq!(reads, ["Y"]);
 
             // `CLK->Y` stays edge on both edges; `A` carries no edge label (it is not a clock), so `A->Y`
             // arcs render `-type combinational`.
+            assert_eq!(
+                labels_of(&es, "Y"),
+                [("CLK", Edge::Rise), ("CLK", Edge::Fall)]
+            );
+        });
+    }
+
+    // The BDET latches read through TWO gates whose pass levels are opposite.
+    const BDET2_TOML: &str = r#"
+[[cell]]
+name = "BDET2"
+inputs = ["CLK", "D", "A", "B"]
+clock = ["CLK"]
+[cell.internal]
+L1 = "!CLK*D + CLK*L1"
+L2 = "CLK*D + !CLK*L2"
+[cell.outputs]
+Y = "!((CLK*L1 + !CLK*L2)*A) + B"
+"#;
+
+    #[test]
+    fn edge_two_read_gates_release_at_opposite_levels() {
+        // `Y = !(M*A) + B` over the DET content `M = CLK*L1 + !CLK*L2`, which shows `L1` (captured on the
+        // rise) while `CLK=1` and `L2` (captured on the fall) while `CLK=0`. Derived by hand:
+        //
+        // * `A=0` pins `Y` to 1 (`!(M*0) + B = 1`) and `B=1` pins it to 1; neither pin appears in `δ_L1` or
+        //   `δ_L2`, so neither moves the cone and both are READ-GATES. Their pass levels are the
+        //   un-asserted ones — `A=1` and `B=0`, opposite levels.
+        // * The content the output reads is `δ_Y` at that pass cube: `!(M*1) + 0 = !M`. No declared
+        //   register holds it (`L1`/`L2` are transparent latches, empty seam sets), so `Y_st` is minted
+        //   holding `!M`, capturing `!D` on both `CLK` edges — the read inverts.
+        // * With `M = !Y_st` the read function is `!(!Y_st*A) + B = Y_st + !A + B`, whose sensitivity to
+        //   the register column is `1 ⊕ (!A + B) = A*!B`: a two-literal cube releasing each gate at exactly
+        //   one level, and at opposite levels. Restricting `δ_Y` there returns `!M`; releasing only `A`
+        //   would leave `!M + B` and only `B` would leave `!(M*A)`, so the resolved value tells the three
+        //   apart.
+        with_machine!(BDET2_TOML, |builder, _a, _m2, m| {
+            let es = classify(&m);
+            assert_captures_faithful(&m, &es);
+            assert_reads_faithful(&m, &es);
+            assert_no_dropped_references(&m, &es);
+
+            let mut folded = folded_list(&es);
+            folded.sort();
+            assert_eq!(folded, ["L1", "L2"]);
+            assert_eq!(node_list(&es), ["Y_st"], "Y is factored out, Y_st minted");
+
+            // `Y_st` is a dual-edge register capturing `!D` on each edge.
+            let yst = reg(&es, "Y_st");
+            assert_eq!(yst.captures.len(), 2, "dual edge");
+            let nd = !&builder.var("D");
+            for (_, _, cap) in &yst.captures {
+                assert!(
+                    builder.build_cover(&cap.on_cover).equivalent_to(&nd),
+                    "each edge captures !D"
+                );
+            }
+
+            assert_eq!(es.derived.len(), 1);
+            assert_eq!(es.derived[0].name, "Y_st");
+            let reads: Vec<&str> = es.derived[0]
+                .reads
+                .iter()
+                .map(|r| r.output.as_str())
+                .collect();
+            assert_eq!(reads, ["Y"]);
+
+            // The read function `Y = Y_st + !A + B`.
+            let gate_a = builder.var("A");
+            let gate_b = builder.var("B");
+            let expected_read = builder.var("Y_st").or(&!&gate_a).or(&gate_b);
+            let read = builder.build_cover(&es.derived[0].reads[0].function.on_cover);
+            assert!(read.equivalent_to(&expected_read), "Y reads Y_st + !A + B");
+
+            // Both gates are released — the cube is `A*!B` — so the register resolves to `!M`.
+            let clk = builder.var("CLK");
+            let mux = clk
+                .and(&builder.var("L1"))
+                .or(&(!&clk).and(&builder.var("L2")));
+            let resolved = derived_values(&m, &es);
+            assert!(
+                resolved[&Symbol::from("Y_st")].equivalent_to(&!&mux),
+                "Y_st resolves to !(CLK*L1 + !CLK*L2), both gates released"
+            );
+
             assert_eq!(
                 labels_of(&es, "Y"),
                 [("CLK", Edge::Rise), ("CLK", Edge::Fall)]
@@ -2715,7 +2886,7 @@ Y = "!(T*A)"
             let reads: Vec<&str> = es.derived[0]
                 .reads
                 .iter()
-                .map(|(o, _)| o.as_str())
+                .map(|r| r.output.as_str())
                 .collect();
             assert_eq!(reads, ["Y"]);
         });
@@ -2777,7 +2948,7 @@ Y = "!(Q*A)"
             let reads: Vec<&str> = es.derived[0]
                 .reads
                 .iter()
-                .map(|(o, _)| o.as_str())
+                .map(|r| r.output.as_str())
                 .collect();
             assert_eq!(reads, ["Y"]);
             assert!(
@@ -2792,7 +2963,8 @@ Y = "!(Q*A)"
         // The harness has teeth on the DERIVED registers: corrupt what the factorisation emits for one and
         // the replay must fail. A test that cannot fail on the bug it targets is not a test. Both halves of
         // the emitted model are corrupted in turn — the register's own capture cover, replayed against the
-        // machine, and the read function the reading output is rendered as.
+        // machine, and the read function the reading output is rendered as — and the resolution the whole
+        // replay rests on is corrupted a third way, by taking every gate out of the read.
         fn fails(f: impl FnOnce()) -> bool {
             let prev = std::panic::take_hook();
             std::panic::set_hook(Box::new(|_| {}));
@@ -2824,12 +2996,31 @@ Y = "!(Q*A)"
         // the read replay catches wherever the register's value reaches the output.
         with_machine!(BDET_TOML, |builder, _a, _m2, m| {
             let mut es = classify(&m);
-            let sr = &mut es.derived[0].reads[0].1;
+            let sr = &mut es.derived[0].reads[0].function;
             let good = builder.build_cover(&sr.on_cover);
             sr.on_cover = regions::minimise_bdd(&!&good);
             assert!(
                 fails(|| assert_reads_faithful(&m, &es)),
                 "corrupting a derived register's read function must make the read harness fail"
+            );
+        });
+
+        // Strip the gates out of the read function, leaving `Y = Y_st`: nothing is released, so the
+        // resolution has no cube to restrict at. This is the shape espresso's expansion would produce over
+        // an unsampled gate assignment, and the value it would silently hand back — δ_Y whole — reproduces
+        // the machine through the corrupted read, so only the resolver's own assert stands between it and
+        // every clause it re-bases.
+        with_machine!(BDET_TOML, |builder, _a, _m2, m| {
+            let mut es = classify(&m);
+            let name = es.derived[0].name.clone();
+            es.derived[0].reads[0].function.on_cover =
+                regions::minimise_bdd(&builder.var(name.as_str()));
+            assert!(
+                fails(|| {
+                    derived_values(&m, &es);
+                }),
+                "a read function naming no gate must make the resolution fail, not adopt the \
+                 unrestricted output function"
             );
         });
     }
@@ -4060,12 +4251,12 @@ Y = "CLK*A + !CLK*B + Y*A*B"
                 {
                     continue; // only Y's CLK Fall arcs
                 }
-                let labelled = es.labels.contains(&(
-                    a.output.clone(),
-                    a.related.clone(),
-                    Edge::Fall,
-                    a.start.clone(),
-                ));
+                let labelled = es.labels.contains(&EdgeLabel {
+                    output: a.output.clone(),
+                    clock: a.related.clone(),
+                    clock_edge: Edge::Fall,
+                    start: a.start.clone(),
+                });
                 match a.start.value_of(mask) {
                     Some(v) if v == edge_when => {
                         assert!(

@@ -506,6 +506,13 @@ other pair, and a single-pin `min_pulse_width` for a pulse. Which pins get one i
 is GENERATED: every hazard is detected and reported whichever pins are selected, so a pin left out keeps
 its stderr diagnostic and only loses its blocks.
 
+Naming a pin brings back the constraints that pin has a **role** in, and the roles are the kind's. A
+`non_seq` is symmetric — its two pins are equals — so naming **either end** selects the separation that
+holds them apart. A setup/hold is directed, the data pin being constrained with respect to the clock, so
+it is selected by its **data pin**: naming the clock asks for what the clock is itself subject to — its
+own minimum pulse width — and not for the separations other pins are held around it by. A
+`min_pulse_width` is selected by the **pin it pulses**.
+
 cellsmith emits two kinds of per-cell stderr diagnostic. The detected hazards come out one entry per
 cause — a header naming the timing and the state it goes wrong from, over a body that names the
 condition, the walk into that state, and one field per outcome observed listing the nodes THAT reading

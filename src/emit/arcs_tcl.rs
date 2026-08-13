@@ -42,7 +42,8 @@ use indexmap::IndexMap;
 use crate::logic::arcs::{Arc, ArcLevels, Edge, ExposedLevel, HiddenArc};
 use crate::logic::assignment;
 use crate::logic::constraint::{self, Constraint, ConstraintKind, VictimNode};
-use crate::logic::hazard::{Cause, Hazard, Outcome};
+use crate::logic::edge::EdgeLabel;
+use crate::logic::hazard::{Cause, Hazard, Outcome, Racer};
 use crate::logic::leakage::LeakageState;
 use crate::logic::literal_product;
 use crate::model::{AnalysedCell, ArcClass};
@@ -379,14 +380,14 @@ fn constraint_firing(block: &ConstraintBlock<'_>, state: &Minterm<Symbol>) -> Ma
         arc_type: block.arc_type,
         kind: match &block.arc.switching {
             Switching::Pair { related, pin } => MaskedKind::Constraint {
-                related: related.0.clone(),
-                related_edge: related.1,
-                pin: pin.0.clone(),
-                pin_edge: pin.1,
+                related: related.pin.clone(),
+                related_edge: related.edge,
+                pin: pin.pin.clone(),
+                pin_edge: pin.edge,
             },
             Switching::Single { pin } => MaskedKind::Pulse {
-                pin: pin.0.clone(),
-                edge: pin.1,
+                pin: pin.pin.clone(),
+                edge: pin.edge,
             },
         },
         states: vec![state.clone()],
@@ -479,12 +480,12 @@ impl ArcIdentity {
         };
         if arc.is_async {
             ArcIdentity::Async(transition)
-        } else if cell.edge.labels.contains(&(
-            arc.output.clone(),
-            arc.related.clone(),
-            related_edge,
-            arc.start.clone(),
-        )) {
+        } else if cell.edge.labels.contains(&EdgeLabel {
+            output: arc.output.clone(),
+            clock: arc.related.clone(),
+            clock_edge: related_edge,
+            start: arc.start.clone(),
+        }) {
             ArcIdentity::Edge(transition)
         } else {
             ArcIdentity::Combinational(transition)
@@ -626,31 +627,26 @@ fn groups(cell: &AnalysedCell, extra: &[Symbol]) -> Vec<Group> {
 /// The pins a constraint block switches, and the edge each makes: the PAIR a constraint holds apart, or
 /// the SINGLE pin a minimum-pulse-width block constrains — the pulse relating that pin to itself, so the
 /// block names it on both `-related_pin` and `-pin`.
-enum Switching<'a> {
-    Pair {
-        related: (&'a Symbol, Edge),
-        pin: (&'a Symbol, Edge),
-    },
-    Single {
-        pin: (&'a Symbol, Edge),
-    },
+enum Switching {
+    Pair { related: Racer, pin: Racer },
+    Single { pin: Racer },
 }
 
-impl Switching<'_> {
-    /// The pin the block names on `-related_pin`. For [`Switching::Single`] that is the one pin: naming
-    /// it twice follows FROM the variant — a pulse constrains a pin against itself — rather than from
-    /// two fields that happen to be equal.
-    fn related(&self) -> &Symbol {
+impl Switching {
+    /// The pin the block names on `-related_pin`, with the edge it makes. For [`Switching::Single`] that
+    /// is the one pin: naming it twice follows FROM the variant — a pulse constrains a pin against
+    /// itself — rather than from two fields that happen to be equal.
+    fn related(&self) -> &Racer {
         match self {
-            Switching::Pair { related, .. } => related.0,
-            Switching::Single { pin } => pin.0,
+            Switching::Pair { related, .. } => related,
+            Switching::Single { pin } => pin,
         }
     }
 
-    /// The pin the block names on `-pin`.
-    fn pin(&self) -> &Symbol {
+    /// The pin the block names on `-pin`, with the edge it makes.
+    fn pin(&self) -> &Racer {
         match self {
-            Switching::Pair { pin, .. } | Switching::Single { pin } => pin.0,
+            Switching::Pair { pin, .. } | Switching::Single { pin } => pin,
         }
     }
 
@@ -658,11 +654,11 @@ impl Switching<'_> {
     /// pins — the vector then holding it at the level it starts from.
     fn edge_of(&self, input: &str) -> Option<Edge> {
         match self {
-            Switching::Pair { related, pin } => [*related, *pin]
+            Switching::Pair { related, pin } => [related, pin]
                 .into_iter()
-                .find(|(name, _)| name.as_str() == input)
-                .map(|(_, edge)| edge),
-            Switching::Single { pin } => (pin.0.as_str() == input).then_some(pin.1),
+                .find(|r| r.pin.as_str() == input)
+                .map(|r| r.edge),
+            Switching::Single { pin } => (pin.pin.as_str() == input).then_some(pin.edge),
         }
     }
 }
@@ -672,7 +668,7 @@ impl Switching<'_> {
 /// The four are read at one state and rendered by one block, so they travel as a named whole — several
 /// of them share a type, and telling them apart by position is what a name spares the block.
 struct ConstraintArc<'a> {
-    switching: Switching<'a>,
+    switching: Switching,
     nodes: &'a [VictimNode],
     prevector: &'a [Minterm<Symbol>],
     levels: &'a ArcLevels,
@@ -690,15 +686,22 @@ struct ConstraintBlock<'a> {
 /// pulse width constrains against its own second edge. A constraint's members all switch the same pins —
 /// what differs between them is the `-type` — so this is a property of the constraint rather than of the
 /// block.
-fn constraint_switching(c: &Constraint) -> Switching<'_> {
-    let pin = (&c.pin, c.pin_edge);
+fn constraint_switching(c: &Constraint) -> Switching {
+    let pin = Racer {
+        pin: c.pin.clone(),
+        edge: c.pin_edge,
+    };
+    let related = |name: &Symbol, edge: Edge| Racer {
+        pin: name.clone(),
+        edge,
+    };
     match &c.kind {
         ConstraintKind::SetupHold { clock, clock_edge } => Switching::Pair {
-            related: (clock, *clock_edge),
+            related: related(clock, *clock_edge),
             pin,
         },
         ConstraintKind::NonSeq { other, other_edge } => Switching::Pair {
-            related: (other, *other_edge),
+            related: related(other, *other_edge),
             pin,
         },
         ConstraintKind::MinPulseWidth => Switching::Single { pin },
@@ -770,14 +773,11 @@ impl ConstraintIdentity {
     fn of(c: &Constraint) -> Self {
         // A minimum pulse width relates its pin to itself, so the related half of the identity is that
         // same pin and edge — which is what the block writes on `-related_pin`.
-        let (related, related_edge) = match constraint_switching(c) {
-            Switching::Pair { related, .. } => (related.0.clone(), related.1),
-            Switching::Single { pin } => (pin.0.clone(), pin.1),
-        };
+        let related = constraint_switching(c).related().clone();
         ConstraintIdentity {
             types: constraint_types(c),
-            related,
-            related_edge,
+            related: related.pin,
+            related_edge: related.edge,
             pin: c.pin.clone(),
             pin_edge: c.pin_edge,
             nodes: c.victim_names(),
@@ -953,8 +953,11 @@ fn constraint_block(
     if let (true, Some(w)) = (with_when, constraint_when_str(arc)) {
         s.push_str(&format!("\t-when \"{w}\" \\\n"));
     }
-    s.push_str(&format!("\t-related_pin {} \\\n", arc.switching.related()));
-    s.push_str(&format!("\t-pin {} \\\n", arc.switching.pin()));
+    s.push_str(&format!(
+        "\t-related_pin {} \\\n",
+        arc.switching.related().pin
+    ));
+    s.push_str(&format!("\t-pin {} \\\n", arc.switching.pin().pin));
     s.push_str(&format!("\t-probe {{{probe_list}}} \\\n"));
     s.push_str(&format!("\t{}\n", name_block(&group.names)));
     s.push('\n');
@@ -4439,7 +4442,7 @@ Q = "!CLKB*M2 + CLKB*Q"
             cell.edge
                 .labels
                 .iter()
-                .any(|(n, c, e, _)| n == "Q" && c == "CLKB" && *e == Edge::Fall),
+                .any(|l| l.output == "Q" && l.clock == "CLKB" && l.clock_edge == Edge::Fall),
             "Q's own latch opens on CLKB's falling edge (an edge arc): {:?}",
             cell.edge.labels
         );
@@ -4571,7 +4574,7 @@ Q = "EN*D + !EN*Q"
             cell.edge
                 .labels
                 .iter()
-                .any(|(n, c, e, _)| n == "Q" && c == "EN" && *e == Edge::Rise),
+                .any(|l| l.output == "Q" && l.clock == "EN" && l.clock_edge == Edge::Rise),
             "the enable's rising edge opens the latch (an edge arc): {:?}",
             cell.edge.labels
         );
@@ -5031,7 +5034,7 @@ M = "!CLK*D + CLK*M"
             cell.edge
                 .labels
                 .iter()
-                .any(|(n, c, e, _)| n == "M" && c == "CLK" && *e == Edge::Fall),
+                .any(|l| l.output == "M" && l.clock == "CLK" && l.clock_edge == Edge::Fall),
             "the exposed master opens on CLK's fall (an edge arc): {:?}",
             cell.edge.labels
         );

@@ -22,6 +22,8 @@
 //!
 //! [`Constraint::pin`] is the pin the constraint constrains — the emitted block's `-pin` — under every
 //! kind. What a kind adds is the OTHER pin of a separation, which a minimum pulse width does not have.
+//! Which pins a NAMED selection reaches a constraint by is the kind's to state as well, and
+//! [`Constraint::selected_by`] states it.
 //!
 //! **One constraint per situation, and a situation is a CAUSE.** A cause is a starting state and a
 //! transition, so `Situation` is the kind with its pins and the edge each makes, plus the state the
@@ -47,6 +49,7 @@ use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::arcs::{ArcLevels, Edge};
 use crate::logic::hazard::{Cause, Hazard, Racer};
+use crate::model::ConstraintPins;
 
 /// What a constraint relates its pin to: the other pin of a separation, or the pin itself.
 ///
@@ -121,6 +124,27 @@ impl Constraint {
     /// state they were sampled at.
     pub(crate) fn victim_names(&self) -> Vec<Symbol> {
         self.nodes.iter().map(|v| v.node.clone()).collect()
+    }
+
+    /// Does `selection` ask for this constraint? The pins that reach it are the ones its KIND gives a
+    /// role to, so the answer is read off the variant rather than off whichever end happens to be
+    /// stored in [`Constraint::pin`].
+    ///
+    /// A [`ConstraintKind::NonSeq`] is symmetric — its two pins are equals — so naming EITHER end names
+    /// the separation that holds them apart. A [`ConstraintKind::SetupHold`] is directed: the data pin
+    /// is constrained with respect to the clock, so the data pin selects it and the clock does not.
+    /// Naming a clock asks for what that clock is itself subject to — its own minimum pulse width — and
+    /// not for the separations other pins are held around it by. A [`ConstraintKind::MinPulseWidth`]
+    /// names one pin, which is the pin that selects it.
+    pub(crate) fn selected_by(&self, selection: &ConstraintPins) -> bool {
+        match &self.kind {
+            ConstraintKind::NonSeq { other, .. } => {
+                selection.selects(&self.pin) || selection.selects(other)
+            }
+            ConstraintKind::SetupHold { .. } | ConstraintKind::MinPulseWidth => {
+                selection.selects(&self.pin)
+            }
+        }
     }
 }
 
@@ -235,21 +259,24 @@ pub(crate) fn constrains(c: &Constraint, hazard: &Hazard) -> bool {
 /// The two ends of a separation, sorted: which of them the record calls its constrained pin is a
 /// property of the declaration (a declared clock directs the pair), so it settles nothing about which
 /// pins are held apart.
-fn separated(c: &Constraint) -> Vec<PinEdge> {
+fn separated(c: &Constraint) -> Vec<Racer> {
     let related = match &c.kind {
-        ConstraintKind::SetupHold { clock, clock_edge } => (clock, *clock_edge),
-        ConstraintKind::NonSeq { other, other_edge } => (other, *other_edge),
+        ConstraintKind::SetupHold { clock, clock_edge } => Racer {
+            pin: clock.clone(),
+            edge: *clock_edge,
+        },
+        ConstraintKind::NonSeq { other, other_edge } => Racer {
+            pin: other.clone(),
+            edge: *other_edge,
+        },
         ConstraintKind::MinPulseWidth => return Vec::new(),
     };
     let mut pair = vec![
-        PinEdge {
+        Racer {
             pin: c.pin.clone(),
             edge: c.pin_edge,
         },
-        PinEdge {
-            pin: related.0.clone(),
-            edge: related.1,
-        },
+        related,
     ];
     pair.sort();
     pair
@@ -258,23 +285,10 @@ fn separated(c: &Constraint) -> Vec<PinEdge> {
 /// The pins a race names, sorted — the same reading [`separated`] takes of the constraint generated from
 /// it. A race is unordered, so a probe that took the pair one way round names the same race as one that
 /// took it the other.
-fn raced(pins: &[Racer]) -> Vec<PinEdge> {
-    let mut pins: Vec<PinEdge> = pins
-        .iter()
-        .map(|r| PinEdge {
-            pin: r.pin.clone(),
-            edge: r.edge,
-        })
-        .collect();
+fn raced(pins: &[Racer]) -> Vec<Racer> {
+    let mut pins = pins.to_vec();
     pins.sort();
     pins
-}
-
-/// A pin, and the edge it makes, as a [`Situation`] names it.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct PinEdge {
-    pin: Symbol,
-    edge: Edge,
 }
 
 /// The pins one situation is about, each with the edge it makes: a constraint's kind carrying EVERY pin
@@ -288,23 +302,23 @@ struct PinEdge {
 enum SituationKind {
     /// A directed separation. Its two ends have different roles — data held around a declared clock — so
     /// each keeps a field of its own.
-    SetupHold { data: PinEdge, clock: PinEdge },
+    SetupHold { data: Racer, clock: Racer },
     /// A symmetric separation, as the unordered pair of the two edges it holds apart.
-    NonSeq { pair: [PinEdge; 2] },
+    NonSeq { pair: [Racer; 2] },
     /// A minimum pulse width, on the one pin it holds against that pin's own second edge.
-    MinPulseWidth { pin: PinEdge },
+    MinPulseWidth { pin: Racer },
 }
 
 impl SituationKind {
     fn of(c: &Constraint) -> Self {
-        let constrained = PinEdge {
+        let constrained = Racer {
             pin: c.pin.clone(),
             edge: c.pin_edge,
         };
         match &c.kind {
             ConstraintKind::SetupHold { clock, clock_edge } => SituationKind::SetupHold {
                 data: constrained,
-                clock: PinEdge {
+                clock: Racer {
                     pin: clock.clone(),
                     edge: *clock_edge,
                 },
@@ -312,7 +326,7 @@ impl SituationKind {
             ConstraintKind::NonSeq { other, other_edge } => {
                 let mut pair = [
                     constrained,
-                    PinEdge {
+                    Racer {
                         pin: other.clone(),
                         edge: *other_edge,
                     },

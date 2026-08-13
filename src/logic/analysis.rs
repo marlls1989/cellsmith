@@ -296,7 +296,9 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     // (the per-cell `constraint_arcs`, unioned for every cell with the global `--constraints` flag) names
     // the pins whose constraints are wanted, and it acts on the constraints generation RETURNS, never on
     // the hazards handed to it: a pin nobody asked constraints for is still probed and still reported,
-    // and only loses its blocks. Emission then picks each general block's representative among exactly
+    // and only loses its blocks. Which pins reach a given constraint is that constraint's kind to answer
+    // ([`Constraint::selected_by`]), the two ends of a symmetric separation being equals and those of a
+    // directed one not. Emission then picks each general block's representative among exactly
     // the constraints that come out, so an unselected pin's observations decide nothing about a selected
     // pin's block.
     let detected = confluence::detect(&m);
@@ -315,7 +317,7 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
         ConstraintPins::Off => Vec::new(),
         selection => constraint::constrain(&hazards, &m.cell.clock_pins)
             .into_iter()
-            .filter(|c| selection.selects(&c.pin))
+            .filter(|c| c.selected_by(selection))
             .collect(),
     };
     // Behavioural edge classification is read-only over the explored machine — it mints only
@@ -345,13 +347,19 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
+    use espresso_logic::Symbol;
+
     use crate::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
     use crate::emit::liberty::cell_liberty;
     use crate::emit::verilog::cell_verilog;
+    use crate::logic::arcs::Edge;
+    use crate::logic::constraint::{Constraint, ConstraintKind};
     use crate::logic::hazard::{Cause, Outcome};
     use crate::logic::machine::ExplorationLimit;
     use crate::logic::resolve;
-    use crate::model::analyse_one;
+    use crate::model::{analyse_one, AnalysedCell};
 
     #[test]
     fn oversized_cell_trips_the_candidate_budget() {
@@ -581,24 +589,9 @@ Q = "!R*(CLK*M + !CLK*Q)"
         // pulse has a minimum width. Naming one of the two decides which constraints are generated and
         // nothing else — the hazards behind BOTH are still detected and still reported, so the pin left
         // out keeps its warning and loses only its blocks.
-        let dff = |selection: &str| {
-            format!(
-                r#"
-[[cell]]
-name = "DFF"
-inputs = ["CLK", "D"]
-clock = ["CLK"]
-constraint_arcs = {selection}
-[cell.internal]
-M = "!CLK*D + CLK*M"
-[cell.outputs]
-Q = "CLK*M + !CLK*Q"
-"#
-            )
-        };
         // The pins constrained, as a set: which observation supplied a constraint states nothing, so
         // two runs agree here without agreeing on the records behind it.
-        let constrained = |c: &crate::model::AnalysedCell| {
+        let pins = |c: &crate::model::AnalysedCell| {
             let mut v: Vec<String> = c.constraints.iter().map(|k| k.pin.to_string()).collect();
             v.sort();
             v.dedup();
@@ -627,8 +620,8 @@ Q = "CLK*M + !CLK*Q"
 
         let every = analyse_one(&dff("true"));
         let data_only = analyse_one(&dff("\"D\""));
-        assert_eq!(constrained(&every), ["CLK", "D"]);
-        assert_eq!(constrained(&data_only), ["D"]);
+        assert_eq!(pins(&every), ["CLK", "D"]);
+        assert_eq!(pins(&data_only), ["D"]);
         assert_eq!(
             detected(&data_only),
             detected(&every),
@@ -829,6 +822,149 @@ Q = "W + Q*(A+B)"
                 (true, false, true, false),
                 (true, true, true, true),
             ],
+        );
+    }
+
+    /// One constraint as a comparable descriptor: its kind, the pins that kind names with the edge each
+    /// makes, and the victim nodes it probes. A symmetric separation reads the same either way round, so
+    /// its two ends are sorted rather than recorded as constrained and related — which is the very thing
+    /// the selections below must not depend on. The probed state is left out: these tests compare WHICH
+    /// constraints a selection returns, and the selections of one cell answer over the same states.
+    fn describe(c: &Constraint) -> String {
+        let end = |pin: &Symbol, edge: Edge| format!("{pin}/{}", edge.rf());
+        let head = match &c.kind {
+            ConstraintKind::SetupHold { clock, clock_edge } => format!(
+                "setup_hold {} around {}",
+                end(&c.pin, c.pin_edge),
+                end(clock, *clock_edge),
+            ),
+            ConstraintKind::NonSeq { other, other_edge } => {
+                let mut ends = [end(&c.pin, c.pin_edge), end(other, *other_edge)];
+                ends.sort();
+                format!("non_seq {} {}", ends[0], ends[1])
+            }
+            ConstraintKind::MinPulseWidth => format!("min_pulse_width {}", end(&c.pin, c.pin_edge)),
+        };
+        let nodes: Vec<String> = c.nodes.iter().map(|v| v.node.to_string()).collect();
+        format!("{head} over {}", nodes.join(","))
+    }
+
+    /// The constraints a cell generated, as the set of their descriptors.
+    fn constrained(cell: &AnalysedCell) -> BTreeSet<String> {
+        cell.constraints.iter().map(describe).collect()
+    }
+
+    /// A descriptor set from the descriptors themselves, for stating an expectation.
+    fn set<const N: usize>(descriptors: [&str; N]) -> BTreeSet<String> {
+        descriptors.iter().map(|d| (*d).to_owned()).collect()
+    }
+
+    /// The cross-coupled mutex, its inputs declared in `inputs` order and its constraint arcs selected
+    /// by `selection`.
+    fn mutex(inputs: &str, selection: &str) -> String {
+        format!(
+            r#"
+[[cell]]
+name = "MUT"
+inputs = [{inputs}]
+constraint_arcs = {selection}
+[cell.outputs]
+Qa = "!Qb * A"
+Qb = "!Qa * B"
+"#
+        )
+    }
+
+    /// A master-slave DFF with `CLK` declared a clock, its constraint arcs selected by `selection`.
+    fn dff(selection: &str) -> String {
+        format!(
+            r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+constraint_arcs = {selection}
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#
+        )
+    }
+
+    /// The one separation the mutex generates: neither request is a declared clock, so the pair whose
+    /// simultaneous assertion rings is symmetric. Both requests rise — the ring is reached FROM the idle
+    /// state — and it endangers both grants.
+    const MUTEX_SEPARATION: &str = "non_seq A/R B/R over Qa,Qb";
+
+    #[test]
+    fn either_end_of_a_symmetric_separation_selects_it() {
+        // A and B are equals here, so naming either names the separation that holds them apart, and the
+        // two selections return the same one.
+        //
+        // What differs between them is the release pulse each request carries of its own: dropping a
+        // granted request opens a cascade whose width decides which request ends up granted, so A↓ and
+        // B↓ are a minimum pulse width each, over the same grant pair. A pulse names ONE pin, so it
+        // answers only to the selection naming that pin.
+        assert_eq!(
+            constrained(&analyse_one(&mutex(r#""A", "B""#, r#"["A"]"#))),
+            set([MUTEX_SEPARATION, "min_pulse_width A/F over Qa,Qb"]),
+        );
+        assert_eq!(
+            constrained(&analyse_one(&mutex(r#""A", "B""#, r#"["B"]"#))),
+            set([MUTEX_SEPARATION, "min_pulse_width B/F over Qa,Qb"]),
+        );
+    }
+
+    #[test]
+    fn the_input_declaration_order_does_not_move_a_symmetric_separation() {
+        // The same cell, its two inputs declared the other way round: a separation is between the pins,
+        // so which of them the spec happens to declare first is nothing the constraint is about. One
+        // selection, naming A, answers the same in both spellings.
+        let declared = constrained(&analyse_one(&mutex(r#""A", "B""#, r#"["A"]"#)));
+        let reversed = constrained(&analyse_one(&mutex(r#""B", "A""#, r#"["A"]"#)));
+        assert_eq!(declared, reversed);
+        assert!(
+            declared.contains(MUTEX_SEPARATION),
+            "naming A selects the separation whichever order the inputs are declared in, got {declared:?}",
+        );
+    }
+
+    #[test]
+    fn a_directed_separation_is_selected_by_its_data_pin() {
+        // CLK is declared a clock, so the CLK/D race is DIRECTED: D is the data, held around CLK. Naming
+        // D asks for what D is subject to, which is that separation. The flop's pulses are on CLK alone —
+        // a clock pulse too narrow to carry the master through to the slave — so naming D brings back no
+        // minimum pulse width.
+        let data = constrained(&analyse_one(&dff(r#"["D"]"#)));
+        assert!(!data.is_empty(), "the flop's CLK/D race is constrained");
+        assert!(
+            data.iter().all(|c| c.starts_with("setup_hold D/")),
+            "naming the data pin selects the separations it is held by, got {data:?}",
+        );
+    }
+
+    #[test]
+    fn a_declared_clock_selects_its_pulse_width_and_not_the_separation() {
+        // Naming CLK asks for what CLK is itself subject to: the width of its own pulse. A rise pulse
+        // opens the slave, so a short one leaves Q where it was rather than at M; a fall pulse opens the
+        // master onto D and only the closing rise walks that into Q, so a short one leaves both. Those
+        // two widths are the whole of what CLK gets — the CLK/D separation is what D is held by, not what
+        // CLK is, so it is not here.
+        let clock = constrained(&analyse_one(&dff(r#"["CLK"]"#)));
+        assert_eq!(
+            clock,
+            set([
+                "min_pulse_width CLK/R over Q",
+                "min_pulse_width CLK/F over Q,M",
+            ]),
+        );
+        // The flop has two input pins, so between them the two selections name every constraint the cell
+        // generates: selecting narrows what comes back and loses nothing no pin asks for.
+        let data = constrained(&analyse_one(&dff(r#"["D"]"#)));
+        assert_eq!(
+            data.union(&clock).cloned().collect::<BTreeSet<String>>(),
+            constrained(&analyse_one(&dff("true"))),
         );
     }
 }

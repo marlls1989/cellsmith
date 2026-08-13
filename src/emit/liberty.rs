@@ -161,7 +161,7 @@ fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
                 .edge
                 .derived
                 .iter()
-                .flat_map(|d| d.reads.iter().map(|(o, sr)| (o.as_str(), sr)))
+                .flat_map(|d| d.reads.iter().map(|r| (r.output.as_str(), &r.function)))
                 .collect();
 
             let n_out = cell.outputs.len();

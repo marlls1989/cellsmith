@@ -119,17 +119,6 @@ pub(crate) struct StateModel {
     /// derived register keep their own name. Folded masters are excluded; recognised edge-register nodes
     /// keep their column.
     pub(crate) internal_nodes: Vec<Symbol>,
-    /// The same columns in the same order under their SIGNAL names — what the covers, the minterm keys
-    /// and the machine are written in. `internal_nodes[i]` is the table node of `state_signals[i]`, so a
-    /// harness addressing a rendered column by signal name reads this list, not `internal_nodes`.
-    ///
-    /// That harness is the only reader, which is why the field is gated on `#[cfg(test)]` — the data sits
-    /// where its consumer is, absent from every other build. `#[cfg(test)]` silences `dead_code` exactly
-    /// as `#[allow]` does, so it is honest only where the reader could not reach the information any other
-    /// way: here it could not, short of inverting [`node_of`](Self::node_of) at each use. Where a
-    /// production route already answers the question, the field is deleted rather than gated.
-    #[cfg(test)]
-    state_signals: Vec<Symbol>,
     /// Each state signal's ORIGINAL name → its state-table node name.
     pub(crate) node_of: BTreeMap<Symbol, Symbol>,
     /// The joint level (level-sensitive) next-state rows, deduplicated and sorted.
@@ -433,8 +422,6 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     Some(StateModel {
         input_nodes,
         internal_nodes,
-        #[cfg(test)]
-        state_signals: state_orig,
         node_of,
         rows,
         edge_rows,
@@ -530,6 +517,18 @@ mod tests {
         v.iter().map(Symbol::as_str).collect()
     }
 
+    /// The signal-name view of `m.internal_nodes`: column `i`'s ORIGINAL signal name, recovered by
+    /// inverting [`StateModel::node_of`]. `node_of` is injective over the pushed nodes (one insert per
+    /// `internal_nodes` push, minted names deduped through `taken`), so the reverse lookup is total.
+    fn state_signals(m: &StateModel) -> Vec<Symbol> {
+        let orig_of: BTreeMap<&Symbol, &Symbol> =
+            m.node_of.iter().map(|(orig, node)| (node, orig)).collect();
+        m.internal_nodes
+            .iter()
+            .map(|node| orig_of[node].clone())
+            .collect()
+    }
+
     fn row(inputs: &[Option<bool>], current: &[Option<bool>], next: &[Option<Next>]) -> StateRow {
         StateRow {
             inputs: inputs.to_vec(),
@@ -581,7 +580,7 @@ Q = "CLK*M + !CLK*Q"
         // The output Q mints its node; the internal master M, having no output pin to compete with,
         // keeps its own name.
         assert_eq!(names(&m.internal_nodes), ["Q_st", "M"]);
-        assert_eq!(names(&m.state_signals), ["Q", "M"]);
+        assert_eq!(names(&state_signals(&m)), ["Q", "M"]);
         assert_eq!(m.node_of[&Symbol::from("M")], "M");
         assert_eq!(m.node_of[&Symbol::from("Q")], "Q_st");
         assert!(m.edge_rows.is_empty());
@@ -798,7 +797,7 @@ Q = "A*Q_st + Q*(A+Q_st)"
         // The colliding input is untouched: still a plain input column under its own name.
         assert!(names(&m.input_nodes).contains(&"Q_st"));
         // The signal side of the column is the OUTPUT, not the like-named input.
-        assert_eq!(names(&m.state_signals), ["Q"]);
+        assert_eq!(names(&state_signals(&m)), ["Q"]);
     }
 
     #[test]
@@ -1391,7 +1390,7 @@ Q = "!CLKB*M2 + CLKB*Q"
     /// The node-order slot of a state SIGNAL in the joint model (`current`/`next` index). Keyed by signal
     /// name, not table node, since callers name the cell's signals.
     fn index_of_node(m: &StateModel, name: &str) -> usize {
-        m.state_signals
+        state_signals(m)
             .iter()
             .position(|n| n == name)
             .unwrap_or_else(|| panic!("{name} is a state node"))
@@ -1633,7 +1632,8 @@ Q = "!R*(CLK*M + !CLK*Q)"
         );
         // The rendered header carries TABLE-NODE names; the machine below answers only to SIGNAL names,
         // and the two differ for every state output. Column i of the rendered rows is `state_sigs[i]`.
-        let state_sigs = names(&model.state_signals);
+        let state_sig_names = state_signals(&model);
+        let state_sigs = names(&state_sig_names);
 
         // Rebuild the machine from the folded cell to read its settled reference values. `build_signal_bdds`
         // is pure over the folded `expr`s, so this reproduces the machine `analyse` explored.

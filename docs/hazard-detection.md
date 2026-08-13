@@ -460,6 +460,7 @@ decides how each one renders, generally or in its own context.
   states the exploration records. A cell that passes either ceiling is left unexplored — it yields neither
   arcs nor hazards — and the run stops with an error naming the cell and the flag that raises that
   ceiling (`--max-candidates`, `--max-states`).
-- All containers are ordered, so reports come out in a deterministic order.
+- The set of reported hazards and constraints is determined by the machine analysis; the order in which
+  entries are emitted is not.
 - The probes never mutate the exploration: they settle *copies* with inputs toggled, so the reachable
   graph the arcs were derived from is exactly the graph the hazards were probed from.

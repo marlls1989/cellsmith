@@ -278,12 +278,17 @@ pub enum ConstraintPins {
     Off,
     /// Constraint arcs for every pin the cell's hazards constrain.
     All,
-    /// Constraint arcs for the listed input pins only, in declared order.
+    /// Constraint arcs for the listed input pins only, in declared order. A named pin brings back the
+    /// constraints it has a ROLE in: either end of a symmetric separation, since its two pins are
+    /// equals; the data pin of a directed setup/hold, the clock it is held around being what OTHER pins
+    /// are constrained against rather than what the clock is subject to; and the pin a minimum pulse
+    /// width is on.
     Named(Vec<Symbol>),
 }
 
 impl ConstraintPins {
-    /// Whether constraints on `pin` are generated.
+    /// Whether this selection names `pin`. Which of a cell's constraints that reaches is the
+    /// constraint's own to answer, from the roles its kind gives its pins — `Constraint::selected_by`.
     pub(crate) fn selects(&self, pin: &Symbol) -> bool {
         match self {
             Self::Off => false,
