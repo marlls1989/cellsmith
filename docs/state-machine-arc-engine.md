@@ -60,7 +60,7 @@ Every term the later sections lean on, pinned here before first use.
   state variables, so the minimisation composes it away (§3) unless something downstream addresses it by
   name — an external output pin, or an internal node the spec lists in `expose`. **"Combinational" means
   "off every cycle," not "a function of inputs only"**: a combinational signal may reference state
-  variables and so depend on the current state — it simply is not itself a piece of held state (see the
+  variables and so depend on the current state — it is not itself a piece of held state (see the
   ICM cell's `GCLK` output in §3).
 - **Coordinate** — a signal surviving the minimisation, hence a column of the machine's state: the state
   variables together with the combinational signals kept beside them. Both kinds are stepped by the same
@@ -83,8 +83,9 @@ Every term the later sections lean on, pinned here before first use.
     once**.
   - **compose** — perform one substitution, `f[v := g]` — used directly for a guarded relay fold and,
     batched, for an alias/complement class rename (§3.1).
-  - **minimise** — drive substitution to a convergence point **once**, before the machine is built: collapse
-    alias/complement chains and fold non-self-holding relays into their consumers. Each δ_v is then the
+  - **minimise** — drive substitution to the **minimised model** once, before the machine is built:
+    collapse alias/complement chains and fold non-self-holding relays into their consumers, dedup then
+    fold, until neither pass commits (`state-space-minimisation.md`). Each δ_v is then the
     minimised model's own function for `v`, read directly; no per-signal composition remains once the
     machine is built.
 
@@ -97,8 +98,8 @@ reads each state variable's function and each combinational output's function di
 and explore passes (§5–§6) only evaluate them. Constructing δ_v is therefore a direct lookup, not a
 per-analysis composition.
 
-The model was folded by two staged discriminators run to a convergence point (the algorithm is documented in full
-in `state-space-minimisation.md`; §3.1 below covers the safety guard): **M1** collapses an
+The model was folded by two staged discriminators run until neither commits (the algorithm is documented
+in full in `state-space-minimisation.md`; §3.1 below covers the safety guard): **M1** collapses an
 alias/complement chain — a signal whose function is *exactly* another signal or its negation — onto one
 representative coordinate; **M2** composes a non-self-holding relay into each of its consumers and drops
 it, refusing only a fold that would *fabricate* a register — an `s ↔ c` 2-cycle whose consumer does not
@@ -232,7 +233,7 @@ A stable state reproduces itself under every further application — iterating a
 anything. That is the whole reason settling need not "keep going to be sure." A stable state **may
 still leave state variables absent** — those the inputs and resolved state do not determine.
 
-Settling may also be requested in a form that discards the cycle detail and simply yields no state when a
+Settling may also be requested in a form that discards the cycle detail and yields no state when a
 state never settles.
 
 ### The one-round stability test
@@ -264,7 +265,7 @@ sequence of visited states in order. When a round produces a next state already 
 trajectory slice from p onwards — from the first revisited unstable state — is the periodic cycle.
 
 When settling is asked only for a stable state, that periodic outcome means "no stable state": the
-trajectory is an **oscillation**, and the BFS simply drops that transition (so no impossible arc is
+trajectory is an **oscillation**, and the BFS drops that transition (so no impossible arc is
 fabricated). This is distinct from a settled state that still carries an absent coordinate — an absent
 coordinate is an **uninitialised** state variable, not a non-settling trajectory. Hazard detection
 instead keeps the cycle: probing a reachable stable state with a simultaneous multi-input toggle (a

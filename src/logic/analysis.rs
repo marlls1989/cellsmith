@@ -134,9 +134,9 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             .filter(|nm| state_set.contains(nm))
             .collect();
 
-        // The minimise convergence-point invariant (I3): every signal's signal-name support is a subset
-        // of the state variables, so a state variable's next-state δ and a combinational output's δ are
-        // both a direct lookup in the shared map — no per-signal composition remains.
+        // `minimise`'s minimised-model support invariant (I3): every signal's signal-name support is a
+        // subset of the state variables, so a state variable's next-state δ and a combinational
+        // output's δ are both a direct lookup in the shared map — no per-signal composition remains.
         debug_assert!(
             signals.iter().all(|s| {
                 bdds[&s.name]
@@ -393,7 +393,7 @@ mod tests {
             cell.leakage.is_empty(),
             "an unexplored cell has no leakage states"
         );
-        // Emission still succeeds (no panic); the artifacts are simply arc-free.
+        // Emission still succeeds (no panic); the artifacts are arc-free.
         let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         let _ = cell_verilog(&cell);
         let _ = cell_liberty(&cell);
@@ -454,7 +454,7 @@ mod tests {
                 "the unexplored {which} carries the default edge classification"
             );
         }
-        // Emission still succeeds (no panic); the artifacts are simply arc-free.
+        // Emission still succeeds (no panic); the artifacts are arc-free.
         let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         let _ = cell_verilog(&cell);
         let _ = cell_liberty(&cell);

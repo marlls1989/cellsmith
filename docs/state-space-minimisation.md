@@ -23,15 +23,36 @@ alias, or duplicate; outputs are never purged: a folded or deduped output keeps 
 re-expressed as a function of its representative) and which surviving signals' functions changed, so
 their display expression can be regenerated.
 
-All substitution is exact and canonical, never an approximation. A signal's *signal support* is its
+All substitution is exact, never an approximation. A signal's *signal support* is its
 function's referenced variables restricted to the names still in the map — primary inputs are ignored,
 since they are never coordinates.
 
 ## The outer loop
 
-The rewrite runs a single convergence-point loop of two output-preserving passes: **dedup first, then fold**,
-repeating until neither pass commits anything. Both prefer to keep output pins and never purge an
-output — a retired output keeps its pin and is re-expressed as a function of its representative.
+**What the loop ranges over.** The rewrite is a second-order operation on the cell's signal-to-function
+map: it takes the map from every signal name to that signal's **transfer function** — the Boolean
+function the signal computes, held as a BDD — and returns another map of the same shape. It ranges over
+those transfer functions, never over machine states; the machine is not built until this rewrite is
+finished. One step of the loop is two output-preserving passes, **dedup first, then fold**, and the loop
+repeats that step until neither pass commits anything. The map it stops on is the **minimised model**.
+Both passes prefer to keep output pins and never purge an output — a retired output keeps its pin and is
+re-expressed as a function of its representative.
+
+**What is not claimed.** No uniqueness and no order-independence is claimed for that endpoint: nothing
+here establishes that a different starting map, or a different order of visiting the signals, reaches the
+same minimised model. The module says as much itself — the comment on
+`exposing_a_signal_reaches_the_same_minimised_model_once_it_is_released` in `src/logic/minimise.rs`
+records that reaching the same minimised model from a partly-minimised start is *not* one of the module's
+proved obligations, so that test stands as a falsification attempt rather than as a guarantee. This loop
+therefore sits deliberately outside the order framework `docs/edge-collapse.md` §3 states for the two
+edge-collapse iterations: its operator is not established monotone over a lattice, and the endpoint
+uniqueness Knaster–Tarski buys there is exactly what this pass declines to claim, so the fixed-point
+vocabulary would assert a guarantee the minimiser does not have.
+
+In the pass's own terms: dedup lands every group of signals computing the identical function on one of
+them, fold composes a signal that holds no memory of its own into its consumers and drops it, and a round
+in which both passes find nothing to do ends the loop. The minimised model is the map both passes decline
+to change.
 
 Iteration is bounded as a runaway backstop; in practice a couple of rounds suffice — a signal made
 foldable only *after* another substitution is picked up on the next round (e.g. a relay chain
@@ -39,7 +60,7 @@ foldable only *after* another substitution is picked up on the next round (e.g. 
 
 ### Output/state separation is not this pass's job
 
-The convergence point above is behaviour-preserving, not Liberty-spec-preserving: it may legitimately leave the
+The rewrite above is behaviour-preserving, not Liberty-spec-preserving: it may legitimately leave the
 minimised model with a cyclic output referenced by another output's function (two genuine coordinates,
 each an external pin). That shape is exactly what a Liberty `statetable`/`function` cannot express for
 an output pin — the spec forbids an output referencing another output. Separating output pins from the
@@ -52,8 +73,12 @@ the cyclic-output shape in the minimised model preserves that distinction for Ve
 ## Identical-δ merge (dedup)
 
 This pass recognises signals that are the **same coordinate** because they compute the *same
-transition function*: two signals whose BDDs are equal. BDD equality is a cheap canonical handle
-compare — structurally identical functions share one node — so the grouping is exact, not a heuristic.
+transition function*: two signals whose BDDs are equal. BDD equality is a cheap handle compare, and it
+decides function equality because a reduced ordered BDD under a fixed variable order is a **canonical**
+form for the function it represents — Bryant's canonicity result, which the shared per-cell builder
+supplies: within one builder every function has exactly one root node, kept canonical by hash-consing.
+So two signals whose handles are equal compute the same transition function, and the grouping is exact,
+not a heuristic.
 
 1. **Group by function.** Scan the signals in order and bucket each one by its BDD — plain BDD
    equality only, no inverse/complement matching. Bare ±aliases are grouped exactly like any other
@@ -134,7 +159,7 @@ things.
 A bare ±alias `s = ±var(t)` is exactly one coordinate shared by `s` and `t`. When `s` is an **external
 output** and `t` is an **internal** key, `s` is the keeper: fold `t`'s definer into `s`'s equation
 (re-expressing `t` as ±s, parity-corrected), fold that everywhere `t` was referenced, and purge `t`, so
-the coordinate lands on the output pin `s`. The sign of the alias simply carries through the composition
+the coordinate lands on the output pin `s`. The sign of the alias carries through the composition
 arithmetic — there is no separate inversion step. This breaks the `s ↔ t` alias 2-cycle that the
 register guard below would otherwise refuse.
 
@@ -232,15 +257,21 @@ The two passes partition the aliasing they resolve by a hard interface rule, not
   exactly the fold that would: a 2-cycle consumer `c ∈ vars(δ_s)` that does not already self-hold, the
   sole way a fold can turn a multi-node oscillation into a stable self-hold. Mutex is refused; folding
   a relay into a consumer that already self-holds (ROSC) preserves the dynamics and is allowed.
-- **(I3) Convergence-point invariant.** At termination every surviving signal's signal support is a subset of
+- **(I3) Minimised-model support invariant.** At termination every surviving signal's signal support is a subset of
   the primary inputs plus the self-reaching signals: any consumed non-self-holding signal is a fold
   candidate, and a refusal implies a 2-cycle whose members self-reach. So state-variable
   classification identifies exactly the coordinates and the machine's δ is a direct map lookup.
-- **(I4) Termination.** Every dedup commit either purges an **internal** duplicate (the signal map
-  strictly shrinks) or idempotently aliases an **output** duplicate onto an output representative (the
-  output is never purged, so a re-classified output produces no further commit); every fold commit
-  removes a signal from every support (a signal re-enters a support only via an alias/demotion, bounded
-  by the output count). So the convergence point is reached within the asserted bound.
+- **(I4) Termination.** The measure is the triple *(signals in the map; outputs not yet aliased onto a
+  representative; signals still named in some other signal's support that the fold could take)*,
+  compared lexicographically — a well-founded order on ℕ³, so no run of commits descends forever. Every
+  dedup commit either purges an **internal** duplicate (the signal map strictly shrinks — first
+  component) or idempotently aliases an **output** duplicate onto an output representative (the output is
+  never purged, so a re-classified output produces no further commit — second component). Every fold
+  commit either purges the folded internal (first component) or, for an output that is kept, strips its
+  name from every support (third component); the names the composition inserts in its place were already
+  read by the folded signal, so none of them gains a consumer it lacked. A name re-enters a support only
+  via an alias/demotion, which drops the second component, so those re-entries are bounded by the output
+  count. The loop therefore stops within the asserted bound.
 - **(I5) Dedup soundness.** Two signals with the *same* BDD compute the same transition function, so
   they are `=` the same underlying coordinate at every state; renaming the retired members onto
   `var(rep)` is exact. Internal retirement is unconditional and purges the internal; output aliasing is

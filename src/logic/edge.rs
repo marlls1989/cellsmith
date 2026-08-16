@@ -872,8 +872,8 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // whole chain.
     //
     // The criterion is deliberately NARROWER than early minimisation's, which preserves self-referential
-    // loops so oscillation stays detectable — minimisation is untouched by this. The minimise
-    // convergence-point invariant I3 (`src/logic/minimise.rs`) holds by construction: every kept
+    // loops so oscillation stays detectable — minimisation is untouched by this. `minimise`'s
+    // minimised-model support invariant I3 (`src/logic/minimise.rs`) holds by construction: every kept
     // survivor's support is kept by closure.
     let ref_reg: BTreeSet<&str> = captures
         .iter()

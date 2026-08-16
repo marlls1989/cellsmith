@@ -10,9 +10,10 @@
 //!
 //! # Pipeline
 //!
-//! A single convergence-point loop alternates two passes that both honour the caller's [`Preserved`] set —
-//! **dedup** (identical-δ merge) then **guarded fold** — over the signals in `signals()` order (outputs
-//! first, then internals as parsed): `loop { dedup_pass; fold_pass; if neither committed break }`.
+//! A single loop, run until neither pass commits, alternates two passes that both honour the caller's
+//! [`Preserved`] set — **dedup** (identical-δ merge) then **guarded fold** — over the signals in
+//! `signals()` order (outputs first, then internals as parsed):
+//! `loop { dedup_pass; fold_pass; if neither committed break }`.
 //! [`Preserved`] carries the two roles the passes read apart: the cell's external **output** pins, and
 //! the wider **preserved** set no pass may purge — the outputs plus any internal the caller marks
 //! *exposed*, a node that must keep its name in the minimised model because something downstream
@@ -93,15 +94,14 @@
 //! survives in `Q`'s own self-loop (`δ_Q = !Q` at `A·!B`) — allowed. Only a *new* self-reference is
 //! forbidden, and only a multi-input (arity `> 1`) relay can fabricate one.
 //!
-//! **(I3) convergence-point invariant.** At termination neither pass commits, so every surviving
+//! **(I3) minimised-model support invariant.** At termination neither pass commits, so every surviving
 //! signal's signal-name support is a subset of the primary inputs plus the self-reaching signals: any
 //! consumed non-self-holding signal is a fold candidate, and a refusal implies a 2-cycle whose members
 //! self-reach. Preservation does not weaken that. The fold composes a preserved relay into **all** of
 //! its consumers exactly as it does a purgeable one and skips only the removal, so a preserved
-//! non-self-reaching signal reaches the convergence point with **no consumers at all** — its name is in
-//! no other signal's support —
-//! surviving as an entry whose own support already lies within the inputs plus the self-reaching
-//! signals. The one way a name re-enters a support is a dedup demotion to `var(rep)`, and that gate
+//! non-self-reaching signal **survives to the minimised model** with no consumers at all — its name is
+//! in no other signal's support — as an entry whose own support already lies within the inputs plus the
+//! self-reaching signals. The one way a name re-enters a support is a dedup demotion to `var(rep)`, and that gate
 //! fires only on a recurrent group, whose rep self-holds. An exposed internal is therefore either a
 //! state variable itself or referenced by nobody, which is what lets the machine's I3 `debug_assert`
 //! (`Machine::build` in [`analysis`](super::analysis) — every signal's support within the state set)
@@ -113,14 +113,19 @@
 //! itself be a state variable — which the recurrence condition guarantees. `resolve::state_variables`
 //! therefore counts exactly the genuine coordinates and the machine's δ is a direct map lookup.
 //!
-//! **(I4) termination.** The measure is unchanged. Every fold commit purges a non-preserved signal or
-//! removes `s` from a support (`s` re-enters a support only via a demotion to `±var(rep)`, bounded by
-//! the preserved count `|outputs| + |exposed|`). Every dedup commit purges a **non-preserved** duplicate
-//! (the map strictly shrinks) or aliases a **preserved** duplicate to `var(rep)` — terminally: the
-//! demotion is idempotent under the `!=` change-check, so a demoted signal never re-commits, and the
-//! renamed-away member never re-enters any support — folding substitutes `var(rep)` for the member,
-//! never the member's own name — so no dedup group can re-form on it. Exposing an internal moves its
-//! retirement from the purge disjunct to the demotion one. Both measures are bounded, and the outer
+//! **(I4) termination.** The measure that strictly decreases is the triple *(signals in the map;
+//! preserved signals not yet demoted to `var(rep)`; signals still named in some other signal's support
+//! that the fold could take)*, compared lexicographically — a well-founded order on ℕ³, so no run of
+//! commits descends forever. Every fold commit purges a non-preserved signal (first component) or, for a
+//! preserved relay that is kept, removes `s` from every support (third component); the names the
+//! composition inserts in `s`'s place were already read by `s`, so none of them gains a consumer it
+//! lacked, and `s` re-enters a support only via a demotion to `±var(rep)`, which drops the second
+//! component and so is bounded by the preserved count `|outputs| + |exposed|`. Every dedup commit purges
+//! a **non-preserved** duplicate (the map strictly shrinks) or aliases a **preserved** duplicate to
+//! `var(rep)` — terminally: the demotion is idempotent under the `!=` change-check, so a demoted signal
+//! never re-commits, and the renamed-away member never re-enters any support — folding substitutes
+//! `var(rep)` for the member, never the member's own name — so no dedup group can re-form on it.
+//! Exposing an internal moves its retirement from the purge disjunct to the demotion one. The outer
 //! loop's `2 * order.len() + 2` `debug_assert` backstops against a runaway.
 //!
 //! **(I5) dedup soundness.** If `δ_a == δ_b` as BDDs, then `a` and `b` are computed by the identical
@@ -140,9 +145,9 @@
 //! `is_output` first and `is_preserved` only after (which name should carry the coordinate?), so an
 //! exposed internal never outranks a real output pin but does outrank a plain internal. A consumer that
 //! transiently references a combinational rep (e.g. after an internal in the same group already retired
-//! onto it) is resolved before the outer loop's convergence point: either the same-round fold composes
+//! onto it) is resolved before the outer loop stops: either the same-round fold composes
 //! the reference away, or a refusal forms an `s ↔ c` 2-cycle that forces both members to self-reach — so
-//! I3 holds at the convergence point either way. Genuine independent memories never collide: a real
+//! I3 holds in the minimised model either way. Genuine independent memories never collide: a real
 //! register self-holds on its **own** variable, so two distinct registers have distinct δ, and two mutex
 //! grants differ (`!Qb·A ≠ !Qa·B`).
 //!
@@ -276,7 +281,8 @@ fn alias_target<B: Brand, C: ManagerCell>(
 /// alias-representative choice. The returned
 /// [`Minimised`] names the purged internals and the surviving signals whose function changed.
 ///
-/// The dedup/fold convergence point (see (I4) above; concept in `state-space-minimisation.md`) is bounded at
+/// The dedup/fold loop runs until neither pass commits (see (I4) above; concept in
+/// `state-space-minimisation.md`) and is bounded at
 /// `2 * order.len() + 2` outer iterations — a `debug_assert` backstop against a runaway loop, not a
 /// behavioural limit reached in practice.
 pub fn minimise_state_space<B: Brand, C: ManagerCell>(
@@ -839,7 +845,7 @@ mod tests {
     }
 
     #[test]
-    fn relay_chain_folds_to_convergence_point() {
+    fn relay_chain_folds_until_no_pass_commits() {
         // W1 → W2 → (input B): a relay chain feeding the self-holding output L. Both internals purge.
         let (b, mut bdds, order, p) = system! {
             outputs: ["L"],
@@ -1212,8 +1218,8 @@ mod tests {
     #[test]
     fn exposed_relay_folds_into_its_consumers_and_survives() {
         // W is an exposed combinational relay. The fold composes it into every consumer exactly as it
-        // would a plain internal and skips only the removal, so W reaches the convergence point with no
-        // consumers left — the I3 shape that keeps the machine's support assert intact.
+        // would a plain internal and skips only the removal, so W survives to the minimised model with
+        // no consumers left — the I3 shape that keeps the machine's support assert intact.
         let (b, mut bdds, order, p) = system! {
             outputs: ["Z"],
             exposed: ["W"],
@@ -1380,16 +1386,16 @@ mod tests {
     ];
 
     #[test]
-    fn exposing_a_signal_reaches_the_same_convergence_point_once_it_is_released() {
+    fn exposing_a_signal_reaches_the_same_minimised_model_once_it_is_released() {
         // D5: minimising with a wider preserved set and then re-minimising with the outputs alone must
         // land on the result a single outputs-only run reaches. This is a falsification test — that the
-        // dedup/fold convergence point is reachable from a partly-minimised start is NOT one of the
+        // dedup/fold minimised model is reachable from a partly-minimised start is NOT one of the
         // module's proved obligations, so a failure here is a finding about the design, not about the
         // fixture.
         //
         // Every signal of every shape is exposed in turn. For an internal that is the exposure the
         // feature exists for; for an output the union is a no-op, which replays the outputs-only run
-        // against its own convergence point and so keeps the internal-free shapes (mutex, SR, the
+        // against its own minimised model and so keeps the internal-free shapes (mutex, SR, the
         // complement pair) in the gate.
         for Fixture {
             label,

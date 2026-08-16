@@ -790,8 +790,8 @@ impl Cell {
         let analysed = self.analyse_signals()?;
 
         // One-shot state-space rewrite: mint the cell's single builder, build every signal's BDD once,
-        // and run the minimisation (identical-δ dedup + guarded relay/alias fold, alternated to a
-        // convergence point). It rewrites the map in place so every surviving signal is a genuine-memory
+        // and run the minimisation (identical-δ dedup + guarded relay/alias fold, alternated until
+        // neither pass commits). It rewrites the map in place so every surviving signal is a genuine-memory
         // coordinate; the same map is then shared by the machine pass, the region cache and emission —
         // no signal function is ever rebuilt.
         let builder = sync_bdd_builder!();
@@ -824,7 +824,7 @@ impl Cell {
         let (arc_view, explored) =
             self.finish_view(analysed, &bdds, &min, Exploration::Fresh(budget));
 
-        // Release the exposure and carry the SAME map on to the outputs-only convergence point. The
+        // Release the exposure and carry the SAME map on to the outputs-only minimised model. The
         // composition reaches the reduced system a single outputs-only run reaches, save for which
         // member of a collapsed group of equal-valued coordinates supplies the surviving name:
         // protecting a member through the first run leaves that one the representative, and the second

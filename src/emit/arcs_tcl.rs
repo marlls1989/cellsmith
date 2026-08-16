@@ -22,7 +22,7 @@
 //! `expose` has no column and goes unsaid where a walk would have primed it. That is the trade taken,
 //! and it is reported rather than hidden: see [`MaskedArc`]. The walk still exists in the model — it is
 //! what identifies the start state, and `-ic` and the vector's held columns are read off its last step
-//! — it is simply not rendered.
+//! — it is not rendered.
 //!
 //! A cell that exposes internal nodes (`expose = [...]`) is rendered from its ARC VIEW
 //! ([`crate::model::AnalysedCell::arc_view`]), the analysis that keeps those nodes as model coordinates.

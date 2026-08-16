@@ -82,7 +82,7 @@ pub(crate) fn state_regions<B: Brand, C: ManagerCell>(
     is_state: bool,
 ) -> StateRegions {
     // Columns = the function's BDD support minus the pin's own self-feedback, in BDD variable order.
-    // Inputs the function does not depend on are simply absent from `variables()`, so they never
+    // Inputs the function does not depend on are absent from `variables()`, so they never
     // become columns. `cover_over_fr(&cols)` then universally projects the self var (the only support
     // variable left outside `cols`) away, re-basing `f` onto the partial function over `cols`.
     let cols: Vec<Symbol> = f

@@ -52,13 +52,13 @@ labels of the cell's clock-related delay arcs (keyed by the arc's full
 set of internal level nodes folded away, and the read-gate factorisations
 (`EdgeArcs::derived`, a `DerivedRegister` per read-gated register output — see §6).
 
-The **candidates** are every output (so a combinational output is considered and simply keeps no edge
+The **candidates** are every output (so a combinational output is considered and keeps no edge
 arc) plus every internal state variable that is not itself an output.
 
 Everything below is measured only from **fully-determinate** reachable stable states — a state with a
 don't-care (uninitialised) state column is arc-ineligible, a don't-care being a *missing* variable never
 coerced to 0/1, in the `Minterm` and in BDD evaluation alike. Traversal is untouched: partial states
-remain seeds, they are simply never measured from. No machine state is ever perturbed, defaulted or
+remain seeds, they are never measured from. No machine state is ever perturbed, defaulted or
 re-settled under a held value; an oscillating configuration is an invalid state and takes part in no
 test. And everything is derived **behaviourally**, from observed toggle-and-settle transitions and the
 cell's own next-state functions — never from the shape of an equation, and never by branching on a
@@ -238,7 +238,11 @@ empty for every cell with no read-gated register output.
 The discriminator is **state-change-in-cone**: a forcing pin of the output is a read-gate iff toggling it
 never moves any state variable in the output's cone — the transitive state variables `δ_output` depends
 on. Its pass level is the pin's un-asserted level. If the output has at least one such gate, the register
-content it reads is `δ_output` cofactored at the read-gates' pass levels (`Bdd::restrict_to`); an ordinary
+content it reads is `δ_output` **cofactored** at the read-gates' pass levels. Cofactoring is Boolean
+restriction — Shannon's cofactor `f|ₓ₌ᵥ`, the function left over the remaining variables once `x` is
+fixed at `v` — and it is `Bdd::restrict_to` from `espresso-logic`, documented there as restricting a
+function to the subspace a minterm pins. In the cell's terms it is what the output's next-state function
+says with every read-gate held at the level that lets the register's value through. An ordinary
 register — every forcing pin changes the held state — is left untouched.
 
 The factored register **reuses a declared register** whose content matches the cofactored content up to
