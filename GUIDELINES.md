@@ -77,7 +77,7 @@ is free to pick any equally-good representative where a choice is arbitrary.
 The one place ordering *is* real is where a format the output feeds gives a position
 meaning — a `-vector`'s characters line up with the `-pinlist`, and Liberty's statetable
 rows are matched first-to-last. Those are external constraints and must be preserved. The
-test for any ordering rule you meet is simply: does the consuming format impose it, or did
+test for any ordering rule you meet is: does the consuming format impose it, or did
 we impose it on ourselves to make a check easier? Only the former survives. Given a choice
 between clearer or faster code that reorders output and more awkward code that keeps the
 order stable, take the former.
