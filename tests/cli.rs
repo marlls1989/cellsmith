@@ -363,9 +363,10 @@ fn arcs_section(stdout: &str) -> &str {
 }
 
 /// `stdout` with its arcs.tcl section ([`arcs_section`]) reduced to its records — a record being a
-/// `define_arc`/`define_leakage`/`#` command with its indented continuation lines folded onto one line
-/// and its whitespace collapsed — sorted. Other sections are left verbatim. Two runs that emit the same
-/// arcs in a different order compare equal under this reduction.
+/// `define_arc`/`define_leakage`/`#` command with its indented continuation lines folded onto one line,
+/// its whitespace collapsed and the state it was measured at dropped ([`without_measured_state`]) —
+/// sorted. Other sections are left verbatim. Two runs that emit the same arcs compare equal under this
+/// reduction, in whatever order and at whichever representative each run measured them.
 fn canonical(stdout: &str) -> String {
     let arcs = arcs_section(stdout);
     let start = arcs.as_ptr() as usize - stdout.as_ptr() as usize;
@@ -391,7 +392,8 @@ fn canonical(stdout: &str) -> String {
         }
     }
     for r in &mut records {
-        *r = r.split_whitespace().collect::<Vec<_>>().join(" ");
+        let folded = r.split_whitespace().collect::<Vec<_>>().join(" ");
+        *r = without_measured_state(&folded);
     }
     records.sort();
 
@@ -401,6 +403,48 @@ fn canonical(stdout: &str) -> String {
         records.join("\n"),
         &stdout[end..]
     )
+}
+
+/// A folded record with the state the run measured it at cut out of it: the `-ic` element, the
+/// `-prevector` element, and the `-vector`'s held `0`/`1` digits masked to `_`, keeping the `R`, `F`
+/// and `X` columns. Those three all name that state — a representative of the record's context, and a
+/// walk free to claim a level in any order may reach one representative before another. Two runs
+/// emitting the same arcs need not agree on them.
+fn without_measured_state(record: &str) -> String {
+    let mut r = without_element(record, "-ic \"", '"');
+    r = without_element(&r, "-prevector {", '}');
+
+    if let Some(off) = r.find("-vector {") {
+        let open = off + "-vector {".len();
+        let close = open + r[open..].find('}').expect("-vector value is brace-closed");
+        r = format!(
+            "{}{}{}",
+            &r[..open],
+            r[open..close].replace(['0', '1'], "_"),
+            &r[close..]
+        );
+    }
+    r
+}
+
+/// `record` with the element starting at `open` cut away through the first `close` after it, and with it
+/// the `\` continuation marker that joined it to the element before, so what remains is a well-formed
+/// folded record — a record's elements are separated by that marker, and `close` does not nest inside
+/// the value it ends. A record carrying no such element is returned unchanged.
+fn without_element(record: &str, open: &str, close: char) -> String {
+    let Some(start) = record.find(open) else {
+        return record.to_string();
+    };
+    let value = start + open.len();
+    let end = value
+        + record[value..]
+            .find(close)
+            .expect("the element's value is delimiter-closed")
+        + close.len_utf8();
+
+    let head = record[..start].trim_end();
+    let head = head.strip_suffix('\\').unwrap_or(head).trim_end();
+    format!("{head} {}", record[end..].trim_start())
 }
 
 /// The `arcs.tcl` section with every `define_leakage` block cut away. A leakage block states the

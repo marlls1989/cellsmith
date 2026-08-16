@@ -33,6 +33,7 @@
 //! reads that view — the `define_cell` pinlist (`pinlist_str`) and every other artifact keep to the
 //! cell's actual pins.
 
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 
@@ -394,45 +395,72 @@ fn constraint_firing(block: &ConstraintBlock<'_>, state: &Minterm<Symbol>) -> Ma
     }
 }
 
+/// What one identity holds while the fold runs: the lowest-rank item met so far, by rank and by index,
+/// and how many items the identity has taken.
+struct Incumbent<R> {
+    rank: R,
+    index: usize,
+    count: usize,
+}
+
+/// One representative per identity: each identity's lowest-rank index into `items`, mapped to how many
+/// items carry that identity. `key` states the identity an item falls under and `rank` orders the items
+/// within it. Only a strictly lower rank displaces the incumbent, so where several items tie at the
+/// minimum any one of them may be kept. A caller reads the map by index: `contains_key` recognises a
+/// representative, and the count tells it how many items that representative speaks for.
+///
+/// `items` arrives enumerated, so a caller that drops items before the fold still keys the map on the
+/// position an item holds in the collection it came from (see [`constraint_selection`]).
+fn representatives<T, K: Hash + Eq, R: Ord>(
+    items: impl Iterator<Item = (usize, T)>,
+    key: impl Fn(&T) -> K,
+    rank: impl Fn(&T) -> R,
+) -> HashMap<usize, usize> {
+    let mut groups: HashMap<K, Incumbent<R>> = HashMap::new();
+    for (index, item) in items {
+        let rank = rank(&item);
+        match groups.entry(key(&item)) {
+            Entry::Occupied(mut group) => {
+                let group = group.get_mut();
+                group.count += 1;
+                if rank < group.rank {
+                    group.rank = rank;
+                    group.index = index;
+                }
+            }
+            Entry::Vacant(group) => {
+                group.insert(Incumbent {
+                    rank,
+                    index,
+                    count: 1,
+                });
+            }
+        }
+    }
+    groups
+        .into_values()
+        .map(|group| (group.index, group.count))
+        .collect()
+}
+
 /// The general arcs of one class: each identity's representative index into `items`, mapped to the
 /// number of firings that identity has. `key` groups the firings — every firing carrying one
 /// [`ArcIdentity`] falls in a single group and one block comes out of it, generalising over the contexts
-/// the firings differed in. The representative is one with the SHORTEST prevector: only a strictly
-/// shorter prevector displaces the incumbent, so where several firings tie at the minimum any one may be
-/// kept. The conditioned pass reads this map by index: `contains_key` recognises a representative, and
-/// the firing count tells it whether the representative stands for a single context (see
-/// [`cell_arcs_tcl`]).
+/// the firings differed in. The rank [`representatives`] picks the representative by is the prevector
+/// length, so the representative is one with the SHORTEST prevector: only a strictly shorter prevector
+/// displaces the incumbent, and where several firings tie at the minimum any one may be kept. The
+/// conditioned pass reads this map by index: `contains_key` recognises a representative, and the firing
+/// count tells it whether the representative stands for a single context (see [`cell_arcs_tcl`]).
 fn generalised<T, K: Hash + Eq>(
     items: &[T],
     key: impl Fn(&T) -> K,
     prevector_len: impl Fn(&T) -> usize,
 ) -> HashMap<usize, usize> {
-    // Per identity: the strictly-shortest-prevector winner and the firing count.
-    let mut groups: HashMap<
-        K,
-        (
-            usize, /* winner len */
-            usize, /* winner index */
-            usize, /* count */
-        ),
-    > = HashMap::new();
-    for (i, item) in items.iter().enumerate() {
-        let len = prevector_len(item);
-        groups
-            .entry(key(item))
-            .and_modify(|g| {
-                g.2 += 1;
-                if len < g.0 {
-                    g.0 = len;
-                    g.1 = i;
-                }
-            })
-            .or_insert((len, i, 1));
-    }
-    groups
-        .into_values()
-        .map(|(_, i, count)| (i, count))
-        .collect()
+    representatives(
+        items.iter().enumerate(),
+        |item| key(item),
+        |item| prevector_len(item),
+    )
 }
 
 /// The event a transition arc measures: the output pin and the edge it makes, the related pin and the
@@ -465,11 +493,16 @@ enum ArcIdentity {
 }
 
 impl ArcIdentity {
-    /// A transition arc's identity: [`ArcIdentity::Async`] for a declared-async related pin, else
-    /// [`ArcIdentity::Edge`] when the arc's FULL context `(output, related, direction, machine start)` is
-    /// labelled a clock-edge timing arc in [`crate::logic::edge::EdgeArcs::labels`], else
-    /// [`ArcIdentity::Combinational`]. There is ONE edge category, so two firings that differ only in
-    /// internal state can classify differently.
+    /// A transition arc's identity, and the one place its kind is decided. Async is a
+    /// declaration the spec makes about a PIN, so it is read off the cell's `async_pins`: every arc
+    /// the pin relates is [`ArcIdentity::Async`]. Failing that the arc is [`ArcIdentity::Edge`] when
+    /// its FULL context `(output, related, direction, machine start)` is labelled a clock-edge timing
+    /// arc in [`crate::logic::edge::EdgeArcs::labels`], else [`ArcIdentity::Combinational`]. There is
+    /// ONE edge category, so two firings that differ only in internal state can classify differently.
+    ///
+    /// Classification sits downstream of arc derivation because those labels are derived FROM the
+    /// arcs — [`crate::logic::analysis::analyse_machine`] classifies the arc list it has just built —
+    /// so a kind exists only once the whole list does.
     fn of(cell: &AnalysedCell, arc: &Arc) -> Self {
         let related_edge = related_edge(arc);
         let transition = Transition {
@@ -478,7 +511,7 @@ impl ArcIdentity {
             related: arc.related.clone(),
             related_edge,
         };
-        if arc.is_async {
+        if cell.async_pins.contains(&arc.related) {
             ArcIdentity::Async(transition)
         } else if cell.edge.labels.contains(&EdgeLabel {
             output: arc.output.clone(),
@@ -750,16 +783,18 @@ fn constraint_blocks(c: &Constraint) -> Vec<ConstraintBlock<'_>> {
         .collect()
 }
 
-/// What an emitted constraint block states of the arc it renders: the `-type`s its kind fans out to, the
-/// pins it relates with the edge each makes, and the nodes it probes. Everything else a block carries —
-/// the `-ic` levels, the `-vector`'s held digits and the `-when` — names the OBSERVATION it was measured
+/// What an emitted constraint block states of the arc it renders: the constraint's kind, the pin it
+/// constrains with the edge that pin makes, and the nodes it probes. The kind is the whole of the
+/// classification: it decides which `-type`s the constraint fans out to ([`constraint_types`]) and which
+/// pin the block relates to, with the edge THAT pin makes ([`constraint_switching`]) — a separation's
+/// related half is the pins its variant carries, and a minimum pulse width relates the constrained pin
+/// to itself, which is the `pin` and `pin_edge` already here. Everything else a block carries — the
+/// `-ic` levels, the `-vector`'s held digits and the `-when` — names the OBSERVATION it was measured
 /// from, so one identity comes out as one general block however many observations were made of it, and
 /// each of those observations returns as its own conditioned block under `--when`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ConstraintIdentity {
-    types: Vec<ArcType>,
-    related: Symbol,
-    related_edge: Edge,
+    kind: ConstraintKind,
     pin: Symbol,
     pin_edge: Edge,
     /// The victim nodes probed, by name ([`Constraint::victim_names`]). An identity states WHICH nodes the
@@ -771,13 +806,8 @@ struct ConstraintIdentity {
 
 impl ConstraintIdentity {
     fn of(c: &Constraint) -> Self {
-        // A minimum pulse width relates its pin to itself, so the related half of the identity is that
-        // same pin and edge — which is what the block writes on `-related_pin`.
-        let related = constraint_switching(c).related().clone();
         ConstraintIdentity {
-            types: constraint_types(c),
-            related: related.pin,
-            related_edge: related.edge,
+            kind: c.kind.clone(),
             pin: c.pin.clone(),
             pin_edge: c.pin_edge,
             nodes: c.victim_names(),
@@ -813,10 +843,9 @@ impl ConstraintRank {
 /// Does `outer` speak for `inner` — is `inner` an observation of the same constraint over a strict subset
 /// of the victim nodes `outer` probes?
 ///
-/// The comparison runs within everything that identifies the constraint EXCEPT its victim nodes: the
-/// kind with its payload pins and edges, plus the constrained pin and the edge it makes — which is
-/// [`ConstraintIdentity`] minus its `nodes`, the kind being what decides the `-type`s and the related
-/// pin. What is left to order within such a group is the node sets, by containment.
+/// The comparison is [`ConstraintIdentity`] minus its `nodes`: the kind, the constrained pin and the
+/// edge that pin makes, compared field for field. What is left to order within such a group is the node
+/// sets, by containment.
 ///
 /// One constraint decides different nodes from different states, and on a cell whose internals form a
 /// chain those node sets nest — one set per depth the cascade was cut at, every one of them the same
@@ -847,34 +876,20 @@ fn strictly_within(inner: &[Symbol], outer: &[Symbol]) -> bool {
 /// into the cell's constraints, mapped to the number of observations that identity carries — read
 /// exactly as the delay arcs read [`generalised`]'s map.
 ///
-/// An observation another one dominates supplies no general block ([`dominates`]); what is left groups by
-/// [`ConstraintIdentity`], and each group's representative — the observation its general block is
-/// rendered from — is its minimum [`ConstraintRank`]. Every observation renders a conditioned block
-/// regardless, so nothing here decides whether one is characterised, only how.
+/// An observation another one dominates supplies no general block ([`dominates`]) and is dropped before
+/// the fold; what is left goes to [`representatives`] keyed by [`ConstraintIdentity`] and ranked by
+/// [`ConstraintRank`], so each group's representative — the observation its general block is rendered
+/// from — is its minimum rank. Every observation renders a conditioned block regardless, so nothing here
+/// decides whether one is characterised, only how.
 fn constraint_selection(constraints: &[Constraint]) -> HashMap<usize, usize> {
-    // Per identity: the minimum-rank winner and the observation count.
-    let mut groups: HashMap<ConstraintIdentity, (ConstraintRank, usize, usize)> = HashMap::new();
-    for (i, c) in constraints
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| !constraints.iter().any(|o| dominates(o, c)))
-    {
-        let rank = ConstraintRank::of(c);
-        groups
-            .entry(ConstraintIdentity::of(c))
-            .and_modify(|g| {
-                g.2 += 1;
-                if rank < g.0 {
-                    g.0 = rank;
-                    g.1 = i;
-                }
-            })
-            .or_insert((rank, i, 1));
-    }
-    groups
-        .into_values()
-        .map(|(_, i, count)| (i, count))
-        .collect()
+    representatives(
+        constraints
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| !constraints.iter().any(|o| dominates(o, c))),
+        |c| ConstraintIdentity::of(c),
+        |c| ConstraintRank::of(c),
+    )
 }
 
 /// State one constraint's blocks: its kind's fan-out, over every alias group whose netlist agrees on the
@@ -898,6 +913,59 @@ fn state_constraint(blocks: &mut Blocks, cell: &AnalysedCell, c: &Constraint, wi
     }
 }
 
+/// The columns one constraint `define_arc` carries, twice over: as the model names them and as the
+/// group's netlist does, beside the start level of every victim node that earned one and the `-probe`
+/// naming every victim.
+struct ConstraintColumns {
+    /// The columns in model coordinates, which `-ic` and `-vector` are rendered over.
+    model: Vec<Symbol>,
+    /// The same columns under the group's netlist names, which `-pinlist` prints.
+    listed: Vec<Symbol>,
+    /// The level a victim node that earned a column holds at the probed state, read back as `-ic`
+    /// renders that column.
+    probed: HashMap<Symbol, bool>,
+    /// The `-probe` line's nodes, separated by spaces: every victim node of the constraint under the
+    /// group's netlist names, the ones that earned a column of their own and the ones that did not
+    /// alike.
+    probe_list: String,
+}
+
+impl ConstraintColumns {
+    /// The columns a block over `group` carries for the victim `nodes` of its constraint: the cell's
+    /// exposures first, then one per victim node that has no column yet.
+    ///
+    /// The victim nodes are measured, so each needs a column: one `-probe` names them all, and the
+    /// columns are what `-ic` initialises them through. A node already has a column when the cell
+    /// exposes it or when it is an output pin, and a second would misalign every column after it, so
+    /// only the rest are added. Both namings of an added column are appended together, which is what
+    /// keeps `-pinlist` and the lines rendered over `model` describing the same column at each
+    /// position.
+    fn of(cell: &AnalysedCell, group: &Group, nodes: &[VictimNode]) -> Self {
+        let mut model = cell.exposed.clone();
+        let mut listed = group.exposed.clone();
+        let mut probed: HashMap<Symbol, bool> = HashMap::new();
+        for p in nodes {
+            if cell.exposed.contains(&p.node) || cell.outputs.iter().any(|o| o.name == p.node) {
+                continue;
+            }
+            model.push(p.node.clone());
+            listed.push(group.probed_name(&p.node));
+            probed.insert(p.node.clone(), p.level);
+        }
+        let probe_list = nodes
+            .iter()
+            .map(|p| group.probed_name(&p.node).to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        Self {
+            model,
+            listed,
+            probed,
+            probe_list,
+        }
+    }
+}
+
 /// One constraint `define_arc` of the given `-type`. Liberate cannot infer how to prepare these
 /// non-standard state-holding cells, so every pin is listed and fully specified: `-ic` states the
 /// pre-toggle condition of every column, and the full `-vector` carries the switching pins as `R`/`F`,
@@ -912,43 +980,29 @@ fn constraint_block(
     arc_type: &str,
     with_when: bool,
 ) -> String {
-    // The victim nodes are measured, so each needs a column: one `-probe` names them
-    // all, and the columns are what `-ic` initialises them through. A node already has a column when
-    // the cell exposes it or when it is an output pin, and a second would misalign every column after
-    // it, so only the rest are added.
-    let mut model = cell.exposed.clone();
-    let mut listed = group.exposed.clone();
-    let mut probed: BTreeMap<Symbol, bool> = BTreeMap::new();
-    for p in arc.nodes {
-        if cell.exposed.contains(&p.node) || cell.outputs.iter().any(|o| o.name == p.node) {
-            continue;
-        }
-        model.push(p.node.clone());
-        listed.push(group.probed_name(&p.node));
-        probed.insert(p.node.clone(), p.level);
-    }
-    let probe_list = arc
-        .nodes
-        .iter()
-        .map(|p| group.probed_name(&p.node).to_string())
-        .collect::<Vec<_>>()
-        .join(" ");
+    let columns = ConstraintColumns::of(cell, group, arc.nodes);
 
     let mut s = String::from("define_arc \\\n");
     s.push_str(&format!("\t-type {arc_type} \\\n"));
     s.push_str(&format!(
         "\t-pinlist {{{}}} \\\n",
-        arc_pinlist_str(cell, &listed)
+        arc_pinlist_str(cell, &columns.listed)
     ));
     if cell.state_holding {
         s.push_str(&format!(
             "\t-ic \"{}\" \\\n",
-            ic_str(cell, &model, arc.prevector, arc.levels, &probed)
+            ic_str(
+                cell,
+                &columns.model,
+                arc.prevector,
+                arc.levels,
+                &columns.probed
+            )
         ));
     }
     s.push_str(&format!(
         "\t-vector {{{}}} \\\n",
-        constraint_vector_str(cell, &model, arc)
+        constraint_vector_str(cell, &columns.model, arc)
     ));
     if let (true, Some(w)) = (with_when, constraint_when_str(arc)) {
         s.push_str(&format!("\t-when \"{w}\" \\\n"));
@@ -958,7 +1012,7 @@ fn constraint_block(
         arc.switching.related().pin
     ));
     s.push_str(&format!("\t-pin {} \\\n", arc.switching.pin().pin));
-    s.push_str(&format!("\t-probe {{{probe_list}}} \\\n"));
+    s.push_str(&format!("\t-probe {{{}}} \\\n", columns.probe_list));
     s.push_str(&format!("\t{}\n", name_block(&group.names)));
     s.push('\n');
     s
@@ -1070,7 +1124,7 @@ fn format_arc(cell: &AnalysedCell, group: &Group, arc: &Arc, with_when: bool) ->
                 &cell.exposed,
                 &arc.prevector,
                 &arc.levels,
-                &BTreeMap::new()
+                &HashMap::new()
             )
         )
     } else {
@@ -1170,7 +1224,7 @@ fn format_hidden_arc(cell: &AnalysedCell, group: &Group, h: &HiddenArc, with_whe
                 &cell.exposed,
                 &h.prevector,
                 &h.levels,
-                &BTreeMap::new()
+                &HashMap::new()
             )
         ));
     }
@@ -1469,7 +1523,7 @@ fn ic_str(
     exposed: &[Symbol],
     prevector: &[espresso_logic::Minterm<espresso_logic::Symbol>],
     levels: &ArcLevels,
-    probed: &BTreeMap<Symbol, bool>,
+    probed: &HashMap<Symbol, bool>,
 ) -> String {
     let held = assignment(
         prevector
