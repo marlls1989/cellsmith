@@ -39,8 +39,9 @@ some **internal** functions. Two rules make state-holding cells work with no spe
   genuine memory (e.g. a flip-flop's master latch) remain first-class state nodes with **no external
   pin**.
 
-cellsmith treats a cell as an **asynchronous state machine** over `inputs × state-variables`, where a
-*state variable* is any signal (output or internal) that sits on a feedback cycle. This
+cellsmith treats a cell as an **asynchronous state machine** over `inputs × state-variables` — Huffman's
+model, in which settling means reaching a **stable state** (`docs/state-machine-arc-engine.md` §5) —
+where a *state variable* is any signal (output or internal) that sits on a feedback cycle. This
 self-reachability check runs over the **already-minimised** model — the raw feedback-cycle rule over
 the declared signals would over-count: a one-shot minimisation pass folds aliases/relays first, so what
 remains afterwards is genuine memory. For example, a gate-level C-element built from complementary
@@ -75,11 +76,10 @@ Three properties follow from this construction:
   A purely combinational cell has no state to establish and carries neither.
 
 A cross-coupled cell is also **bistable**: co-asserting a mutex's two requests walks the joint
-next-state around a cycle it never leaves, so the machine reaches no state that is its own next state
-— an **oscillation hazard**, whose physical risk is metastability. An oscillation is annotated on the
-constraint it motivated: the comment leads the blocks generated to separate the racing pair, naming
-the condition the pair toggles OUT of, the group of nodes involved and the states honouring the timing
-settles them to:
+next-state around a cycle it never leaves, so the machine reaches no **stable state** — an **oscillation
+hazard**, whose physical risk is metastability. An oscillation is annotated on the constraint it
+motivated: the comment leads the blocks generated to separate the racing pair, naming the condition the
+pair toggles OUT of, the group of nodes involved and the states honouring the timing settles them to:
 
 ```
 # oscillation: !A*!B risks metastability in {Qa, Qb}, settling to one of {Qa=0, Qb=1} | {Qa=1, Qb=0}
@@ -497,9 +497,9 @@ input edges landing close enough together that which of them lands first changes
 or a **pulse**, the two edges of one input racing each other (a clock pulse too narrow to carry a flop's
 master through to its slave leaves the flop somewhere a wider pulse does not). Its **outcome** is what
 the machine then does: **indeterminate** — it settles, but which state it settles to is not determined —
-or **oscillation** — it never settles, walking a periodic cycle instead of reaching a state that is its
-own next state, as a mutex/arbiter does when both requests arrive together. The axes are independent, so
-one cause showing both outcomes is reported under each.
+or **oscillation** — it never settles, walking a periodic cycle instead of reaching a **stable state**
+(`docs/state-machine-arc-engine.md` §5), as a mutex/arbiter does when both requests arrive together. The
+axes are independent, so one cause showing both outcomes is reported under each.
 
 A **cause** is a starting state and a transition. From a detected hazard, cellsmith can **generate** a
 timing constraint to remove it, and the constraint follows the cause and not the outcome — the same

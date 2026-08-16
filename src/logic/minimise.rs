@@ -86,7 +86,7 @@
 //! refusing the fold of `s` (all-or-nothing) exactly when `arity(δ_s) > 1` **and** some consumer
 //! `c ∈ vars(δ_s)` **does not already self-hold**: then the fold invents a self-loop for `c` and projects
 //! an oscillation that lived in the *disagreement* of two non-self-holding nodes onto a single-node
-//! convergence point. Mutex (`δ_Qa = {Qb, A}`, arity 2, `Qb` not self-holding): folding `Qa` gives a stable
+//! stable state. Mutex (`δ_Qa = {Qb, A}`, arity 2, `Qb` not self-holding): folding `Qa` gives a stable
 //! `δ_Qb` at `A=B=1`, collapsing the `(0,0) ↔ (1,1)` oscillation
 //! [`machine::settle_or_cycle`](super::machine) reads — refused. `ROSC`'s `Q` already self-holds, so
 //! folding the relay `X` re-expresses an existing register rather than inventing one; the oscillation
@@ -543,7 +543,7 @@ fn fold_pass<B: Brand, C: ManagerCell>(
         // Guard: refuse only a fold that would *fabricate* a register. A consumer `c` that forms an
         // `s ↔ c` 2-cycle (`c ∈ support(δ_s)`) yet does **not** already self-hold is emergent memory:
         // folding `s` into it invents a self-loop and projects a multi-node oscillation onto a
-        // single-node convergence point, hiding it (the mutex — `(0,0) ↔ (1,1)` at `A=B=1` collapses to a
+        // single-node stable state, hiding it (the mutex — `(0,0) ↔ (1,1)` at `A=B=1` collapses to a
         // stable `δ_Qb = Qb`). A consumer that **already self-holds** (e.g. `ROSC`'s `Q = Q·B + X`) is
         // a genuine register; folding the relay into it preserves the dynamics — the oscillation
         // survives in the register's own self-loop (`δ_Q = !Q` at `A·!B`) — so the fold is allowed

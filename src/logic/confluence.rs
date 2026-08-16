@@ -31,7 +31,7 @@
 //!
 //! The same walk observes the other outcome: probed from `s`, the pair applied *simultaneously* (or,
 //! degenerately, a single input toggle) can drive the state into a **periodic oscillation** rather than
-//! a convergence point (`machine::settle_or_cycle` returning the cycle instead of settling), filed as
+//! a stable state (`machine::settle_or_cycle` returning the cycle instead of settling), filed as
 //! [`Outcome::Oscillation`] under the same racing cause. The two outcomes are independent readings of
 //! one probe, so a pair that both diverges and never settles files a record for each, sharing the cause
 //! rather than merging into one record. A lone toggle that never settles was observed under the one pin

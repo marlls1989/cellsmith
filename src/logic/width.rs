@@ -4,12 +4,12 @@
 //! OPENING edge), the cascade that toggle opens left to run some distance, and `p` toggled back (the
 //! CLOSING edge). That distance is the pulse's **width**, counted here in next-state rounds of the
 //! [`machine`]: writing `t[0..last]` for the settling trace of the opening toggle
-//! (`machine::settle_trace` — `t[0]` the toggle itself, `t[last]` its convergence point), closing the
+//! (`machine::settle_trace` — `t[0]` the toggle itself, `t[last]` its stable state), closing the
 //! pulse after `i` rounds is the **cut** `i`, which settles `toggle(t[i], [p])`, and a wider pulse is a
 //! later cut.
 //!
 //! The cuts are not peers. The close at cut `last` — the one placed once the opening cascade has reached
-//! its convergence point — is the **reference**: after the cell has settled, closing now and closing
+//! its stable state — is the **reference**: after the cell has settled, closing now and closing
 //! three days later are the same event, so that close is the behaviour a minimum pulse width is defined
 //! RELATIVE TO rather than one outcome among several. Every earlier close is a **candidate**, the
 //! narrowest of them the zero-width close, whose outcome is `s` itself. A hazard is a candidate that
@@ -23,7 +23,7 @@
 //!   the pulse leaves the cell in is decided by its width; the record's `group` is the state variables
 //!   the two differ in.
 //! - [`Outcome::Oscillation`] — a candidate leaves the machine walking a periodic cycle instead of
-//!   reaching a convergence point, and the record's `group` is what that cycle rings over.
+//!   reaching a stable state, and the record's `group` is what that cycle rings over.
 //!
 //! A pulse showing both files both, sharing the one [`Cause::Pulse`]: they are different phenomena over
 //! their own nodes — a ring is not a disagreement between landing points — and each names the nodes its
@@ -117,12 +117,12 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
                 .expect("a settle trace is seeded with the node itself");
 
             // The REFERENCE: the close at cut `last`, placed once the opening cascade has reached its
-            // convergence point.
+            // stable state.
             //
             // A reference that rings files nothing — neither outcome, on this pin from this state —
             // because there is behaviour here for no candidate to be measured against. Nothing is lost
-            // by passing over it: that close is the closing edge ALONE toggled from a convergence
-            // point, which is the single-pin race oscillation `confluence::detect` already records. It
+            // by passing over it: that close is the closing edge ALONE toggled from a stable state,
+            // which is the single-pin race oscillation `confluence::detect` already records. It
             // probes every arc-eligible state of `explored.order` with every input singly; `t[last]` is
             // `settle(toggle(s, [p]))`, which the BFS puts into that very set; and the call here is
             // `settle_or_cycle` over the same `deltas` from that same state.
@@ -133,7 +133,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
 
             // The CANDIDATES: every close earlier than the reference's. Cut 0 — the zero-width pulse —
             // is `s` itself by derivation rather than by settling (`toggle` writes only the named
-            // input's column, so closing at `t[0]` reproduces `s`, which is a convergence point), and
+            // input's column, so closing at `t[0]` reproduces `s`, which is a stable state), and
             // it is the close the generated constraint forbids, so it decides whether there is a hazard
             // at all. The rest are settled here. An opening toggle that comes to rest at once leaves
             // none of them, and cut 0 is then the reference — which agrees with itself, so reading `s`
@@ -213,8 +213,8 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
             }
             // A candidate that rings names at least one state variable — the inputs hold through a
             // settle and a combinational coordinate lies on no dependency cycle (see
-            // [`super::resolve`]), so a cycle that moved no held coordinate would be a convergence point
-            // — hence a non-empty group here is exactly "some candidate did not converge".
+            // [`super::resolve`]), so a cycle that moved no held coordinate would be a stable state —
+            // hence a non-empty group here is exactly "some candidate did not converge".
             if !ringing.is_empty() {
                 found.push(Hazard {
                     cause,
@@ -355,7 +355,7 @@ mod tests {
     }
 
     /// The two waypoints a record states, as the report renders them and in the order it holds them —
-    /// the opening edge's convergence point, then the reference, where the closing edge settles. Every
+    /// the opening edge's stable state, then the reference, where the closing edge settles. Every
     /// pulse record states exactly those two: a probe whose reference does not converge files nothing.
     fn waypoints(hz: &Hazard) -> Vec<String> {
         let stated = hz.settled_strs();
@@ -492,7 +492,7 @@ Q = "E*D + !E*Q"
         // Cross-NOR SR (the `examples/cells.toml` cell): asserting S from the reset state (S=0, R=0,
         // Q=0, Qn=1) opens a two-step cascade — Qn falls, then Q rises. The candidate closing at the
         // first cut lands on the illegal both-low state under S=R=0, which rings (both rise, both fall,
-        // …): no convergence point. The reference, closing after the second, lands on the set state,
+        // …): no stable state. The reference, closing after the second, lands on the set state,
         // which holds.
         let cell = analyse(
             r#"
@@ -567,7 +567,7 @@ Qn = "!(S+Q)"
         // Cross-coupled mutex, both requests up and A granted (A=1, B=1, Qa=1, Qb=0). Dropping A opens
         // a two-step cascade — Qa falls, then Qb rises on B. The candidate closing at the first cut
         // re-asserts A onto the no-grant state with both requests up, which is the mutex's own
-        // oscillation point: no convergence point. The reference re-asserts it after B has taken the
+        // oscillation point: no stable state. The reference re-asserts it after B has taken the
         // grant, which holds. So the release pulse is two records under one cause — its width decides
         // which request ends up granted, and it can leave the pair ringing — each over the grant pair.
         let cell = analyse(
@@ -603,8 +603,8 @@ Qb = "!Qa * B"
         // Both records of the A release walk the same two waypoints: the opening cascade rests with the
         // grant handed to B, and the reference re-asserting A onto it changes nothing (Qa = !Qb*A is
         // held low by Qb).
-        // Only the co-asserted state carries this hazard — with B down the released grant is simply
-        // taken back — so the grants are fixed rather than read off the representative.
+        // Only the co-asserted state carries this hazard — with B down the released grant is taken
+        // back — so the grants are fixed rather than read off the representative.
         let to_b = held(&[("Qa", false), ("Qb", true)]);
         for outcome in [Outcome::Indeterminate, Outcome::Oscillation] {
             for hz in on(&cell, "A", Edge::Fall, outcome) {

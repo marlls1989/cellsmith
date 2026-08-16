@@ -33,9 +33,8 @@ classifies each on two independent axes.
 
 - **Indeterminate** — the cell settles, but which state it settles to is not determined by the cause
   alone.
-- **Oscillation** — the cell never settles: instead of reaching a **convergence point** — a state `x` with
-  δ(x) = x, reproducing itself under every further evaluation of the next-state functions — it walks a
-  periodic cycle.
+- **Oscillation** — the cell never settles: instead of reaching a **stable state** — Huffman's term,
+  defined in `state-machine-arc-engine.md` §5 — it walks a periodic cycle.
 
 The two axes are independent, so there are four hazards: a race settling indeterminately (the settled
 state depends on which of two edges lands first), a race that oscillates (the two edges landing at once
@@ -103,8 +102,8 @@ from each reachable state, which is what the next section does.
 
 For each reachable stable state, detection settles each input's single toggle **once** and reuses it
 across every pair — so the per-state single-settle cost is O(n) in the cell's input count, not
-O(n²). Every settle either reaches a convergence point or reveals a **periodic cycle**: the
-trajectory it revisits, kept rather than discarded.
+O(n²). Every settle either reaches a stable state or reveals a **periodic cycle**: the trajectory it
+revisits, kept rather than discarded.
 
 For each reachable stable state and each unordered input pair {x, y} (all other inputs held at their
 values in that state), the pair-specific work is one simultaneous settle plus, when both single toggles
@@ -116,8 +115,8 @@ settled, two order follow-ups:
 
 and, when both single toggles settle, two follow-ups that complete the *orders*:
 
-4. **x then y** — toggle y from x's convergence point
-5. **y then x** — toggle x from y's convergence point
+4. **x then y** — toggle y from x's stable state
+5. **y then x** — toggle x from y's stable state
 
 **Confluent** is term rewriting's word — the Church–Rosser property — and here it ranges over the
 cell's settled machine states, reached from one settled state under a near-simultaneous pair of
@@ -191,8 +190,8 @@ carried by the race that oscillates (§5), from which emission generates the con
 ## 5. When the pair ties: races that oscillate
 
 A simultaneous settle that returns a **cycle** — a finite, deterministic transition that revisits a state
-that is not a convergence point, so periodic forever after — is reported as a race that oscillates: the
-cell never settles, which is where the metastability risk arises. From the cycle the report is assembled:
+that is not stable, so periodic forever after — is reported as a race that oscillates: the cell never
+settles, which is where the metastability risk arises. From the cycle the report is assembled:
 
 - **group** — the state variables that actually oscillate: those whose *value* differs between any two
   nodes of the cycle. Variables that happen to sit still through the cycle are not blamed.
@@ -234,13 +233,13 @@ genuine race settling indeterminately (§4), not an oscillation.
 
 A pulse, as §1 defines it, is measured by its **width**, counted in settling rounds — one round being one
 evaluation of every δ. Settling the opening toggle yields the trace t[0…last]: t[0] is the toggled state
-itself, t[last] the convergence point it settles to. Closing the pulse at **cut** i means toggling p back
+itself, t[last] the stable state it settles to. Closing the pulse at **cut** i means toggling p back
 at t[i] and settling from there, so cut i is the pulse i rounds wide and a wider pulse is a later cut. What
 the cuts produce are the pulse's **outcomes**: the states they settle to, projected onto the nodes at
 risk.
 
 The cuts are not peers. The close at cut last — the one placed once the opening cascade has reached its
-convergence point — is the **reference**: after the cell has settled, closing now and closing three days
+stable state — is the **reference**: after the cell has settled, closing now and closing three days
 later are the same event, so that close is the behaviour a minimum pulse width is defined RELATIVE TO
 rather than one outcome among several. Every earlier close is a **candidate**, the narrowest of them the
 zero-width close, whose outcome is s itself. A hazard is a candidate that disagrees with the reference, or
@@ -283,7 +282,7 @@ Worked example — the master-slave flop M = !CLK·D + CLK·M (the master, trans
 Q = CLK·M + !CLK·Q (the slave, transparent while CLK is high), notation (CLK D | Q M):
 
 - **CLK↑ from (0 0 | 1 0)**, a state whose slave holds a value its master does not. The opening toggle
-  opens the slave; one round copies M into Q, reaching the convergence point (1 0 | 0 0). Closing there
+  opens the slave; one round copies M into Q, reaching the stable state (1 0 | 0 0). Closing there
   leaves Q at 0, where the zero-width pulse leaves it at 1. The master holds through both (δ_M = M while
   CLK is high), so the width decides Q alone.
 - **CLK↓ from (1 0 | 1 1)**, a state whose master holds a value D does not. The opening toggle opens the
@@ -461,7 +460,7 @@ constraint — it decides how each one renders, generally or in its own context.
   too. That rule is theirs alone. The single-toggle probes run at any input count — one pin races the
   cell's own feedback, and a lone toggle that never settles is a hazard however few other pins the cell
   has — and so do the pulse probes (§6), which relate one pin to itself. §6's reference close rests on
-  that: it is the closing edge alone toggled from a convergence point, which is exactly the single-toggle
+  that: it is the closing edge alone toggled from a stable state, which is exactly the single-toggle
   race §5 records, and the record has to be there at one input as much as at ten.
 - Within a cell that clears those early-outs, the probed population is filtered per state: only a
   fully-initialised reachable stable state is probed from (§2). The filter is applied after the states are

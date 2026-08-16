@@ -1583,8 +1583,8 @@ Q = "!R*(CLK*M + !CLK*Q)"
 
     /// Settle the rendered statetable as a next-state machine: apply the joint first-match next-state, with
     /// the toggled input's clock edge live only on the first step (later steps are quiescent settling), to
-    /// a convergence point. Mirrors the async cell's own `settle`, so the convergence point is comparable
-    /// to the machine's settled state; an oscillation where the machine settled is a faithfulness failure.
+    /// a stable state. Mirrors the async cell's own `settle`, so the stable state is comparable to the
+    /// machine's settled state; an oscillation where the machine settled is a faithfulness failure.
     fn settle_rendered(
         input_names: &[String],
         rows: &[RenderedRow],

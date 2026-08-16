@@ -162,7 +162,7 @@ The fold is refused by a **three-clause arity guard**. It declines to fold `s` i
 
 That triple is the emergent-memory signature: `s` and `c` hold no memory individually, so the fold
 would invent a self-loop for `c` and project an oscillation that lived in their *disagreement* onto a
-single-node convergence point, hiding it. If `c` already self-holds it is a genuine register and folding the
+single-node stable state, hiding it. If `c` already self-holds it is a genuine register and folding the
 relay into it is safe (only a *new* self-reference is forbidden). **Mutex** is refused; a **ring
 oscillator** whose register already self-holds is allowed.
 

@@ -191,10 +191,11 @@ pub(crate) fn is_stable<B: Brand, C: ManagerCell>(
     step(deltas, node) == *node
 }
 
-/// Settle the state under `node`'s fixed inputs: iterate `step` to a convergence point — a state `x`
-/// with `step(x) == x`. The convergence point may still leave state variables absent — those the inputs
-/// (and resolved state) do not determine. Returns `None` if the state oscillates without settling (an
-/// oscillation hazard, which risks metastability).
+/// Settle the state under `node`'s fixed inputs: iterate `step` to a **stable state** — Huffman's
+/// term — a state `x` with `step(x) == x`, stated in full in `state-machine-arc-engine.md` §5. A
+/// stable state may still leave state variables absent — those the inputs (and resolved state) do
+/// not determine. Returns `None` if the state oscillates without settling (an oscillation hazard,
+/// which risks metastability).
 pub(crate) fn settle<B: Brand, C: ManagerCell>(
     deltas: &[Delta<B, C>],
     node: &Minterm<Symbol>,
@@ -218,9 +219,9 @@ pub(crate) fn settle_or_cycle<B: Brand, C: ManagerCell>(
     })
 }
 
-/// Like [`settle_or_cycle`], but on a convergence point returns the whole settling trace rather than
-/// just its end: `t[0]` is `node` itself (unstepped), `t[last]` is the convergence point, so the round
-/// count is `t.len() - 1`. On oscillation the error arm is unchanged — the periodic cycle.
+/// Like [`settle_or_cycle`], but on a stable state returns the whole settling trace rather than just
+/// its end: `t[0]` is `node` itself (unstepped), `t[last]` is the stable state, so the round count is
+/// `t.len() - 1`. On oscillation the error arm is unchanged — the periodic cycle.
 pub(crate) fn settle_trace<B: Brand, C: ManagerCell>(
     deltas: &[Delta<B, C>],
     node: &Minterm<Symbol>,
@@ -232,10 +233,10 @@ pub(crate) fn settle_trace<B: Brand, C: ManagerCell>(
     loop {
         let next = step(deltas, &cur);
         if next == cur {
-            return Ok(trace); // convergence point
+            return Ok(trace); // stable state
         }
         if let Some(&p) = pos.get(&next) {
-            // revisited a state short of a convergence point → the oscillating cycle
+            // revisited a state short of a stable state → the oscillating cycle
             return Err(trace[p..].to_vec());
         }
         pos.insert(next.clone(), trace.len());
@@ -476,8 +477,8 @@ pub(crate) fn explore<B: Brand, C: ManagerCell + Send + Sync>(
 
     // Seed the BFS from the ranked candidates: widen each candidate input onto the full columns (the
     // coordinate columns arrive absent, target-only labels of the projection) and settle to a
-    // convergence point, which is where a combinational coordinate first takes a value — no separate
-    // fill phase. Metastable seeds (no convergence point) are dropped. Sequential: the Vacant-insertion
+    // stable state, which is where a combinational coordinate first takes a value — no separate
+    // fill phase. Metastable seeds (no stable state) are dropped. Sequential: the Vacant-insertion
     // order into `prev` fixes the order seeds are pushed onto the BFS queue.
     let mut prev: HashMap<Minterm<Symbol>, Option<Minterm<Symbol>>> = HashMap::new();
     let mut frontier: Vec<Minterm<Symbol>> = Vec::new();
@@ -519,7 +520,7 @@ pub(crate) fn explore<B: Brand, C: ManagerCell + Send + Sync>(
             .flat_map_iter(|node| {
                 input_names.iter().filter_map(move |related| {
                     let toggled = toggle(node, &[related.as_str()]);
-                    // Metastable toggles (no convergence point) are dropped, and so are the states
+                    // Metastable toggles (no stable state) are dropped, and so are the states
                     // already walked — asking `prev` here rather than downstream means the parent is
                     // only cloned for a toggle that reached somewhere new.
                     let np = settle(deltas, &toggled)?;
@@ -672,7 +673,7 @@ mod tests {
     #[test]
     fn mutex_oscillates_to_none() {
         // Cross-coupled: Qa = !Qb*A, Qb = !Qa*B. Under A=B=1 the joint next-state of {Qa=0,Qb=0}
-        // toggles both to 1 then back — no convergence point reachable from it, so settle yields None.
+        // toggles both to 1 then back — no stable state reachable from it, so settle yields None.
         let builder = bdd_builder!();
         let da = builder.parse("!Qb*A").unwrap();
         let db = builder.parse("!Qa*B").unwrap();
@@ -692,8 +693,7 @@ mod tests {
         let deltas = vec![(Symbol::from("Qa"), da), (Symbol::from("Qb"), db)];
         let both_low = node_from(&["A", "B", "Qa", "Qb"], |n| matches!(n, "A" | "B"));
 
-        let cycle =
-            settle_or_cycle(&deltas, &both_low).expect_err("oscillates, no convergence point");
+        let cycle = settle_or_cycle(&deltas, &both_low).expect_err("oscillates, no stable state");
         assert_eq!(cycle.len(), 2, "expected a length-2 cycle, got {cycle:?}");
 
         let qa_values: BTreeSet<_> = cycle.iter().map(|m| m.value_of("Qa")).collect();
@@ -711,9 +711,9 @@ mod tests {
     }
 
     #[test]
-    fn settle_trace_ends_at_the_convergence_point() {
+    fn settle_trace_ends_at_the_stable_state() {
         // Same C-element as `settles_a_c_element_hold`: A=1 B=1 Q=0 is not stable and settles to
-        // Q=1. settle_trace's trace is seeded with the node itself and ends at the convergence point
+        // Q=1. settle_trace's trace is seeded with the node itself and ends at the stable state
         // settle() reports.
         let builder = bdd_builder!();
         let dq = builder.parse("A*B + Q*(A+B)").unwrap();
@@ -729,7 +729,7 @@ mod tests {
         assert_eq!(
             trace.last(),
             Some(&settled),
-            "the trace ends at the convergence point"
+            "the trace ends at the stable state"
         );
     }
 
@@ -743,7 +743,7 @@ mod tests {
         let deltas = vec![(Symbol::from("Qa"), da), (Symbol::from("Qb"), db)];
         let both_low = node_from(&["A", "B", "Qa", "Qb"], |n| matches!(n, "A" | "B"));
 
-        let cycle = settle_trace(&deltas, &both_low).expect_err("oscillates, no convergence point");
+        let cycle = settle_trace(&deltas, &both_low).expect_err("oscillates, no stable state");
         assert_eq!(cycle.len(), 2, "expected a length-2 cycle, got {cycle:?}");
     }
 }

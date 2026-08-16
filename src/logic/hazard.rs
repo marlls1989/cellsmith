@@ -23,7 +23,7 @@
 //!
 //! - [`Outcome::Indeterminate`] — it settles, but which state it settles to is not determined.
 //! - [`Outcome::Oscillation`] — it never settles: the state walks a periodic cycle instead of reaching a
-//!   convergence point (a state `x` with `delta(x) == x`). Detected when
+//!   stable state (a state `x` with `delta(x) == x`). Detected when
 //!   `super::machine::settle_or_cycle` returns the cycle instead of settling.
 //!
 //! The axes are independent, so there are four hazards — a race or a pulse, each settling
@@ -78,8 +78,8 @@ pub enum Cause {
 pub enum Outcome {
     /// The machine settles, but which state it settles to is not determined.
     Indeterminate,
-    /// The machine never settles: the state walks a periodic cycle instead of reaching a convergence
-    /// point.
+    /// The machine never settles: the state walks a periodic cycle instead of reaching a stable
+    /// state.
     Oscillation,
 }
 
