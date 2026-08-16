@@ -40,19 +40,29 @@ consequences are exact:
 - **Every signal the function actually depends on becomes a column** — a primary input, another output,
   or an internal state node — because it appears in the function's support.
 - **An input the function ignores never appears.** Support comes from the BDD, so a pin the function
-  does not reference is simply absent; it is not carried as a spurious don't-care column.
+  does not reference is absent; it is not carried as a spurious don't-care column.
 - **The signal's own self-feedback is projected out** and becomes the sequential element's
   current-state (`reg`) column, rather than an input column. It is the only support variable left
   outside the column set, which is what makes the projection in §3 well defined.
 
 ## 3. The three regions by universal projection of the self variable
 
-The regions come from re-basing the function `f` onto the column set by **universally** projecting away
-the self variable `self`:
+**The machinery.** Re-basing the function `f` onto the column set rests on **universal Boolean
+quantification** — the consensus operator `∀v. f = f|ᵥ₌₁ ∧ f|ᵥ₌₀`, the conjunction of the two
+restrictions (Shannon cofactors) of `f` at the two values of `v`. It ranges here over the signal's own
+function on its support minus the self variable, and yields a function of the column variables alone,
+true at exactly those column assignments where `f` holds for **both** values of `v`. It is
+`Bdd::forall` from `espresso-logic`, documented there as universal quantification over the named
+variables, that the region pass calls (`src/logic/regions.rs`).
+
+The regions come from projecting the self variable `self` away that way:
 
 - `on   = ∀self. f`
 - `off  = ∀self. ¬f`
 - `hold = ¬(on ∨ off)`
+
+In the cell's own terms: a column assignment is in `on` when the signal goes high there whatever value
+it currently holds, in `off` when it goes low whatever it holds, and in neither when the two disagree.
 
 Because a partial function's on-set and off-set are **not** complementary, the gap between them is
 non-empty exactly where the output still depends on the projected self variable — that is, where the
@@ -135,7 +145,7 @@ in five steps:
 
 A `-` in a row's next-state field for some node means this row does not define that node's next value at
 all. Liberty resolves each output's next state independently — **per-output priority** (Vol. 1 §5) — by
-reading the first row that pins a definite (non-`-`) value for it, in table order; `-` simply defers
+reading the first row that pins a definite (non-`-`) value for it, in table order; `-` defers
 that node to whichever lower-priority row does pin it (the master-slave `CP(R)`/`CPN(F)` split-row
 example — one row for the rising-clock phase, another for the falling-clock phase — is exactly this
 deferral). The construction is sound only because, per node, its `on`, `off`,

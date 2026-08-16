@@ -123,7 +123,6 @@ library (cells) {
       internal_node : "Q_st";
     }
   }
-  /* oscillation: !S*!R risks metastability in Q, Qn, settling to one of {Q=0, Qn=1} | {Q=1, Qn=0} */
   cell (SR) {
     pin (S) {
       direction : input;
@@ -156,7 +155,6 @@ library (cells) {
       internal_node : "Qn_st";
     }
   }
-  /* oscillation: A*B risks metastability in Qa, Qb, settling to one of {Qa=0, Qb=1} | {Qa=1, Qb=0} */
   cell (MUT) {
     pin (A) {
       direction : input;

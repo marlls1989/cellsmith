@@ -6,7 +6,7 @@
 //! signal (primary inputs + other outputs) as an input column, so a self-holding cell keeps its
 //! hysteresis as `-` (no-change) rows. Pins are emitted in declaration order.
 //!
-//! A signal recognised as an edge-triggered register ([`crate::logic::edge`]) emits an
+//! A signal recognised as an edge-triggered register (`crate::logic::edge`) emits an
 //! **edge-sensitive** UDP instead: the level-latch rows are replaced by clock-edge (`(01)`/`(10)`)
 //! capture rows — one group per active `(clock, edge)`, so a dual-edge register captures on both — plus
 //! async set/clear level rows, a no-change row for each clock's inactive edge and no-change rows for
@@ -82,7 +82,7 @@ fn read_functions(cell: &AnalysedCell) -> BTreeMap<&str, &StateRegions> {
     cell.edge
         .derived
         .iter()
-        .flat_map(|d| d.reads.iter().map(|(o, sr)| (o.as_str(), sr)))
+        .flat_map(|d| d.reads.iter().map(|r| (r.output.as_str(), &r.function)))
         .collect()
 }
 
@@ -745,10 +745,10 @@ GCLK = "enA*CLKA+enB*CLKB"
 
     #[test]
     fn dcmux_udp_is_a_level_reg() {
-        // DCMUX collapses to a LEVEL model (its falls are combinational and the seam fixpoint empties Q's
-        // set), so Q emits a level `reg` UDP -- it holds while both clocks are low and passes the muxed
-        // masters otherwise, with NO edge rows. Both clocks stay UDP ports; the two rise DELAY arcs render
-        // `-type edge` (covered in the arcs_tcl emitter tests).
+        // DCMUX collapses to a LEVEL model (its falls are combinational and the active-edge filter
+        // empties Q's set), so Q emits a level `reg` UDP -- it holds while both clocks are low and
+        // passes the muxed masters otherwise, with NO edge rows. Both clocks stay UDP ports; the two
+        // rise DELAY arcs render `-type edge` (covered in the arcs_tcl emitter tests).
         let cell = analyse(
             r#"
 [[cell]]

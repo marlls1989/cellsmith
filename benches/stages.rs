@@ -12,7 +12,7 @@ use cellsmith::emit::verilog::cell_verilog;
 use cellsmith::logic::analysis::{analyse_machine, Machine};
 use cellsmith::logic::machine::ExplorationBudget;
 use cellsmith::logic::minimise::{minimise_state_space, Preserved};
-use cellsmith::logic::{arcs, confluence, leakage};
+use cellsmith::logic::{arcs, confluence, leakage, width};
 use cellsmith::model::{build_signal_bdds, derive_regions};
 use espresso_logic::{sync_bdd_builder, Symbol};
 
@@ -119,6 +119,9 @@ fn bench_machine_stages(c: &mut Criterion) {
         );
         sweep_bench!(g, "confluence_detect", cell.name[0], true, heavy, || {
             confluence::detect(&m)
+        });
+        sweep_bench!(g, "width_detect", cell.name[0], true, heavy, || {
+            width::detect(&m)
         });
         sweep_bench!(g, "analyse_machine", cell.name[0], true, heavy, || {
             analyse_machine(

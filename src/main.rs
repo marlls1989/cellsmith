@@ -3,21 +3,23 @@
 //! behavioural Verilog model (sequential UDP + wrapper), and a minimal Liberty fragment (`statetable`
 //! for hysteretic outputs, plain `function` for combinational ones).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, Parser};
+use espresso_logic::{Minterm, Symbol};
 use rayon::prelude::*;
 
 use cellsmith::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, CellArcs};
 use cellsmith::emit::define_cell::cell_define_cell;
 use cellsmith::emit::liberty::library_liberty;
 use cellsmith::emit::verilog::cell_verilog;
+use cellsmith::logic::hazard::{Cause, Hazard, Outcome, Racer};
 use cellsmith::logic::machine::{ExplorationBudget, ExplorationLimit};
-use cellsmith::model::{parse_spec, AnalysedCell, ArcClass, ArcClasses};
+use cellsmith::model::{parse_spec, AnalysedCell, ArcClass, ArcClasses, ConstraintPins};
 
 /// Generate Cadence Liberate transition arcs, a behavioural Verilog model and a
 /// Liberty fragment for logic cells, including state-holding/hysteretic cells.
@@ -52,7 +54,7 @@ struct Cli {
     #[arg(long)]
     no_cells: bool,
 
-    /// Emit derived setup/hold & non_seq constraint arcs.
+    /// Emit derived constraint arcs; every input pin.
     #[arg(long)]
     constraints: bool,
 
@@ -148,12 +150,14 @@ fn main() {
 fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     let src = read_spec(&cli.spec)?;
     let mut spec = parse_spec(&src)?;
-    // `--constraints` is a blanket opt-in: it enables constraint-arc generation for every cell,
-    // exactly as if each had declared `constraint_arcs = true`. Applied before analysis so the single
-    // per-cell flag gates both generation and emission downstream.
+    // `--constraints` is a blanket opt-in: it asks every cell for constraint arcs on every input pin,
+    // exactly as if each had declared `constraint_arcs = true`. Which pins one cell wants is the spec's
+    // `constraint_arcs` to say, and the flag subsumes any such selection rather than narrowing it.
+    // Applied before analysis so the single per-cell selection is what generation and emission both
+    // read downstream.
     if cli.constraints {
         for c in &mut spec.cells {
-            c.constraint_arcs = true;
+            c.constraint_arcs = ConstraintPins::All;
         }
     }
     // `--no-edge-collapse` is a blanket disable: it opts every cell out of the edge-register collapse,
@@ -234,66 +238,19 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     // distinct warnings are separated by a single blank line when printed, so a block reads as a unit.
     let mut warnings: Vec<String> = Vec::new();
 
-    // Diagnose detected oscillation hazards: a periodic, non-settling cycle rather than a fixpoint,
-    // naming the nodes (outputs or internals) that oscillate — the user should know, as this is never
-    // expressed as deterministic timing.
-    // Both hazard loops read the ARC VIEW, the same analysis `cell_arcs` renders: it is that view's
-    // hazards the emitted constraint arcs come from, so reporting the other view's would describe arcs
-    // the run never wrote.
+    // Diagnose the cell's detected hazards, one warning per OCCASION — one cause, which is a transition
+    // out of one starting state. Detection files a record per (cause, outcome), so an occasion showing
+    // both outcomes arrives as two records; they are gathered here into the single entry whose body
+    // names each outcome beside the nodes it puts at risk. The pass reads the ARC VIEW, the same
+    // analysis `cell_arcs` renders: it is that view's hazards the emitted constraint arcs come from, so
+    // reporting the other view's would describe arcs the run never wrote.
     for c in &cells {
-        for a in &c.arc_view().oscillation {
-            // The condition leads the sub-block as `when` (as in the race warning). How the machine
-            // reached it — path into the pre-hazard state and the simultaneous toggle that triggers the
-            // oscillation — comes from the representative pair-probe race (min by `(prevector.len,
-            // discovered)`, matching the constraint tie-break). A single-toggle oscillation carries no
-            // race, so only `when` is shown.
-            let mut fields = vec![("when", a.condition_str())];
-            if let Some(r) = a
-                .races
-                .iter()
-                .min_by_key(|r| (r.prevector.len(), r.discovered))
-            {
-                fields.push(("reached along", r.path_str()));
-                fields.push(("pre-hazard", r.pre_state_str()));
-                fields.push((
-                    "triggered by",
-                    format!("simultaneous toggle {}", r.transition_str()),
-                ));
-            }
-            let mut lines = vec![format!(
-                "cellsmith: warning: cell {:?}: nodes {{{}}} oscillate",
-                c.repr_name(),
-                a.group.join(", "),
-            )];
-            lines.extend(subblock(&fields));
-            warnings.push(lines.join("\n"));
+        let mut occasions: HashMap<Occasion, Vec<&Hazard>> = HashMap::new();
+        for a in &c.arc_view().hazards {
+            occasions.entry(Occasion::of(a)).or_default().push(a);
         }
-    }
-
-    // Diagnose detected order-dependent hazards, grouped per racing pin pair: the settled state
-    // depends on which of the pair's edges lands first (non-confluence). Each hazard on the pair is its
-    // own `-`-bulleted sub-block (condition, path into the pre-hazard state, and the two settle orders
-    // whose outcomes diverge), so multiple hazards on one pair read as a list.
-    type RacePairs<'a> = BTreeMap<(&'a str, &'a str), Vec<Vec<String>>>;
-    for c in &cells {
-        let mut pairs: RacePairs = BTreeMap::new();
-        for od in &c.arc_view().order_dependence {
-            let (x, y) = (od.x.as_str(), od.y.as_str());
-            let key = if x <= y { (x, y) } else { (y, x) };
-            pairs.entry(key).or_default().push(subblock(&[
-                ("when", od.condition_str()),
-                ("reached along", od.path_str()),
-                ("pre-hazard", od.pre_state_str()),
-                ("orders", od.transition_str()),
-            ]));
-        }
-        for ((x, y), hazards) in &pairs {
-            let mut lines = vec![format!(
-                "cellsmith: warning: cell {:?}: inputs ({x}, {y}) race",
-                c.repr_name(),
-            )];
-            lines.extend(hazards.iter().flatten().cloned());
-            warnings.push(lines.join("\n"));
+        for (occasion, records) in &occasions {
+            warnings.push(hazard_warning(c, occasion, records));
         }
     }
 
@@ -316,7 +273,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             // reached the emitter first is nothing to report. What differs across them wants exposing.
             let mut fields = vec![("arc", m.arc_str())];
             fields.extend(m.state_strs().into_iter().map(|s| ("cell state", s)));
-            lines.extend(subblock(&fields));
+            lines.extend(subblock("  - ", &fields));
         }
         warnings.push(lines.join("\n"));
     }
@@ -325,9 +282,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         eprintln!("{}", warnings.join("\n\n"));
     }
 
-    // Constraints are the remedy for a hazard already reported by the oscillation and
-    // order-dependence warnings above, so the constraint arcs are emitted (below, gated by the
-    // per-cell opt-in) without a separate diagnostic.
+    // Constraints avoid a hazard already reported by the warnings above, so the constraint arcs are
+    // emitted (below, gated by the per-cell opt-in) without a separate diagnostic.
 
     let base = cli.name.unwrap_or_else(|| base_name(&cli.spec));
     let arcs: String = rendered.iter().map(|r| r.tcl.as_str()).collect();
@@ -379,17 +335,215 @@ fn banner(kind: &str, body: &str) -> String {
     format!("// ===== cellsmith {kind} =====\n{body}\n")
 }
 
-/// Render one hazard detail sub-block as its lines: the first is `-`-bulleted, the rest indented to
-/// align under it. Each is a colon-labelled field whose values are column-aligned (the longest label,
-/// `reached along:`, sets the column). No trailing newline — callers join a warning's lines with `\n`.
-fn subblock(fields: &[(&str, String)]) -> Vec<String> {
+/// Render one warning detail block as its lines: colon-labelled fields, indented under the header with
+/// their values column-aligned. `lead` opens the first line — a hazard warning states one block and
+/// opens it at the same indent as the rest, while the masked-arc warning states a block per conflated
+/// arc and bullets each so the blocks read apart. No trailing newline — callers join a warning's lines
+/// with `\n`.
+fn subblock(lead: &str, fields: &[(&str, String)]) -> Vec<String> {
     fields
         .iter()
         .enumerate()
         .map(|(i, (label, value))| {
-            let marker = if i == 0 { "  - " } else { "    " };
-            format!("{marker}{:<14} {value}", format!("{label}:"))
+            let marker = if i == 0 { lead } else { "    " };
+            format!("{marker}{:<16} {value}", format!("{label}:"))
         })
+        .collect()
+}
+
+/// The occasion one hazard warning reports — the CAUSE: a transition, made from one starting state, at
+/// the input condition that state stands at. Detection files one record per (cause, outcome), so the
+/// records sharing an occasion are the outcomes observed there, and the warning names them together.
+#[derive(PartialEq, Eq, Hash)]
+struct Occasion<'a> {
+    cause: &'a Cause,
+    condition: &'a Minterm<Symbol>,
+    state: &'a Minterm<Symbol>,
+}
+
+impl<'a> Occasion<'a> {
+    /// The occasion `hazard` was observed on.
+    fn of(hazard: &'a Hazard) -> Self {
+        Self {
+            cause: &hazard.cause,
+            condition: &hazard.condition,
+            state: &hazard.state,
+        }
+    }
+}
+
+/// What one outcome does at an occasion: the nodes that reading puts at risk, and the states the
+/// machine lands at once the timing is honoured. Both are gathered over the occasion's records of that
+/// outcome — the victims unioned, each kept at the position it was first named, and the landings kept in
+/// the order the records state them, since a pulse's are a sequence and a race's alternatives.
+#[derive(Default)]
+struct Effect<'a> {
+    victims: Vec<&'a str>,
+    landings: Vec<String>,
+}
+
+/// One occasion's warning: a header naming what causes the hazard and the state it is caused from, over
+/// a detail block that names the effect. `records` are the occasion's detected hazards, one per outcome
+/// observed; the fields that follow from the occasion alone — its condition and the path into its state
+/// — are the same in each, so they are read from the first, while each outcome contributes a field of
+/// its own naming the nodes THAT reading puts at risk and where it leaves them.
+fn hazard_warning(cell: &AnalysedCell, occasion: &Occasion, records: &[&Hazard]) -> String {
+    let first = records
+        .first()
+        .expect("an occasion is only entered by a record");
+    // One entry per outcome, over the nodes and landing states every record of that outcome names.
+    // `Outcome`'s own order sets the order the fields come out in, so a warning reads the same however
+    // detection filed them.
+    let mut effects: BTreeMap<Outcome, Effect> = BTreeMap::new();
+    for h in records {
+        let effect = effects.entry(h.outcome).or_default();
+        for n in &h.group {
+            if !effect.victims.contains(&n.as_str()) {
+                effect.victims.push(n.as_str());
+            }
+        }
+        effect.landings.extend(h.settled_strs());
+    }
+    // Successive landings naming the same state are one place the machine comes to rest: a pulse's two
+    // waypoints coincide wherever the closing edge moves nothing the outcome names, and reporting that
+    // state twice would offer the reader two landings to tell apart where there is only one. A race's
+    // are already distinct, detection holding them as a set.
+    for effect in effects.values_mut() {
+        effect.landings.dedup();
+    }
+    let mut fields = vec![
+        ("when", first.condition_str()),
+        ("reached along", first.path_str()),
+    ];
+    // A pulse returns its pin to the value it started from, so the pre-pulse input state IS the
+    // condition the hazard occurs under — `when` states it, and a separate pre-hazard field would only
+    // restate it. A race leaves its pins where they landed, so its own starting state is worth naming.
+    if let Cause::Race { pins } = occasion.cause {
+        fields.push(("pre-hazard", first.pre_state_str()));
+        if effects.contains_key(&Outcome::Indeterminate) {
+            fields.push(("orders", orders_str(pins)));
+        }
+        if effects.contains_key(&Outcome::Oscillation) {
+            fields.push(("triggered by", trigger_str(pins)));
+        }
+    }
+    fields.extend(
+        effects
+            .iter()
+            .map(|(outcome, effect)| (outcome_str(*outcome), effect_str(occasion.cause, effect))),
+    );
+    let mut lines = vec![format!(
+        "cellsmith: warning: cell {:?}: {} causes a hazard at {}",
+        cell.repr_name(),
+        cause_str(occasion.cause),
+        Hazard::state_str(occasion.state),
+    )];
+    lines.extend(subblock("    ", &fields));
+    lines.join("\n")
+}
+
+/// What causes the hazard, as the header names it: the timing that has to be wrong for the cell to be
+/// at risk, rather than the transition itself. A pulse is a hazard when it is too SHORT — exactly what
+/// the generated minimum pulse width forbids — and a pair of edges when too little separates them, what
+/// the generated setup/hold separation forbids. A lone toggle observed not to converge has no second
+/// edge to be separated from, and no constraint follows from it, so there the transition is the whole of
+/// the condition.
+fn cause_str(cause: &Cause) -> String {
+    match cause {
+        Cause::Pulse { pin, edge } => format!("a short pulse on {pin}{}", edge.arrow()),
+        Cause::Race { pins } => match toggles(pins).as_slice() {
+            [one] => format!("toggling {one}"),
+            many => format!("too little separation between {}", many.join(" and ")),
+        },
+    }
+}
+
+/// The label an outcome's own field carries — the name it is reported under, beside the nodes that
+/// reading puts at risk.
+fn outcome_str(outcome: Outcome) -> &'static str {
+    match outcome {
+        Outcome::Indeterminate => "indeterminate",
+        Outcome::Oscillation => "oscillation",
+    }
+}
+
+/// One outcome's field value: the nodes it puts at risk, and — where the records name any — the states
+/// the machine lands at once the timing IS honoured, which for a short pulse is where it would have gone
+/// had the pulse been wide enough.
+///
+/// The landings are joined by what the cause makes them. A race's are ALTERNATIVES: either winner is a
+/// legitimate result of separating the edges, and nothing orders them among themselves, so they read as
+/// `or`. A pulse's are the two waypoints a wide enough one walks through — where the opening edge's own
+/// cascade comes to rest, and then where the closing edge leaves the machine — so they read with the
+/// same `→` the path field uses for a sequence.
+///
+/// The clause is absent, rather than empty, where the records name no landing at all: a lone toggle has
+/// no second edge to be separated from, and a pair whose every order rings has no timing that brings the
+/// machine to rest either. The header and `triggered by` already say which of the two it is.
+fn effect_str(cause: &Cause, effect: &Effect) -> String {
+    let victims = format!("{{{}}}", effect.victims.join(", "));
+    if effect.landings.is_empty() {
+        return victims;
+    }
+    let separator = match cause {
+        Cause::Race { .. } => " or ",
+        Cause::Pulse { .. } => " → ",
+    };
+    format!("{victims} lands at {}", effect.landings.join(separator))
+}
+
+/// The triggering transitions of an indeterminate race: every order its edges can arrive in, since
+/// which lands first is what the settled state depends on (`A↓ then B↑ vs B↑ then A↓`).
+fn orders_str(pins: &[Racer]) -> String {
+    orderings(pins.len())
+        .into_iter()
+        .map(|order| {
+            order
+                .into_iter()
+                .map(|i| format!("{}{}", pins[i].pin, pins[i].edge.arrow()))
+                .collect::<Vec<_>>()
+                .join(" then ")
+        })
+        .collect::<Vec<_>>()
+        .join(" vs ")
+}
+
+/// Every ordering of `n` positions, as sequences of indices: each position taken first in turn, each
+/// followed by every ordering of those left, so the identity order comes out first.
+fn orderings(n: usize) -> Vec<Vec<usize>> {
+    if n == 0 {
+        return vec![Vec::new()];
+    }
+    let mut orders: Vec<Vec<usize>> = Vec::new();
+    for first in 0..n {
+        for mut rest in orderings(n - 1) {
+            // `rest` indexes the `n - 1` positions left once `first` is taken, so an index at or past
+            // it names the position one further along.
+            for i in &mut rest {
+                if *i >= first {
+                    *i += 1;
+                }
+            }
+            orders.push(std::iter::once(first).chain(rest).collect());
+        }
+    }
+    orders
+}
+
+/// The triggering transition of an oscillating race: the toggles it was observed under. Two or more
+/// arrive together, which is what drives the cycle (`simultaneous toggle S↓ & R↓`); one arrives with
+/// nothing to coincide with (`toggling A↓`).
+fn trigger_str(pins: &[Racer]) -> String {
+    match toggles(pins).as_slice() {
+        [one] => format!("toggling {one}"),
+        many => format!("simultaneous toggle {}", many.join(" & ")),
+    }
+}
+
+/// Each racing pin with the edge it makes (`A↓`), in the order the probe named them.
+fn toggles(pins: &[Racer]) -> Vec<String> {
+    pins.iter()
+        .map(|r| format!("{}{}", r.pin, r.edge.arrow()))
         .collect()
 }
 
@@ -443,7 +597,7 @@ mod tests {
     #[test]
     fn when_repeats_union_their_classes() {
         assert_eq!(
-            when_classes(&["--when=hidden", "--when=transition"]),
+            when_classes(&["--when=hidden", "--when=transition", "--when=constraint"]),
             ArcClasses::ALL,
         );
     }
@@ -475,6 +629,53 @@ mod tests {
     fn when_does_not_take_a_spaced_value() {
         // `require_equals`: the spaced token is the positional `<SPEC>`, so a second one is unexpected.
         assert!(Cli::try_parse_from(["cellsmith", "--when", "hidden", "s.toml"]).is_err());
+    }
+
+    #[test]
+    fn constraints_is_a_bare_flag_and_keeps_the_positional() {
+        let cli = Cli::try_parse_from(["cellsmith", "--constraints", "s.toml"]).unwrap();
+        assert!(cli.constraints);
+        assert_eq!(cli.spec, "s.toml");
+    }
+
+    #[test]
+    fn constraints_absent_asks_for_none() {
+        let cli = Cli::try_parse_from(["cellsmith", "s.toml"]).unwrap();
+        assert!(!cli.constraints);
+    }
+
+    #[test]
+    fn constraints_names_no_pin() {
+        // Which pins one cell wants constraint arcs on is the spec's `constraint_arcs` to say, so the
+        // flag names none: an `=PIN` value is unexpected, and a spaced one is a second positional.
+        assert!(Cli::try_parse_from(["cellsmith", "--constraints=D", "s.toml"]).is_err());
+        assert!(Cli::try_parse_from(["cellsmith", "--constraints", "D", "s.toml"]).is_err());
+    }
+
+    #[test]
+    fn cli_constraints_selects_every_pin_over_the_cells_own() {
+        let mut spec = parse_spec(
+            r#"
+[[cell]]
+name = "X"
+inputs = ["A", "B"]
+constraint_arcs = "A"
+[cell.outputs]
+Y = "A*B"
+"#,
+        )
+        .unwrap();
+        let cli = Cli::try_parse_from(["cellsmith", "--constraints", "s.toml"]).unwrap();
+        if cli.constraints {
+            for c in &mut spec.cells {
+                c.constraint_arcs = ConstraintPins::All;
+            }
+        }
+        assert_eq!(
+            spec.cells[0].constraint_arcs,
+            ConstraintPins::All,
+            "the flag subsumes the cell's own narrower selection",
+        );
     }
 
     #[test]

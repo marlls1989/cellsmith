@@ -2,7 +2,7 @@
 
 How cellsmith derives Liberate timing arcs for state-holding cells (C-elements, latches, SR pairs,
 mutexes/arbiters, flip-flops with internal state). This document explains the model, the state machine,
-how a state is settled to a fixpoint, and how arcs are discovered — with a full worked example.
+how a state is settled to a stable state, and how arcs are discovered — with a full worked example.
 
 The functional state-table view of the same signals is documented separately in
 `state-table-regions.md`. The hazard vocabulary this document leans on — the two detected hazards
@@ -36,7 +36,7 @@ Before any construction detail, the whole pipeline in one view. For a cell, cell
    variable** (it holds state) or **combinational** (it does not);
 3. reads, directly from the minimised model, a fixed **transition function** δ — one component δ_v per
    coordinate;
-4. **settles** a state by repeatedly *evaluating* δ until the state stops changing (a fixpoint);
+4. **settles** a state by repeatedly *evaluating* δ until the state stops changing (a **stable state**, §5);
 5. **explores** the reachable settled states, toggling one input at a time;
 6. **derives arcs** by re-walking that exploration and watching which input toggles flip an output.
 
@@ -60,7 +60,7 @@ Every term the later sections lean on, pinned here before first use.
   state variables, so the minimisation composes it away (§3) unless something downstream addresses it by
   name — an external output pin, or an internal node the spec lists in `expose`. **"Combinational" means
   "off every cycle," not "a function of inputs only"**: a combinational signal may reference state
-  variables and so depend on the current state — it simply is not itself a piece of held state (see the
+  variables and so depend on the current state — it is not itself a piece of held state (see the
   ICM cell's `GCLK` output in §3).
 - **Coordinate** — a signal surviving the minimisation, hence a column of the machine's state: the state
   variables together with the combinational signals kept beside them. Both kinds are stepped by the same
@@ -75,13 +75,17 @@ Every term the later sections lean on, pinned here before first use.
 - **Transition function δ** — the machine's next-state map, given as one **component δ_v per
   coordinate**: a fixed Boolean function of `inputs ∪ state-variables` yielding v's next value (§3). δ is
   the standard automata-theory transition function, not a difference/delta of states.
+- **Stable state** — a machine state that one settle round maps to itself, `δ(x) = x`: every coordinate
+  already holds the value its δ_v yields there, so the machine rests in it. The term is Huffman's; §5
+  states the model it belongs to and why a single agreeing round decides the question.
 - The verbs, in increasing scope:
   - **substitute** — the atomic step: replace one referenced signal name by its definition, **at most
     once**.
   - **compose** — perform one substitution, `f[v := g]` — used directly for a guarded relay fold and,
     batched, for an alias/complement class rename (§3.1).
-  - **minimise** — drive substitution to a fixpoint **once**, before the machine is built: collapse
-    alias/complement chains and fold non-self-holding relays into their consumers. Each δ_v is then the
+  - **minimise** — drive substitution to the **minimised model** once, before the machine is built:
+    collapse alias/complement chains and fold non-self-holding relays into their consumers, dedup then
+    fold, until neither pass commits (`state-space-minimisation.md`). Each δ_v is then the
     minimised model's own function for `v`, read directly; no per-signal composition remains once the
     machine is built.
 
@@ -94,8 +98,8 @@ reads each state variable's function and each combinational output's function di
 and explore passes (§5–§6) only evaluate them. Constructing δ_v is therefore a direct lookup, not a
 per-analysis composition.
 
-The model was folded by two staged discriminators run to a fixpoint (the algorithm is documented in full
-in `state-space-minimisation.md`; §3.1 below covers the safety guard): **M1** collapses an
+The model was folded by two staged discriminators run until neither commits (the algorithm is documented
+in full in `state-space-minimisation.md`; §3.1 below covers the safety guard): **M1** collapses an
 alias/complement chain — a signal whose function is *exactly* another signal or its negation — onto one
 representative coordinate; **M2** composes a non-self-holding relay into each of its consumers and drops
 it, refusing only a fold that would *fabricate* a register — an `s ↔ c` 2-cycle whose consumer does not
@@ -183,8 +187,19 @@ shown as `-`.
 
 ## 5. Settling a state, and how "stable" is decided
 
-Everything rests on one fact: **for fixed inputs, one settle round is a deterministic map on states.**
-Call that round *step*.
+Settling reads the cell in **Huffman's model of asynchronous sequential circuits** (D. A. Huffman's
+formulation, in the treatment of Unger's *Asynchronous Sequential Switching Circuits*). The model ranges
+over the **total state** — one assignment to the inputs and the internal variables together. Its operation
+is the **excitation**: the map from a total state to the next value of each internal variable. A total
+state is **stable** exactly where the excitation reproduces what is held, `δ(x) = x`. The fact relied on:
+a circuit of this kind rests only in stable states, and passes through the unstable ones.
+
+In this tool's terms, a cellsmith machine state is already a total state — §4 fixes every input and every
+coordinate in one minterm. The excitation is one settle round, written *step*, computed per coordinate
+from the fixed δ_v (§3). Settling evaluates *step* until the state stops changing, and the state it stops
+at is where the modelled cell physically rests.
+
+Everything rests on one fact: **for fixed inputs, *step* is a deterministic map on states.**
 
 ### One round: *step*
 
@@ -206,19 +221,19 @@ Two properties make this well-defined:
 2. All v′ are read from the **same** current state before the new one is built, so the round is a genuine
    parallel update, not order-dependent.
 
-### Fixpoint = *step*(state) == state
+### Stable state = *step*(state) == state
 
-Settling iterates the round: compute the next state; if it equals the current state, that state is a
-fixpoint and settling stops. The comparison is plain minterm equality. **One match is enough to stop, and
-this is exact, not heuristic:** the round is deterministic and pure, so
+Settling iterates the round: compute the next state; if it equals the current state, that state is
+stable and settling stops. The comparison is plain minterm equality. **One match is enough to
+stop, and this is exact, not heuristic:** the round is deterministic and pure, so
 
 > *step*(x) = x   ⟹   *step*ⁿ(x) = x   for all n.
 
-A fixed point reproduces itself under every further application — iterating again cannot change anything.
-That is the whole reason settling need not "keep going to be sure." The fixpoint **may still leave state
-variables absent** — those the inputs and resolved state do not determine.
+A stable state reproduces itself under every further application — iterating again cannot change
+anything. That is the whole reason settling need not "keep going to be sure." A stable state **may
+still leave state variables absent** — those the inputs and resolved state do not determine.
 
-Settling may also be requested in a form that discards the cycle detail and simply yields no state when a
+Settling may also be requested in a form that discards the cycle detail and yields no state when a
 state never settles.
 
 ### The one-round stability test
@@ -243,26 +258,26 @@ A mid-cascade state `(1 0 | 0 1)` fails, so another round is required:
 What if a state never settles? For fixed inputs the reachable state space is **finite** (each state
 variable is `0`, `1`, or absent) and the round is deterministic, so the trajectory
 `s → step(s) → step²(s) → …` must eventually **repeat** a state; once it does it is periodic and can
-never reach a fixpoint.
+never reach a stable state.
 
 Settling detects that by recording the index at which each visited state first appeared alongside the
 sequence of visited states in order. When a round produces a next state already seen at index p, the
-trajectory slice from p onwards — from the first revisited non-fixpoint — is the periodic cycle.
+trajectory slice from p onwards — from the first revisited unstable state — is the periodic cycle.
 
 When settling is asked only for a stable state, that periodic outcome means "no stable state": the
-trajectory is an **oscillation**, and the BFS simply drops that transition (so no impossible arc is
+trajectory is an **oscillation**, and the BFS drops that transition (so no impossible arc is
 fabricated). This is distinct from a settled state that still carries an absent coordinate — an absent
 coordinate is an **uninitialised** state variable, not a non-settling trajectory. Hazard detection
 instead keeps the cycle: probing a reachable stable state with a simultaneous multi-input toggle (a
-mutex's requests co-asserting) and finding a cycle rather than a fixpoint names the varying state
-variables as an oscillating group — an oscillation hazard (`hazard-detection.md`).
+mutex's requests co-asserting) and finding a cycle rather than a stable state names the varying
+state variables as an oscillating group — an oscillation hazard (`hazard-detection.md`).
 
 Example — mutex under `A=B=1` from `(1 1 | 0 0)`:
 
 `(1 1 | 0 0) → (1 1 | 1 1) → (1 1 | 0 0) → …`
 
 The second `(1 1 | 0 0)` is already recorded ⇒ periodic ⇒ no stable state ⇒ no arc. The same
-equality/visited machinery that confirms a fixpoint also rejects the states that don't have one.
+equality/visited machinery that confirms a stable state also rejects the states that don't have one.
 
 ## 6. Deriving arcs by re-walking the shared exploration
 
@@ -381,7 +396,7 @@ settle:
 |-------|-------|--------------|--------------|
 | start | `(1 0 \| 0 1)` | !1·1 = **0** | !0·0 = **0** |
 | →     | `(1 0 \| 0 0)` | !0·1 = **1** | !0·0 = **0** |
-| →     | `(1 0 \| 1 0)` | !0·1 = 1 | !1·0 = 0 → **fixpoint** |
+| →     | `(1 0 \| 1 0)` | !0·1 = 1 | !1·0 = 0 → **stable state** |
 
 Settled `(1 0 | 1 0)`. The two micro-steps are the physical cascade: B drops → Qb falls; with Qb=0 and
 A=1, Qa rises.

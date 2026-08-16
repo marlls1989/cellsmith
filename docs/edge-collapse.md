@@ -22,12 +22,14 @@ combinational arcs coexist on it — an async-reset flop carries both.
 
 An edge arc emits Liberate `-type edge`; an arc that does not meet the
 definition — a data change reaching a node while a latch is already transparent, or a clock acting by
-its LEVEL (a clock gate) — carries no label and stays an ordinary combinational data arc. The physical
-event behind an edge arc may be a *capture* (the delivered value then holds independent of the clock
-level until the next edge, a flop seam — defined in §3.2) or a latch *opening* (the delivered value then
-tracks its data); both are timing arcs measured from a clock edge and both emit the one `-type edge`
-token, so the distinction changes nothing in the annotation. A latch's opening is itself a real edge
-arc.
+its LEVEL (a clock gate) — carries no label and stays an ordinary combinational data arc. Each arc is
+keyed on a `(clock, direction)` pair — a named clock and its rise or its fall; a pair a node captures on
+is an **active edge** of that node, Liberty's term for the clock edge a register captures on, and §3.2
+collects a node's into its active-edge set. The physical event behind an edge arc may be a *capture* (the
+delivered value then holds independent of the clock level until the next edge, so the node is an edge
+register, §3.2) or a latch *opening* (the delivered value then tracks its data); both are timing arcs
+measured from a clock edge and both emit the one `-type edge` token, so the distinction changes nothing
+in the annotation. A latch's opening is itself a real edge arc.
 
 A **conditioned** edge arc — a clock edge reaching an output only through a second,
 currently-open latch — is an edge arc like any other: conditioning never reclassifies an arc. Its
@@ -47,16 +49,16 @@ exploration with `machine::toggle`/`machine::settle` — exactly mirroring `arcs
 output is one field, `AnalysedCell::edge` (`EdgeArcs`): the per-node captures, the per-arc `-type`
 labels of the cell's clock-related delay arcs (keyed by the arc's full
 `(output, clock, direction, machine start minterm)` identity in the arc pipeline), the cell-level
-set of internal non-seam masters folded away (non-seam is defined in §3.2), and the read-gate factorisations
+set of internal level nodes folded away, and the read-gate factorisations
 (`EdgeArcs::derived`, a `DerivedRegister` per read-gated register output — see §6).
 
-The **candidates** are every output (so a combinational output is considered and simply keeps no edge
+The **candidates** are every output (so a combinational output is considered and keeps no edge
 arc) plus every internal state variable that is not itself an output.
 
 Everything below is measured only from **fully-determinate** reachable stable states — a state with a
 don't-care (uninitialised) state column is arc-ineligible, a don't-care being a *missing* variable never
 coerced to 0/1, in the `Minterm` and in BDD evaluation alike. Traversal is untouched: partial states
-remain seeds, they are simply never measured from. No machine state is ever perturbed, defaulted or
+remain seeds, they are never measured from. No machine state is ever perturbed, defaulted or
 re-settled under a held value; an oscillating configuration is an invalid state and takes part in no
 test. And everything is derived **behaviourally**, from observed toggle-and-settle transitions and the
 cell's own next-state functions — never from the shape of an equation, and never by branching on a
@@ -64,15 +66,38 @@ declared input class. An async pin need not be declared to be handled: its effec
 own observed moves (see `forcing_pins`, §5). The characterisation is consequently **implementation-style
 invariant**: the NAND-implemented `NDLAT` / `NDFF` / `NHPIPE` fixtures in `src/logic/edge.rs`
 (a latch, a D flip-flop, and a two-clock pipe stage) characterise identically to their pass-transistor
-twins `DLAT` / `DFF` / `HPIPE` — same arcs, same seams, same covers, same folds.
+twins `DLAT` / `DFF` / `HPIPE` — same arcs, same active-edge sets, same covers, same folds.
 
 ## 3. The decision pipeline
 
 One analysis over the machine's `toggle`/`settle` observations produces both the arc types and the state
-model:
+model. Two of its steps settle a set by repetition, and both are read in the same order.
 
-> arc typing (two-birth gate, per arc) → per-node seam set `S` (greatest fixpoint) → edge functions
-> (uniform header + drop-loop) → off-edge → read-gate factorisation → fold (reachability).
+**The order.** The carrier is the **subsets of a finite set, ordered by inclusion** — a complete lattice,
+every family of subsets having a least upper bound (its union) and a greatest lower bound (its
+intersection). A step is an operator `R` on those subsets, and both operators here are **monotone**: a
+larger input set never yields a smaller output set. The result relied on is **Knaster–Tarski** — a
+monotone operator on a complete lattice has a unique **greatest fixed point** and a unique **least fixed
+point**. On a finite carrier each is reached by iterating, downwards from the whole set for the greatest
+and upwards from the seeds for the least, and the set the iteration arrives at does not depend on the
+order the steps were visited in.
+
+Two sets are read this way, over separate populations:
+
+- the **active-edge set**, one per candidate node, over that node's `(clock, direction)` pairs — the
+  greatest fixed point of the removal in §3.2;
+- the **fold's live set**, one per cell, over the cell's foldable nodes — the least fixed point of the
+  marking in §7.
+
+In the cell's own terms: a node's active-edge set is the largest set of edges the node genuinely holds its
+delivered value across. Begin with every edge its arcs type edge, drop one the phase refutes, and repeat;
+one removal can expose the next, and the set the loop ends at is the same whatever order the removals were
+found in. The fold's live set is the smallest set that both contains the seeds — the nodes emission still
+names — and is closed under reference: whatever a live node's function reads is live too. Anything outside
+that set is named by nothing the cell emits, and folds away.
+
+> arc typing (two-birth gate, per arc) → per-node active-edge set `S` (greatest fixed point) → edge
+> functions (uniform header + drop-loop) → off-edge → read-gate factorisation → fold (reachability).
 
 ### 3.1 Arc typing — the two-birth gate
 
@@ -140,19 +165,20 @@ two-clock interlock clock gate, `GCLK = enA*CLKA + enB*CLKB`) is not the
 toggled clock's associate, so a clock gate's `GCLK` reaches no birth node on either edge and stays
 combinational — the exclusion is causal, a plain absence of any clock-associated birth.
 
-### 3.2 The seam set — the seam fixpoint
+### 3.2 The active-edge set — pruned to the greatest fixed point
 
-A candidate node carries an **edge seam** on `(clock, direction)` iff the arc typing holds **and** the
-delivered value holds through the phase, the second computed as a greatest fixpoint over the node's own
-seam set `S`. Start `S` at every `(clock, direction)` the node types edge on at some eligible changed
-firing, then remove `(clock, direction)` whenever some non-forcing change of the node inside its
-delivered phase occurs at a toggle that is **not** itself an edge of `S` — live data, or a non-seam
-clock — and iterate until stable. A node with a non-empty `S` is an edge register: its per-edge
-next-state functions and off-edge are synthesised into `EdgeArcs::captures`. An empty `S` is a level
-node (a latch that merely tracks, or a clock gate). `DCMUX` collapses to level in two steps — its falls
-are combinational, so each in-phase fall is a non-seam change and both rises' seams die — leaving a level
-model whose two rises still carry `-type edge` labels; `DLAT` empties immediately on live data. `ICG` and
-`ICM`'s `GCLK` have no edge arc and therefore no seam, causally.
+A candidate node carries an **active edge** on `(clock, direction)` iff the arc typing holds **and** the
+delivered value holds through the phase, the second computed as the greatest fixed point of a removal over
+the node's own active-edge set `S`. Start `S` at every `(clock, direction)` the node types edge on at some
+eligible changed firing, then remove `(clock, direction)` whenever some non-forcing change of the node
+inside its delivered phase occurs at a toggle that is **not** itself an active edge of `S` — live data, or
+a clock edge outside `S` — and repeat until no pair still qualifies for removal. A node with a non-empty
+`S` is an edge register: its per-edge next-state functions and off-edge are synthesised into
+`EdgeArcs::captures`. An empty `S` is a level node (a latch that merely tracks, or a clock gate). `DCMUX`
+collapses to level in two steps — its falls are combinational, so each in-phase fall is a change at an
+inactive edge and both rises leave `S` — leaving a level model whose two rises still carry `-type edge`
+labels; `DLAT` empties immediately on live data. `ICG` and `ICM`'s `GCLK` have no edge arc and therefore
+no active edge, causally.
 
 ## 4. Cover synthesis
 
@@ -212,7 +238,11 @@ empty for every cell with no read-gated register output.
 The discriminator is **state-change-in-cone**: a forcing pin of the output is a read-gate iff toggling it
 never moves any state variable in the output's cone — the transitive state variables `δ_output` depends
 on. Its pass level is the pin's un-asserted level. If the output has at least one such gate, the register
-content it reads is `δ_output` cofactored at the read-gates' pass levels (`Bdd::restrict_to`); an ordinary
+content it reads is `δ_output` **cofactored** at the read-gates' pass levels. Cofactoring is Boolean
+restriction — Shannon's cofactor `f|ₓ₌ᵥ`, the function left over the remaining variables once `x` is
+fixed at `v` — and it is `Bdd::restrict_to` from `espresso-logic`, documented there as restricting a
+function to the subspace a minterm pins. In the cell's terms it is what the output's next-state function
+says with every read-gate held at the level that lets the register's value through. An ordinary
 register — every forcing pin changes the held state — is left untouched.
 
 The factored register **reuses a declared register** whose content matches the cofactored content up to
@@ -236,21 +266,22 @@ matches `T` up to inversion, so `T` is reused and nothing is minted.
 ## 7. Fold
 
 Folding is decided at **cell level** (`EdgeArcs::folded`), after classification, as a **reachability**
-question: does this value still influence an output once collapsed? It is computed as a liveness fixpoint
-over the graph of raw-function references among the internal non-seam survivors. The seeds are what must
-stay visible: capture-less outputs (never folded) and any candidate named by a surviving capture or
-off-edge cover column — the sinks whose raw function is actually emitted. Liveness then propagates along
-each live node's own function support (semantic BDD support, never equation shape). An internal non-seam
-node folds unless that propagation reaches it; a *mutually-referencing* — or transitively-referencing —
-set of such nodes that reaches no sink folds together, because the set as a whole influences nothing a
-survivor still names. This single reachability rule covers both the single-node case and the group:
+question: does this value still influence an output once collapsed? It is computed as the least fixed
+point of a liveness marking over the graph of raw-function references among the internal level survivors.
+The seeds are what must stay visible: capture-less outputs (never folded) and any candidate named by a
+surviving capture or off-edge cover column — the sinks whose raw function is actually emitted. Liveness
+then propagates along each live node's own function support (semantic BDD support, never equation shape).
+An internal level node folds unless that propagation reaches it; a *mutually-referencing* — or
+transitively-referencing — set of such nodes that reaches no sink folds together, because the set as a
+whole influences nothing a survivor still names. This single reachability rule covers both the
+single-node case and the group:
 `NDFF`'s NAND master pair `M`/`Mn` and `NHPIPE`'s inner NAND master pair `M1`/`M1n` are capture-less and
 mutually referencing, so both fold together — exactly as the pass-transistor `DFF` and `HPIPE` fold their
 lone `M`/`M1`, pinned by `edge_nand_master_slave_matches_the_pass_gate_flop` and
 `edge_nand_hierarchical_two_clocks_matches_the_pass_gate_pipe`. A folded node's own pin, UDP primitive,
 and statetable row are elided from every artifact, leaving only the edge form; its internal-power
 characterisation via its primary-input hidden arcs is unchanged. A **toggle flop** is self-fed, so its
-ring cannot fold: its master carries a real capture, which excludes it from the non-seam candidate
+ring cannot fold: its master carries a real capture, which excludes it from the level-node candidate
 population regardless of this rule; it decomposes into two opposite-edge captures instead, each keeping
 the other as a live reference.
 
@@ -277,8 +308,8 @@ self-referential set that reaches no output may be collapsed even though minimis
   first-class `internal_node` pin for a minted register — its native edge rows join the joint statetable —
   and the read-gated output prints a `state_function` over the factored register and the gate pins
   (`Y`'s `Yst + !A`), never its folded master.
-- **Verilog** — the sequential UDP is written in edge-triggered form for the seams and elides folded
-  masters; likewise independent of `labels`, the level rows already carrying the latch. A minted factored
+- **Verilog** — the sequential UDP is written in edge-triggered form for the edge registers and elides
+  folded masters; likewise independent of `labels`, the level rows already carrying the latch. A minted factored
   register emits its own edge UDP driving an internal wire, and the read-gated output becomes a continuous
   assign over that wire and the gate pins.
 

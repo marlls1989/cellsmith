@@ -9,8 +9,8 @@
 //! no cycle is purely combinational.
 //!
 //! Substitution itself happens once, up front, in [`super::minimise`]: each signal's function is folded
-//! down to a fixpoint over the minimal residual set before this module ever sees it. δ (a state
-//! variable's next-state function) is then a direct lookup in the shared BDD map — there is no
+//! until neither pass commits, to the minimised model's residual set, before this module ever sees it. δ (a
+//! state variable's next-state function) is then a direct lookup in the shared BDD map — there is no
 //! resolve/substitution step left to perform here.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,7 +21,7 @@ use crate::model::AnalysedOutput;
 
 /// `signal name → the signal names its function references` (its feedback/state, self-reference
 /// included). Non-signal variables (primary inputs) are not edges.
-pub fn dependency_map(signals: &[&AnalysedOutput]) -> BTreeMap<Symbol, Vec<Symbol>> {
+pub(crate) fn dependency_map(signals: &[&AnalysedOutput]) -> BTreeMap<Symbol, Vec<Symbol>> {
     signals
         .iter()
         .map(|s| (s.name.clone(), s.feedback.clone()))
@@ -70,7 +70,7 @@ pub(crate) fn self_reaching(edges: &BTreeMap<Symbol, Vec<Symbol>>) -> BTreeSet<S
 /// larger coupling cycle. A signal on no cycle is combinational and resolves away entirely; a state
 /// variable is a held coordinate of the cell's state machine. A signal `s` is a state variable iff `s`
 /// reaches itself in the reference graph.
-pub fn state_variables(signals: &[&AnalysedOutput]) -> BTreeSet<Symbol> {
+pub(crate) fn state_variables(signals: &[&AnalysedOutput]) -> BTreeSet<Symbol> {
     self_reaching(&dependency_map(signals))
 }
 

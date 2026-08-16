@@ -4,5 +4,5 @@
 pub mod arcs_tcl;
 pub mod define_cell;
 pub mod liberty;
-pub mod statetable;
+pub(crate) mod statetable;
 pub mod verilog;

@@ -1,10 +1,6 @@
-#![allow(dead_code)]
-//! Shared fixtures and thread-sweep helpers for the `stages` and `aggregate` bench binaries. Each
-//! binary uses only a subset of these; the blanket `dead_code` allow avoids per-binary dead-code
-//! churn.
+//! Shared fixtures and thread-sweep helpers for the `stages` and `aggregate` bench binaries.
 
-use cellsmith::model::{parse_spec, AnalysedCell, Cell};
-use rayon::prelude::*;
+use cellsmith::model::{parse_spec, Cell};
 
 /// Cells whose machine width makes them worth sweeping across the full thread range; the rest are
 /// cheap enough that only the `n=1` baseline and the default parallelism are informative.
@@ -20,12 +16,6 @@ pub fn raw_cells() -> Vec<Cell> {
     parse_spec(include_str!("../../examples/cells.toml"))
         .unwrap()
         .cells
-}
-
-/// Analyse every cell in parallel; a fixture-prep helper for stages that need an already-analysed
-/// cell as input, run outside the timed region.
-pub fn analyse_all(cells: &[Cell]) -> Vec<AnalysedCell> {
-    cells.par_iter().map(|c| c.analyse().unwrap()).collect()
 }
 
 /// The rayon global thread pool's configured width.

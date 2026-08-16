@@ -45,6 +45,15 @@ CHANGELOG, and commit and PR messages.
   project or otherwise non-obvious before leaning on it, and where a name belongs to a
   particular tool or theory, say so. You finish a change holding a great deal of context the
   reader does not have; the prose has to bridge that gap rather than assume it away.
+- **State a borrowed framework before its vocabulary, and gloss it afterwards.** Where an
+  argument rests on established machinery — a lattice and its fixed points, a rewrite system,
+  an automaton — say what it ranges over here, what the operation is, and whose result is
+  being relied on, before any term belonging to it appears; then restate it in the terms of
+  the cell or the pass at hand. The formal statement is what makes a word like *greatest* mean
+  something and be checkable. The restatement is what lets a reader who does not know the
+  framework follow the argument. Either half alone fails: a term with no framework behind it
+  is a claim nobody can verify, and a framework with no restatement is vocabulary nobody can
+  use.
 - A comment that only restates the code earns nothing. Spend the words on a non-obvious
   invariant and why it holds.
 
@@ -68,7 +77,7 @@ is free to pick any equally-good representative where a choice is arbitrary.
 The one place ordering *is* real is where a format the output feeds gives a position
 meaning — a `-vector`'s characters line up with the `-pinlist`, and Liberty's statetable
 rows are matched first-to-last. Those are external constraints and must be preserved. The
-test for any ordering rule you meet is simply: does the consuming format impose it, or did
+test for any ordering rule you meet is: does the consuming format impose it, or did
 we impose it on ourselves to make a check easier? Only the former survives. Given a choice
 between clearer or faster code that reorders output and more awkward code that keeps the
 order stable, take the former.

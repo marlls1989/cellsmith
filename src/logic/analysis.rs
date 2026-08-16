@@ -3,16 +3,17 @@
 //! same exploration.
 //!
 //! A cell is a state machine over `inputs × coordinates` — every signal surviving the minimisation, the
-//! state variables and the combinational survivors alike (see [`machine`] and [`resolve`]). The
+//! state variables and the combinational survivors alike (see [`machine`] and `resolve`). The
 //! signals' BDDs are built and minimised once in [`crate::model::Cell::analyse`]; this pass reads that
 //! shared map. After the fold every coordinate's next-state δ **is** its entry in the map — a direct
 //! lookup, no per-signal composition. Only the one
-//! [`machine::explore`] BFS is set up here, and it is the same setup for both derivations, so it is done
+//! `machine::explore` BFS is set up here, and it is the same setup for both derivations, so it is done
 //! **once** and shared through [`Machine`]. It is done once per CELL rather than once per view: a cell
 //! that exposes internal nodes is analysed as two views, and the second one takes the first's explored
 //! states projected onto its own coordinates ([`Exploration`]) instead of exploring again. Only plain
-//! data ([`Arc`]; the detected [`OrderDependence`] and [`Oscillation`] hazards; the generated
-//! [`Constraint`]s; the explored states themselves, which are minterms and carry no BDD handle) escapes
+//! data ([`Arc`]; the detected [`Hazard`]s; the
+//! generated `Constraint`s; the explored states themselves, which are minterms and carry no BDD
+//! handle) escapes
 //! into [`MachineAnalysis`]; the live BDD handles never leave this pass.
 //!
 //! The BDD brand is a **generic type parameter** `<B, C>` carried by [`Machine`]: the builder is minted
@@ -28,28 +29,29 @@ use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::arcs::{self, Arc, HiddenArc};
-use crate::logic::confluence::{self, Constraint};
-use crate::logic::hazard::{OrderDependence, Oscillation};
+use crate::logic::confluence;
+use crate::logic::constraint::{self, Constraint};
+use crate::logic::hazard::Hazard;
 use crate::logic::leakage::{self, LeakageState};
-use crate::logic::{machine, resolve};
-use crate::model::AnalysedCell;
+use crate::logic::{machine, resolve, width};
+use crate::model::{AnalysedCell, ConstraintPins};
 
-/// The plain-data outcome of the shared machine pass: the transition arcs, the two detected hazards
-/// (order-dependent and oscillation), and the constraints generated to avoid them. Everything is empty
-/// when the exploration passed a budget ceiling, and `unexplored` then names the counter that stopped it
+/// The plain-data outcome of the shared machine pass: the transition arcs, the detected hazards — one
+/// [`Hazard`] per (cause, outcome) pair the two detection passes observe — and the constraints generated
+/// to avoid them. Everything is empty when the exploration passed a budget ceiling, and `unexplored`
+/// then names the counter that stopped it
 /// (see [`machine::ExplorationBudget`]).
 ///
 /// `MachineAnalysis` itself never escapes this module: [`analyse_machine`]'s result is copied field-for-
 /// field into the matching [`crate::model::AnalysedCell`] fields by `Cell::analyse` (see `model.rs`).
 #[derive(Debug, Default)]
 pub struct MachineAnalysis {
-    pub arcs: Vec<Arc>,
-    pub hidden_arcs: Vec<HiddenArc>,
-    pub constraints: Vec<Constraint>,
-    pub order_dependence: Vec<OrderDependence>,
-    pub oscillation: Vec<Oscillation>,
-    pub leakage: Vec<LeakageState>,
-    pub edge: crate::logic::edge::EdgeArcs,
+    pub(crate) arcs: Vec<Arc>,
+    pub(crate) hidden_arcs: Vec<HiddenArc>,
+    pub(crate) constraints: Vec<Constraint>,
+    pub(crate) hazards: Vec<Hazard>,
+    pub(crate) leakage: Vec<LeakageState>,
+    pub(crate) edge: crate::logic::edge::EdgeArcs,
     /// The budget counter that stopped the exploration, or `None` when the machine was explored in
     /// full. Set ⇒ every field above is empty, because nothing was derived.
     ///
@@ -57,11 +59,11 @@ pub struct MachineAnalysis {
     /// to completion in the view that performed it — so this is set only for a view that explored
     /// ([`Exploration::Fresh`]) or for one mirroring the ceiling that stopped the exploration it would
     /// have reused.
-    pub unexplored: Option<machine::ExplorationLimit>,
+    pub(crate) unexplored: Option<machine::ExplorationLimit>,
     /// The exploration this pass performed, handed back so a second view of the same cell projects it
     /// onto its own coordinates instead of repeating it. `None` when the pass reused an exploration, and
     /// when a budget ceiling stopped one.
-    pub explored: Option<machine::Explored>,
+    pub(crate) explored: Option<machine::Explored>,
 }
 
 /// Where a view's explored states come from.
@@ -132,9 +134,9 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             .filter(|nm| state_set.contains(nm))
             .collect();
 
-        // The minimise fixpoint invariant (I3): every signal's signal-name support is a subset of the
-        // state variables, so a state variable's next-state δ and a combinational output's δ are both a
-        // direct lookup in the shared map — no per-signal composition remains.
+        // `minimise`'s minimised-model support invariant (I3): every signal's signal-name support is a
+        // subset of the state variables, so a state variable's next-state δ and a combinational
+        // output's δ are both a direct lookup in the shared map — no per-signal composition remains.
         debug_assert!(
             signals.iter().all(|s| {
                 bdds[&s.name]
@@ -288,16 +290,35 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
         }
     };
     let (arcs, hidden_arcs) = arcs::derive(&m);
-    // Detect the hazards, then generate the constraints that avoid them — two separate stages.
-    // Hazards are always detected (they drive the oscillation/race warnings and annotations);
-    // constraint generation is gated on the cell's opt-in (the per-cell `constraint_arcs`, also set
-    // for every cell by the global `--constraints` flag), so no constraint is generated — hence none
-    // emitted — unless the cell requested it.
+    // Detect the hazards, then generate the constraints that avoid them — two separate stages. Every
+    // hazard is always detected — the race-cause and pulse-cause ones alike (they drive the warnings and
+    // annotations); what the cell's selection decides is which of them get a constraint. The selection
+    // (the per-cell `constraint_arcs`, unioned for every cell with the global `--constraints` flag) names
+    // the pins whose constraints are wanted, and it acts on the constraints generation RETURNS, never on
+    // the hazards handed to it: a pin nobody asked constraints for is still probed and still reported,
+    // and only loses its blocks. Which pins reach a given constraint is that constraint's kind to answer
+    // ([`Constraint::selected_by`]), the two ends of a symmetric separation being equals and those of a
+    // directed one not. Emission then picks each general block's representative among exactly
+    // the constraints that come out, so an unselected pin's observations decide nothing about a selected
+    // pin's block.
     let detected = confluence::detect(&m);
-    let constraints = if cell.constraint_arcs_declared {
-        confluence::constrain(&detected, &m.cell.clock_pins)
-    } else {
-        Vec::new()
+    let width_dependence = width::detect(&m);
+    // The one `hazards` record set: what the two detection passes returned, concatenated. Generation
+    // reads it whole — a constraint follows its record's cause, so both passes' records reach the one
+    // generator.
+    let hazards: Vec<Hazard> = detected
+        .order_dependence
+        .into_iter()
+        .chain(detected.oscillation)
+        .chain(width_dependence)
+        .collect();
+    let constraints = match &cell.constraint_arcs_declared {
+        // Nothing is wanted of any pin, so generation is skipped whole rather than run and discarded.
+        ConstraintPins::Off => Vec::new(),
+        selection => constraint::constrain(&hazards, &m.cell.clock_pins)
+            .into_iter()
+            .filter(|c| c.selected_by(selection))
+            .collect(),
     };
     // Behavioural edge classification is read-only over the explored machine — it mints only
     // already-existing names and mutates nothing (the exploration-unchanged invariant holds BY
@@ -314,8 +335,7 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
         arcs,
         hidden_arcs,
         constraints,
-        order_dependence: detected.order_dependence,
-        oscillation: detected.oscillation,
+        hazards,
         leakage,
         edge,
         unexplored: None,
@@ -327,12 +347,19 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
+    use espresso_logic::Symbol;
+
     use crate::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
     use crate::emit::liberty::cell_liberty;
     use crate::emit::verilog::cell_verilog;
+    use crate::logic::arcs::Edge;
+    use crate::logic::constraint::{Constraint, ConstraintKind};
+    use crate::logic::hazard::{Cause, Outcome};
     use crate::logic::machine::ExplorationLimit;
     use crate::logic::resolve;
-    use crate::model::analyse_one;
+    use crate::model::{analyse_one, AnalysedCell};
 
     #[test]
     fn oversized_cell_trips_the_candidate_budget() {
@@ -361,19 +388,12 @@ mod tests {
             cell.constraints.is_empty(),
             "an unexplored cell has no constraints"
         );
-        assert!(
-            cell.oscillation.is_empty(),
-            "an unexplored cell has no oscillation"
-        );
-        assert!(
-            cell.order_dependence.is_empty(),
-            "an unexplored cell has no order-dependent hazards"
-        );
+        assert!(cell.hazards.is_empty(), "an unexplored cell has no hazards");
         assert!(
             cell.leakage.is_empty(),
             "an unexplored cell has no leakage states"
         );
-        // Emission still succeeds (no panic); the artifacts are simply arc-free.
+        // Emission still succeeds (no panic); the artifacts are arc-free.
         let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         let _ = cell_verilog(&cell);
         let _ = cell_liberty(&cell);
@@ -419,12 +439,8 @@ mod tests {
                 "the unexplored {which} has no constraints"
             );
             assert!(
-                view.oscillation.is_empty(),
-                "the unexplored {which} has no oscillation"
-            );
-            assert!(
-                view.order_dependence.is_empty(),
-                "the unexplored {which} has no order-dependent hazards"
+                view.hazards.is_empty(),
+                "the unexplored {which} has no hazards"
             );
             assert!(
                 view.leakage.is_empty(),
@@ -438,7 +454,7 @@ mod tests {
                 "the unexplored {which} carries the default edge classification"
             );
         }
-        // Emission still succeeds (no panic); the artifacts are simply arc-free.
+        // Emission still succeeds (no panic); the artifacts are arc-free.
         let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         let _ = cell_verilog(&cell);
         let _ = cell_liberty(&cell);
@@ -501,7 +517,10 @@ inputs = ["A"]
 Q = "A + Q"
 "#,
         );
-        assert!(cell.oscillation.is_empty());
+        assert!(!cell
+            .hazards
+            .iter()
+            .any(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation));
         assert_eq!(cell.regions.len(), 1);
         let q = &cell.regions[0];
         assert!(q.hysteretic, "a single-input keeper holds its own state");
@@ -510,6 +529,16 @@ Q = "A + Q"
         assert!(
             cell.arcs.is_empty(),
             "a single-input keeper has no arc between reachable stable states"
+        );
+        // Nor any width-dependent hazard, for the same reason: that one rise is the cell's only
+        // transition, so at every state a pulse may start from Q is already high and A's toggle leaves
+        // it there — every cut of every pulse lands back where it started.
+        assert!(
+            !cell
+                .hazards
+                .iter()
+                .any(|h| matches!(h.cause, Cause::Pulse { .. })),
+            "a single-input keeper's pulses all settle back to where they started"
         );
         // Emission is well-formed: a statetable for the hysteretic output, and no panic on the arcs.
         assert!(cell_liberty(&cell).contains("statetable"));
@@ -552,6 +581,63 @@ Q = "!R*(CLK*M + !CLK*Q)"
         );
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         assert!(tcl.contains("define_arc"));
+    }
+
+    #[test]
+    fn a_named_pin_keeps_its_own_constraints_and_leaves_detection_alone() {
+        // A DFF constrains both its pins: `D`, held around the clock it races, and `CLK`, whose own
+        // pulse has a minimum width. Naming one of the two decides which constraints are generated and
+        // nothing else — the hazards behind BOTH are still detected and still reported, so the pin left
+        // out keeps its warning and loses only its blocks.
+        // The pins constrained, as a set: which observation supplied a constraint states nothing, so
+        // two runs agree here without agreeing on the records behind it.
+        let pins = |c: &crate::model::AnalysedCell| {
+            let mut v: Vec<String> = c.constraints.iter().map(|k| k.pin.to_string()).collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+        // What the warnings are rendered from: each detected hazard's cause, named by its pins.
+        let detected = |c: &crate::model::AnalysedCell| {
+            let mut v: Vec<String> = c
+                .hazards
+                .iter()
+                .map(|h| match &h.cause {
+                    Cause::Pulse { pin, .. } => format!("pulse {pin}"),
+                    Cause::Race { pins } => format!(
+                        "race {}",
+                        pins.iter()
+                            .map(|r| r.pin.to_string())
+                            .collect::<Vec<_>>()
+                            .join("+")
+                    ),
+                })
+                .collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+
+        let every = analyse_one(&dff("true"));
+        let data_only = analyse_one(&dff("\"D\""));
+        assert_eq!(pins(&every), ["CLK", "D"]);
+        assert_eq!(pins(&data_only), ["D"]);
+        assert_eq!(
+            detected(&data_only),
+            detected(&every),
+            "a pin left out of the selection is still probed and still reported",
+        );
+        assert!(
+            detected(&data_only).contains(&"pulse CLK".to_owned()),
+            "the width hazard behind the dropped constraint is one of them",
+        );
+
+        // And the deck follows the selection: the separation blocks come out, the minimum width the
+        // unselected `CLK` would have carried does not.
+        let tcl = cell_arcs_tcl(&data_only, ArcsTclOptions::default());
+        assert!(tcl.contains("-type setup"));
+        assert!(tcl.contains("-type hold"));
+        assert!(!tcl.contains("-type min_pulse_width"));
     }
 
     #[test]
@@ -736,6 +822,149 @@ Q = "W + Q*(A+B)"
                 (true, false, true, false),
                 (true, true, true, true),
             ],
+        );
+    }
+
+    /// One constraint as a comparable descriptor: its kind, the pins that kind names with the edge each
+    /// makes, and the victim nodes it probes. A symmetric separation reads the same either way round, so
+    /// its two ends are sorted rather than recorded as constrained and related — which is the very thing
+    /// the selections below must not depend on. The probed state is left out: these tests compare WHICH
+    /// constraints a selection returns, and the selections of one cell answer over the same states.
+    fn describe(c: &Constraint) -> String {
+        let end = |pin: &Symbol, edge: Edge| format!("{pin}/{}", edge.rf());
+        let head = match &c.kind {
+            ConstraintKind::SetupHold { clock, clock_edge } => format!(
+                "setup_hold {} around {}",
+                end(&c.pin, c.pin_edge),
+                end(clock, *clock_edge),
+            ),
+            ConstraintKind::NonSeq { other, other_edge } => {
+                let mut ends = [end(&c.pin, c.pin_edge), end(other, *other_edge)];
+                ends.sort();
+                format!("non_seq {} {}", ends[0], ends[1])
+            }
+            ConstraintKind::MinPulseWidth => format!("min_pulse_width {}", end(&c.pin, c.pin_edge)),
+        };
+        let nodes: Vec<String> = c.nodes.iter().map(|v| v.node.to_string()).collect();
+        format!("{head} over {}", nodes.join(","))
+    }
+
+    /// The constraints a cell generated, as the set of their descriptors.
+    fn constrained(cell: &AnalysedCell) -> BTreeSet<String> {
+        cell.constraints.iter().map(describe).collect()
+    }
+
+    /// A descriptor set from the descriptors themselves, for stating an expectation.
+    fn set<const N: usize>(descriptors: [&str; N]) -> BTreeSet<String> {
+        descriptors.iter().map(|d| (*d).to_owned()).collect()
+    }
+
+    /// The cross-coupled mutex, its inputs declared in `inputs` order and its constraint arcs selected
+    /// by `selection`.
+    fn mutex(inputs: &str, selection: &str) -> String {
+        format!(
+            r#"
+[[cell]]
+name = "MUT"
+inputs = [{inputs}]
+constraint_arcs = {selection}
+[cell.outputs]
+Qa = "!Qb * A"
+Qb = "!Qa * B"
+"#
+        )
+    }
+
+    /// A master-slave DFF with `CLK` declared a clock, its constraint arcs selected by `selection`.
+    fn dff(selection: &str) -> String {
+        format!(
+            r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+constraint_arcs = {selection}
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#
+        )
+    }
+
+    /// The one separation the mutex generates: neither request is a declared clock, so the pair whose
+    /// simultaneous assertion rings is symmetric. Both requests rise — the ring is reached FROM the idle
+    /// state — and it endangers both grants.
+    const MUTEX_SEPARATION: &str = "non_seq A/R B/R over Qa,Qb";
+
+    #[test]
+    fn either_end_of_a_symmetric_separation_selects_it() {
+        // A and B are equals here, so naming either names the separation that holds them apart, and the
+        // two selections return the same one.
+        //
+        // What differs between them is the release pulse each request carries of its own: dropping a
+        // granted request opens a cascade whose width decides which request ends up granted, so A↓ and
+        // B↓ are a minimum pulse width each, over the same grant pair. A pulse names ONE pin, so it
+        // answers only to the selection naming that pin.
+        assert_eq!(
+            constrained(&analyse_one(&mutex(r#""A", "B""#, r#"["A"]"#))),
+            set([MUTEX_SEPARATION, "min_pulse_width A/F over Qa,Qb"]),
+        );
+        assert_eq!(
+            constrained(&analyse_one(&mutex(r#""A", "B""#, r#"["B"]"#))),
+            set([MUTEX_SEPARATION, "min_pulse_width B/F over Qa,Qb"]),
+        );
+    }
+
+    #[test]
+    fn the_input_declaration_order_does_not_move_a_symmetric_separation() {
+        // The same cell, its two inputs declared the other way round: a separation is between the pins,
+        // so which of them the spec happens to declare first is nothing the constraint is about. One
+        // selection, naming A, answers the same in both spellings.
+        let declared = constrained(&analyse_one(&mutex(r#""A", "B""#, r#"["A"]"#)));
+        let reversed = constrained(&analyse_one(&mutex(r#""B", "A""#, r#"["A"]"#)));
+        assert_eq!(declared, reversed);
+        assert!(
+            declared.contains(MUTEX_SEPARATION),
+            "naming A selects the separation whichever order the inputs are declared in, got {declared:?}",
+        );
+    }
+
+    #[test]
+    fn a_directed_separation_is_selected_by_its_data_pin() {
+        // CLK is declared a clock, so the CLK/D race is DIRECTED: D is the data, held around CLK. Naming
+        // D asks for what D is subject to, which is that separation. The flop's pulses are on CLK alone —
+        // a clock pulse too narrow to carry the master through to the slave — so naming D brings back no
+        // minimum pulse width.
+        let data = constrained(&analyse_one(&dff(r#"["D"]"#)));
+        assert!(!data.is_empty(), "the flop's CLK/D race is constrained");
+        assert!(
+            data.iter().all(|c| c.starts_with("setup_hold D/")),
+            "naming the data pin selects the separations it is held by, got {data:?}",
+        );
+    }
+
+    #[test]
+    fn a_declared_clock_selects_its_pulse_width_and_not_the_separation() {
+        // Naming CLK asks for what CLK is itself subject to: the width of its own pulse. A rise pulse
+        // opens the slave, so a short one leaves Q where it was rather than at M; a fall pulse opens the
+        // master onto D and only the closing rise walks that into Q, so a short one leaves both. Those
+        // two widths are the whole of what CLK gets — the CLK/D separation is what D is held by, not what
+        // CLK is, so it is not here.
+        let clock = constrained(&analyse_one(&dff(r#"["CLK"]"#)));
+        assert_eq!(
+            clock,
+            set([
+                "min_pulse_width CLK/R over Q",
+                "min_pulse_width CLK/F over Q,M",
+            ]),
+        );
+        // The flop has two input pins, so between them the two selections name every constraint the cell
+        // generates: selecting narrows what comes back and loses nothing no pin asks for.
+        let data = constrained(&analyse_one(&dff(r#"["D"]"#)));
+        assert_eq!(
+            data.union(&clock).cloned().collect::<BTreeSet<String>>(),
+            constrained(&analyse_one(&dff("true"))),
         );
     }
 }

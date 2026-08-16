@@ -19,7 +19,7 @@
 //! clock phase puts a condition in the arc's `-when` and never suppresses or reclassifies it. MASKING
 //! needs no rule — it falls out of arc derivation: an arc exists only where a transition actually reaches
 //! an output, so a flop master's opening (stopped by its closed slave) and a gated clock's falling edge
-//! (cancelled by the gating condition it controls) simply never present an arc.
+//! (cancelled by the gating condition it controls) never present an arc.
 //!
 //! Everything is derived BEHAVIOURALLY from observed toggle-and-settle transitions, never from the shape
 //! of an equation, and nothing branches on a declared input class — an async pin need not be declared,
@@ -27,8 +27,8 @@
 //! consequently IMPLEMENTATION-STYLE INVARIANT: the NAND-implemented `NDLAT` / `NDFF` / `NHPIPE`
 //! fixtures characterise identically to their pass-transistor twins `DLAT` / `DFF` / `HPIPE`.
 //!
-//! [`classify`] is a **post-exploration** read-only pass over the shared [`Machine`]: it re-walks the
-//! exploration with [`machine::toggle`]/[`machine::settle`], mirroring [`super::arcs::derive`]'s
+//! `classify` is a **post-exploration** read-only pass over the shared [`Machine`]: it re-walks the
+//! exploration with `machine::toggle`/`machine::settle`, mirroring [`super::arcs::derive`]'s
 //! per-node walk, and only ADDS an edge annotation. It never re-derives the exploration, the
 //! prevectors or the hazards — those stay byte-identical whether the annotation is on or off.
 //!
@@ -37,12 +37,12 @@
 //! Only FULLY-DETERMINATE reachable states take part in ARC MEASUREMENT and typing — a state with a
 //! don't-care (uninitialised) state column is arc-INELIGIBLE (a don't-care is a MISSING variable, never
 //! coerced to 0/1, in the `Minterm` and in BDD evaluation alike). Traversal is untouched: partial states
-//! remain seeds, they are simply not measured from. (`forcing_pins`'s constant-pinning scan is a
+//! remain seeds, they are not measured from. (`forcing_pins`'s constant-pinning scan is a
 //! separate behavioural classification, not an arc measurement: it ranges over every reachable stable
 //! state, reading a node only where that node's own value is determinate there.) NO machine state is ever
 //! coerced, defaulted or re-settled under a held value — an oscillating configuration is an invalid state
 //! and never participates in any test; everything is read off the combinational stable-state machinery
-//! [`machine::explore`]/[`machine::settle`] already produce.
+//! `machine::explore`/`machine::settle` already produce.
 //!
 //! The pipeline is one analysis over the machine's `toggle`/`settle` observations:
 //!
@@ -61,26 +61,29 @@
 //!      the residual still depends on `W`. Candidate sources are the K-associated latches in the output's
 //!      cone (generator and closer); applied PER ARC (each firing restricts to its own post-state) and
 //!      transitively along the dependency chain.
-//! 2. **The seam set `S`** — per candidate node (every output and internal state variable), the
-//!    `(clock, direction)` toggles on which the node carries an edge SEAM: the typing holds AND the
-//!    delivered value HOLDS through the phase, the last a greatest fixpoint (`seam_fixpoint`) that removes
-//!    `(K, d)` when a non-forcing change of the node inside its delivered phase occurs at a toggle not
-//!    itself an edge of `S`. A node with a non-empty `S` is an edge register; its per-edge next-state
-//!    functions and off-edge are synthesised into [`EdgeArcs::captures`].
+//! 2. **The active-edge set `S`** — per candidate node (every output and internal state variable), the
+//!    `(clock, direction)` toggles on which the node carries an ACTIVE EDGE (Liberty's term for the
+//!    clock edge a register captures on): the typing holds AND the delivered value HOLDS through the
+//!    phase, the last the GREATEST FIXED POINT of the removal `retain_active_edges` performs — the order
+//!    it is taken in is stated in `docs/edge-collapse.md` §3 — which drops `(K, d)` when a non-forcing
+//!    change of the node inside its delivered phase occurs at a toggle not itself an active edge of `S`.
+//!    A node with a non-empty `S` is an edge register; its per-edge next-state functions and off-edge are
+//!    synthesised into `EdgeArcs::captures`.
 //! 3. **Cover synthesis** — `synth_capture`, `generalise` and `regions_from` over one uniform
 //!    header (all inputs except the keying clock plus every candidate), with an ordered drop-loop that
 //!    prefers inputs over internals so the fold-eligible internals drop out of the cover.
-//! 4. **Fold** — internal non-seam nodes fold away as an emission-time reachability fixpoint.
+//! 4. **Fold** — internal level nodes fold away: the live set is the LEAST FIXED POINT of an
+//!    emission-time reachability marking, and everything outside it goes.
 //!
 //! The capture and off-edge functions are recorded verbatim as ordinary functions — an inverting flop's
-//! next state is simply `!D`, never special-cased.
+//! next state is `!D`, never special-cased.
 //!
 //! See `docs/edge-collapse.md` for the concept-first walkthrough.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
-use espresso_logic::{Anonymous, Cover, CoverType, CubeType, Minimizable, Minterm, Symbol};
+use espresso_logic::{Cover, CoverType, CubeType, Minimizable, Minterm, Symbol};
 use rayon::prelude::*;
 
 use crate::logic::analysis::Machine;
@@ -88,28 +91,28 @@ use crate::logic::arcs::{Arc as DelayArc, Edge};
 use crate::logic::machine;
 use crate::logic::regions::{self, StateRegions};
 
-/// The edge arcs carried by one node: the node re-expressed as an edge seam on one or more clocks, each
-/// edge making the node capture-and-hold a next-state value.
+/// The edge arcs carried by one node: the node re-expressed as an edge register on one or more clocks,
+/// each active edge making it capture-and-hold a next-state value.
 #[derive(Debug, Clone)]
-pub struct EdgeCaptures {
+pub(crate) struct EdgeCaptures {
     /// The node the edge arcs belong to.
-    pub node: Symbol,
+    pub(crate) node: Symbol,
     /// The captured next-state function per active edge, as combinational state-table regions (total —
     /// off is the complement of on, empty hold). Each capture carries ITS OWN clock. Grouped by clock in
     /// cell input-pin order, `Rise` before `Fall` within a clock; a single-clock node keeps one entry per
     /// active edge (two for a dual-edge node with `Rise` first).
-    pub captures: Vec<(Symbol, Edge, StateRegions)>,
+    pub(crate) captures: Vec<(Symbol, Edge, StateRegions)>,
     /// The off-edge (hold) function as state-table regions, keyed by the clock set's phase vector: on/off
     /// are the set/clear covers, hold is the quiescent region. A phase-agreed forcing drops the clocks
     /// from its cover; a phase-conditioned one keeps its gating clock literal (`CLK*R`).
-    pub off_edge: StateRegions,
+    pub(crate) off_edge: StateRegions,
     /// The node's column set: the first-appearance union of the captures' cols then `off_edge.cols`.
-    pub cols: Vec<Symbol>,
+    pub(crate) cols: Vec<Symbol>,
 }
 
 impl EdgeCaptures {
     /// The distinct clocks the edge arcs key off, in first-appearance (capture) order.
-    pub fn clocks(&self) -> Vec<&Symbol> {
+    pub(crate) fn clocks(&self) -> Vec<&Symbol> {
         let mut out: Vec<&Symbol> = Vec::new();
         for (clock, _, _) in &self.captures {
             if !out.contains(&clock) {
@@ -121,7 +124,7 @@ impl EdgeCaptures {
 }
 
 /// The behavioural edge arcs of a cell: the per-node edge captures recognised across its outputs and
-/// state variables, plus the cell-level set of internal non-seam master nodes folded away. A mutually-
+/// state variables, plus the cell-level set of internal level nodes folded away. A mutually-
 /// or transitively-referencing set of such nodes folds together whenever nothing outside the set reaches
 /// an output, so a cross-coupled pair — or a longer reference chain — shares one fold, not just a single
 /// self-holding node.
@@ -130,34 +133,49 @@ impl EdgeCaptures {
 /// value depends on latch content. A node that additionally HOLDS its
 /// delivered value through the phase is an edge register, its per-edge next-state functions recorded in
 /// [`EdgeArcs::captures`]; a latch that merely tracks live data through its open phase carries an edge
-/// arc but no capture (its seam set is empty). Both are real timing arcs and both emit Liberate
+/// arc but no capture (its active-edge set is empty). Both are real timing arcs and both emit Liberate
 /// `-type edge`.
 #[derive(Debug, Default)]
-pub struct EdgeArcs {
-    pub captures: Vec<EdgeCaptures>,
-    pub folded: Vec<Symbol>,
-    /// The set of the cell's CLOCK-RELATED delay arcs that are EDGE arcs, by full arc identity —
-    /// `(output, related clock, the clock's own direction, machine start minterm)`, the same identity
-    /// [`super::arcs::derive`] keys an [`super::arcs::Arc`] on. SOURCED FROM the derived arcs: an entry
-    /// exists only where the pipeline observed the transition (so a masked edge — a `DFF`'s fall,
-    /// `ICM`'s competing branch reaching an internal latch — has none by construction, and internal
-    /// nodes carrying no delay arc are never labelled). An arc whose identity is ABSENT stays
+pub(crate) struct EdgeArcs {
+    pub(crate) captures: Vec<EdgeCaptures>,
+    pub(crate) folded: Vec<Symbol>,
+    /// The set of the cell's CLOCK-RELATED delay arcs that are EDGE arcs, each at the full identity an
+    /// [`EdgeLabel`] carries. SOURCED FROM the derived arcs: an entry exists only where the pipeline
+    /// observed the transition (so a masked edge — a `DFF`'s fall, `ICM`'s competing branch reaching an
+    /// internal latch — has none by construction, and internal nodes carrying no delay arc are never
+    /// labelled). An arc whose identity is ABSENT stays
     /// `-type combinational`: it acts by the clock's LEVEL, or propagates data through an
     /// already-transparent latch. Membership is PER FIRING, so two firings of one
     /// `(output, clock, direction)` that differ only in internal state can type differently. Every reader
     /// asks the set whether an identity is a member, so it is a [`HashSet`].
-    ///
-    /// The start minterm is the machine's own node, so it is as wide as the machine's coordinates — a
-    /// column per state variable and per combinational survivor. That width never has to be matched by
-    /// hand at the reading end: the probe is the same `arc.start` of the same derived arc, and a
-    /// [`Minterm`] compares and hashes by label-aligned value, an absent column reading as the don't-care
-    /// it would carry anyway. Widening the coordinates therefore widens key and probe together.
-    pub labels: HashSet<(Symbol, Symbol, Edge, Minterm<Symbol>)>,
+    pub(crate) labels: HashSet<EdgeLabel>,
     /// The read-gate factorisations recognised across the cell's outputs (see [`DerivedRegister`]). Empty
     /// for every cell that carries no read-gated register output. Each entry names a state-holding register
     /// the emitters render as a first-class internal node, and carries the combinational read function(s)
     /// of the output(s) that read it through a gate.
-    pub derived: Vec<DerivedRegister>,
+    pub(crate) derived: Vec<DerivedRegister>,
+}
+
+/// One EDGE-typed delay arc at full identity — the identity [`super::arcs::derive`] keys an
+/// [`super::arcs::Arc`] on. The two pins are the arc's ends and are not interchangeable: `output` is where
+/// the transition lands, `clock` the related pin it came from, and `clock_edge` the direction the CLOCK
+/// moves in, which is not in general the direction the output moves in.
+///
+/// The start minterm is the machine's own node, so it is as wide as the machine's coordinates — a
+/// column per state variable and per combinational survivor. That width never has to be matched by
+/// hand at the reading end: the probe is the same `arc.start` of the same derived arc, and a
+/// [`Minterm`] compares and hashes by label-aligned value, an absent column reading as the don't-care
+/// it would carry anyway. Widening the coordinates therefore widens key and probe together.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct EdgeLabel {
+    /// The output pin the arc lands on.
+    pub(crate) output: Symbol,
+    /// The related pin, a declared clock.
+    pub(crate) clock: Symbol,
+    /// The clock's own direction across the firing.
+    pub(crate) clock_edge: Edge,
+    /// The stable state the firing started from: `super::arcs::Arc::start` verbatim.
+    pub(crate) start: Minterm<Symbol>,
 }
 
 /// A post-processing derived internal edge register: content is a function of already-explored state,
@@ -168,22 +186,27 @@ pub struct EdgeArcs {
 /// releases; instead the state-holding register is factored out as its own node (`Y_st`) with native edge
 /// capture, and the output becomes a combinational [`state_function`](crate::emit::liberty) over it.
 ///
-/// The register additionally carries an ordinary [`EdgeCaptures`] entry on [`EdgeArcs::captures`] (its
+/// The register additionally carries an ordinary `EdgeCaptures` entry on `EdgeArcs::captures` (its
 /// captures are the output's already-synthesised covers cofactored at the read-gates' pass levels), so the
 /// entire downstream edge-row / UDP machinery — which is name-driven — flows through unchanged. When the
 /// factored content matches an ALREADY-DECLARED register (up to inversion — `DETP`'s buried `T`), that
 /// register is reused and nothing is minted; the entry then only records the reading output's function.
 #[derive(Debug, Clone)]
-pub struct DerivedRegister {
+pub(crate) struct DerivedRegister {
     /// The register node's name — a freshly minted, collision-checked name, or the name of the reused
     /// declared register when a match was found (nothing minted).
-    pub name: Symbol,
-    /// The register's value over machine coordinates, evaluable at any explored stable state — the harness
-    /// resolves the derived node's value through this instead of `Machine::output_value`.
-    pub content: Cover<Symbol, Anonymous>,
-    /// Per read-gated output that reads this register: the output's combinational read function, as
-    /// state-table regions over the register node and the gate pins.
-    pub reads: Vec<(Symbol, StateRegions)>,
+    pub(crate) name: Symbol,
+    /// Every read-gated output that reads this register, each with the function it reads it through.
+    pub(crate) reads: Vec<RegisterRead>,
+}
+
+/// One read-gated output rendered as a combinational read of a [`DerivedRegister`].
+#[derive(Debug, Clone)]
+pub(crate) struct RegisterRead {
+    /// The output pin the read function belongs to.
+    pub(crate) output: Symbol,
+    /// The read function, as state-table regions over the register node and the gate pins.
+    pub(crate) function: StateRegions,
 }
 
 /// A single clock edge's observations for one candidate: whether any sample changed the value (the
@@ -235,11 +258,21 @@ type Synthesised = (Vec<(Symbol, Edge, StateRegions)>, StateRegions);
 /// a node is typed independently, so edge and combinational arcs coexist freely on one output.
 type Arc = (Symbol, bool);
 
+/// A latch taken in one phase of one clock: what the opacity memo is keyed on. The two names carry
+/// different roles — `latch` is a state variable, `clock` an input the phase belongs to — and `level` is
+/// the clock's level, never the latch's value.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct LatchPhase {
+    latch: Symbol,
+    clock: Symbol,
+    level: bool,
+}
+
 /// Discover each node's edge arcs from the cell's toggle-and-settle behaviour and label the cell's
 /// delay arcs per arc. Read-only over the shared [`Machine`]: it re-walks the exploration and only ADDS
 /// an annotation, mirroring [`super::arcs::derive`] — whose derived arcs are also the SOURCE of the
 /// label domain: only an observed arc is ever labelled.
-pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
+pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     m: &Machine<B, C>,
     delay_arcs: &[DelayArc],
 ) -> EdgeArcs {
@@ -332,9 +365,10 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         },
     );
 
-    // Each candidate's forcing pins. Computed BEFORE any synthesis, so the seam set — which decides the
-    // fold-eligible internals the drop-loop prefers to shed — is settled first. Forcing plays no part in
-    // typing; it is consumed only by off-edge synthesis and the seam fixpoint's forcing exemption.
+    // Each candidate's forcing pins. Computed BEFORE any synthesis, so the active-edge set — which
+    // decides the fold-eligible internals the drop-loop prefers to shed — is settled first. Forcing plays
+    // no part in typing; it is consumed only by off-edge synthesis and the forcing exemption in
+    // `retain_active_edges`.
     let forcing_of: Vec<BTreeMap<Symbol, (bool, bool)>> = candidates
         .iter()
         .zip(&aggs)
@@ -363,7 +397,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         .filter(|p| scan.clock_set.contains(p.as_str()))
         .collect();
     let live_succ = scan.live_successors();
-    let mut opaque_of: HashMap<(Symbol, Symbol, bool), bool> = HashMap::new();
+    let mut opaque_of: HashMap<LatchPhase, bool> = HashMap::new();
     for w in &m.state_vars {
         for clock in &clocks {
             for level in [false, true] {
@@ -372,7 +406,14 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                         && s.value_of(clock.as_str()) == Some(level)
                         && reaches_self(&live_succ[i], w)
                 });
-                opaque_of.insert((w.clone(), (*clock).clone(), level), v);
+                opaque_of.insert(
+                    LatchPhase {
+                        latch: w.clone(),
+                        clock: (*clock).clone(),
+                        level,
+                    },
+                    v,
+                );
             }
         }
     }
@@ -385,7 +426,12 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // (`RDFF`'s `R`, pinning `Q` at 0 across its whole phase) from reading as a generating edge, while a
     // clock-latched constant whose phase does vary (`SETLR`) stays a genuine opening.
     let transparent = |w: &Symbol, clock: &Symbol, level: bool| -> bool {
-        if opaque_of[&(w.clone(), clock.clone(), level)] {
+        let phase = LatchPhase {
+            latch: w.clone(),
+            clock: clock.clone(),
+            level,
+        };
+        if opaque_of[&phase] {
             return false;
         }
         let mut seen: Option<bool> = None;
@@ -411,11 +457,20 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // delivered level (`d`). It is K-ASSOCIATED when its opacity differs across `K`'s two phases (a real latch
     // on `K` — the generator that opens on `d`, or the closer that shuts).
     let generates = |w: &Symbol, clock: &Symbol, is_rise: bool| -> bool {
-        opaque_of[&(w.clone(), clock.clone(), !is_rise)] && transparent(w, clock, is_rise)
+        let source = LatchPhase {
+            latch: w.clone(),
+            clock: clock.clone(),
+            level: !is_rise,
+        };
+        opaque_of[&source] && transparent(w, clock, is_rise)
     };
     let k_assoc = |w: &Symbol, clock: &Symbol| -> bool {
-        opaque_of[&(w.clone(), clock.clone(), false)]
-            != opaque_of[&(w.clone(), clock.clone(), true)]
+        let phase = |level: bool| LatchPhase {
+            latch: w.clone(),
+            clock: clock.clone(),
+            level,
+        };
+        opaque_of[&phase(false)] != opaque_of[&phase(true)]
     };
     // A node's DIRECT-SUPPORT K-LATCHES: the state variables `δ_node` reads in ONE step that are
     // K-associated (a real latch on `clock`). Used SOLELY by the closer-exposure birth test to pick a
@@ -507,7 +562,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // `arcs::derive`, or from an ineligible start — has no identity to add. The start minterm keyed on is
     // `a.start` VERBATIM, which is what makes the key line up with the emitter's probe whatever the
     // machine's coordinates are (see [`EdgeArcs::labels`]).
-    let mut labels: HashSet<(Symbol, Symbol, Edge, Minterm<Symbol>)> = HashSet::new();
+    let mut labels: HashSet<EdgeLabel> = HashSet::new();
     for a in delay_arcs {
         if !scan.clock_set.contains(a.related.as_str()) || !scan.is_eligible(&a.start) {
             continue;
@@ -519,15 +574,20 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         };
         if types_edge(&a.output, &a.related, is_rise, &sp) {
             let edge = if is_rise { Edge::Rise } else { Edge::Fall };
-            labels.insert((a.output.clone(), a.related.clone(), edge, a.start.clone()));
+            labels.insert(EdgeLabel {
+                output: a.output.clone(),
+                clock: a.related.clone(),
+                clock_edge: edge,
+                start: a.start.clone(),
+            });
         }
     }
 
-    // THE SEAM SET per candidate: the `(clock, direction)` toggles the node TYPES EDGE on at some eligible
-    // CHANGED firing (the initial set), tightened by the greatest fixpoint in `seam_fixpoint` — the
-    // delivered value must hold through the phase. A non-empty seam set is an edge register; an empty one is
-    // level (a latch that merely tracks, or a clock gate).
-    let seam_of: Vec<BTreeSet<Arc>> = candidates
+    // THE ACTIVE-EDGE SET per candidate: the `(clock, direction)` toggles the node TYPES EDGE on at some
+    // eligible CHANGED firing (the initial set), tightened to the greatest fixed point by
+    // `retain_active_edges` — the delivered value must hold through the phase. A node with a non-empty set
+    // is an edge register; an empty one is a level node (a latch that merely tracks, or a clock gate).
+    let active_edges: Vec<BTreeSet<Arc>> = candidates
         .iter()
         .zip(&aggs)
         .zip(&forcing_of)
@@ -547,30 +607,30 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                     s.insert((clock.clone(), *is_rise));
                 }
             }
-            scan.seam_fixpoint(name.as_str(), node_forcing, &mut s);
+            scan.retain_active_edges(name.as_str(), node_forcing, &mut s);
             s
         })
         .collect();
 
-    // The internal non-seam nodes: the drop-loop prefers to shed these from a survivor's cover, and they
+    // The internal level nodes: the drop-loop prefers to shed these from a survivor's cover, and they
     // are the fold candidates. Output nodes are never folded, so their names stay available in the header.
-    let internal_nonseam: BTreeSet<Symbol> = candidates
+    let internal_level: BTreeSet<Symbol> = candidates
         .iter()
-        .zip(&seam_of)
+        .zip(&active_edges)
         .filter(|(name, s)| s.is_empty() && !output_names.contains(name.as_str()))
         .map(|(name, _)| name.clone())
         .collect();
     let inputs_set: BTreeSet<&str> = inputs.iter().map(Symbol::as_str).collect();
 
     let mut captures: Vec<EdgeCaptures> = Vec::new();
-    for (i, s) in seam_of.iter().enumerate() {
+    for (i, s) in active_edges.iter().enumerate() {
         if s.is_empty() {
             continue;
         }
         let name = &candidates[i];
         let agg = &aggs[i];
         // The keying clocks in cell input-pin order, each with the `(is_rise, Edge)` directions kept
-        // (Rise before Fall). Every clock present carries at least one seam direction.
+        // (Rise before Fall). Every clock present carries at least one active-edge direction.
         let clock_edges: Vec<(Symbol, Vec<(bool, Edge)>)> = inputs
             .iter()
             .filter(|p| s.iter().any(|(clock, _)| clock == *p))
@@ -589,9 +649,9 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         let (node_captures, off_edge) = synth_node_captures(
             builder
                 .as_ref()
-                .expect("a seam implies a state variable, hence a builder"),
+                .expect("an active edge implies a state variable, hence a builder"),
             &candidates,
-            &internal_nonseam,
+            &internal_level,
             &inputs_set,
             inputs,
             &clock_edges,
@@ -654,7 +714,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         let mut minted: Vec<EdgeCaptures> = Vec::new();
 
         // Every register output, in candidate order.
-        let output_regs: Vec<usize> = seam_of
+        let output_regs: Vec<usize> = active_edges
             .iter()
             .enumerate()
             .filter(|(i, s)| !s.is_empty() && output_names.contains(candidates[*i].as_str()))
@@ -704,7 +764,7 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
 
             // Reuse a declared register whose content matches (up to inversion — a NAND read of a DET
             // holds `!T`), else mint a fresh node holding the cofactored content.
-            let matched = seam_of
+            let matched = active_edges
                 .iter()
                 .enumerate()
                 .filter(|(j, s)| *j != iy && !s.is_empty())
@@ -776,16 +836,17 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                 });
             }
 
-            let content = regions::minimise_bdd(&content_bdd);
             derived_map
                 .entry(reg_name.clone())
                 .or_insert_with(|| DerivedRegister {
                     name: reg_name.clone(),
-                    content,
                     reads: Vec::new(),
                 })
                 .reads
-                .push((y.clone(), reads_sr));
+                .push(RegisterRead {
+                    output: y.clone(),
+                    function: reads_sr,
+                });
             read_support.insert(y.clone(), read_header);
             factored.insert(y);
         }
@@ -797,39 +858,41 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     }
 
     // FOLD (cell-level): folding is decided at emission as a REACHABILITY question — once the collapse is
-    // done, does this value still influence anything the cell emits? An internal non-seam node folds unless
-    // a chain of raw-function references, starting from surviving emitted content — a surviving
+    // done, does this value still influence anything the cell emits? An internal level node folds unless a
+    // chain of raw-function references, starting from surviving emitted content — a surviving
     // capture/off-edge cover column, or the raw function of a survivor that can never fold — reaches it. A
-    // mutually-referencing non-seam set that reaches no such sink influences nothing and collapses as one,
+    // mutually-referencing level set that reaches no such sink influences nothing and collapses as one,
     // exactly as a lone self-holding master does.
     //
-    // This is computed as a least-fixpoint liveness marking, which is the complement of the greatest
-    // fixpoint "assume every candidate folds, then reinstate any candidate referenced from OUTSIDE the
-    // folded set": a node's own function only propagates once the node is already live, so self-reference
-    // alone never marks it, while any chain that reaches a live sink strands the whole chain.
+    // The live set is the LEAST FIXED POINT of this marking (`docs/edge-collapse.md` §3), and its
+    // complement the GREATEST FIXED POINT of the dual "assume every candidate folds, then reinstate any
+    // candidate referenced from OUTSIDE the folded set": a node's own function only propagates once the
+    // node is already live, so self-reference alone never marks it — which is what lets `NDFF`'s
+    // mutually-referencing `M`/`Mn` NAND pair fold — while any chain that reaches a live sink strands the
+    // whole chain.
     //
     // The criterion is deliberately NARROWER than early minimisation's, which preserves self-referential
-    // loops so oscillation stays detectable — minimisation is untouched by this. The minimise fixpoint
-    // invariant I3 (`src/logic/minimise.rs`) holds by construction: every kept survivor's support is kept
-    // by closure.
+    // loops so oscillation stays detectable — minimisation is untouched by this. `minimise`'s
+    // minimised-model support invariant I3 (`src/logic/minimise.rs`) holds by construction: every kept
+    // survivor's support is kept by closure.
     let ref_reg: BTreeSet<&str> = captures
         .iter()
         .flat_map(|r| r.cols.iter().map(Symbol::as_str))
         .collect();
-    // The foldable population: internal non-seam nodes.
-    let foldable: BTreeSet<&str> = internal_nonseam.iter().map(Symbol::as_str).collect();
+    // The foldable population: internal level nodes.
+    let foldable: BTreeSet<&str> = internal_level.iter().map(Symbol::as_str).collect();
 
-    // The liveness seeds. Every non-seam candidate that is NOT foldable — a non-seam OUTPUT — has its RAW
+    // The liveness seeds. Every level candidate that is NOT foldable — a level OUTPUT — has its RAW
     // function emitted and can never fold, so it is a sink whose support must survive. Candidates that
-    // CARRY a seam are neither seeds nor propagation sources: their raw function is replaced by the edge
-    // seam, so their references reach us through `ref_reg` instead. On top of that, any foldable node named
-    // by a surviving capture or off-edge cover column is itself live.
-    // A READ-GATED output carries a seam but emits a
-    // combinational read over its factored register — so it is a live sink like any non-seam output, and it
-    // propagates through its READ FUNCTION's support (register + gate pins), not its raw function. That
-    // redirect is what folds the masters it re-expresses (`BDET`'s `L1/L2`).
+    // CARRY an active edge are neither seeds nor propagation sources: their raw function is replaced by
+    // the edge form, so their references reach us through `ref_reg` instead. On top of that, any foldable
+    // node named by a surviving capture or off-edge cover column is itself live. A READ-GATED output
+    // carries an active edge but emits a combinational read over its factored register — so it is a live
+    // sink like any level output, and it propagates through its READ FUNCTION's support (register + gate
+    // pins), not its raw function. That redirect is what folds the masters it re-expresses (`BDET`'s
+    // `L1/L2`).
     let mut live: BTreeSet<&str> = BTreeSet::new();
-    for (name, s) in candidates.iter().zip(&seam_of) {
+    for (name, s) in candidates.iter().zip(&active_edges) {
         if !s.is_empty() && !factored.contains(name) {
             continue;
         }
@@ -840,7 +903,8 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     let mut worklist: Vec<&str> = live.iter().copied().collect();
 
     // Propagate liveness along each live node's raw-function support — semantic BDD support, never equation
-    // shape — until the least fixpoint is reached. A read-gated output propagates through its read support.
+    // shape — until the least fixed point is reached. A read-gated output propagates through its
+    // read support.
     while let Some(l) = worklist.pop() {
         if let Some(sup) = read_support.get(l) {
             for v in sup {
@@ -883,8 +947,8 @@ pub fn classify<B: Brand, C: ManagerCell + Send + Sync>(
 /// The classifier's scan context over one machine: the machine's coordinate δ set, the single-input
 /// transition table across the reachable stable states, those states' ARC ELIGIBILITY, and the declared
 /// clock set. All of them are NODE-INDEPENDENT — they describe the cell's state machine, not any one
-/// candidate — so they are read once per cell and every seam, phase and forcing scan indexes into them
-/// rather than re-settling.
+/// candidate — so they are read once per cell and every active-edge, phase and forcing scan indexes into
+/// them rather than re-settling.
 struct Scan<'a, B: Brand, C: ManagerCell> {
     /// The machine every scan reads.
     m: &'a Machine<'a, B, C>,
@@ -967,14 +1031,15 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
             .collect()
     }
 
-    /// The greatest-fixpoint filter that keeps `s` to the `(clock, direction)` toggles whose DELIVERED VALUE
-    /// HOLDS through the phase. A `(k, d)` is removed when some NON-FORCING change of `node` inside its
-    /// delivered phase (`clock == d`) happens at a toggle that is NOT itself an edge of `s` — live data (a
-    /// non-clock input) or a non-seam clock. A co-resident clock's edge that IS in `s` is another seam of the
-    /// node, not a disqualifier, so iterating to a fixpoint lets one seam's removal cascade to another
-    /// (`MCDFF` loses `(CLKB, Rise)` on live D, then `(CLKA, Fall)` because the in-phase CLKB rise is gone).
-    /// Only ELIGIBLE states, at both ends of a transition, take part.
-    fn seam_fixpoint(
+    /// Keeps `s` to the `(clock, direction)` toggles whose DELIVERED VALUE HOLDS through the phase — the
+    /// GREATEST FIXED POINT of this removal, in the order stated in `docs/edge-collapse.md` §3. A `(k, d)`
+    /// is removed when some NON-FORCING change of `node` inside its delivered phase (`clock == d`) happens
+    /// at a toggle that is NOT itself an active edge of `s` — live data (a non-clock input), or a clock
+    /// edge outside `s`. A co-resident clock's edge that IS in `s` is another active edge of the node, not
+    /// a disqualifier, so iterating lets one removal cascade to the next (`MCDFF` loses `(CLKB, Rise)` on
+    /// live D, then `(CLKA, Fall)` because the in-phase CLKB rise is gone). Only ELIGIBLE states, at both
+    /// ends of a transition, take part.
+    fn retain_active_edges(
         &self,
         node: &str,
         node_forcing: &BTreeMap<Symbol, (bool, bool)>,
@@ -1020,12 +1085,12 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
                         if node_forcing.contains_key(x) {
                             continue; // a forcing pin's assertion is a coexisting combinational arc
                         }
-                        // Is the toggle of `x` itself an edge of the node's current seam set?
-                        let x_is_seam = self.clock_set.contains(x.as_str()) && {
+                        // Is the toggle of `x` itself an active edge of the node's current set?
+                        let x_is_active_edge = self.clock_set.contains(x.as_str()) && {
                             let xdir = dest.value_of(x.as_str()) == Some(true);
                             s.contains(&(x.clone(), xdir))
                         };
-                        if !x_is_seam {
+                        if !x_is_active_edge {
                             to_remove = Some((k.clone(), *is_rise));
                             break 'search;
                         }
@@ -1191,10 +1256,11 @@ fn conflict_free(cols: &[Symbol], samples: &[(Minterm<Symbol>, bool)]) -> bool {
 /// The cover columns for one edge's samples: start from the uniform `header`, then attempt to drop each
 /// candidate column, permanently keeping any drop that leaves the samples conflict-free. Inputs are never
 /// dropped. The DROP ORDER is fold-eligibility order — fold-eligible level internals (`fold_eligible`,
-/// the seam-empty internals settled before synthesis) first, then everything else (outputs and edge-form
-/// nodes), reverse header order within each class — so a cover prefers columns that survive emission and
-/// the internals the fold wants gone drop out. Deterministic and espresso-independent (`ICM`'s
-/// inter-determined `sela1`/`sela2` force the ordering: an unordered loop could legally keep `sela1`).
+/// the internals with an empty active-edge set, settled before synthesis) first, then everything else
+/// (outputs and edge-form nodes), reverse header order within each class — so a cover prefers columns
+/// that survive emission and the internals the fold wants gone drop out. Deterministic and
+/// espresso-independent (`ICM`'s inter-determined `sela1`/`sela2` force the ordering: an unordered loop
+/// could legally keep `sela1`).
 fn drop_loop_columns(
     header: &[Symbol],
     samples: &[(Minterm<Symbol>, bool)],
@@ -1269,8 +1335,8 @@ fn synth_node_captures<B: Brand, C: ManagerCell>(
 
     // Off-edge over ALL the inputs, the node's own clocks INCLUDED: the hold-and-set/clear behaviour is
     // input driven, so the state coordinates are not columns (the value held is the node's own, absent
-    // from the header, and any forcing comes from an input). A data input that never forces simply lands
-    // every projection in `hold` and drops out of the cols; a PHASE-AGREED forcing makes each clock a
+    // from the header, and any forcing comes from an input). A data input that never forces lands every
+    // projection in `hold` and drops out of the cols; a PHASE-AGREED forcing makes each clock a
     // don't-care in every forcing cube, so it drops out of the cover support too, while a phase-CONDITIONED
     // reset keeps its gating clock pinned to the forcing level (`CLK*R`).
     let off_edge = synth_off_edge(builder, inputs, &clocks, &agg.stable);
@@ -1511,7 +1577,7 @@ fn synth_off_edge<B: Brand, C: ManagerCell>(
     let mut off_pts = builder.constant(false);
     for (proj, phases) in &groups {
         // The header names the clocks, so a projection carries exactly one phase vector — the classes
-        // cannot disagree, and a mixed projection is simply held.
+        // cannot disagree, and a mixed projection is held.
         let agreed = phases.values().find_map(|vals| phase_class(vals));
         let cube = cube_bdd(builder, proj);
         match agreed {
@@ -1545,6 +1611,7 @@ fn capture_cols(captures: &[(Symbol, Edge, StateRegions)], off_edge: &StateRegio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::logic::hazard::Cause;
     use espresso_logic::sync_bdd_builder;
     use std::collections::BTreeSet;
 
@@ -1618,7 +1685,7 @@ mod tests {
         let mut v: Vec<(&str, &str, Edge)> = es
             .labels
             .iter()
-            .map(|(n, c, e, _)| (n.as_str(), c.as_str(), *e))
+            .map(|l| (l.output.as_str(), l.clock.as_str(), l.clock_edge))
             .collect();
         v.sort();
         v.dedup();
@@ -1632,6 +1699,95 @@ mod tests {
             .filter(|(n, _, _)| *n == node)
             .map(|(_, c, e)| (c, e))
             .collect()
+    }
+
+    /// Every MINTED read-gate register's value as a function of machine coordinates, keyed by node name.
+    /// A minted register is not itself a machine coordinate, so no state column carries its value; it is
+    /// read off the reading output's δ with the read-gates RELEASED. Releasing a gate cannot move the
+    /// held content — that a pin never moves the output's cone state is exactly what makes it a read-gate
+    /// — and at the released levels the output shows that content unaltered. The released levels are the
+    /// ones the emitted read function is SENSITIVE to the register column at: an asserted gate pins the
+    /// output to a constant, so the two register cofactors differ on the released cube and nowhere else. A
+    /// register the factorisation REUSED is a declared one, still a machine coordinate, so it is absent
+    /// here and resolves through [`Machine::output_value`].
+    ///
+    /// That argument is exact over the output's TRUE read function. What is cofactored is the SYNTHESISED
+    /// cover — fit to the ELIGIBLE REACHABLE samples, with the unwitnessed remainder minimised as a
+    /// don't-care set (`synth_capture` through `generalise`) — so it carries a precondition: every gate
+    /// assignment must be sampled. An assignment the exploration never reaches is a don't-care espresso is
+    /// free to expand into, and expanding over a gate drops that gate's literal, taking the level the
+    /// resolution restricts at with it. The assert below holds the precondition to account instead of
+    /// assuming it.
+    fn derived_values<B: Brand, C: ManagerCell + Send + Sync>(
+        m: &Machine<B, C>,
+        es: &EdgeArcs,
+    ) -> BTreeMap<Symbol, Bdd<B, C>> {
+        let mut values: BTreeMap<Symbol, Bdd<B, C>> = BTreeMap::new();
+        let Some((_, any)) = m.deltas.first() else {
+            return values; // no state variables, so nothing was factored out
+        };
+        let b = any.builder();
+        let mut fn_of: BTreeMap<&str, &Bdd<B, C>> = BTreeMap::new();
+        for (n, d) in &m.deltas {
+            fn_of.insert(n.as_str(), d);
+        }
+        for (n, d) in m.combinational_outputs() {
+            fn_of.insert(n.as_str(), d);
+        }
+        let is_machine_node = |name: &Symbol| {
+            m.state_set.contains(name.as_str()) || m.cell.outputs.iter().any(|o| &o.name == name)
+        };
+        for d in es.derived.iter().filter(|d| !is_machine_node(&d.name)) {
+            // A minted register is minted from ONE output's cofactored content — the mint takes that
+            // output's own name — so its read function is the one that reveals the register.
+            let reveal = d
+                .reads
+                .first()
+                .expect("a derived register carries its reading output");
+            let out = &reveal.output;
+            let read = b.build_cover(&reveal.function.on_cover);
+            let sensitive = read
+                .cofactor(d.name.as_str(), true)
+                .xor(&read.cofactor(d.name.as_str(), false));
+            assert!(
+                !sensitive.is_contradiction(),
+                "the read function of {out} never reveals {}",
+                d.name
+            );
+            // Sensitivity is the conjunction of the released levels, so exactly one level of each gate
+            // survives it: at the other the output is constant and the two cofactors coincide.
+            let gates: Vec<Symbol> = sensitive.variables().collect();
+            let released: Vec<(&str, Option<bool>)> = gates
+                .iter()
+                .map(|g| {
+                    let high = !sensitive.cofactor(g.as_str(), true).is_contradiction();
+                    let low = !sensitive.cofactor(g.as_str(), false).is_contradiction();
+                    assert!(
+                        high != low,
+                        "gate {g} must release {} at exactly one level",
+                        d.name
+                    );
+                    (g.as_str(), Some(high))
+                })
+                .collect();
+            let released: Minterm<Symbol> =
+                Minterm::with_labels(&released).expect("distinct read-gate pins");
+            // The cube IS the resolution: `restrict_to` on an empty one is the identity, and δ_out
+            // unrestricted would then pass for held content without a word — the read function reproduces
+            // the machine either way, so nothing downstream would notice. Sensitivity must therefore BE
+            // this cube: non-empty, and revealing the register nowhere outside it.
+            assert!(
+                !gates.is_empty() && sensitive.equivalent_to(&cube_bdd(&b, &released)),
+                "the read function of {out} must reveal {} on a cube of released gate levels and \
+                 nowhere else, released {released:?}",
+                d.name
+            );
+            let dy = fn_of
+                .get(out.as_str())
+                .expect("a read-gated output is a machine coordinate");
+            values.insert(d.name.clone(), dy.restrict_to(&released));
+        }
+        values
     }
 
     /// Replay-faithfulness harness: prove the emitted edge arcs against the machine's own
@@ -1700,20 +1856,12 @@ mod tests {
             false
         };
 
-        // The read-gate factorisation's MINTED registers are not machine nodes, so their value is resolved
-        // through their content cover (built once on the harness builder) rather than `output_value`. A
-        // declared register reused by the factorisation stays a machine node and resolves normally. This is
-        // what makes the derived register's captures and off-edge replay for real against the machine below,
-        // rather than passing vacuously on an all-`None` value.
-        let is_machine_node = |name: &Symbol| {
-            m.state_set.contains(name.as_str()) || m.cell.outputs.iter().any(|o| &o.name == name)
-        };
-        let derived_content: BTreeMap<Symbol, Bdd<B, C>> = es
-            .derived
-            .iter()
-            .filter(|d| !is_machine_node(&d.name))
-            .map(|d| (d.name.clone(), builder.build_cover(&d.content)))
-            .collect();
+        // The read-gate factorisation's MINTED registers are not machine nodes, so their value comes from
+        // [`derived_values`] rather than `output_value`. A declared register reused by the factorisation
+        // stays a machine node and resolves normally. This is what makes the derived register's captures
+        // and off-edge replay for real against the machine below, rather than passing vacuously on an
+        // all-`None` value.
+        let derived_content = derived_values(m, es);
 
         for r in &es.captures {
             let node = r.node.as_str();
@@ -1907,14 +2055,15 @@ mod tests {
         let read_gated: BTreeSet<&str> = es
             .derived
             .iter()
-            .flat_map(|d| d.reads.iter().map(|(o, _)| o.as_str()))
+            .flat_map(|d| d.reads.iter().map(|r| r.output.as_str()))
             .collect();
         for d in &es.derived {
-            for (o, sr) in &d.reads {
-                for col in &sr.cols {
+            for r in &d.reads {
+                for col in &r.function.cols {
                     assert!(
                         !folded.contains(col.as_str()),
-                        "dropped reference: read function of {o} names folded node {col}, folded {:?}",
+                        "dropped reference: read function of {} names folded node {col}, folded {:?}",
+                        r.output,
                         folded_list(es)
                     );
                 }
@@ -1924,7 +2073,7 @@ mod tests {
         // (b) no surviving capture-less candidate's raw function has a folded node in its support. The
         // candidate population is the classifier's own: every output plus every non-output state
         // variable. A candidate that carries a capture is not a survivor of this kind — its raw function
-        // is replaced by the edge seam — and the folded nodes themselves are gone. A read-gated output is
+        // is replaced by the edge form — and the folded nodes themselves are gone. A read-gated output is
         // likewise not a survivor of this kind — it emits its read function, checked above.
         let output_names: BTreeSet<&str> = m.cell.outputs.iter().map(|o| o.name.as_str()).collect();
         let captured: BTreeSet<&str> = node_list(es)
@@ -1963,9 +2112,9 @@ mod tests {
 
     /// Replay-faithfulness for the read-gate factorisation's READ FUNCTIONS: at every reachable stable
     /// state, the emitted read cover — evaluated with the factored register resolved through its own value
-    /// (a minted register through its content cover, a reused declared register through `output_value`) and
-    /// the gate pins at their state values — reproduces the machine's output. This is the semantic
-    /// correctness gate for `Y = state_function(register, gates)`, stronger than any literal SOP match.
+    /// ([`derived_values`] for a minted register, `output_value` for a reused declared one) and the gate
+    /// pins at their state values — reproduces the machine's output. This is the semantic correctness gate
+    /// for `Y = state_function(register, gates)`, stronger than any literal SOP match.
     fn assert_reads_faithful<B: Brand, C: ManagerCell + Send + Sync>(
         m: &Machine<B, C>,
         es: &EdgeArcs,
@@ -1974,19 +2123,19 @@ mod tests {
             return;
         };
         let b = any.builder();
-        let is_machine = |n: &str| {
-            m.state_set.contains(n) || m.cell.outputs.iter().any(|o| o.name.as_str() == n)
-        };
+        let derived = derived_values(m, es);
         for d in &es.derived {
-            let content = b.build_cover(&d.content);
             let reg_value = |s: &Minterm<Symbol>| -> Option<bool> {
-                if is_machine(d.name.as_str()) {
-                    m.output_value(d.name.as_str(), s)
-                } else {
-                    content.evaluate_fast(s)
+                match derived.get(&d.name) {
+                    Some(content) => content.evaluate_fast(s),
+                    None => m.output_value(d.name.as_str(), s),
                 }
             };
-            for (o, sr) in &d.reads {
+            for RegisterRead {
+                output: o,
+                function: sr,
+            } in &d.reads
+            {
                 let read = b.build_cover(&sr.on_cover);
                 let mut exercised = false;
                 for s in &m.explored.order {
@@ -2380,11 +2529,11 @@ Q = "!R*(CLK*M + !CLK*Q)"
     #[test]
     fn edge_toggle_flop_inverting_self_capture() {
         // The self-fed master M has no *data* input (R is async), so the ring is decomposed into TWO edge
-        // seams rather than folding M into Q. Q captures on the rising edge and M on the falling edge, both
-        // over the uniform header projected to [R, Q] — the ring closes on Q's OWN prior state: the captured
-        // next state is `!R*!Q` (toggle, gated by the async reset), recorded verbatim (inversion is not
-        // special-cased). The internal master M is dropped from the cover in favour of the input/output
-        // columns [R, Q].
+        // registers rather than folding M into Q. Q captures on the rising edge and M on the falling
+        // edge, both over the uniform header projected to [R, Q] — the ring closes on Q's OWN prior
+        // state: the captured next state is `!R*!Q` (toggle, gated by the async reset), recorded verbatim
+        // (inversion is not special-cased). The internal master M is dropped from the cover in favour of
+        // the input/output columns [R, Q].
         with_machine!(TOGGLE_FLOP_TOML, |builder, _a, _m2, m| {
             let es = classify(&m);
             assert_captures_faithful(&m, &es);
@@ -2410,8 +2559,8 @@ Q = "!R*(CLK*M + !CLK*Q)"
                 m_on.equivalent_to(&want),
                 "M captures !R*!Q (=!R*!M at the pre-fall states), inverting, no special-casing"
             );
-            // The ring survives whole: M carries its own falling capture, so it is not an internal non-seam
-            // node and is structurally ineligible for the fold fixpoint.
+            // The ring survives whole: M carries its own falling capture, so it is not an internal level
+            // node and is outside the fold's foldable population altogether.
             assert!(
                 folded_list(&es).is_empty(),
                 "a self-referential ring whose master carries a real capture folds nothing, got {:?}",
@@ -2608,12 +2757,97 @@ Y = "!(T*A)"
             let reads: Vec<&str> = es.derived[0]
                 .reads
                 .iter()
-                .map(|(o, _)| o.as_str())
+                .map(|r| r.output.as_str())
                 .collect();
             assert_eq!(reads, ["Y"]);
 
             // `CLK->Y` stays edge on both edges; `A` carries no edge label (it is not a clock), so `A->Y`
             // arcs render `-type combinational`.
+            assert_eq!(
+                labels_of(&es, "Y"),
+                [("CLK", Edge::Rise), ("CLK", Edge::Fall)]
+            );
+        });
+    }
+
+    // The BDET latches read through TWO gates whose pass levels are opposite.
+    const BDET2_TOML: &str = r#"
+[[cell]]
+name = "BDET2"
+inputs = ["CLK", "D", "A", "B"]
+clock = ["CLK"]
+[cell.internal]
+L1 = "!CLK*D + CLK*L1"
+L2 = "CLK*D + !CLK*L2"
+[cell.outputs]
+Y = "!((CLK*L1 + !CLK*L2)*A) + B"
+"#;
+
+    #[test]
+    fn edge_two_read_gates_release_at_opposite_levels() {
+        // `Y = !(M*A) + B` over the DET content `M = CLK*L1 + !CLK*L2`, which shows `L1` (captured on the
+        // rise) while `CLK=1` and `L2` (captured on the fall) while `CLK=0`. Derived by hand:
+        //
+        // * `A=0` pins `Y` to 1 (`!(M*0) + B = 1`) and `B=1` pins it to 1; neither pin appears in `δ_L1` or
+        //   `δ_L2`, so neither moves the cone and both are READ-GATES. Their pass levels are the
+        //   un-asserted ones — `A=1` and `B=0`, opposite levels.
+        // * The content the output reads is `δ_Y` at that pass cube: `!(M*1) + 0 = !M`. No declared
+        //   register holds it (`L1`/`L2` are transparent latches, empty active-edge sets), so `Y_st` is
+        //   minted holding `!M`, capturing `!D` on both `CLK` edges — the read inverts.
+        // * With `M = !Y_st` the read function is `!(!Y_st*A) + B = Y_st + !A + B`, whose sensitivity to
+        //   the register column is `1 ⊕ (!A + B) = A*!B`: a two-literal cube releasing each gate at exactly
+        //   one level, and at opposite levels. Restricting `δ_Y` there returns `!M`; releasing only `A`
+        //   would leave `!M + B` and only `B` would leave `!(M*A)`, so the resolved value tells the three
+        //   apart.
+        with_machine!(BDET2_TOML, |builder, _a, _m2, m| {
+            let es = classify(&m);
+            assert_captures_faithful(&m, &es);
+            assert_reads_faithful(&m, &es);
+            assert_no_dropped_references(&m, &es);
+
+            let mut folded = folded_list(&es);
+            folded.sort();
+            assert_eq!(folded, ["L1", "L2"]);
+            assert_eq!(node_list(&es), ["Y_st"], "Y is factored out, Y_st minted");
+
+            // `Y_st` is a dual-edge register capturing `!D` on each edge.
+            let yst = reg(&es, "Y_st");
+            assert_eq!(yst.captures.len(), 2, "dual edge");
+            let nd = !&builder.var("D");
+            for (_, _, cap) in &yst.captures {
+                assert!(
+                    builder.build_cover(&cap.on_cover).equivalent_to(&nd),
+                    "each edge captures !D"
+                );
+            }
+
+            assert_eq!(es.derived.len(), 1);
+            assert_eq!(es.derived[0].name, "Y_st");
+            let reads: Vec<&str> = es.derived[0]
+                .reads
+                .iter()
+                .map(|r| r.output.as_str())
+                .collect();
+            assert_eq!(reads, ["Y"]);
+
+            // The read function `Y = Y_st + !A + B`.
+            let gate_a = builder.var("A");
+            let gate_b = builder.var("B");
+            let expected_read = builder.var("Y_st").or(&!&gate_a).or(&gate_b);
+            let read = builder.build_cover(&es.derived[0].reads[0].function.on_cover);
+            assert!(read.equivalent_to(&expected_read), "Y reads Y_st + !A + B");
+
+            // Both gates are released — the cube is `A*!B` — so the register resolves to `!M`.
+            let clk = builder.var("CLK");
+            let mux = clk
+                .and(&builder.var("L1"))
+                .or(&(!&clk).and(&builder.var("L2")));
+            let resolved = derived_values(&m, &es);
+            assert!(
+                resolved[&Symbol::from("Y_st")].equivalent_to(&!&mux),
+                "Y_st resolves to !(CLK*L1 + !CLK*L2), both gates released"
+            );
+
             assert_eq!(
                 labels_of(&es, "Y"),
                 [("CLK", Edge::Rise), ("CLK", Edge::Fall)]
@@ -2656,7 +2890,7 @@ Y = "!(T*A)"
             let reads: Vec<&str> = es.derived[0]
                 .reads
                 .iter()
-                .map(|(o, _)| o.as_str())
+                .map(|r| r.output.as_str())
                 .collect();
             assert_eq!(reads, ["Y"]);
         });
@@ -2718,7 +2952,7 @@ Y = "!(Q*A)"
             let reads: Vec<&str> = es.derived[0]
                 .reads
                 .iter()
-                .map(|(o, _)| o.as_str())
+                .map(|r| r.output.as_str())
                 .collect();
             assert_eq!(reads, ["Y"]);
             assert!(
@@ -2730,24 +2964,67 @@ Y = "!(Q*A)"
 
     #[test]
     fn edge_read_gate_corrupted_cover_teeth() {
-        // The harness has teeth on the DERIVED registers: corrupt a derived content cover and the
-        // replay must fail. A test that cannot fail on the bug it targets is not a test.
+        // The harness has teeth on the DERIVED registers: corrupt what the factorisation emits for one and
+        // the replay must fail. A test that cannot fail on the bug it targets is not a test. Both halves of
+        // the emitted model are corrupted in turn — the register's own capture cover, replayed against the
+        // machine, and the read function the reading output is rendered as — and the resolution the whole
+        // replay rests on is corrupted a third way, by taking every gate out of the read.
+        fn fails(f: impl FnOnce()) -> bool {
+            let prev = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {}));
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+            std::panic::set_hook(prev);
+            result.is_err()
+        }
+
+        // Invert a captured next-state cover of the minted register: the replay now predicts `D` on that
+        // edge where the machine delivers `!D`.
         with_machine!(BDET_TOML, |builder, _a, _m2, m| {
             let mut es = classify(&m);
             assert!(!es.derived.is_empty(), "BDET factors a derived register");
-            // Invert the minted register's content: the resolver now reads the wrong held value.
-            let good = builder.build_cover(&es.derived[0].content);
-            es.derived[0].content = regions::minimise_bdd(&!&good);
-
-            let prev = std::panic::take_hook();
-            std::panic::set_hook(Box::new(|_| {}));
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                assert_captures_faithful(&m, &es)
-            }));
-            std::panic::set_hook(prev);
+            let name = es.derived[0].name.clone();
+            let er = es
+                .captures
+                .iter_mut()
+                .find(|ec| ec.node == name)
+                .expect("the minted register carries edge captures");
+            let good = builder.build_cover(&er.captures[0].2.on_cover);
+            er.captures[0].2.on_cover = regions::minimise_bdd(&!&good);
             assert!(
-                result.is_err(),
-                "corrupting a derived cover must make the replay harness fail"
+                fails(|| assert_captures_faithful(&m, &es)),
+                "corrupting a derived register's capture cover must make the replay harness fail"
+            );
+        });
+
+        // Invert the read function: the output is now rendered as the complement of what it reads, which
+        // the read replay catches wherever the register's value reaches the output.
+        with_machine!(BDET_TOML, |builder, _a, _m2, m| {
+            let mut es = classify(&m);
+            let sr = &mut es.derived[0].reads[0].function;
+            let good = builder.build_cover(&sr.on_cover);
+            sr.on_cover = regions::minimise_bdd(&!&good);
+            assert!(
+                fails(|| assert_reads_faithful(&m, &es)),
+                "corrupting a derived register's read function must make the read harness fail"
+            );
+        });
+
+        // Strip the gates out of the read function, leaving `Y = Y_st`: nothing is released, so the
+        // resolution has no cube to restrict at. This is the shape espresso's expansion would produce over
+        // an unsampled gate assignment, and the value it would silently hand back — δ_Y whole — reproduces
+        // the machine through the corrupted read, so only the resolver's own assert stands between it and
+        // every clause it re-bases.
+        with_machine!(BDET_TOML, |builder, _a, _m2, m| {
+            let mut es = classify(&m);
+            let name = es.derived[0].name.clone();
+            es.derived[0].reads[0].function.on_cover =
+                regions::minimise_bdd(&builder.var(name.as_str()));
+            assert!(
+                fails(|| {
+                    derived_values(&m, &es);
+                }),
+                "a read function naming no gate must make the resolution fail, not adopt the \
+                 unrestricted output function"
             );
         });
     }
@@ -2983,7 +3260,7 @@ GCLK = "CLK*EL"
 
     #[test]
     fn edge_master_only_reset_master_folds_once_recognised() {
-        // Q carries an edge seam, so its raw function is replaced by that seam and nothing surviving
+        // Q is an edge register, so its raw function is replaced by that edge form and nothing surviving
         // references the master ⇒ M folds away.
         with_machine!(MOR_ASYNC_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
@@ -3136,33 +3413,18 @@ GCLK = "CLK*EL"
             // sampled at the probed state and name the same free representative the arcs do, and
             // `condition` is a FULL input assignment, so it carries the inputs outside the race at
             // whatever the probed state held them — the racing pins and their edges are what the
-            // hazard is. `stable` is a group-projected set the detector sorts, so it stays.
-            let race_shapes = |c: &crate::model::AnalysedCell| {
+            // hazard is. `settled` is a group-projected set the detector sorts, so it stays. Race-cause
+            // hazards only: this equivalence check has never compared pulse-cause ones.
+            let hazard_shapes = |c: &crate::model::AnalysedCell| {
                 let mut v: Vec<String> = c
-                    .order_dependence
+                    .hazards
                     .iter()
-                    .map(|o| {
+                    .filter(|h| matches!(h.cause, Cause::Race { .. }))
+                    .map(|h| {
                         format!(
-                            "{} {:?} {} {:?} {:?} {:?}",
-                            o.x, o.x_edge, o.y, o.y_edge, o.group, o.stable
+                            "{:?} {:?} {:?} {:?}",
+                            h.cause, h.outcome, h.group, h.settled
                         )
-                    })
-                    .collect();
-                v.sort();
-                v
-            };
-            let osc_shapes = |c: &crate::model::AnalysedCell| {
-                let mut v: Vec<String> = c
-                    .oscillation
-                    .iter()
-                    .map(|o| {
-                        let mut r: Vec<String> = o
-                            .races
-                            .iter()
-                            .map(|r| format!("{} {:?} {} {:?}", r.x, r.x_edge, r.y, r.y_edge))
-                            .collect();
-                        r.sort();
-                        format!("{:?} {:?} {:?}", o.group, o.stable, r)
                     })
                     .collect();
                 v.sort();
@@ -3173,24 +3435,18 @@ GCLK = "CLK*EL"
                     .constraints
                     .iter()
                     .map(|k| {
-                        format!(
-                            "{:?} {} {:?} {} {:?}",
-                            k.kind, k.related, k.related_edge, k.pin, k.pin_edge
-                        )
+                        // The kind carries the other pin of a separation and the edge it makes, so the
+                        // pin the constraint constrains and its own edge complete the identity.
+                        format!("{:?} {} {:?}", k.kind, k.pin, k.pin_edge)
                     })
                     .collect();
                 v.sort();
                 v
             };
             assert_eq!(
-                race_shapes(&off),
-                race_shapes(&on),
-                "edge classification changed AnalysedCell::order_dependence",
-            );
-            assert_eq!(
-                osc_shapes(&off),
-                osc_shapes(&on),
-                "edge classification changed AnalysedCell::oscillation",
+                hazard_shapes(&off),
+                hazard_shapes(&on),
+                "edge classification changed AnalysedCell::hazards",
             );
             unchanged!(clock_pins);
             assert_eq!(
@@ -3214,9 +3470,11 @@ GCLK = "CLK*EL"
     // generation at Q (Q self-loops only when both clocks are low, and each rise takes it transparent to
     // that clock's master), so both rises carry `-type edge`. But the FALLS are combinational: nothing
     // generates on a fall (each master generates on its own rise), and Q switching away delivers the OTHER
-    // clock's held value, arriving regardless. With no fall seam to hold against, the seam fixpoint empties
-    // Q's set — an in-phase fall of the co-resident clock is a non-seam change — so Q is NOT an edge
-    // register; it models as level rows with edge-labelled rises. The internal masters carry no arcs.
+    // clock's held value, arriving regardless. With no fall active edge to hold against,
+    // `retain_active_edges` empties Q's set — an in-phase fall of the co-resident clock is a change at an
+    // inactive edge — so Q is
+    // NOT an edge register; it models as level rows with edge-labelled rises. The internal masters carry
+    // no arcs.
     const DCMUX_TOML: &str = r#"
 [[cell]]
 name = "DCMUX"
@@ -3234,8 +3492,8 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
         with_machine!(DCMUX_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert_captures_faithful(&m, &es);
-            // The seam fixpoint empties Q's set (its falls are combinational, so each in-phase fall is a
-            // non-seam change), so NOTHING is an edge register — the cell is a level model.
+            // `retain_active_edges` empties Q's set (its falls are combinational, so each in-phase fall
+            // is a change at an inactive edge), so NOTHING is an edge register — the cell is a level model.
             assert!(
                 es.captures.is_empty(),
                 "DCMUX models as level rows, no edge register, got {:?}",
@@ -3365,7 +3623,7 @@ Q = "!CLR*(PRE + CLK*M + !CLK*Q)"
 
     // HPIPE -- a CLKA rising-edge master pair (M1/M2 capture D on CLKA) feeding a CLKB slave latch on Q (a
     // derived/gated-clock chain). Every hierarchically-related clock's edge arcs survive: the slave Q keeps
-    // both CLKA and CLKB, the master node M2 keeps CLKA, and no seam set is emptied.
+    // both CLKA and CLKB, the master node M2 keeps CLKA, and no active-edge set is emptied.
     const HPIPE_TOML: &str = r#"
 [[cell]]
 name = "HPIPE"
@@ -3380,13 +3638,13 @@ Q = "!CLKB*M2 + CLKB*Q"
 
     #[test]
     fn edge_hierarchical_two_clocks_exact_arc_set() {
-        // Q's seam set is EXACTLY {CLKA:Rise, CLKB:Fall}:
+        // Q's active-edge set is EXACTLY {CLKA:Rise, CLKB:Fall}:
         //
         // * CLKA:Rise is the conditioned capture — Q takes the master pair's content when CLKB is
         //   transparent (CLKB=0) and re-delivers its own held value when CLKB is opaque (CLKB=1);
         // * CLKB:Fall is Q's OWN latch opening — Q holds M2 in CLKB=1 and reveals it on the fall, a
-        //   first-class seam with its own capture (M2). The replay harness predicts this reveal directly,
-        //   with no exemption.
+        //   first-class active edge with its own capture (M2). The replay harness predicts this reveal
+        //   directly, with no exemption.
         with_machine!(HPIPE_TOML, |builder, _a, _m2, m| {
             let es = classify(&m);
             assert_captures_faithful(&m, &es);
@@ -3589,9 +3847,9 @@ Q = "!( !(M2*!CLKB) * Qn )"
             assert!(qn_on.equivalent_to(&!&builder.var("D")), "Qn captures !D");
 
             // The pass DFF folds its lone master M; the NAND master pair M/Mn is captureless and
-            // MUTUALLY REFERENCING, reaching no output once collapsed, so the reachability fixpoint
-            // folds the pair together — the two forms converge on folding their master(s), the NAND
-            // idiom simply carrying the complement as a second candidate.
+            // MUTUALLY REFERENCING, reaching no output once collapsed, so the liveness marking never
+            // reaches the pair and it folds together — the two forms agree on folding their master(s), the
+            // NAND idiom carrying the complement as a second candidate.
             let mut ndff_folded = folded_list(&es);
             ndff_folded.sort();
             assert_eq!(
@@ -3704,7 +3962,8 @@ Q = "!( !(M2*!CLKB) * Qn )"
 
         // A plain latch has no capture anywhere, but its enable's OPENING edge (opaque→transparent) is a
         // real edge arc — GENERATION at the output, `Q` opaque at `CLK=0` and transparent at `CLK=1` — so
-        // the CLK-rise arc is labelled edge while `Q`'s seam empties (it tracks `D` in its open phase).
+        // the CLK-rise arc is labelled edge while `Q`'s active-edge set empties (it tracks `D` in its
+        // open phase).
         with_machine!(DLAT_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert!(es.captures.is_empty(), "a latch has no capture");
@@ -3713,7 +3972,8 @@ Q = "!( !(M2*!CLKB) * Qn )"
 
         // A transparent-LOW cascade is the fall-mirror of `DLAT`: `Q` is opaque across the high phase and
         // transparent through the low phase, so it GENERATES on the fall — the CLK-fall opening is a real
-        // edge arc labelled on the output — while its seam empties (it tracks `M`/`D` once open) so it keeps
+        // edge arc labelled on the output — while its active-edge set empties (it tracks `M`/`D` once
+        // open) so it keeps
         // NO capture. The internal master carries no delay arc, so the label set is exactly `Q`'s fall.
         with_machine!(TCASC_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
@@ -3769,7 +4029,7 @@ Q = "!( !(M2*!CLKB) * Qn )"
                     .map(|(c, e, _)| (c.as_str(), *e))
                     .collect::<Vec<_>>(),
                 [("CLKA", Edge::Rise), ("CLKB", Edge::Fall)],
-                "Q's seams: the CLKA capture and its own CLKB-fall opening"
+                "Q's active edges: the CLKA capture and its own CLKB-fall opening"
             );
         });
 
@@ -3998,12 +4258,12 @@ Y = "CLK*A + !CLK*B + Y*A*B"
                 {
                     continue; // only Y's CLK Fall arcs
                 }
-                let labelled = es.labels.contains(&(
-                    a.output.clone(),
-                    a.related.clone(),
-                    Edge::Fall,
-                    a.start.clone(),
-                ));
+                let labelled = es.labels.contains(&EdgeLabel {
+                    output: a.output.clone(),
+                    clock: a.related.clone(),
+                    clock_edge: Edge::Fall,
+                    start: a.start.clone(),
+                });
                 match a.start.value_of(mask) {
                     Some(v) if v == edge_when => {
                         assert!(

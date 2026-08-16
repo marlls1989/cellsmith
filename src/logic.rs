@@ -3,13 +3,15 @@
 pub mod analysis;
 pub mod arcs;
 pub mod confluence;
-pub mod edge;
+pub(crate) mod constraint;
+pub(crate) mod edge;
 pub mod hazard;
 pub mod leakage;
 pub mod machine;
 pub mod minimise;
 pub mod regions;
-pub mod resolve;
+pub(crate) mod resolve;
+pub mod width;
 
 use std::collections::BTreeMap;
 
@@ -17,7 +19,7 @@ use espresso_logic::{Minterm, Symbol};
 
 /// The fixed (non-don't-care) assignments of a minterm as a `name -> value` map. Used by the arcs
 /// emitter to read an arc's input vectors.
-pub fn assignment(m: &Minterm<Symbol>) -> BTreeMap<Symbol, bool> {
+pub(crate) fn assignment(m: &Minterm<Symbol>) -> BTreeMap<Symbol, bool> {
     m.vars()
         .iter()
         .zip(m.iter())
@@ -60,7 +62,7 @@ pub(crate) fn fixed_pairs(m: &Minterm<Symbol>, skip: &[&str]) -> Vec<String> {
 /// Mint a state-node name for `base`: `<base>_st`, escalating to `<base>_st2`, `<base>_st3`, … until
 /// `taken` no longer reports it. `taken` answers for every name already in use in the cell — its pins
 /// and its previously minted nodes alike — so a spec that legitimately declares a signal called
-/// `Q_st` simply pushes the minted node to `Q_st2` rather than colliding with it.
+/// `Q_st` pushes the minted node to `Q_st2` rather than colliding with it.
 ///
 /// The single minting convention for both node-minting sites: a state OUTPUT's table node
 /// ([`crate::emit::statetable::build_state_model`]) and a register factored out of a read-gated output

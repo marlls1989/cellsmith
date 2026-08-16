@@ -3,7 +3,7 @@
 //!
 //! A cell's hysteretic signals (its **state variables**: outputs and internal nodes on a dependency
 //! cycle, as classified in [`crate::logic::regions`]) are folded into ONE joint next-state table. Each
-//! [`StateRow`] pairs a primary-input pattern and a current-state pattern with a per-node next-state
+//! `StateRow` pairs a primary-input pattern and a current-state pattern with a per-node next-state
 //! action (`H`/`L`/`N` = drive-high/drive-low/hold, or `-` = unconstrained here). Every state variable,
 //! whether output or internal, keeps its own name as its state-table node.
 //!
@@ -34,7 +34,7 @@
 //!   register keep their own names.
 //!
 //! EDGE REGISTERS. When [`crate::logic::edge`] has recognised a node as an edge-triggered register, that
-//! register's node keeps its column but its rows come from the annotation ([`EdgeRow`]) rather than the
+//! register's node keeps its column but its rows come from the annotation (`EdgeRow`) rather than the
 //! level cover pass: a capture cube stamps the active edge token (`R`/`F`) with the register's next
 //! action, an off-edge cube the hold/async action. A single-edge register prints the off-edge on its
 //! inactive face (`~R`/`~F`); a dual-edge register (both edges capture) prints its off-edge with a
@@ -54,7 +54,7 @@ use crate::model::AnalysedCell;
 
 /// A single state node's next-state action in a joint row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Next {
+pub(crate) enum Next {
     /// Drive the node high (the signal's `on` region — Liberty `H`).
     High,
     /// Drive the node low (the signal's `off` region — Liberty `L`).
@@ -70,17 +70,17 @@ pub enum Next {
 /// is a definite action and `None` is a node this row leaves unconstrained (`-`, deferred to a
 /// lower-priority row per Liberty's per-output resolution).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct StateRow {
-    pub inputs: Vec<Option<bool>>,
-    pub current: Vec<Option<bool>>,
-    pub next: Vec<Option<Next>>,
+pub(crate) struct StateRow {
+    pub(crate) inputs: Vec<Option<bool>>,
+    pub(crate) current: Vec<Option<bool>>,
+    pub(crate) next: Vec<Option<Next>>,
 }
 
 /// The clock-edge token an [`EdgeRow`] prints in its clock column: the active edge (`Rise`/`Fall`) of a
 /// capture row, the inactive face (`NotRise`/`NotFall`) of a single-edge register's off-edge (hold /
 /// async) row, or `Level` for a dual-edge register's off-edge row (which owns neither clock face).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum EdgeTok {
+pub(crate) enum EdgeTok {
     /// Rising clock edge — Liberty `R`.
     Rise,
     /// Falling clock edge — Liberty `F`.
@@ -100,36 +100,32 @@ pub enum EdgeTok {
 /// `inputs` as a `None` placeholder; the renderer prints `token` in that column instead of a level. Every
 /// next slot other than the register's own stays `None` (`-`, deferred), exactly as for the level rows.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct EdgeRow {
-    pub clock: Symbol,
-    pub token: EdgeTok,
-    pub inputs: Vec<Option<bool>>,
-    pub current: Vec<Option<bool>>,
-    pub next: Vec<Option<Next>>,
+pub(crate) struct EdgeRow {
+    pub(crate) clock: Symbol,
+    pub(crate) token: EdgeTok,
+    pub(crate) inputs: Vec<Option<bool>>,
+    pub(crate) current: Vec<Option<bool>>,
+    pub(crate) next: Vec<Option<Next>>,
 }
 
 /// The joint state-table model of a sequential cell: the input-node and internal-node column headers,
 /// the original-signal → node-name map, and the deduplicated, sorted joint rows.
 #[derive(Debug)]
-pub struct StateModel {
+pub(crate) struct StateModel {
     /// Primary-input columns, ordered by the cell's input-pin order.
-    pub input_nodes: Vec<Symbol>,
+    pub(crate) input_nodes: Vec<Symbol>,
     /// State-node columns (`current`/`next` order) under their TABLE-NODE names — what the statetable
     /// header prints. A state output's node is minted (`Q` -> `Q_st`); an internal state node and a
     /// derived register keep their own name. Folded masters are excluded; recognised edge-register nodes
     /// keep their column.
-    pub internal_nodes: Vec<Symbol>,
-    /// The same columns in the same order under their SIGNAL names — what the covers, the minterm keys
-    /// and the machine are written in. `internal_nodes[i]` is the table node of `state_signals[i]`;
-    /// anything querying the machine or a region by column must read this list, not `internal_nodes`.
-    pub state_signals: Vec<Symbol>,
+    pub(crate) internal_nodes: Vec<Symbol>,
     /// Each state signal's ORIGINAL name → its state-table node name.
-    pub node_of: BTreeMap<Symbol, Symbol>,
+    pub(crate) node_of: BTreeMap<Symbol, Symbol>,
     /// The joint level (level-sensitive) next-state rows, deduplicated and sorted.
-    pub rows: Vec<StateRow>,
+    pub(crate) rows: Vec<StateRow>,
     /// The edge-triggered rows contributed by the cell's recognised edge registers, after the level rows
     /// in register (`signals()`) order. Empty for a cell with no collapsed master-slave pair.
-    pub edge_rows: Vec<EdgeRow>,
+    pub(crate) edge_rows: Vec<EdgeRow>,
 }
 
 /// Build the joint state-table model of a cell, or `None` if the cell has no state variable (a purely
@@ -138,7 +134,7 @@ pub struct StateModel {
 /// State signals are the cell's hysteretic [`signal_regions`](AnalysedCell::signal_regions) entries —
 /// identical to [`crate::logic::resolve::state_variables`] by construction, so this reads the cached
 /// `hysteretic` flag rather than re-running the classifier.
-pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
+pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     // Behavioural edge annotation: the cell's recognised edge registers and the cell-level set of
     // internal level-sensitive masters folded away (empty when the cell opted out). A folded master
     // vanishes entirely — no node, no column, no rows; an edge-register node keeps its column but its
@@ -426,7 +422,6 @@ pub fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     Some(StateModel {
         input_nodes,
         internal_nodes,
-        state_signals: state_orig,
         node_of,
         rows,
         edge_rows,
@@ -522,6 +517,18 @@ mod tests {
         v.iter().map(Symbol::as_str).collect()
     }
 
+    /// The signal-name view of `m.internal_nodes`: column `i`'s ORIGINAL signal name, recovered by
+    /// inverting [`StateModel::node_of`]. `node_of` is injective over the pushed nodes (one insert per
+    /// `internal_nodes` push, minted names deduped through `taken`), so the reverse lookup is total.
+    fn state_signals(m: &StateModel) -> Vec<Symbol> {
+        let orig_of: BTreeMap<&Symbol, &Symbol> =
+            m.node_of.iter().map(|(orig, node)| (node, orig)).collect();
+        m.internal_nodes
+            .iter()
+            .map(|node| orig_of[node].clone())
+            .collect()
+    }
+
     fn row(inputs: &[Option<bool>], current: &[Option<bool>], next: &[Option<Next>]) -> StateRow {
         StateRow {
             inputs: inputs.to_vec(),
@@ -573,7 +580,7 @@ Q = "CLK*M + !CLK*Q"
         // The output Q mints its node; the internal master M, having no output pin to compete with,
         // keeps its own name.
         assert_eq!(names(&m.internal_nodes), ["Q_st", "M"]);
-        assert_eq!(names(&m.state_signals), ["Q", "M"]);
+        assert_eq!(names(&state_signals(&m)), ["Q", "M"]);
         assert_eq!(m.node_of[&Symbol::from("M")], "M");
         assert_eq!(m.node_of[&Symbol::from("Q")], "Q_st");
         assert!(m.edge_rows.is_empty());
@@ -790,7 +797,7 @@ Q = "A*Q_st + Q*(A+Q_st)"
         // The colliding input is untouched: still a plain input column under its own name.
         assert!(names(&m.input_nodes).contains(&"Q_st"));
         // The signal side of the column is the OUTPUT, not the like-named input.
-        assert_eq!(names(&m.state_signals), ["Q"]);
+        assert_eq!(names(&state_signals(&m)), ["Q"]);
     }
 
     #[test]
@@ -992,13 +999,13 @@ Y = "C*L"
     }
 
     /// Three shapes the behavioural classifier leaves fully level (no register, no fold) even under
-    /// default (on) collapse: a single latch (no seam to sample), a gated latch (self-referencing
+    /// default (on) collapse: a single latch (no active edge to sample), a gated latch (self-referencing
     /// transparent cofactor), and a two-latch DFF whose clock is never declared. MCDFF and EMDFF have
     /// their own fixtures instead: MCDFF's two-clock slave stays level
     /// (`mcdff_two_clock_pair_stays_level`), while EMDFF's slave is recognised as an edge register
     /// (`emdff_recognises_slave_over_surviving_master`).
     const NON_COLLAPSIBLE: [&str; 3] = [
-        // Single latch: Q has no master seam, so no clock edge captures it.
+        // Single latch: Q has no master edge register, so no clock edge captures it.
         r#"
 [[cell]]
 name = "DLAT"
@@ -1148,8 +1155,8 @@ M = "!CLK*D + CLK*M"
     }
 
     // Master/slave pair split across two DIFFERENT declared clocks: M latches on CLKA, Q on CLKB. Q tracks
-    // live data through CLKB's transparent phase, so its seam set empties under the fixpoint: the
-    // classifier recognises NO register and Q stays fully level.
+    // live data through CLKB's transparent phase, so its active-edge set empties under the active-edge
+    // filter: the classifier recognises NO register and Q stays fully level.
     const MCDFF: &str = r#"
 [[cell]]
 name = "MCDFF"
@@ -1331,9 +1338,9 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
 
     #[test]
     fn dcmux_is_a_level_model_no_edge_rows() {
-        // DCMUX collapses to a LEVEL model: its falls are combinational and the seam fixpoint empties Q's
-        // set, so nothing contributes an edge capture row -- the whole cell renders as level rows. The two
-        // rises stay `-type edge` DELAY arcs (covered in the arcs_tcl emitter tests).
+        // DCMUX collapses to a LEVEL model: its falls are combinational and the active-edge filter
+        // empties Q's set, so nothing contributes an edge capture row -- the whole cell renders as level
+        // rows. The two rises stay `-type edge` DELAY arcs (covered in the arcs_tcl emitter tests).
         let cell = analyse(DCMUX);
         let m = build_state_model(&cell).expect("DCMUX has level state (MA/MB/Q)");
         assert!(
@@ -1383,7 +1390,7 @@ Q = "!CLKB*M2 + CLKB*Q"
     /// The node-order slot of a state SIGNAL in the joint model (`current`/`next` index). Keyed by signal
     /// name, not table node, since callers name the cell's signals.
     fn index_of_node(m: &StateModel, name: &str) -> usize {
-        m.state_signals
+        state_signals(m)
             .iter()
             .position(|n| n == name)
             .unwrap_or_else(|| panic!("{name} is a state node"))
@@ -1576,8 +1583,8 @@ Q = "!R*(CLK*M + !CLK*Q)"
 
     /// Settle the rendered statetable as a next-state machine: apply the joint first-match next-state, with
     /// the toggled input's clock edge live only on the first step (later steps are quiescent settling), to
-    /// a fixpoint. Mirrors the async cell's own `settle`, so the fixpoint is comparable to the machine's
-    /// settled state; an oscillation where the machine settled is a faithfulness failure.
+    /// a stable state. Mirrors the async cell's own `settle`, so the stable state is comparable to the
+    /// machine's settled state; an oscillation where the machine settled is a faithfulness failure.
     fn settle_rendered(
         input_names: &[String],
         rows: &[RenderedRow],
@@ -1625,7 +1632,8 @@ Q = "!R*(CLK*M + !CLK*Q)"
         );
         // The rendered header carries TABLE-NODE names; the machine below answers only to SIGNAL names,
         // and the two differ for every state output. Column i of the rendered rows is `state_sigs[i]`.
-        let state_sigs = names(&model.state_signals);
+        let state_sig_names = state_signals(&model);
+        let state_sigs = names(&state_sig_names);
 
         // Rebuild the machine from the folded cell to read its settled reference values. `build_signal_bdds`
         // is pure over the folded `expr`s, so this reproduces the machine `analyse` explored.
@@ -1731,9 +1739,10 @@ Q = "!R*(CLK*M + !CLK*Q)"
 
     /// The rendered-row replay over the joint level+edge first-match semantics, for the fixtures that
     /// carry the phase-conditioned clear (MOR/MORA), a multi-step two-node level model (SR), a dual-edge
-    /// register (DET), a two-seam toggle register (TFF), the canonical DFF, and a full-async clear DFF
-    /// (RDFF). Fails against an `edge_input_pattern` that drops the `CLK*R` clock literal (which would make
-    /// MOR/MORA clear on any non-rising event with R high, including CLK=0 where the cell holds).
+    /// register (DET), a toggle register decomposing into two edge registers (TFF), the canonical DFF,
+    /// and a full-async clear DFF (RDFF). Fails against an `edge_input_pattern` that drops the `CLK*R`
+    /// clock literal (which would make MOR/MORA clear on any non-rising event with R high, including
+    /// CLK=0 where the cell holds).
     #[test]
     fn rendered_rows_replay_machine_settled_values() {
         for src in [MOR, MORA, SR_FLOP, TOGGLE_FLOP, DET, DFF, RDFF] {

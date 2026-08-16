@@ -4,7 +4,7 @@
 //! A sequential library cell carries **exactly one** state table (Liberty 2017.06 Vol.1 §5 p.5-23: "a
 //! sequential library cell can have only one state table"); every state variable of the cell is one
 //! column of that single table. The joint model is built at emission time by
-//! [`crate::emit::statetable::build_state_model`], which folds the cell's hysteretic signals (its
+//! `crate::emit::statetable::build_state_model`, which folds the cell's hysteretic signals (its
 //! **state variables**: outputs and internal nodes on a dependency cycle) into one next-state table.
 //! Within a table field node values are **space-separated**; whole rows are **comma-separated**. The
 //! next-state action per node is `H` (drive high = on region) / `L` (drive low = off) / `N` (hold =
@@ -48,7 +48,8 @@ use espresso_logic::Symbol;
 use rayon::prelude::*;
 
 use crate::emit::statetable::{build_state_model, EdgeRow, EdgeTok, Next, StateModel};
-use crate::logic::hazard::Oscillation;
+use crate::logic::constraint::constrains;
+use crate::logic::hazard::{Cause, Hazard, Outcome};
 use crate::logic::regions::{StateCube, StateRegions};
 use crate::model::AnalysedCell;
 
@@ -85,12 +86,23 @@ pub fn library_liberty(name: &str, cells: &[AnalysedCell]) -> String {
 }
 
 /// The Liberty `cell (...) { ... }` fragment for a cell, as text (newline-terminated so fragments
-/// concatenate cleanly). A cell with a detected oscillation hazard is prefixed with a comment
-/// recording the racing condition and the competing settled outcomes.
+/// concatenate cleanly).
+///
+/// The fragment is prefixed with a comment per RACE-cause oscillation the cell generated a constraint
+/// from, recording the racing condition and the competing settled outcomes. A comment explains the thing
+/// it accompanies, so an oscillation the cell states no constraint for is annotated nowhere — a
+/// lone-toggle ring names one pin, and one edge has nothing to be separated from, and a cell that did not
+/// opt into constraint arcs states none at all. What was detected is reported to the user on stderr
+/// either way. A pulse-cause oscillation names no competing settled state to report here, so this reads
+/// race-cause records only.
 pub fn cell_liberty(cell: &AnalysedCell) -> String {
     let mut out = String::new();
-    for a in &cell.oscillation {
-        let states: Vec<String> = a.stable.iter().map(Oscillation::state_str).collect();
+    for a in cell.hazards.iter().filter(|h| {
+        matches!(h.cause, Cause::Race { .. })
+            && h.outcome == Outcome::Oscillation
+            && cell.constraints.iter().any(|c| constrains(c, h))
+    }) {
+        let states: Vec<String> = a.settled.iter().map(Hazard::state_str).collect();
         out.push_str(&format!(
             "/* oscillation: {} risks metastability in {}, settling to one of {} */\n",
             a.condition_str(),
@@ -149,7 +161,7 @@ fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
                 .edge
                 .derived
                 .iter()
-                .flat_map(|d| d.reads.iter().map(|(o, sr)| (o.as_str(), sr)))
+                .flat_map(|d| d.reads.iter().map(|r| (r.output.as_str(), &r.function)))
                 .collect();
 
             let n_out = cell.outputs.len();
@@ -1305,9 +1317,10 @@ Q = "CLK*L1 + !CLK*L2"
 
     #[test]
     fn dcmux_statetable_is_a_level_model() {
-        // DCMUX collapses to a LEVEL model: its falls are combinational and the seam fixpoint empties Q's
-        // set, so the joint statetable renders level rows with NO edge (R/F) token in any column. The two
-        // rise DELAY arcs still render `-type edge` (covered in the arcs_tcl emitter tests).
+        // DCMUX collapses to a LEVEL model: its falls are combinational and the active-edge filter
+        // empties Q's set, so the joint statetable renders level rows with NO edge (R/F) token in any
+        // column. The two rise DELAY arcs still render `-type edge` (covered in the arcs_tcl emitter
+        // tests).
         let cell = analyse(
             r#"
 [[cell]]

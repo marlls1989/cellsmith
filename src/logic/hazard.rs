@@ -1,33 +1,46 @@
-//! The two **detected hazards** of an asynchronous cell: the report types only.
+//! The **detected hazards** of an asynchronous cell: the report record only.
 //!
-//! Two closely-timed input changes can drive a cell into metastability. Detection
-//! ([`super::confluence`]) finds the two shapes that risk takes and reports each here; a
-//! [`super::confluence::Constraint`] is then *generated* from a detected hazard to specify the timing
-//! separation that removes it. Detection happens first; constraint generation follows from each
-//! detected hazard.
+//! Closely-timed input changes can drive a cell into metastability. Detection finds each occasion and
+//! reports it here as a [`Hazard`]; a `super::constraint::Constraint` is then *generated* from a
+//! detected hazard to specify the timing that removes it. Detection happens first; constraint
+//! generation follows from each detected hazard.
 //!
-//! - An [`OrderDependence`] hazard: the settled state depends on which of two input edges lands first
-//!   (non-confluence). Detected when two settle orders diverge and the divergence interacts with the
-//!   racing pair in the immediate combinational neighbourhood.
-//! - An [`Oscillation`] hazard: two simultaneous input edges (or, degenerately, a single toggle) drive
-//!   the state into a periodic, non-settling cycle rather than a fixpoint. Detected when
-//!   [`super::machine::settle_or_cycle`] returns the cycle instead of settling.
+//! A hazard is read on two independent axes — what the timing is between, and what the machine then
+//! does.
 //!
-//! Both are *detected* during the state-space exploration in [`super::confluence`]. An uninitialised
-//! state variable is at an UNKNOWN state — not a value, and not a third one — so no detection runs from a
-//! state carrying one. Metastability is the shared physical risk both create — the reason a constraint is
-//! generated. This module carries only the resulting report types.
+//! [`Cause`] is what the timing is between:
 //!
-//! **Implementation note:** deduplication is handled by [`super::confluence`].
-//! [`OrderDependence`] is keyed by the unordered `(pin,edge)|(pin,edge)` pair together with the nodes
-//! the hazard endangers — the same pins racing under different conditions can put different nodes at
-//! risk, and those are different hazards — keeping the min
-//! `(prevector.len, discovered)` representative; [`Oscillation`] is keyed by `group|condition`, keeping an
-//! arbitrary colliding representative (`group`/`condition`/`stable` coincide by key) with every colliding
-//! pair-probe [`Race`] appended rather than dropped. `discovered` (on both [`Race`] and [`OrderDependence`])
-//! is the probed state's index in exploration order — one half of the min `(prevector.len, discovered)`
-//! tie-break that fixes the surviving [`OrderDependence`] and, downstream,
-//! `confluence::constrain`'s own constraint dedup. See `hazard-detection.md` for the concept.
+//! - [`Cause::Race`] — inputs that don't converge when toggled (one or two). The record names the pins observed racing, one
+//!   [`Racer`] per pin, each with the edge it makes.
+//! - [`Cause::Pulse`] — one signal racing itself: the two edges of a single pin. A **pulse** on input
+//!   `p` from a stable state `s` is `p` toggled (the *opening* edge), the cascade that toggle opens left
+//!   to run some distance, and `p` toggled back (the *closing* edge) before settling; that distance is
+//!   the pulse's **width**. Detection ([`super::width`]) measures it in next-state rounds of the opening
+//!   edge's settling trace `t[0..last]`, and closing the pulse after `i` rounds is the **cut** `i` —
+//!   a wider pulse is a later cut.
+//!
+//! [`Outcome`] is what the machine then does:
+//!
+//! - [`Outcome::Indeterminate`] — it settles, but which state it settles to is not determined.
+//! - [`Outcome::Oscillation`] — it never settles: the state walks a periodic cycle instead of reaching a
+//!   stable state (a state `x` with `delta(x) == x`). Detected when
+//!   `super::machine::settle_or_cycle` returns the cycle instead of settling.
+//!
+//! The axes are independent, so there are four hazards — a race or a pulse, each settling
+//! indeterminately or not settling at all. One [`Hazard`] carries one (cause, outcome) pair, so a probe
+//! that observes both outcomes under one cause files two records carrying that same cause: a mutex's
+//! `A↓`, which both settles unpredictably and can fail to settle, is two records rather than one.
+//!
+//! Detection runs over the state-space exploration in [`super::confluence`] and [`super::width`]. An
+//! uninitialised state variable is at an UNKNOWN state — not a value, and not a third one — so no
+//! detection runs from a state carrying one. Metastability is the shared physical risk all four create
+//! — the reason a constraint is generated. This module carries only the resulting report record.
+//!
+//! **Implementation note:** a record is filed for every observation, and which of them a block is
+//! rendered from is [`crate::emit::arcs_tcl`]'s to decide: the observation naming a maximal set of
+//! victim nodes under containment supplies one. `discovered` is the probed state's index in exploration order,
+//! and with `Hazard::ordinal` it forms the `(discovered, ordinal)` key that settles the choice between
+//! observations dominating equally. See `hazard-detection.md` for the concept.
 
 use std::collections::BTreeMap;
 
@@ -35,81 +48,84 @@ use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::arcs::{ArcLevels, Edge};
 
-/// One detected **oscillation hazard** of a cell: the oscillating state variables, the primary-input
-/// condition under which they oscillate, and the competing order-of-arrival outcomes (if any).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Oscillation {
-    /// The oscillating state variables, in signal declaration order.
-    pub group: Vec<Symbol>,
-    /// Primary-input condition under which the group oscillates, as a full input assignment.
-    pub condition: Minterm<Symbol>,
-    /// The competing stable states — each a group-projected minterm (group order), sorted for
-    /// determinism.
-    pub stable: Vec<Minterm<Symbol>>,
-    /// One [`Race`] per pair-probe observation of this oscillation — the racing pins/edges and prevector
-    /// a generated constraint needs. A single-input-toggle observation appends none. Colliding pair
-    /// observations append to the surviving entry rather than dropping, so this stays in bijection with
-    /// the constraint key.
-    pub races: Vec<Race>,
+/// One pin observed racing, and the edge it makes.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Racer {
+    pub pin: Symbol,
+    pub edge: Edge,
 }
 
-/// One pair-probe observation of an [`Oscillation`]: the two racing pins and their edges, the prevector
-/// into the probed state, and the state's exploration-order index (the constraint dedup tie-break token).
+/// What the hazard's timing is between: inputs that don't converge when toggled (one or two), or one signal racing itself.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Cause {
+    /// Inputs that don't converge when toggled: one input alone, or two together.
+    Race {
+        /// The pins the probe observed racing: one member when a single toggle was observed not to
+        /// converge, two when a pair probe raced them together. Never empty.
+        pins: Vec<Racer>,
+    },
+    /// One signal racing itself: the two edges of a single pin, bounding a pulse.
+    Pulse {
+        pin: Symbol,
+        /// The OPENING edge of the pulse — rise means the pulse is high, fall low.
+        edge: Edge,
+    },
+}
+
+/// What the machine does under the hazard's timing. The variant is the whole of the classification:
+/// everything that differs between the two lives in the shared fields of [`Hazard`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Outcome {
+    /// The machine settles, but which state it settles to is not determined.
+    Indeterminate,
+    /// The machine never settles: the state walks a periodic cycle instead of reaching a stable
+    /// state.
+    Oscillation,
+}
+
+/// One detected hazard: a [`Cause`], the [`Outcome`] it produces, and the observation the generated
+/// constraint is built from.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Race {
-    pub x: Symbol,
-    pub x_edge: Edge,
-    pub y: Symbol,
-    pub y_edge: Edge,
+pub struct Hazard {
+    pub cause: Cause,
+    pub outcome: Outcome,
+    /// The state variables the hazard decides — those that diverge across the competing outcomes, or
+    /// that oscillate — in signal declaration order.
+    pub group: Vec<Symbol>,
+    /// The condition the hazard occurs under: the probed state's input projection, which is the standing
+    /// input assignment the probed transition happens FROM. The pins a probe toggles are the ones an
+    /// emitted block writes as edges, and an edge is not part of the condition it fires under, so this is
+    /// the pre-transition assignment under every cause alike — a race's as much as a pulse's.
+    pub condition: Minterm<Symbol>,
+    /// Where the machine lands when the timing is honoured — separated edges for a race, an adequate
+    /// width for a pulse — each state a group-projected minterm (group order).
+    ///
+    /// How the members relate follows from the cause. A race has a winner, and either winner is a
+    /// legitimate result of honouring the timing, so its members are ALTERNATIVES: their order among
+    /// themselves carries nothing, and they are held sorted only so the report is deterministic. A pulse
+    /// is one signal's two edges, and a transition cannot be a rise and a fall at once, so its members
+    /// cannot be reordered: they are a SEQUENCE in causal order, the machine's landing point as the
+    /// pulse widens. A `Vec` carries order either way, so the two readings share the type.
+    pub settled: Vec<Minterm<Symbol>>,
     /// The prevector: the input-assignment path that drives every state variable into the probed state
     /// (each node projected onto the inputs).
-    pub prevector: Vec<Minterm<Symbol>>,
+    pub(crate) prevector: Vec<Minterm<Symbol>>,
     /// The levels the cell's outputs hold at the probed state — sampled at the SAME state as
     /// `prevector`, so the pair the constraint carries is consistent.
-    pub levels: ArcLevels,
+    pub(crate) levels: ArcLevels,
     /// The level each node the hazard names holds at the PROBED state, by name. Sampled at the same
     /// state as `prevector` and `levels`, and covering every entry of the hazard's `group`, so the
-    /// constraint generated from this observation can state the start level of the node it protects.
-    pub node_levels: BTreeMap<Symbol, bool>,
+    /// constraint generated from this observation can state the start level of each node it probes.
+    pub(crate) node_levels: BTreeMap<Symbol, bool>,
     /// The probed state itself: every input and state variable at the level it holds there. The
     /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
     /// emitted column carries.
     pub state: Minterm<Symbol>,
-    /// Index of the probed state in `ex.order` (the sequential BFS exploration order).
-    pub discovered: usize,
-}
-
-/// One detected **order-dependent hazard** of a cell: two input edges whose settle order changes the
-/// settled state (non-confluence). Reported symmetrically to [`Oscillation`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OrderDependence {
-    pub x: Symbol,
-    pub x_edge: Edge,
-    pub y: Symbol,
-    pub y_edge: Edge,
-    /// Primary-input condition under which the pair races, as a full input assignment.
-    pub condition: Minterm<Symbol>,
-    /// The state variables that diverge between the two settle orders, in signal declaration order.
-    pub group: Vec<Symbol>,
-    /// The competing settled states — each a group-projected minterm (group order), sorted for
-    /// determinism.
-    pub stable: Vec<Minterm<Symbol>>,
-    /// The prevector: the input-assignment path that drives every state variable into the probed state.
-    pub prevector: Vec<Minterm<Symbol>>,
-    /// The levels the cell's outputs hold at the probed state — sampled at the SAME state as
-    /// `prevector`, so the pair the constraint carries is consistent.
-    pub levels: ArcLevels,
-    /// The level each node the hazard names holds at the PROBED state, by name. Sampled at the same
-    /// state as `prevector` and `levels`, and covering every entry of the hazard's `group`, so the
-    /// constraint generated from this observation can state the start level of the node it protects.
-    pub node_levels: BTreeMap<Symbol, bool>,
-    /// The probed state itself: every input and state variable at the level it holds there. The
-    /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
-    /// emitted column carries.
-    pub state: Minterm<Symbol>,
-    /// Index of the probed state in `ex.order` (the sequential BFS exploration order) — the secondary
-    /// tie-break key: on equal `prevector.len`, the earlier-discovered representative is kept.
-    pub discovered: usize,
+    /// Index of the probed state in `ex.order` (the sequential BFS exploration order) — the leading
+    /// component of the tie-break between equally dominant observations: the earlier-discovered one is
+    /// kept. The exploration is breadth-first, so this already orders the observations by the length of
+    /// the walk that reaches them.
+    pub(crate) discovered: usize,
 }
 
 /// One input state as a brace-wrapped literal product (`{S=1, R=0}`).
@@ -138,73 +154,49 @@ fn render_pre_state(prevector: &[Minterm<Symbol>]) -> String {
     )
 }
 
-impl Oscillation {
+impl Hazard {
     /// The condition as a Boolean product of literals (`A*B`, `!R*S`, …).
     pub fn condition_str(&self) -> String {
         crate::logic::literals_str(&self.condition)
     }
 
-    /// A competing stable state as a brace-wrapped literal product (`{Qa=1, Qb=0}`).
-    pub fn state_str(state: &Minterm<Symbol>) -> String {
-        render_state(state)
-    }
-}
-
-impl Race {
-    /// The path into the pre-hazard state: the sequence of input states the machine walks — driving its
-    /// hidden state — to reach the state the simultaneous toggle oscillates from. Last state is the
-    /// pre-hazard state.
-    pub fn path_str(&self) -> String {
-        render_path(&self.prevector)
-    }
-
-    /// The pre-hazard state: the reachable stable state the simultaneous toggle starts from (the path's
-    /// last input state).
-    pub fn pre_state_str(&self) -> String {
-        render_pre_state(&self.prevector)
-    }
-
-    /// The triggering transition: the two racing inputs toggling simultaneously (`S↓ & R↓`).
-    pub fn transition_str(&self) -> String {
-        format!(
-            "{}{} & {}{}",
-            self.x,
-            self.x_edge.arrow(),
-            self.y,
-            self.y_edge.arrow(),
-        )
-    }
-}
-
-impl OrderDependence {
-    /// The condition as a Boolean product of literals (`A*B`, `!R*S`, …).
-    pub fn condition_str(&self) -> String {
-        crate::logic::literals_str(&self.condition)
-    }
-
-    /// A competing settled state as a brace-wrapped literal product (`{Q=1}`).
+    /// A competing settled state as a brace-wrapped literal product (`{Qa=1, Qb=0}`).
     pub fn state_str(state: &Minterm<Symbol>) -> String {
         render_state(state)
     }
 
+    /// Every state the machine lands at when the timing is honoured, each rendered by [`Self::state_str`]
+    /// and kept in `settled`'s order.
+    pub fn settled_strs(&self) -> Vec<String> {
+        self.settled.iter().map(render_state).collect()
+    }
+
     /// The path into the pre-hazard state: the sequence of input states the machine walks — driving its
-    /// hidden state — to reach the state the two orders diverge from. Last state is the pre-hazard state.
+    /// hidden state — to reach the state the probe acts on. Last state is the pre-hazard state.
     pub fn path_str(&self) -> String {
         render_path(&self.prevector)
     }
 
-    /// The pre-hazard state: the reachable stable state the two settle orders start from (the path's last
-    /// input state).
+    /// The pre-hazard state: the reachable stable state the probe starts from (the path's last input
+    /// state).
     pub fn pre_state_str(&self) -> String {
         render_pre_state(&self.prevector)
     }
 
-    /// The triggering transitions: the two settle orders whose outcomes differ (`A↓ then B↑ vs B↑ then
-    /// A↓`).
-    pub fn transition_str(&self) -> String {
-        let (x, xe) = (&self.x, self.x_edge.arrow());
-        let (y, ye) = (&self.y, self.y_edge.arrow());
-        format!("{x}{xe} then {y}{ye} vs {y}{ye} then {x}{xe}")
+    /// A fixed total order over the four (cause, outcome) cells, so that two hazards can be ordered by
+    /// which cell they occupy. It is the second component of the representative tie-break, after
+    /// `discovered`: two records read from one probed state still pick a representative
+    /// deterministically.
+    pub(crate) fn ordinal(&self) -> u8 {
+        let cause = match self.cause {
+            Cause::Race { .. } => 0,
+            Cause::Pulse { .. } => 2,
+        };
+        let outcome = match self.outcome {
+            Outcome::Indeterminate => 0,
+            Outcome::Oscillation => 1,
+        };
+        cause + outcome
     }
 }
 
@@ -227,24 +219,37 @@ Qa = "!Qb * A"
 Qb = "!Qa * B"
 "#,
         );
-        let arb = &cell.oscillation;
-        assert_eq!(arb.len(), 1, "exactly one oscillation hazard");
-        let a = &arb[0];
+        let oscillating: Vec<&Hazard> = cell
+            .hazards
+            .iter()
+            .filter(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation)
+            .collect();
+        assert_eq!(oscillating.len(), 1, "exactly one oscillation hazard");
+        let a = oscillating[0];
         assert_eq!(a.group, ["Qa", "Qb"]);
-        assert_eq!(a.condition_str(), "A*B");
-        // Exactly one pair-probe race backs the oscillation (the A*B co-assertion), carrying the A/B
-        // pins the generated constraint needs.
-        assert_eq!(a.races.len(), 1, "one pair-probe race, got {:?}", a.races);
-        let race = &a.races[0];
-        assert!(
-            [race.x.as_str(), race.y.as_str()]
-                .iter()
-                .all(|p| *p == "A" || *p == "B"),
-            "the race is between A and B, got {race:?}"
+        // A `when` is the assignment the transition happens FROM, and this ring is A and B toggled
+        // together: the pair rises out of the idle state, where neither request is up. (Co-asserted is
+        // where it rings, and that is the pair's destination, not its condition.)
+        assert_eq!(a.condition_str(), "!A*!B");
+        // The A*B co-assertion is a pair-probe race, carrying the A/B pins the generated constraint
+        // needs.
+        let pins = match &a.cause {
+            Cause::Race { pins } => pins,
+            Cause::Pulse { .. } => unreachable!("filtered on Cause::Race above"),
+        };
+        assert_eq!(
+            pins.len(),
+            2,
+            "a pair-probe race names both racing pins, got {pins:?}"
         );
-        // Competing stable states: Qa high / Qb low, and the mirror.
-        assert_eq!(a.stable.len(), 2);
-        let states: BTreeSet<String> = a.stable.iter().map(Oscillation::state_str).collect();
+        assert!(
+            pins.iter()
+                .all(|r| r.pin.as_str() == "A" || r.pin.as_str() == "B"),
+            "the race is between A and B, got {pins:?}"
+        );
+        // Competing settled states: Qa high / Qb low, and the mirror.
+        assert_eq!(a.settled.len(), 2);
+        let states: BTreeSet<String> = a.settled.iter().map(Hazard::state_str).collect();
         assert_eq!(
             states,
             ["{Qa=1, Qb=0}".to_string(), "{Qa=0, Qb=1}".to_string()]
@@ -252,10 +257,16 @@ Qb = "!Qa * B"
                 .collect()
         );
         // A mutex detects no order-dependent hazard (its grant divergence is latch-filtered).
+        let order_dependent: Vec<&Hazard> = cell
+            .hazards
+            .iter()
+            .filter(|h| {
+                matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Indeterminate
+            })
+            .collect();
         assert!(
-            cell.order_dependence.is_empty(),
-            "a mutex detects no order-dependent hazard, got {:?}",
-            cell.order_dependence
+            order_dependent.is_empty(),
+            "a mutex detects no order-dependent hazard, got {order_dependent:?}"
         );
     }
 
@@ -271,10 +282,16 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        assert!(cell.oscillation.is_empty());
+        assert!(!cell
+            .hazards
+            .iter()
+            .any(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation));
         // The C-element is order-dependent (A↓ racing B↑), so it detects an order-dependent hazard.
         assert!(
-            !cell.order_dependence.is_empty(),
+            cell.hazards
+                .iter()
+                .any(|h| matches!(h.cause, Cause::Race { .. })
+                    && h.outcome == Outcome::Indeterminate),
             "a C-element detects an order-dependent hazard"
         );
     }
@@ -292,7 +309,10 @@ Q = "S + Q*!R"
 Qn = "R + Qn*!S"
 "#,
         );
-        assert!(cell.oscillation.is_empty());
+        assert!(!cell
+            .hazards
+            .iter()
+            .any(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation));
     }
 
     #[test]
@@ -306,7 +326,13 @@ inputs = ["A", "B"]
 Y = "!(A*B)"
 "#,
         );
-        assert!(cell.oscillation.is_empty());
-        assert!(cell.order_dependence.is_empty());
+        assert!(!cell
+            .hazards
+            .iter()
+            .any(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation));
+        assert!(!cell
+            .hazards
+            .iter()
+            .any(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Indeterminate));
     }
 }

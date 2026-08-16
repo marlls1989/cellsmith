@@ -31,7 +31,7 @@
 //! described concept-first in `state-table-regions.md`; this module records only the implementation
 //! shape.
 //!
-//! **Emission plumbing:** [`state_regions`] is called once per signal from `Cell::analyse`, cached on
+//! **Emission plumbing:** `state_regions` is called once per signal from `Cell::analyse`, cached on
 //! `AnalysedCell::regions` in `signals()` order (see `model.rs`); the Verilog and Liberty emitters read
 //! that cache rather than rebuilding the BDDs.
 
@@ -40,7 +40,7 @@ use espresso_logic::{Anonymous, Cover, CoverType, CubeType, Minimizable, Symbol}
 
 /// One cube over the state-table/UDP column set: `Some(true)`/`Some(false)` for a fixed column,
 /// `None` for a don't-care. Aligned position-by-position to [`StateRegions::cols`].
-pub type StateCube = Vec<Option<bool>>;
+pub(crate) type StateCube = Vec<Option<bool>>;
 
 /// The regions of a signal as they appear in a **state table / sequential UDP**.
 ///
@@ -51,38 +51,38 @@ pub struct StateRegions {
     /// Input columns: the pin function's BDD support minus its own self-feedback, in BDD variable
     /// order. Every other signal the function references (another output or an internal node) that it
     /// actually depends on appears here; inputs the function ignores do not.
-    pub cols: Vec<Symbol>,
-    pub on: Vec<StateCube>,
-    pub off: Vec<StateCube>,
-    pub hold: Vec<StateCube>,
+    pub(crate) cols: Vec<Symbol>,
+    pub(crate) on: Vec<StateCube>,
+    pub(crate) off: Vec<StateCube>,
+    pub(crate) hold: Vec<StateCube>,
     /// The minimised on-region as a single-output F cover over `cols` (the same cover the `on` cubes
     /// are read from). Kept so the joint state-table build can re-base and stack it into a
     /// multi-output cover without rebuilding any BDD.
-    pub on_cover: Cover<Symbol, Anonymous>,
+    pub(crate) on_cover: Cover<Symbol, Anonymous>,
     /// The minimised off-region cover, twin of [`on_cover`](Self::on_cover).
-    pub off_cover: Cover<Symbol, Anonymous>,
+    pub(crate) off_cover: Cover<Symbol, Anonymous>,
     /// The minimised hold-region cover, twin of [`on_cover`](Self::on_cover). Empty for a signal with
     /// no self-hold gap (cross-coupled emergent memory).
-    pub hold_cover: Cover<Symbol, Anonymous>,
+    pub(crate) hold_cover: Cover<Symbol, Anonymous>,
     /// The signal is a state variable — it lies on a dependency cycle (a direct self-hold or a larger
     /// coupling cycle, as classified by [`super::resolve::state_variables`]) — and so must emit a
     /// `statetable`, never a combinational `function`. This is independent of whether the signal has a
     /// direct self-hold gap: cross-coupled emergent memory (mutex, SR latch) is hysteretic with an
     /// empty `hold`.
-    pub hysteretic: bool,
+    pub(crate) hysteretic: bool,
 }
 
 /// Derive the state-table regions of the signal `name` from its folded BDD `f` (see [`StateRegions`]),
 /// taken from the shared per-cell BDD map. `is_state` is the machine's cyclic classification — whether
 /// `name` is in the cell's [`super::resolve::state_variables`] set — and decides `hysteretic` (and thus
 /// statetable-vs-function emission), independent of the region maths.
-pub fn state_regions<B: Brand, C: ManagerCell>(
+pub(crate) fn state_regions<B: Brand, C: ManagerCell>(
     name: &Symbol,
     f: &Bdd<B, C>,
     is_state: bool,
 ) -> StateRegions {
     // Columns = the function's BDD support minus the pin's own self-feedback, in BDD variable order.
-    // Inputs the function does not depend on are simply absent from `variables()`, so they never
+    // Inputs the function does not depend on are absent from `variables()`, so they never
     // become columns. `cover_over_fr(&cols)` then universally projects the self var (the only support
     // variable left outside `cols`) away, re-basing `f` onto the partial function over `cols`.
     let cols: Vec<Symbol> = f

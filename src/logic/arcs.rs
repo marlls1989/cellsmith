@@ -1,19 +1,19 @@
 //! Transition-arc derivation over the cell's **asynchronous state machine**.
 //!
 //! A cell is a state machine over `inputs × state-variables` (each output's own feedback and every
-//! internal state node; see [`resolve`](super::resolve)). A node is a [`Minterm<Symbol>`] over
+//! internal state node; see `resolve`). A node is a [`Minterm<Symbol>`] over
 //! `inputs…, state_vars…` ([`machine`]); traversal states may be partial — an uninitialised latch
 //! leaves its state column a don't-care — but every MEASURED arc comes only from a fully-initialised
 //! (determinate) state, per the shared `Machine::arc_eligible` predicate. Arcs are derived by
 //! exploring it:
 //!
-//!   1. Each state variable's δ comes directly from the cell's minimised signal functions; [`machine::settle`] applies them
+//!   1. Each state variable's δ comes directly from the cell's minimised signal functions; `machine::settle` applies them
 //!      via [`Bdd::evaluate`](espresso_logic::bdd::Bdd::evaluate) until the state stops changing.
-//!   2. BFS from the reachable stable states — which are not assumed but discovered by [`machine::explore`]
+//!   2. BFS from the reachable stable states — which are not assumed but discovered by `machine::explore`
 //!      from the on/off covers of the signal characteristic functions (never an assumed all-zero state) —
 //!      stepping one input at a time and letting the state settle. Oscillating transitions (the state
 //!      oscillates instead of settling — an oscillation hazard, e.g. a mutex at simultaneity) yield no
-//!      fixpoint and are dropped, so no impossible arc is produced.
+//!      stable state and are dropped, so no impossible arc is produced.
 //!   3. Wherever a single input toggle flips an **output**, emit an arc: the toggled input is the
 //!      `related` pin (arcs are only ever sourced by primary inputs — never an output or internal),
 //!      and the prevector is the BFS path — each node projected onto the inputs — that reaches the
@@ -43,7 +43,7 @@ pub enum Edge {
 
 impl Edge {
     /// The `R`/`F` symbol for this edge (Liberate vector notation).
-    pub fn rf(self) -> char {
+    pub(crate) fn rf(self) -> char {
         match self {
             Edge::Rise => 'R',
             Edge::Fall => 'F',
@@ -61,10 +61,10 @@ impl Edge {
 /// One exposed internal node across a measured arc: the level it holds before the measured edge and the
 /// level it holds after. Equal levels render the held `0`/`1`; a change renders `R`/`F`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExposedLevel {
-    pub node: Symbol,
-    pub start: bool,
-    pub end: bool,
+pub(crate) struct ExposedLevel {
+    pub(crate) node: Symbol,
+    pub(crate) start: bool,
+    pub(crate) end: bool,
 }
 
 /// What the cell's non-input columns hold across a measured arc: each output pin's level at the arc's
@@ -74,9 +74,9 @@ pub struct ExposedLevel {
 /// which the measurement observes as well as initialises, needs its end level too: it can move across an
 /// arc whose outputs all hold.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ArcLevels {
-    pub outputs: Vec<(Symbol, bool)>,
-    pub exposed: Vec<ExposedLevel>,
+pub(crate) struct ArcLevels {
+    pub(crate) outputs: Vec<(Symbol, bool)>,
+    pub(crate) exposed: Vec<ExposedLevel>,
 }
 
 impl ArcLevels {
@@ -95,7 +95,10 @@ impl ArcLevels {
     /// is therefore either a state variable, which `arc_eligible` requires to be defined, or a
     /// combinational signal whose support lies within the inputs plus the state variables — resolved
     /// either way, as is every output.
-    pub fn at<B: Brand, C: ManagerCell>(m: &Machine<B, C>, node: &Minterm<Symbol>) -> ArcLevels {
+    pub(crate) fn at<B: Brand, C: ManagerCell>(
+        m: &Machine<B, C>,
+        node: &Minterm<Symbol>,
+    ) -> ArcLevels {
         ArcLevels {
             outputs: m
                 .cell
@@ -131,7 +134,7 @@ impl ArcLevels {
     /// transitions during an arc that leaves every output alone — a DFF's master follows D while Q holds —
     /// so its end is read separately. Total wherever [`Self::at`] is: settling from an eligible start
     /// leaves every state column determinate.
-    pub fn ending_at<B: Brand, C: ManagerCell>(
+    pub(crate) fn ending_at<B: Brand, C: ManagerCell>(
         &self,
         m: &Machine<B, C>,
         settled: &Minterm<Symbol>,
@@ -158,37 +161,37 @@ impl ArcLevels {
 /// sources; they are established indirectly by the prevector.
 #[derive(Debug, Clone)]
 pub struct Arc {
-    pub edge: Edge,
-    pub output: Symbol,
-    pub related: Symbol,
+    pub(crate) edge: Edge,
+    pub(crate) output: Symbol,
+    pub(crate) related: Symbol,
     /// Start state of the measured edge (the prevector's target): the FULL machine node, over the
     /// input AND state-variable columns, not just the input projection. This is the arc's context:
     /// two firings that agree on the inputs but differ in internal state are different arcs, each
     /// with its own prevector, and both are emitted.
-    pub start: Minterm<Symbol>,
+    pub(crate) start: Minterm<Symbol>,
     /// End state of the measured edge (defines the vector and the `-when` condition).
-    pub end: Minterm<Symbol>,
+    pub(crate) end: Minterm<Symbol>,
     /// The prevector: the input-assignment sequence that drives every state variable into `start`.
-    pub prevector: Vec<Minterm<Symbol>>,
+    pub(crate) prevector: Vec<Minterm<Symbol>>,
     /// The levels the cell's outputs hold at `start` — the arc's `-ic` initial condition.
-    pub levels: ArcLevels,
-    pub is_async: bool,
+    pub(crate) levels: ArcLevels,
+    pub(crate) is_async: bool,
 }
 
 /// A whole-cell internal-power ('hidden') arc: the input `pin` toggles between two settled
 /// states and NO output changes. Used for internal-power characterisation.
 #[derive(Debug, Clone)]
 pub struct HiddenArc {
-    pub pin: Symbol, // the toggled primary input
-    pub edge: Edge,  // that input's Rise/Fall
+    pub(crate) pin: Symbol, // the toggled primary input
+    pub(crate) edge: Edge,  // that input's Rise/Fall
     /// Start state of the measured toggle: the FULL machine node before it (inputs and state
     /// variables), the arc's context — see [`Arc::start`].
-    pub start: Minterm<Symbol>,
-    pub end: Minterm<Symbol>, // input vector after the toggle
-    pub prevector: Vec<Minterm<Symbol>>,
+    pub(crate) start: Minterm<Symbol>,
+    pub(crate) end: Minterm<Symbol>, // input vector after the toggle
+    pub(crate) prevector: Vec<Minterm<Symbol>>,
     /// Each output's HELD logic value, in `cell.outputs` order. Every output is defined at both ends of
     /// the toggle and none of them changes across it, so the values held ARE the levels at `start`.
-    pub levels: ArcLevels,
+    pub(crate) levels: ArcLevels,
 }
 
 /// Derive transition arcs for every output of a cell by re-walking its shared asynchronous state machine

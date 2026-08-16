@@ -7,6 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **cellsmith detects a pulse too short for the cell to honour, and constrains its minimum width.**
+  A pulse is one input's own two edges, driven out of a settled state and driven back. Where the
+  cell lands depends on how far the cascade got in between, so a pulse can leave it in a state a
+  fully-settled one would never reach, or leave it ringing. Every such pulse yields a
+  minimum-pulse-width constraint, emitted as a `-type min_pulse_width` block naming the pulsed pin
+  and probing the nodes whose settled value the width decides. Emission is opt-in, as it is for
+  every constraint arc: a block is written for the pins a cell's `constraint_arcs` selects, or for
+  every input pin of every cell under `--constraints`, and a spec that asks for neither gets none.
+  The vector states one edge, so Liberate performs the pulse and searches the width itself, and it
+  writes the characterised `min_pulse_width_high`/`_low` into its own output library — the `.lib`
+  cellsmith generates is unchanged.
+
+- **`--when=constraint` characterises a constraint in each input context it was observed in.** The
+  `-when`-conditioned pass covered the delay/transition and hidden arcs; it now covers the derived
+  constraint arcs too, so `--when=constraint` — or `when = "constraint"` on a cell — adds one
+  conditioned block per observation. A hazard reachable from ten states used to be kept from one of
+  them, the one reached along the shortest walk in, and the other nine were discarded before
+  emission saw them; all ten now survive. The observation attacking the widest set of nodes supplies
+  the general block that stands for the constraint however it was reached, and every remaining one
+  adds a conditioned block over its own nodes, so a conditioned block can probe less than the
+  general one beside it.
+
+### Changed
+
+- **A hazard is reported under its cause and its outcome, one report entry per cause.** A cause is
+  what the timing is between — two inputs racing each other, or one input's own two edges — and an
+  outcome is what the machine then does, settling indeterminately or oscillating. Every combination
+  of the two is detected, and a cause observed to do both is reported as both, so a cell that drew
+  one warning can draw several. The entry's header names the timing and the state it goes wrong
+  from; its body names the condition, the walk into that state, and then one field per outcome
+  observed, each listing the victim nodes that reading names and where the machine lands on them
+  when the timing is honoured — for a race the alternatives it may settle to, for a pulse the rest
+  states an adequately wide one walks through. The header carries no node set, because two outcomes
+  of one cause need not attack the same nodes — an SR latch's set pulse rings over `{Q, Qn}` and
+  settles indeterminately over `{Q, Qn, L}`. The constraint follows the cause alone: a directed
+  setup/hold or a symmetric non-sequential separation for a race, a minimum pulse width for a pulse.
+
+- **A cell that reaches one input assignment in several stored states is constrained in each of
+  them.** A state-holding cell arrives at one input assignment in more than one stored state — a
+  C-element holds either value under `A*!B` — and those used to be folded into a single constraint
+  before emission could see them, so such a cell now emits more constraint blocks. Where a block's
+  `-ic` and `-vector` cannot tell two of them apart, the run warns that too few nodes are exposed
+  for `-ic` to express the cell state, naming the arc and every state that block conflates, rather
+  than the difference vanishing silently. A constraint covers on `-probe` everything its cause
+  endangers, since the timing that removes the cause removes every consequence at once.
+
+- **`when` is the input assignment a transition happens FROM, on every arc of every kind.** A
+  block's `-when` states the standing assignment its measured transition starts at, and the pins it
+  switches are written as edges rather than as literals of the condition. Race-cause hazards used to
+  carry the assignment the machine is left in once both edges have landed, which disagreed with the
+  `-when` the block beside them wrote: a mutex's ring is now reported and annotated under `!A*!B`,
+  the idle state its two requests rise out of, rather than under the `A*B` they land in.
+
+- **A cell with a single input is reported when it rings.** A race is between two pins and needs
+  both, while a toggle that leaves the cell ringing around its own feedback needs only the one, so a
+  one-input ring — `Q = "!(EN*Q)"` — is reported as an oscillation instead of passing silently.
+
+- **`constraint_arcs` takes a pin name or a list of them as well as `true`, and a name selects the
+  constraints that pin has a role in.** The roles are the kind's. A non-sequential separation is
+  symmetric — its two pins are equals — so naming either end selects the separation that holds them
+  apart. A setup/hold is directed, the data pin being constrained with respect to the clock, so its
+  data pin selects it: naming the clock asks for what that clock is itself subject to, its own
+  minimum pulse width, and not for the separations other pins are held around it by. A minimum pulse
+  width is selected by the pin it pulses. A name that is not one of the cell's declared inputs is a
+  spec error — `constraint pin "Q" is not a declared input` — rather than a selection that matches
+  nothing.
+
+- **An oscillation is annotated on the constraint it motivated.** The `# oscillation:` comment in
+  the emitted Tcl, and the `/* oscillation: … */` form in the `.lib`, lead the constraint block
+  generated from the ringing observation instead of heading the file. A comment explains what it
+  accompanies, so a ring with no constraint beside it carries none — a ring observed under a lone
+  toggle names one pin, and one edge has nothing to be separated from. Every detected hazard reaches
+  the user through the report on stderr either way.
+
 ## [0.5.1] - 2026-08-08
 
 ### Added
