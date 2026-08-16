@@ -1,7 +1,10 @@
-//! Hazard **detection** over **confluence** of the asynchronous state machine. [`detect`] probes what
-//! two closely-timed input edges do to the machine and files each observation as a [`Hazard`] whose
-//! cause is a **race**, naming the pins whose transitions the observation was made under. The timing
-//! that removes a detected hazard is generated downstream, by `super::constraint`.
+//! Hazard **detection** over **confluence** of the asynchronous state machine. *Confluent* is term
+//! rewriting's word — the Church–Rosser property — and here it ranges over the cell's settled
+//! machine states, the operation being settling after toggling one input then the other, in each
+//! order. [`detect`] probes what two closely-timed input edges do to the machine and files each
+//! observation as a [`Hazard`] whose cause is a **race**, naming the pins whose transitions the
+//! observation was made under. The timing that removes a detected hazard is generated downstream,
+//! by `super::constraint`.
 //!
 //! A delay arc ([`super::arcs`]) records a single input edge that *causes* an output edge. A
 //! **constraint** arc instead records that two inputs must not change too close together — a setup/hold

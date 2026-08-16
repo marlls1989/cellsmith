@@ -31,7 +31,7 @@ some **internal** functions. Two rules make state-holding cells work with no spe
 
 - **any signal name referenced inside a function is that signal's feedback/delayed value** — so a
   C-element referencing `Q`, an SR pair referencing each other, and a flop's slave referencing its
-  master are all just ordinary references;
+  master are all ordinary references;
 - whether an **internal** signal (declared under `[cell.internal]`) becomes a **state node** is decided
   by minimisation: before the machine is built, cellsmith **minimises** the model — a pure alias or
   complement of another signal collapses onto that signal's coordinate, and a non-self-holding
@@ -76,24 +76,27 @@ Three properties follow from this construction:
 
 A cross-coupled cell is also **bistable**: co-asserting a mutex's two requests walks the joint
 next-state around a cycle it never leaves, so the machine reaches no state that is its own next state
-— an **oscillation hazard**, whose physical risk is metastability. cellsmith detects this during
-analysis and annotates both the arcs and the Liberty stub with a generic comment naming the condition
-the pair toggles OUT of, the group of nodes involved and the states honouring the timing settles them
-to:
+— an **oscillation hazard**, whose physical risk is metastability. An oscillation is annotated on the
+constraint it motivated: the comment leads the blocks generated to separate the racing pair, naming
+the condition the pair toggles OUT of, the group of nodes involved and the states honouring the timing
+settles them to:
 
 ```
 # oscillation: !A*!B risks metastability in {Qa, Qb}, settling to one of {Qa=0, Qb=1} | {Qa=1, Qb=0}
 ```
 
-(and the equivalent `/* oscillation: ... */` form in the `.lib`). cellsmith always emits a stderr
-warning for the same hazard, noting that the hazard is recorded as a comment annotation only. The
-hazard is derived from the functions themselves; there is no spec key to declare or silence it. The
-arbitration *choice* itself is a physical property Liberate characterises separately, outside
-cellsmith's deterministic timing arcs.
+(and the equivalent `/* oscillation: ... */` form heading the cell's Liberty stub). A comment explains
+what it accompanies, so a ring with no constraint beside it carries none — constraint arcs are opt-in,
+through a cell's `constraint_arcs` key or `--constraints` for every input pin of every cell, and a ring
+observed under a lone toggle names one pin, which has nothing to be separated from. Detection does not
+depend on that selection: the hazard report on stderr carries every hazard, one entry per cause — what
+the timing is between — and the state it goes wrong from. The hazard is derived from the functions
+themselves; there is no spec key to declare or silence it. The arbitration *choice* itself is a physical
+property Liberate characterises separately, outside cellsmith's deterministic timing arcs.
 
 The Verilog UDP and Liberty `statetable` are both the **functional** view, but Liberty's spec forces a
 different shape. Verilog keeps one sequential UDP per signal, and an output's table may reference
-another output directly — the UDP columns are simply that signal's support, projecting out only its own
+another output directly — the UDP columns are that signal's support, projecting out only its own
 feedback. The Liberty spec, in contrast, disallows an output pin's own table from referencing another
 output pin, so no output pin ever carries state directly there: instead the emitter merges every
 sequential cell's state into **one joint `statetable`**, whose rows give the joint next-state of every
@@ -152,7 +155,7 @@ clock = ["CLK"]                # optional: input pins that are clocks. A hazard 
 constraint_arcs = true         # optional: the input pins this cell's derived constraint arcs are
                                #   generated for — true/"D"/["CLK", "D"]; --constraints selects every
                                #   input pin of every cell. A pin left out is still probed and its
-                               #   hazards still reported; it just gets no constraint block
+                               #   hazards still reported; it gets no constraint block
 # no_edge_collapse = true      # optional: opt this cell OUT of the edge classification below
                                #   (equivalent to the global --no-edge-collapse flag, per cell)
 # when = true                  # optional: also emit the `-when`-conditioned arcs, per arc class —
@@ -488,23 +491,24 @@ through settling, and the walk into an arc's start state drives every state vari
 included) to its value there; a state-holding cell's `-ic` line is what carries that start condition
 into the measured vector.
 
-A hazard is read on two independent axes. Its **cause** is what the timing is between: a **race**,
-input edges that do not converge when toggled (a C-element's `A↓` against `B↑`, a DFF's data against
-its clock, an SR latch's simultaneous release), or a **pulse**, the two edges of one input racing each
-other (a clock pulse too narrow to carry a flop's master through to its slave leaves the flop somewhere
-a wider pulse does not). Its **outcome** is what the machine then does: **indeterminate** — it settles,
-but which state it settles to is not determined — or **oscillation** — it never settles, walking a
-periodic cycle instead of reaching a state that is its own next state, as a mutex/arbiter does when both
-requests arrive together. The axes are independent, so one cause showing both outcomes is reported under
-each.
+A hazard is read on two independent axes. Its **cause** is what the timing is between: a **race**, two
+input edges landing close enough together that which of them lands first changes where the cell ends up
+(a C-element's `A↓` against `B↑`, a DFF's data against its clock, an SR latch's simultaneous release),
+or a **pulse**, the two edges of one input racing each other (a clock pulse too narrow to carry a flop's
+master through to its slave leaves the flop somewhere a wider pulse does not). Its **outcome** is what
+the machine then does: **indeterminate** — it settles, but which state it settles to is not determined —
+or **oscillation** — it never settles, walking a periodic cycle instead of reaching a state that is its
+own next state, as a mutex/arbiter does when both requests arrive together. The axes are independent, so
+one cause showing both outcomes is reported under each.
 
-A **cause** is a starting state and a transition; an **effect** is which node suffers what. From a
-detected hazard, cellsmith can **generate** a timing constraint to remove it, and the constraint follows
-the cause alone — setup/hold for a racing pair holding a declared clock, a symmetric `non_seq` for any
-other pair, and a single-pin `min_pulse_width` for a pulse. Which pins get one is selected by a cell's
-`constraint_arcs`, or by `--constraints` for every input pin of every cell. Selecting pins narrows what
-is GENERATED: every hazard is detected and reported whichever pins are selected, so a pin left out keeps
-its stderr diagnostic and only loses its blocks.
+A **cause** is a starting state and a transition. From a detected hazard, cellsmith can **generate** a
+timing constraint to remove it, and the constraint follows the cause and not the outcome — the same
+timing removes a race whether it settles indeterminately or never settles. A racing pair holding a
+declared clock gives a setup/hold, any other pair a symmetric `non_seq`, and a pulse a single-pin
+`min_pulse_width`. Which pins get one is selected by a cell's `constraint_arcs`, or by `--constraints`
+for every input pin of every cell. Selecting pins narrows what is GENERATED: every hazard is detected
+and reported whichever pins are selected, so a pin left out keeps its stderr diagnostic and only loses
+its blocks.
 
 Naming a pin brings back the constraints that pin has a **role** in, and the roles are the kind's. A
 `non_seq` is symmetric — its two pins are equals — so naming **either end** selects the separation that

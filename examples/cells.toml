@@ -49,7 +49,9 @@ Qn = "!(S+Q)"
 [[cell]]
 name = "MUT"
 inputs = ["A", "B"]            # mutex/arbiter: grants are mutually exclusive, oscillates at A*B
-[cell.outputs]                 #   -> arcs condition each grant on the other; oscillation is annotated
+[cell.outputs]                 #   -> arcs condition each grant on the other. The oscillation is
+                               #   detected and reported on stderr; it is annotated only where a
+                               #   constraint block is generated for it, and this cell asks for none
 Qa  = "!Qb * A"
 Qb  = "!Qa * B"
 
