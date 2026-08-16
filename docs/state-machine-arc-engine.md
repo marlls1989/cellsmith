@@ -334,16 +334,26 @@ cascade naturally through the multi-round settle.
 ### The general pass
 
 Derivation hands the emitter (`src/emit/arcs_tcl.rs`) every firing it found; the emitter is where the
-grain of the generated `.tcl` is decided. Each arc class is emitted in two passes.
+grain of the generated `.tcl` is decided.
 
-The **general pass** always runs. It groups the class's derived arcs by **transition** — the output pin
-and the edge it makes, the related pin and the edge IT makes — together with the `-type` the arc
-classifies as, and emits **one representative** per group, with no `-when` line. The block so emitted
-generalises over what the group's members differ in: the side inputs' held levels, the held outputs, and
-the internal state the firing was measured from. The representative is a member with the **strictly
-shortest prevector** — where several tie at the minimum, any one of them is an equally valid
-representative of the group at this grain — and it renders its own concrete `-ic` and `-vector`, those
-of one real firing rather than a synthesised context.
+A block form is a variant there. The nine variants of `DefineArc` are Liberate's `-type` taxonomy —
+`async`, `edge` and `combinational` for a measured transition, `hidden` for an input toggle that settles
+with no output following it, and the five constraint types — and each variant renders its whole
+`define_arc` block, writing its own `-type` word. Picking the variant is the classification: a measured
+transition's kind is decided in one place, `TransitionIdentity::of`, and the identity it returns — the
+transition together with that kind — is what the general pass groups the arc under. The exploration's
+rest states come out as `define_leakage` blocks, one per state the cell can sit and leak in, and the two
+forms that command takes are the variants of `LeakageBlock`: the walk that primes the cell into a rest
+state, and the condition the inputs alone settle it at.
+
+Each arc class is emitted in two passes. The **general pass** always runs. It groups the class's derived
+arcs by **transition** — the output pin and the edge it makes, the related pin and the edge IT makes —
+together with the `-type` the arc classifies as, and emits **one representative** per group, with no
+`-when` line. The block so emitted generalises over what the group's members differ in: the side inputs'
+held levels, the held outputs, and the internal state the firing was measured from. The representative is
+a member with the **strictly shortest prevector** — where several tie at the minimum, any one of them is
+an equally valid representative of the group at this grain — and it renders its own concrete `-ic` and
+`-vector`, those of one real firing rather than a synthesised context.
 
 Selecting the class (`--when`, or the per-cell `when` key) adds a **conditioned pass** on top: every
 derived arc of that class comes back as its own block carrying its own condition, so a firing can appear

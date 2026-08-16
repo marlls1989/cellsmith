@@ -1,7 +1,16 @@
-//! Emit Cadence Liberate `define_arc` blocks for a cell's transition arcs.
+//! Emit Cadence Liberate `define_arc` and `define_leakage` blocks for a cell.
 //!
 //! A block states its start condition and its stimulus, and nothing about how the cell was walked
 //! there: `-type` leads, then the pins in declaration order.
+//!
+//! A block form is a variant. The nine variants of `DefineArc` ARE Liberate's `-type` taxonomy — the
+//! three measured transitions, the hidden arc and the five constraint types — and each renders its whole
+//! `define_arc` block, writing its `-type` word as a literal in its own arm. `LeakageBlock` does the same
+//! for `define_leakage`, a command that carries no `-type`: its two variants are the two forms that
+//! command takes, the walk that primes the cell into a rest state and the condition the inputs alone
+//! settle it at. What the arms have in common they take from helpers naming no kind, `ConstraintColumns`
+//! among them — the columns one constraint block carries, under the model's names and the netlist's
+//! alike, with the level `-ic` starts each probed victim node at.
 //!
 //! Arc typing follows the per-arc labels in `crate::logic::edge`, which are SOURCED FROM the arc
 //! pipeline itself: each emitted delay arc looks up its own `(output, related clock, clock direction)`
@@ -9,7 +18,11 @@
 //! holds independently of the clock level, and Liberate has one token for it: `-type edge`. An
 //! unlabelled arc — a data change propagating through an already-transparent latch, or a clock acting by
 //! its level rather than being held — stays `-type combinational`, and a declared-async related pin
-//! takes precedence with `-type async`.
+//! takes precedence with `-type async`. `TransitionIdentity::of` applies that rule, and is the one place
+//! a measured transition's kind is decided; picking the variant IS the classification, so the `-type` a
+//! block writes and the identity the emitter grouped it under agree by construction. `HiddenIdentity` —
+//! a toggled pin and the edge it makes — is a hidden arc's identity in the same way, one kind of block
+//! with nothing to classify.
 //!
 //! **No `define_arc` carries a `-prevector`. That is a DELIBERATE CHOICE, not an omission: `-ic` is
 //! cheaper than a prevector.** A prevector is a simulation the characterisation run has to perform to
@@ -219,7 +232,7 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
     // every alias.
     if opts.emit_leakage {
         for l in &cell.leakage {
-            blocks.out.push_str(&format_leakage(cell, l));
+            blocks.out.push_str(&LeakageBlock::of(l).render(cell));
         }
     }
     // Constraint arcs emit whatever generation produced: `cell.constraints` is populated only when the
@@ -1706,50 +1719,71 @@ fn constraint_when_str(arc: &ConstraintArc<'_>) -> Option<String> {
     Some(crate::logic::literal_product(&lits))
 }
 
-/// One `define_leakage` block for a static leakage state, in one of two forms.
+/// One `define_leakage` block for a static leakage state, in one of two forms. `define_leakage` is a
+/// command of its own: the block carries no `-type` and no `-pinlist`, and names the cell rather than a
+/// [`Group`], so the form it takes is what this type ranges over and the variant IS that form.
 ///
-/// A state the cell must be WALKED into runs the walk: the `-prevector` primes the internal nodes,
-/// which is what distinguishes two rest states sharing an input assignment, and the `-when` names the
-/// condition the cell rests at. The walk is rendered whole, its last step being the state itself.
-///
-/// A state the INPUTS drive the cell into on their own is the bare condition: `define_leakage -when
-/// "…" { … }`. There is nothing to prime, so there is nothing to run, and the condition alone states
-/// it. Its walk is a single step — `Explored::path_to` seeds the chain with the state itself — which
-/// is the state that condition already names.
-///
-/// Two bare blocks cannot collide, which is why leakage needs no equivalent of [`Blocks::state`]:
-/// walk-free means the inputs alone drive the cell into the state, so the inputs determine it, and two
-/// states resting under one `-when` cannot differ.
-fn format_leakage(cell: &AnalysedCell, l: &LeakageState) -> String {
-    let mut lits: Vec<(Symbol, bool)> = assignment(&l.inputs).into_iter().collect();
-    lits.extend(l.outputs.iter().cloned());
-    lits.sort();
-    let when = literal_product(&lits);
+/// A leakage block goes straight into the output. Two [`LeakageBlock::Resting`] blocks cannot collide,
+/// which is why leakage needs no equivalent of [`Blocks::state`]: walk-free means the inputs alone drive
+/// the cell into the state, so the inputs determine it, and two states resting under one `-when` cannot
+/// differ.
+enum LeakageBlock<'a> {
+    /// A state the cell must be WALKED into, which runs the walk: the `-prevector` primes the internal
+    /// nodes, which is what distinguishes two rest states sharing an input assignment, and the `-when`
+    /// names the condition the cell rests at. The walk is rendered whole, its last step being the state
+    /// itself.
+    Primed(&'a LeakageState),
+    /// A state the INPUTS drive the cell into on their own, which is the bare condition: `define_leakage
+    /// -when "…" { … }`. There is nothing to prime, so there is nothing to run, and the condition alone
+    /// states it. Its walk is a single step — `Explored::path_to` seeds the chain with the state itself
+    /// — which is the state that condition already names.
+    Resting(&'a LeakageState),
+}
 
-    // A state the inputs drive the cell into on their own needs no priming, and with nothing to prime
-    // there is nothing to run: the condition alone states it, and the block is that one line. Its walk
-    // is a single step — `Explored::path_to` seeds the chain with the state itself — which is the state
-    // the condition already names.
-    if l.prevector.len() <= 1 {
-        return format!(
-            "define_leakage -when \"{when}\" {}\n\n",
-            name_block(&cell.name)
-        );
+impl<'a> LeakageBlock<'a> {
+    /// The form a rest state renders as, read off the walk that reaches it.
+    fn of(l: &'a LeakageState) -> Self {
+        if l.prevector.len() <= 1 {
+            LeakageBlock::Resting(l)
+        } else {
+            LeakageBlock::Primed(l)
+        }
     }
 
-    let mut s = String::from("define_leakage \\\n");
-    s.push_str(&format!(
-        "\t-prevector_pinlist {{{}}} \\\n",
-        cell.inputs.join(" ")
-    ));
-    s.push_str(&format!(
-        "\t-prevector {{{}}} \\\n",
-        prevector_str(cell, &l.prevector)
-    ));
-    s.push_str(&format!("\t-when \"{when}\" \\\n"));
-    s.push_str(&format!("\t{}\n", name_block(&cell.name)));
-    s.push('\n');
-    s
+    /// The whole block. Both forms rest under the same condition — the input assignment and every
+    /// settled output as one product — so it is stated once here, and each arm carries it where its own
+    /// form puts it.
+    fn render(&self, cell: &AnalysedCell) -> String {
+        let when = match self {
+            LeakageBlock::Primed(l) | LeakageBlock::Resting(l) => {
+                let mut lits: Vec<(Symbol, bool)> = assignment(&l.inputs).into_iter().collect();
+                lits.extend(l.outputs.iter().cloned());
+                lits.sort();
+                literal_product(&lits)
+            }
+        };
+        match self {
+            LeakageBlock::Resting(_) => format!(
+                "define_leakage -when \"{when}\" {}\n\n",
+                name_block(&cell.name)
+            ),
+            LeakageBlock::Primed(l) => {
+                let mut s = String::from("define_leakage \\\n");
+                s.push_str(&format!(
+                    "\t-prevector_pinlist {{{}}} \\\n",
+                    cell.inputs.join(" ")
+                ));
+                s.push_str(&format!(
+                    "\t-prevector {{{}}} \\\n",
+                    prevector_str(cell, &l.prevector)
+                ));
+                s.push_str(&format!("\t-when \"{when}\" \\\n"));
+                s.push_str(&format!("\t{}\n", name_block(&cell.name)));
+                s.push('\n');
+                s
+            }
+        }
+    }
 }
 
 #[cfg(test)]

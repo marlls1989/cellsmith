@@ -216,51 +216,45 @@ pub enum ArcClass {
 
 /// The set of arc classes whose `-when` arcs are also emitted, on top of the always-emitted general
 /// arcs. `Default` is the EMPTY set — only the general arcs, no `-when`.
+///
+/// Membership is a bitmask indexed by [`ArcClass`]'s discriminant: every operation reads a class's bit
+/// through `bit`, so the class a bit stands for is fixed by the variant itself.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ArcClasses {
-    transition: bool,
-    hidden: bool,
-    constraint: bool,
+    bits: u8,
 }
 
 impl ArcClasses {
     /// Every class selected.
     pub const ALL: Self = Self {
-        transition: true,
-        hidden: true,
-        constraint: true,
+        bits: Self::bit(ArcClass::Transition)
+            | Self::bit(ArcClass::Hidden)
+            | Self::bit(ArcClass::Constraint),
     };
+
+    /// The bit standing for `class`, its discriminant being the bit index.
+    const fn bit(class: ArcClass) -> u8 {
+        1 << (class as u8)
+    }
 
     /// Whether `class`'s `-when` arcs are also emitted.
     pub fn contains(self, class: ArcClass) -> bool {
-        match class {
-            ArcClass::Transition => self.transition,
-            ArcClass::Hidden => self.hidden,
-            ArcClass::Constraint => self.constraint,
-        }
+        self.bits & Self::bit(class) != 0
     }
 
-    /// The field-wise union of two sets: a class is selected iff either set selects it.
+    /// The union of two sets: a class is selected iff either set selects it.
     pub fn union(self, other: Self) -> Self {
         Self {
-            transition: self.transition || other.transition,
-            hidden: self.hidden || other.hidden,
-            constraint: self.constraint || other.constraint,
+            bits: self.bits | other.bits,
         }
     }
 }
 
 impl FromIterator<ArcClass> for ArcClasses {
     fn from_iter<I: IntoIterator<Item = ArcClass>>(iter: I) -> Self {
-        let mut set = Self::default();
-        for class in iter {
-            match class {
-                ArcClass::Transition => set.transition = true,
-                ArcClass::Hidden => set.hidden = true,
-                ArcClass::Constraint => set.constraint = true,
-            }
-        }
-        set
+        iter.into_iter().fold(Self::default(), |set, class| Self {
+            bits: set.bits | Self::bit(class),
+        })
     }
 }
 
@@ -1356,6 +1350,15 @@ oscillate = ["Q"]
 Y = "A"
 "#;
         assert!(matches!(parse_spec(s), Err(ModelError::Spec(_))));
+    }
+
+    /// `ALL` names its classes one by one, so it is checked against `ValueEnum`'s derived list of
+    /// every variant.
+    #[test]
+    fn all_selects_every_arc_class() {
+        for class in <ArcClass as clap::ValueEnum>::value_variants() {
+            assert!(ArcClasses::ALL.contains(*class), "{class:?} is not in ALL");
+        }
     }
 
     #[test]
