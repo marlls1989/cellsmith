@@ -654,11 +654,11 @@ pub struct AnalysedCell {
     /// of how a cell with memory is told what state its measured vector begins in. A combinational cell
     /// has no state to establish and gets no `-ic`.
     pub(crate) state_holding: bool,
-    /// The cell's behavioural edge classification ([`crate::logic::edge::EdgeArcs`]): the per-node edge
-    /// seams (`captures`), the per-arc `-type edge` labels (`labels`) — the field the Liberate arc emitter
-    /// reads to type each arc — the cell-level set of internal non-seam master nodes folded away
-    /// (`folded`), and the read-gate factorisations recognised across the cell's outputs (`derived`),
-    /// which the Liberty, Verilog and state-table emitters read to render a read-gated register as its own
+    /// The cell's behavioural edge classification ([`crate::logic::edge::EdgeArcs`]): the per-node
+    /// active-edge sets (`captures`), the per-arc `-type edge` labels (`labels`) — the field the Liberate
+    /// arc emitter reads to type each arc — the cell-level set of internal level master nodes folded away
+    /// (`folded`), and the read-gate factorisations recognised across the cell's outputs (`derived`), which
+    /// the Liberty, Verilog and state-table emitters read to render a read-gated register as its own
     /// internal node. Default (empty) when the cell opted out (`no_edge_collapse`). Computed purely from
     /// the already-explored machine — it never alters the exploration.
     pub(crate) edge: crate::logic::edge::EdgeArcs,

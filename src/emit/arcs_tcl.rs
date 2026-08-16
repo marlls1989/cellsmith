@@ -4224,7 +4224,7 @@ Q = "CLK*M + !CLK*Q"
 "#,
         );
         assert!(!cell.edge.captures.is_empty());
-        // The recognised register captures on the rising clock seam (transparent-high slave).
+        // The recognised register captures on the rising active edge (transparent-high slave).
         assert!(cell
             .edge
             .captures
@@ -4374,7 +4374,7 @@ Q = "CLK*L1 + !CLK*L2"
     }
 
     /// DCMUX: two independently-clocked masters merged into one output. Q collapses to a LEVEL model (its
-    /// falls are combinational and the seam convergence point empties its set), so Q is NOT an edge
+    /// falls are combinational and the active-edge filter empties its set), so Q is NOT an edge
     /// register, yet each clock's RISING Q delay arc still renders `-type edge` (generation at Q). Both
     /// clocks therefore carry an edge-labelled Q arc; the falls stay combinational.
     #[test]

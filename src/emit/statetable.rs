@@ -999,13 +999,13 @@ Y = "C*L"
     }
 
     /// Three shapes the behavioural classifier leaves fully level (no register, no fold) even under
-    /// default (on) collapse: a single latch (no seam to sample), a gated latch (self-referencing
+    /// default (on) collapse: a single latch (no active edge to sample), a gated latch (self-referencing
     /// transparent cofactor), and a two-latch DFF whose clock is never declared. MCDFF and EMDFF have
     /// their own fixtures instead: MCDFF's two-clock slave stays level
     /// (`mcdff_two_clock_pair_stays_level`), while EMDFF's slave is recognised as an edge register
     /// (`emdff_recognises_slave_over_surviving_master`).
     const NON_COLLAPSIBLE: [&str; 3] = [
-        // Single latch: Q has no master seam, so no clock edge captures it.
+        // Single latch: Q has no master edge register, so no clock edge captures it.
         r#"
 [[cell]]
 name = "DLAT"
@@ -1155,8 +1155,8 @@ M = "!CLK*D + CLK*M"
     }
 
     // Master/slave pair split across two DIFFERENT declared clocks: M latches on CLKA, Q on CLKB. Q tracks
-    // live data through CLKB's transparent phase, so its seam set empties under the convergence point: the
-    // classifier recognises NO register and Q stays fully level.
+    // live data through CLKB's transparent phase, so its active-edge set empties under the active-edge
+    // filter: the classifier recognises NO register and Q stays fully level.
     const MCDFF: &str = r#"
 [[cell]]
 name = "MCDFF"
@@ -1338,7 +1338,7 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
 
     #[test]
     fn dcmux_is_a_level_model_no_edge_rows() {
-        // DCMUX collapses to a LEVEL model: its falls are combinational and the seam convergence point
+        // DCMUX collapses to a LEVEL model: its falls are combinational and the active-edge filter
         // empties Q's set, so nothing contributes an edge capture row -- the whole cell renders as level
         // rows. The two rises stay `-type edge` DELAY arcs (covered in the arcs_tcl emitter tests).
         let cell = analyse(DCMUX);
@@ -1739,9 +1739,10 @@ Q = "!R*(CLK*M + !CLK*Q)"
 
     /// The rendered-row replay over the joint level+edge first-match semantics, for the fixtures that
     /// carry the phase-conditioned clear (MOR/MORA), a multi-step two-node level model (SR), a dual-edge
-    /// register (DET), a two-seam toggle register (TFF), the canonical DFF, and a full-async clear DFF
-    /// (RDFF). Fails against an `edge_input_pattern` that drops the `CLK*R` clock literal (which would make
-    /// MOR/MORA clear on any non-rising event with R high, including CLK=0 where the cell holds).
+    /// register (DET), a toggle register decomposing into two edge registers (TFF), the canonical DFF,
+    /// and a full-async clear DFF (RDFF). Fails against an `edge_input_pattern` that drops the `CLK*R`
+    /// clock literal (which would make MOR/MORA clear on any non-rising event with R high, including
+    /// CLK=0 where the cell holds).
     #[test]
     fn rendered_rows_replay_machine_settled_values() {
         for src in [MOR, MORA, SR_FLOP, TOGGLE_FLOP, DET, DFF, RDFF] {
