@@ -50,6 +50,7 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt;
 use std::hash::Hash;
 
 use espresso_logic::{Minterm, Symbol};
@@ -96,16 +97,68 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     cell_arcs(cell, opts).tcl
 }
 
+/// The kind of block a masked measurement rendered as: one variant per `define_arc` `-type` — the three
+/// measured transitions, the hidden toggle and the five constraint types — plus one for
+/// `define_leakage`, a command that carries no `-type`. Picking the variant IS the classification: the
+/// [`DefineArc`] or [`LeakageBlock`] arm that renders a block names its kind here, and a reader of a
+/// [`MaskedArc`] matches on the variant.
+///
+/// The `Display` rendering is the word the report on stderr leads with. A block writes its own `-type`
+/// line as a literal in the arm that renders it (see [`DefineArc::tcl`]), so the emitted flag is not read
+/// from here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BlockKind {
+    /// A transition an asynchronous pin drives.
+    Async,
+    /// A transition a clock edge drives.
+    Edge,
+    /// A transition the cell's logic drives directly.
+    Combinational,
+    /// An input toggle that settles with no output following it.
+    Hidden,
+    /// The setup member of a directed clock↔data separation.
+    Setup,
+    /// The hold member of a directed clock↔data separation.
+    Hold,
+    /// The setup member of a symmetric separation.
+    NonSeqSetup,
+    /// The hold member of a symmetric separation.
+    NonSeqHold,
+    /// The width a pulse must keep on one pin.
+    MinPulseWidth,
+    /// A rest state, which `define_leakage` states.
+    Leakage,
+}
+
+impl fmt::Display for BlockKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            BlockKind::Async => "async",
+            BlockKind::Edge => "edge",
+            BlockKind::Combinational => "combinational",
+            BlockKind::Hidden => "hidden",
+            BlockKind::Setup => "setup",
+            BlockKind::Hold => "hold",
+            BlockKind::NonSeqSetup => "non_seq_setup",
+            BlockKind::NonSeqHold => "non_seq_hold",
+            BlockKind::MinPulseWidth => "min_pulse_width",
+            BlockKind::Leakage => "leakage",
+        })
+    }
+}
+
 /// One measurement a cell could not state, because a firing already rendered the identical block — an
 /// arc or a rest state alike. Every block should express the cell state it measures from, and `-ic` and
 /// `-vector` reach exactly the `-pinlist`: an internal node with no column is in nothing the block says,
 /// so two firings that differ only there are one block. Exposing those nodes is what tells them apart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaskedArc {
-    /// The block on one line, written by the variant that rendered it: a [`DefineArc`]'s `-type` word
-    /// and the pins it measures between, or `leakage` for a [`LeakageBlock`], which carries neither.
-    /// Text for the report on stderr; the variant that rendered the block is what classifies it.
-    pub(crate) arc: String,
+    /// The kind of block the firing rendered, named by the arm that rendered it.
+    pub(crate) kind: BlockKind,
+    /// The pins the block measures between and the edges they make, as the report writes them: `A↑ -> Q↓`
+    /// from a related pin to an output, `S↑` for a toggle, `CLK↑ & D↑` for the pair a separation holds
+    /// apart. A `define_leakage` block names no pin, so it carries none.
+    pub(crate) pins: Option<String>,
     /// The cell states the one emitted block conflates. None of them is the block's: which firing
     /// reached the emitter first decides nothing, since the block says the same of every one. Read
     /// against each other they agree on what the block states and differ on what it cannot — and what
@@ -114,10 +167,13 @@ pub struct MaskedArc {
 }
 
 impl MaskedArc {
-    /// The block on one line: `combinational A↑ -> Q↓`, `hidden S↑`, `setup CLK↑ & D↑`,
-    /// `min_pulse_width CLK↑`, `leakage`.
+    /// The block on one line, its kind leading the pins it measures between: `combinational A↑ -> Q↓`,
+    /// `hidden S↑`, `setup CLK↑ & D↑`, `min_pulse_width CLK↑`, `leakage`.
     pub fn arc_str(&self) -> String {
-        self.arc.clone()
+        match &self.pins {
+            Some(pins) => format!("{} {pins}", self.kind),
+            None => self.kind.to_string(),
+        }
     }
 
     /// Each conflated state as a brace-wrapped literal product (`{A=1, B=0, M=1}`), in the order the
@@ -604,87 +660,96 @@ impl<'a> DefineArc<'a> {
         }
     }
 
-    /// The firing this block renders, carrying the one state it measures from: the block on one line,
-    /// led by its own `-type` word, and that state. [`Blocks::state`] gathers these, and a block
+    /// The firing this block renders, carrying the one state it measures from: the kind of block it is,
+    /// the pins it measures between and that state. [`Blocks::state`] gathers these, and a block
     /// several firings render reports every state it conflates.
     fn firing(&self) -> MaskedArc {
         match self {
             DefineArc::Async(arc) => MaskedArc {
-                arc: format!(
-                    "async {}{} -> {}{}",
+                kind: BlockKind::Async,
+                pins: Some(format!(
+                    "{}{} -> {}{}",
                     arc.related,
                     related_edge(arc).arrow(),
                     arc.output,
                     arc.edge.arrow()
-                ),
+                )),
                 states: vec![arc.start.clone()],
             },
             DefineArc::Edge(arc) => MaskedArc {
-                arc: format!(
-                    "edge {}{} -> {}{}",
+                kind: BlockKind::Edge,
+                pins: Some(format!(
+                    "{}{} -> {}{}",
                     arc.related,
                     related_edge(arc).arrow(),
                     arc.output,
                     arc.edge.arrow()
-                ),
+                )),
                 states: vec![arc.start.clone()],
             },
             DefineArc::Combinational(arc) => MaskedArc {
-                arc: format!(
-                    "combinational {}{} -> {}{}",
+                kind: BlockKind::Combinational,
+                pins: Some(format!(
+                    "{}{} -> {}{}",
                     arc.related,
                     related_edge(arc).arrow(),
                     arc.output,
                     arc.edge.arrow()
-                ),
+                )),
                 states: vec![arc.start.clone()],
             },
             DefineArc::Hidden(h) => MaskedArc {
-                arc: format!("hidden {}{}", h.pin, h.edge.arrow()),
+                kind: BlockKind::Hidden,
+                pins: Some(format!("{}{}", h.pin, h.edge.arrow())),
                 states: vec![h.start.clone()],
             },
             DefineArc::Setup(pins, arc) => MaskedArc {
-                arc: format!(
-                    "setup {}{} & {}{}",
+                kind: BlockKind::Setup,
+                pins: Some(format!(
+                    "{}{} & {}{}",
                     pins.related.pin,
                     pins.related.edge.arrow(),
                     pins.pin.pin,
                     pins.pin.edge.arrow()
-                ),
+                )),
                 states: vec![arc.state.clone()],
             },
             DefineArc::Hold(pins, arc) => MaskedArc {
-                arc: format!(
-                    "hold {}{} & {}{}",
+                kind: BlockKind::Hold,
+                pins: Some(format!(
+                    "{}{} & {}{}",
                     pins.related.pin,
                     pins.related.edge.arrow(),
                     pins.pin.pin,
                     pins.pin.edge.arrow()
-                ),
+                )),
                 states: vec![arc.state.clone()],
             },
             DefineArc::NonSeqSetup(pins, arc) => MaskedArc {
-                arc: format!(
-                    "non_seq_setup {}{} & {}{}",
+                kind: BlockKind::NonSeqSetup,
+                pins: Some(format!(
+                    "{}{} & {}{}",
                     pins.related.pin,
                     pins.related.edge.arrow(),
                     pins.pin.pin,
                     pins.pin.edge.arrow()
-                ),
+                )),
                 states: vec![arc.state.clone()],
             },
             DefineArc::NonSeqHold(pins, arc) => MaskedArc {
-                arc: format!(
-                    "non_seq_hold {}{} & {}{}",
+                kind: BlockKind::NonSeqHold,
+                pins: Some(format!(
+                    "{}{} & {}{}",
                     pins.related.pin,
                     pins.related.edge.arrow(),
                     pins.pin.pin,
                     pins.pin.edge.arrow()
-                ),
+                )),
                 states: vec![arc.state.clone()],
             },
             DefineArc::MinPulseWidth(pin, arc) => MaskedArc {
-                arc: format!("min_pulse_width {}{}", pin.pin, pin.edge.arrow()),
+                kind: BlockKind::MinPulseWidth,
+                pins: Some(format!("{}{}", pin.pin, pin.edge.arrow())),
                 states: vec![arc.state.clone()],
             },
         }
@@ -1806,7 +1871,8 @@ impl<'a> LeakageBlock<'a> {
     fn firing(&self) -> MaskedArc {
         match self {
             LeakageBlock::Held(l) | LeakageBlock::Resting(l) => MaskedArc {
-                arc: "leakage".to_string(),
+                kind: BlockKind::Leakage,
+                pins: None,
                 states: vec![l.state.clone()],
             },
         }
@@ -5016,27 +5082,26 @@ Qb = "!Qa * B"
 
     #[test]
     fn a_block_and_its_firing_agree_on_the_type_word() {
-        // Each variant states its `-type` word twice, as two literals of its own arm: once in the block
-        // header it renders, once leading the one-line description its firing reports. Reading both off
-        // ONE value is what holds them together, and a report naming a taxonomy its block is not in is
-        // what the two drifting apart looks like. That holds only for a word some fixture reaches, so
-        // the words seen are collected and asserted to be the whole taxonomy — a fixture list that
-        // stopped reaching a variant would drop its description out of the comparison silently.
+        // Each variant states its taxonomy twice, in one arm of its own apiece: the `-type` word it
+        // writes as a literal into the block header, and the [`BlockKind`] its firing names, which the
+        // report on stderr leads with. Reading both off ONE value is what holds them together, and a
+        // firing naming a taxonomy its block is not in is what the two drifting apart looks like. That
+        // holds only for a word some fixture reaches, so the words seen are collected and asserted to be
+        // the whole taxonomy — a fixture list that stopped reaching a variant would drop its kind out of
+        // the comparison silently.
         let mut words: HashSet<String> = HashSet::new();
         for src in [IC_DFF, MUT_CONSTRAINED, BOTH_RESET] {
             let cell = analyse(src);
             let cell = cell.arc_view();
             let mut agree = |block: &DefineArc<'_>, group: &Group| {
                 let tcl = block.tcl(cell, group, false);
-                let reported = block.firing().arc_str();
+                let firing = block.firing();
                 let word = type_word(&tcl);
                 assert_eq!(
                     word,
-                    reported
-                        .split_whitespace()
-                        .next()
-                        .expect("a firing leads with its -type word"),
-                    "the block and its firing name one taxonomy:\n{tcl}{reported}"
+                    firing.kind.to_string(),
+                    "the block and its firing name one taxonomy:\n{tcl}{}",
+                    firing.arc_str()
                 );
                 words.insert(word.to_string());
             };
@@ -5068,7 +5133,7 @@ Qb = "!Qa * B"
             .collect();
         assert_eq!(
             words, taxonomy,
-            "the fixtures reach every -type word, so every firing's description is read"
+            "the fixtures reach every -type word, so every firing's kind is compared"
         );
     }
 
@@ -5182,7 +5247,7 @@ Q = "CLKB*b1 + !CLKB*Q"
         let leakage: Vec<&MaskedArc> = rendered
             .masked
             .iter()
-            .filter(|m| m.arc_str() == "leakage")
+            .filter(|m| m.kind == BlockKind::Leakage)
             .collect();
         assert!(
             !leakage.is_empty(),
@@ -5216,7 +5281,7 @@ Q = "CLKB*b1 + !CLKB*Q"
         let rendered = cell_arcs(&exposed_cell, ArcsTclOptions::default());
         eprintln!("{}", rendered.tcl);
         assert!(
-            rendered.masked.iter().all(|m| m.arc_str() != "leakage"),
+            rendered.masked.iter().all(|m| m.kind != BlockKind::Leakage),
             "exposure tells every rest state apart: {:?}",
             rendered.masked
         );
@@ -5675,9 +5740,8 @@ Q = "CLKB*M + !CLKB*Q"
         // rest states of the same unexposed M. A masked transition or constraint here would be a defect,
         // so every entry is checked against that pair before the toggle-specific claims below.
         for m in &rendered.masked {
-            let stated = m.arc_str();
             assert!(
-                stated.starts_with("hidden ") || stated == "leakage",
+                matches!(m.kind, BlockKind::Hidden | BlockKind::Leakage),
                 "the fixture reports only toggles and rest states: {m:?}"
             );
         }
@@ -5686,7 +5750,7 @@ Q = "CLKB*M + !CLKB*Q"
         let toggles: Vec<&MaskedArc> = rendered
             .masked
             .iter()
-            .filter(|m| m.arc_str().starts_with("hidden "))
+            .filter(|m| m.kind == BlockKind::Hidden)
             .collect();
         assert!(
             !toggles.is_empty(),
@@ -5694,10 +5758,9 @@ Q = "CLKB*M + !CLKB*Q"
             rendered.tcl
         );
         for m in &toggles {
-            // The report reads as the block's own kind and toggle, in full: every state the block
-            // conflates is one firing of exactly the toggle the description names. Reading the whole
-            // string back is what catches one variant rendering another's word — a `hidden` block
-            // reported as `edge S↑` names no firing of this cell.
+            // The report names the toggle in full, beside the kind selected above: every state the block
+            // conflates is one firing of exactly the toggle its pins name, and pins naming some other
+            // toggle name no firing of this cell.
             for s in &m.states {
                 let firings = cell
                     .arc_view()
@@ -5705,7 +5768,8 @@ Q = "CLKB*M + !CLKB*Q"
                     .iter()
                     .filter(|h| {
                         h.start == *s
-                            && format!("hidden {}{}", h.pin, h.edge.arrow()) == m.arc_str()
+                            && m.pins.as_deref()
+                                == Some(format!("{}{}", h.pin, h.edge.arrow()).as_str())
                     })
                     .count();
                 assert_eq!(
