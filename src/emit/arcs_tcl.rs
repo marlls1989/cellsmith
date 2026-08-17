@@ -470,7 +470,10 @@ impl HiddenIdentity {
 ///
 /// A variant holds the arc it renders from, so the block's text, the condition deciding whether the
 /// conditioned pass emits it at all, and the one-line description its firing reports are three
-/// renderings of one value.
+/// renderings of one value. A constraint variant holds the pins it switches alongside it — the two a
+/// separation holds apart, or the one a minimum pulse width constrains against its own second edge — so
+/// the `-type` word and the pins named on `-related_pin` and `-pin` are the one choice, and a block
+/// cannot hold a shape of pins its type does not switch.
 enum DefineArc<'a> {
     /// A transition an asynchronous pin drives, that pin being declared such by the spec.
     Async(&'a Arc),
@@ -480,18 +483,19 @@ enum DefineArc<'a> {
     Combinational(&'a Arc),
     /// An input toggle that settles with no output following it, drawn for its internal power.
     Hidden(&'a HiddenArc),
-    /// The setup member of a directed clock↔data separation.
-    Setup(ConstraintArc<'a>),
-    /// The hold member of a directed clock↔data separation.
-    Hold(ConstraintArc<'a>),
+    /// The setup member of a directed clock↔data separation, over the clock and the data pin it holds
+    /// apart.
+    Setup(RacingPins, ConstraintArc<'a>),
+    /// The hold member of a directed clock↔data separation, over the same pair.
+    Hold(RacingPins, ConstraintArc<'a>),
     /// The setup member of a symmetric separation — an oscillation or a mutual exclusion, where neither
-    /// pin is the clock of the other.
-    NonSeqSetup(ConstraintArc<'a>),
-    /// The hold member of a symmetric separation.
-    NonSeqHold(ConstraintArc<'a>),
-    /// The width a pulse must keep for the probed nodes to go on behaving, constraining one pin against
-    /// its own second edge.
-    MinPulseWidth(ConstraintArc<'a>),
+    /// pin is the clock of the other — over the pair it holds apart.
+    NonSeqSetup(RacingPins, ConstraintArc<'a>),
+    /// The hold member of a symmetric separation, over the same pair.
+    NonSeqHold(RacingPins, ConstraintArc<'a>),
+    /// The width a pulse must keep for the probed nodes to go on behaving, over the ONE pin it
+    /// constrains against that pin's own second edge.
+    MinPulseWidth(Racer, ConstraintArc<'a>),
 }
 
 impl<'a> DefineArc<'a> {
@@ -552,25 +556,25 @@ impl<'a> DefineArc<'a> {
                 s.push('\n');
                 s
             }
-            DefineArc::Setup(arc) => format!(
+            DefineArc::Setup(pins, arc) => format!(
                 "define_arc \\\n\t-type setup \\\n{}",
-                constraint_body(cell, group, arc, when)
+                constraint_body(cell, group, pins, arc, when)
             ),
-            DefineArc::Hold(arc) => format!(
+            DefineArc::Hold(pins, arc) => format!(
                 "define_arc \\\n\t-type hold \\\n{}",
-                constraint_body(cell, group, arc, when)
+                constraint_body(cell, group, pins, arc, when)
             ),
-            DefineArc::NonSeqSetup(arc) => format!(
+            DefineArc::NonSeqSetup(pins, arc) => format!(
                 "define_arc \\\n\t-type non_seq_setup \\\n{}",
-                constraint_body(cell, group, arc, when)
+                constraint_body(cell, group, pins, arc, when)
             ),
-            DefineArc::NonSeqHold(arc) => format!(
+            DefineArc::NonSeqHold(pins, arc) => format!(
                 "define_arc \\\n\t-type non_seq_hold \\\n{}",
-                constraint_body(cell, group, arc, when)
+                constraint_body(cell, group, pins, arc, when)
             ),
-            DefineArc::MinPulseWidth(arc) => format!(
+            DefineArc::MinPulseWidth(pin, arc) => format!(
                 "define_arc \\\n\t-type min_pulse_width \\\n{}",
-                constraint_body(cell, group, arc, when)
+                constraint_body(cell, group, &RacingPins::pulse(pin), arc, when)
             ),
         }
     }
@@ -585,11 +589,11 @@ impl<'a> DefineArc<'a> {
                 when_str(&arc.end, &arc.related)
             }
             DefineArc::Hidden(h) => hidden_when_str(h),
-            DefineArc::Setup(arc)
-            | DefineArc::Hold(arc)
-            | DefineArc::NonSeqSetup(arc)
-            | DefineArc::NonSeqHold(arc)
-            | DefineArc::MinPulseWidth(arc) => constraint_when_str(arc),
+            DefineArc::Setup(pins, arc)
+            | DefineArc::Hold(pins, arc)
+            | DefineArc::NonSeqSetup(pins, arc)
+            | DefineArc::NonSeqHold(pins, arc) => constraint_when_str(pins, arc),
+            DefineArc::MinPulseWidth(pin, arc) => constraint_when_str(&RacingPins::pulse(pin), arc),
         }
     }
 
@@ -632,65 +636,50 @@ impl<'a> DefineArc<'a> {
                 arc: format!("hidden {}{}", h.pin, h.edge.arrow()),
                 states: vec![h.start.clone()],
             },
-            DefineArc::Setup(arc) => {
-                let (related, pin) = (arc.switching.related(), arc.switching.pin());
-                MaskedArc {
-                    arc: format!(
-                        "setup {}{} & {}{}",
-                        related.pin,
-                        related.edge.arrow(),
-                        pin.pin,
-                        pin.edge.arrow()
-                    ),
-                    states: vec![arc.state.clone()],
-                }
-            }
-            DefineArc::Hold(arc) => {
-                let (related, pin) = (arc.switching.related(), arc.switching.pin());
-                MaskedArc {
-                    arc: format!(
-                        "hold {}{} & {}{}",
-                        related.pin,
-                        related.edge.arrow(),
-                        pin.pin,
-                        pin.edge.arrow()
-                    ),
-                    states: vec![arc.state.clone()],
-                }
-            }
-            DefineArc::NonSeqSetup(arc) => {
-                let (related, pin) = (arc.switching.related(), arc.switching.pin());
-                MaskedArc {
-                    arc: format!(
-                        "non_seq_setup {}{} & {}{}",
-                        related.pin,
-                        related.edge.arrow(),
-                        pin.pin,
-                        pin.edge.arrow()
-                    ),
-                    states: vec![arc.state.clone()],
-                }
-            }
-            DefineArc::NonSeqHold(arc) => {
-                let (related, pin) = (arc.switching.related(), arc.switching.pin());
-                MaskedArc {
-                    arc: format!(
-                        "non_seq_hold {}{} & {}{}",
-                        related.pin,
-                        related.edge.arrow(),
-                        pin.pin,
-                        pin.edge.arrow()
-                    ),
-                    states: vec![arc.state.clone()],
-                }
-            }
-            DefineArc::MinPulseWidth(arc) => {
-                let pin = arc.switching.pin();
-                MaskedArc {
-                    arc: format!("min_pulse_width {}{}", pin.pin, pin.edge.arrow()),
-                    states: vec![arc.state.clone()],
-                }
-            }
+            DefineArc::Setup(pins, arc) => MaskedArc {
+                arc: format!(
+                    "setup {}{} & {}{}",
+                    pins.related.pin,
+                    pins.related.edge.arrow(),
+                    pins.pin.pin,
+                    pins.pin.edge.arrow()
+                ),
+                states: vec![arc.state.clone()],
+            },
+            DefineArc::Hold(pins, arc) => MaskedArc {
+                arc: format!(
+                    "hold {}{} & {}{}",
+                    pins.related.pin,
+                    pins.related.edge.arrow(),
+                    pins.pin.pin,
+                    pins.pin.edge.arrow()
+                ),
+                states: vec![arc.state.clone()],
+            },
+            DefineArc::NonSeqSetup(pins, arc) => MaskedArc {
+                arc: format!(
+                    "non_seq_setup {}{} & {}{}",
+                    pins.related.pin,
+                    pins.related.edge.arrow(),
+                    pins.pin.pin,
+                    pins.pin.edge.arrow()
+                ),
+                states: vec![arc.state.clone()],
+            },
+            DefineArc::NonSeqHold(pins, arc) => MaskedArc {
+                arc: format!(
+                    "non_seq_hold {}{} & {}{}",
+                    pins.related.pin,
+                    pins.related.edge.arrow(),
+                    pins.pin.pin,
+                    pins.pin.edge.arrow()
+                ),
+                states: vec![arc.state.clone()],
+            },
+            DefineArc::MinPulseWidth(pin, arc) => MaskedArc {
+                arc: format!("min_pulse_width {}{}", pin.pin, pin.edge.arrow()),
+                states: vec![arc.state.clone()],
+            },
         }
     }
 }
@@ -716,7 +705,7 @@ struct Group {
     /// What this group's netlist calls each node the BLOCK carries beyond the cell's exposures — the
     /// victim nodes its own constraint probes, and nothing else. A block groups on the columns it
     /// carries, so it holds names for those and no others.
-    probed: BTreeMap<Symbol, Symbol>,
+    probed: HashMap<Symbol, Symbol>,
 }
 
 impl Group {
@@ -772,52 +761,40 @@ fn groups(cell: &AnalysedCell, extra: &[Symbol]) -> Vec<Group> {
         .collect()
 }
 
-/// The pins a constraint block switches, and the edge each makes: the PAIR a constraint holds apart, or
-/// the SINGLE pin a minimum-pulse-width block constrains — the pulse relating that pin to itself, so the
-/// block names it on both `-related_pin` and `-pin`.
-enum Switching {
-    Pair { related: Racer, pin: Racer },
-    Single { pin: Racer },
+/// The two pins one constraint block switches, and the edge each makes: the pin it names on
+/// `-related_pin` and the pin it names on `-pin`, in that order. A separation carries the pair it holds
+/// apart; a minimum pulse width carries its one pin and relates it to itself ([`RacingPins::pulse`]).
+struct RacingPins {
+    related: Racer,
+    pin: Racer,
 }
 
-impl Switching {
-    /// The pin the block names on `-related_pin`, with the edge it makes. For [`Switching::Single`] that
-    /// is the one pin: naming it twice follows FROM the variant — a pulse constrains a pin against
-    /// itself — rather than from two fields that happen to be equal.
-    fn related(&self) -> &Racer {
-        match self {
-            Switching::Pair { related, .. } => related,
-            Switching::Single { pin } => pin,
+impl RacingPins {
+    /// The pins a minimum-pulse-width block switches: the one pin it constrains, raced against its own
+    /// second edge, so the block names that pin on both `-related_pin` and `-pin`.
+    fn pulse(pin: &Racer) -> Self {
+        RacingPins {
+            related: pin.clone(),
+            pin: pin.clone(),
         }
     }
 
-    /// The pin the block names on `-pin`, with the edge it makes.
-    fn pin(&self) -> &Racer {
-        match self {
-            Switching::Pair { pin, .. } | Switching::Single { pin } => pin,
-        }
-    }
-
-    /// The edge `input` makes in the block's `-vector`, or `None` where it is none of the switching
+    /// The edge `input` makes in the block's `-vector`, or `None` where it is neither of the switching
     /// pins — the vector then holding it at the level it starts from.
     fn edge_of(&self, input: &str) -> Option<Edge> {
-        match self {
-            Switching::Pair { related, pin } => [related, pin]
-                .into_iter()
-                .find(|r| r.pin.as_str() == input)
-                .map(|r| r.edge),
-            Switching::Single { pin } => (pin.pin.as_str() == input).then_some(pin.edge),
-        }
+        [&self.related, &self.pin]
+            .into_iter()
+            .find(|r| r.pin.as_str() == input)
+            .map(|r| r.edge)
     }
 }
 
-/// What one constraint `define_arc` renders from: the pins it switches, the victim nodes with the level
-/// each holds at the probed state, the walk into that state with the levels sampled there, and the
-/// probed state itself. The five are read at one state and rendered by one block, so they travel as a
-/// named whole — several of them share a type, and telling them apart by position is what a name spares
-/// the block.
+/// What one constraint `define_arc` renders from besides the pins its variant carries: the victim nodes
+/// with the level each holds at the probed state, the walk into that state with the levels sampled
+/// there, and the probed state itself. The four are read at one state and rendered by one block, so they
+/// travel as a named whole — several of them share a type, and telling them apart by position is what a
+/// name spares the block.
 struct ConstraintArc<'a> {
-    switching: Switching,
     nodes: &'a [VictimNode],
     prevector: &'a [Minterm<Symbol>],
     levels: &'a ArcLevels,
@@ -827,37 +804,10 @@ struct ConstraintArc<'a> {
     state: &'a Minterm<Symbol>,
 }
 
-/// The pins every block of `c` switches: the pair a separation holds apart, or the one pin a minimum
-/// pulse width constrains against its own second edge. A constraint's members all switch the same pins —
-/// what differs between them is the `-type` — so this is a property of the constraint rather than of the
-/// block.
-fn constraint_switching(c: &Constraint) -> Switching {
-    let pin = Racer {
-        pin: c.pin.clone(),
-        edge: c.pin_edge,
-    };
-    let related = |name: &Symbol, edge: Edge| Racer {
-        pin: name.clone(),
-        edge,
-    };
-    match &c.kind {
-        ConstraintKind::SetupHold { clock, clock_edge } => Switching::Pair {
-            related: related(clock, *clock_edge),
-            pin,
-        },
-        ConstraintKind::NonSeq { other, other_edge } => Switching::Pair {
-            related: related(other, *other_edge),
-            pin,
-        },
-        ConstraintKind::MinPulseWidth => Switching::Single { pin },
-    }
-}
-
-/// The arc every block of `c` renders from: the pins it switches, the victim nodes with the level each
-/// holds at the probed state, the walk into that state with the levels sampled there, and that state.
+/// The arc every block of `c` renders from: the victim nodes with the level each holds at the probed
+/// state, the walk into that state with the levels sampled there, and that state.
 fn constraint_arc(c: &Constraint) -> ConstraintArc<'_> {
     ConstraintArc {
-        switching: constraint_switching(c),
         nodes: &c.nodes,
         prevector: &c.prevector,
         levels: &c.levels,
@@ -866,7 +816,10 @@ fn constraint_arc(c: &Constraint) -> ConstraintArc<'_> {
 }
 
 /// The blocks one constraint renders, in emission order — how many its kind fans out to, and which.
-/// Each renders from the one arc the constraint states ([`constraint_arc`]).
+/// Each renders from the pins its variant carries and the one arc the constraint states
+/// ([`constraint_arc`]). A constraint's members all switch the same pins, what differs between them
+/// being the `-type`; the kind deciding the fan-out is the kind naming the related pin, and both are
+/// read here in one match, so no member can be handed the pins of another kind.
 ///
 /// A SEPARATION is a pair — the setup member and the hold member, which Liberate characterises as
 /// separate arcs: `setup`/`hold` for a directed clock↔data constraint, `non_seq_setup`/`non_seq_hold`
@@ -877,28 +830,39 @@ fn constraint_arc(c: &Constraint) -> ConstraintArc<'_> {
 /// here — a pair's two members are the two sides of a separation between two pins, and a pulse has one
 /// pin, which the block names on both `-related_pin` and `-pin`.
 fn constraint_blocks(c: &Constraint) -> Vec<DefineArc<'_>> {
+    let pin = Racer {
+        pin: c.pin.clone(),
+        edge: c.pin_edge,
+    };
+    let separation = |related: &Symbol, edge: Edge| RacingPins {
+        related: Racer {
+            pin: related.clone(),
+            edge,
+        },
+        pin: pin.clone(),
+    };
     match &c.kind {
-        ConstraintKind::SetupHold { .. } => vec![
-            DefineArc::Setup(constraint_arc(c)),
-            DefineArc::Hold(constraint_arc(c)),
+        ConstraintKind::SetupHold { clock, clock_edge } => vec![
+            DefineArc::Setup(separation(clock, *clock_edge), constraint_arc(c)),
+            DefineArc::Hold(separation(clock, *clock_edge), constraint_arc(c)),
         ],
-        ConstraintKind::NonSeq { .. } => vec![
-            DefineArc::NonSeqSetup(constraint_arc(c)),
-            DefineArc::NonSeqHold(constraint_arc(c)),
+        ConstraintKind::NonSeq { other, other_edge } => vec![
+            DefineArc::NonSeqSetup(separation(other, *other_edge), constraint_arc(c)),
+            DefineArc::NonSeqHold(separation(other, *other_edge), constraint_arc(c)),
         ],
-        ConstraintKind::MinPulseWidth => vec![DefineArc::MinPulseWidth(constraint_arc(c))],
+        ConstraintKind::MinPulseWidth => vec![DefineArc::MinPulseWidth(pin, constraint_arc(c))],
     }
 }
 
 /// What an emitted constraint block states of the arc it renders: the constraint's kind, the pin it
 /// constrains with the edge that pin makes, and the nodes it probes. The kind is the whole of the
-/// classification: it decides which `-type`s the constraint fans out to ([`constraint_blocks`]) and which
-/// pin the block relates to, with the edge THAT pin makes ([`constraint_switching`]) — a separation's
-/// related half is the pins its variant carries, and a minimum pulse width relates the constrained pin
-/// to itself, which is the `pin` and `pin_edge` already here. Everything else a block carries — the
-/// `-ic` levels, the `-vector`'s held digits and the `-when` — names the OBSERVATION it was measured
-/// from, so one identity comes out as one general block however many observations were made of it, and
-/// each of those observations returns as its own conditioned block under `--when`.
+/// classification: it decides which `-type`s the constraint fans out to and which pin each of those
+/// blocks relates to, with the edge THAT pin makes ([`constraint_blocks`] reads both off it) — a
+/// separation's related half is the pins its variant carries, and a minimum pulse width relates the
+/// constrained pin to itself, which is the `pin` and `pin_edge` already here. Everything else a block
+/// carries — the `-ic` levels, the `-vector`'s held digits and the `-when` — names the OBSERVATION it
+/// was measured from, so one identity comes out as one general block however many observations were
+/// made of it, and each of those observations returns as its own conditioned block under `--when`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ConstraintIdentity {
     kind: ConstraintKind,
@@ -1084,6 +1048,7 @@ impl ConstraintColumns {
 fn constraint_body(
     cell: &AnalysedCell,
     group: &Group,
+    pins: &RacingPins,
     arc: &ConstraintArc<'_>,
     when: Option<&str>,
 ) -> String {
@@ -1102,16 +1067,13 @@ fn constraint_body(
     ));
     s.push_str(&format!(
         "\t-vector {{{}}} \\\n",
-        constraint_vector_str(cell, &columns.model, arc)
+        constraint_vector_str(cell, &columns.model, pins, arc)
     ));
     if let Some(w) = when {
         s.push_str(&format!("\t-when \"{w}\" \\\n"));
     }
-    s.push_str(&format!(
-        "\t-related_pin {} \\\n",
-        arc.switching.related().pin
-    ));
-    s.push_str(&format!("\t-pin {} \\\n", arc.switching.pin().pin));
+    s.push_str(&format!("\t-related_pin {} \\\n", pins.related.pin));
+    s.push_str(&format!("\t-pin {} \\\n", pins.pin.pin));
     s.push_str(&format!("\t-probe {{{}}} \\\n", columns.probe_list));
     s.push_str(&format!("\t{}\n", name_block(&group.names)));
     s.push('\n');
@@ -1129,6 +1091,7 @@ fn constraint_body(
 fn constraint_vector_str(
     cell: &AnalysedCell,
     exposed: &[Symbol],
+    pins: &RacingPins,
     arc: &ConstraintArc<'_>,
 ) -> String {
     let held = assignment(
@@ -1139,7 +1102,7 @@ fn constraint_vector_str(
     vector(
         cell,
         exposed,
-        |input| match arc.switching.edge_of(input) {
+        |input| match pins.edge_of(input) {
             Some(edge) => edge.rf().to_string(),
             None => if *held
                 .get(input)
@@ -1702,14 +1665,14 @@ fn hidden_when_str(h: &HiddenArc) -> Option<String> {
 /// land and measures nothing the cell does in response — so the outputs are exactly what tells two
 /// contexts of a state-holding cell apart, one input assignment reaching each over a different stored
 /// value. Naming their levels is what makes the condition name one observation.
-fn constraint_when_str(arc: &ConstraintArc<'_>) -> Option<String> {
+fn constraint_when_str(pins: &RacingPins, arc: &ConstraintArc<'_>) -> Option<String> {
     let held = arc
         .prevector
         .last()
         .expect("path_to seeds its chain with the probed node itself");
     let mut lits: Vec<(Symbol, bool)> = assignment(held)
         .into_iter()
-        .filter(|(k, _)| arc.switching.edge_of(k.as_str()).is_none())
+        .filter(|(k, _)| pins.edge_of(k.as_str()).is_none())
         .collect();
     lits.extend(arc.levels.outputs.iter().map(|(s, v)| (s.clone(), *v)));
     if lits.is_empty() {
@@ -1723,10 +1686,17 @@ fn constraint_when_str(arc: &ConstraintArc<'_>) -> Option<String> {
 /// command of its own: the block carries no `-type` and no `-pinlist`, and names the cell rather than a
 /// [`Group`], so the form it takes is what this type ranges over and the variant IS that form.
 ///
-/// A leakage block goes straight into the output. Two [`LeakageBlock::Resting`] blocks cannot collide,
-/// which is why leakage needs no equivalent of [`Blocks::state`]: walk-free means the inputs alone drive
-/// the cell into the state, so the inputs determine it, and two states resting under one `-when` cannot
-/// differ.
+/// A leakage block goes straight into the output: leakage needs no equivalent of [`Blocks::state`],
+/// because no two of these blocks can coincide. One block is one rest state — `leakage::derive` reads
+/// `Explored::order`, which holds each reachable state once. Two [`LeakageBlock::Resting`] blocks cannot
+/// collide: walk-free means the inputs alone drive the cell into the state, so the inputs determine it,
+/// and two states resting under one `-when` cannot differ. Two [`LeakageBlock::Primed`] blocks commonly
+/// share a `-when` — the condition names the inputs and every settled output, so two states it cannot
+/// separate differ in an internal node, and the cell leaks differently in each — and with no `-pinlist`
+/// there is no `-ic` to state that node's level, which leaves the walk as the only part of the block
+/// naming which state is meant. The walks do separate them: replaying one re-derives exactly one state,
+/// its first step's inputs settling to the start state and each later step being a single input toggle
+/// settled (`machine::explore`), so two states cannot share a walk.
 enum LeakageBlock<'a> {
     /// A state the cell must be WALKED into, which runs the walk: the `-prevector` primes the internal
     /// nodes, which is what distinguishes two rest states sharing an input assignment, and the `-when`
@@ -4638,12 +4608,9 @@ Q = "!R*(B + CLK*M + !CLK*Q)"
         assert!(q_arc("R", "async"), "R->Q is -type async");
     }
 
-    /// BOTH_RESET: edge and async arcs coexist on one output pin. CLK's rising edge captures
-    /// (`-type edge`); the declared async clear R forces Q low (`-type async`).
-    #[test]
-    fn both_reset_edge_and_async_coexist_on_one_pin() {
-        let cell = analyse(
-            r#"
+    /// A rising-edge DFF with a declared asynchronous clear: the clear reaches
+    /// [`DefineArc::Async`], which a spec naming no `async` pin has no way to build.
+    const BOTH_RESET: &str = r#"
 [[cell]]
 name = "BR"
 inputs = ["CLK", "D", "R"]
@@ -4653,8 +4620,13 @@ async = ["R"]
 M = "!R*(!CLK*D + CLK*M)"
 [cell.outputs]
 Q = "!R*(CLK*M + !CLK*Q)"
-"#,
-        );
+"#;
+
+    /// Edge and async arcs coexist on one output pin: CLK's rising edge captures (`-type edge`), and
+    /// the declared async clear R forces Q low (`-type async`).
+    #[test]
+    fn both_reset_edge_and_async_coexist_on_one_pin() {
+        let cell = analyse(BOTH_RESET);
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
         let has_clk_edge = tcl.split("define_arc").any(|frag| {
@@ -4799,6 +4771,11 @@ Qb = "!Qa * B"
         "non_seq_hold",
         "min_pulse_width",
     ];
+
+    /// The `-type` words a block rendered from a measurement leads with — the four [`DefineArc`]
+    /// variants that carry a transition or a hidden toggle. With [`CONSTRAINT_TYPES`] these are the
+    /// whole of Liberate's taxonomy here, one word per variant.
+    const MEASURED_TYPES: [&str; 4] = ["async", "edge", "combinational", "hidden"];
 
     /// The `-type` word the FIRST block of each constraint kind's fan-out leads with — the one an
     /// oscillation annotation rides in.
@@ -4948,24 +4925,29 @@ Qb = "!Qa * B"
 
     #[test]
     fn a_block_and_its_firing_agree_on_the_type_word() {
-        // One classification per emission: the `-type` line and the description the firing reports are
-        // written by the same variant, from one value built once. A second classification of the same
-        // arc could disagree with the first, and the report would then name a taxonomy the block is not
-        // in — which is the state this makes unreachable.
-        for src in [IC_DFF, MUT_CONSTRAINED] {
+        // Each variant states its `-type` word twice, as two literals of its own arm: once in the block
+        // header it renders, once leading the one-line description its firing reports. Reading both off
+        // ONE value is what holds them together, and a report naming a taxonomy its block is not in is
+        // what the two drifting apart looks like. That holds only for a word some fixture reaches, so
+        // the words seen are collected and asserted to be the whole taxonomy — a fixture list that
+        // stopped reaching a variant would drop its description out of the comparison silently.
+        let mut words: HashSet<String> = HashSet::new();
+        for src in [IC_DFF, MUT_CONSTRAINED, BOTH_RESET] {
             let cell = analyse(src);
             let cell = cell.arc_view();
-            let agree = |block: &DefineArc<'_>, group: &Group| {
+            let mut agree = |block: &DefineArc<'_>, group: &Group| {
                 let tcl = block.tcl(cell, group, false);
                 let reported = block.firing().arc_str();
+                let word = type_word(&tcl);
                 assert_eq!(
-                    type_word(&tcl),
+                    word,
                     reported
                         .split_whitespace()
                         .next()
                         .expect("a firing leads with its -type word"),
                     "the block and its firing name one taxonomy:\n{tcl}{reported}"
                 );
+                words.insert(word.to_string());
             };
             let measured = whole(cell);
             let mut checked = 0;
@@ -4988,6 +4970,15 @@ Qb = "!Qa * B"
             }
             assert!(checked > 0, "the fixture emits blocks to check");
         }
+        let taxonomy: HashSet<String> = MEASURED_TYPES
+            .iter()
+            .chain(&CONSTRAINT_TYPES)
+            .map(|w| w.to_string())
+            .collect();
+        assert_eq!(
+            words, taxonomy,
+            "the fixtures reach every -type word, so every firing's description is read"
+        );
     }
 
     #[test]
