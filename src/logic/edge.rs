@@ -3407,7 +3407,7 @@ GCLK = "CLK*EL"
                 let mut v: Vec<String> = c
                     .leakage
                     .iter()
-                    .map(|l| format!("{:?} {:?}", l.inputs, l.outputs))
+                    .map(|l| format!("{:?} {:?}", l.inputs, l.levels.outputs))
                     .collect();
                 v.sort();
                 v

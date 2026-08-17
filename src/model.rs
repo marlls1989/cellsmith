@@ -611,8 +611,8 @@ pub struct AnalysedCell {
     /// output unchanged — precomputed once by the shared machine pass
     /// ([`crate::logic::analysis::analyse_machine`]) and consumed by the arcs emitter.
     pub(crate) hidden_arcs: Vec<HiddenArc>,
-    /// The cell's static leakage states — the settled seed states of the machine exploration —
-    /// precomputed once by the shared machine pass
+    /// The cell's static leakage states — one per fully-initialised reachable rest state of the machine
+    /// exploration — precomputed once by the shared machine pass
     /// ([`crate::logic::analysis::analyse_machine`]) and consumed by the arcs emitter.
     pub(crate) leakage: Vec<LeakageState>,
     /// The cell's detected hazards — one [`Hazard`] per (cause, outcome) pair a probe observes: a race
@@ -2064,8 +2064,9 @@ M = "CLK"
     #[test]
     fn per_alias_nodes_fan_the_arcs_out_by_group() {
         // A block addresses its exposed column by one name, so aliases whose netlists disagree on it
-        // cannot share a block: each group names only its own aliases. Leakage carries no exposed
-        // column, so it stays one block naming both.
+        // cannot share a block: each group names only its own aliases. A bare leakage block carries no
+        // exposed column, so it stays one block naming both; a walked one carries the column and fans
+        // out by group exactly as a measured block does.
         let cell = analyse_one(NODES_SRC);
         let arcs = crate::emit::arcs_tcl::cell_arcs_tcl(
             &cell,
@@ -2083,9 +2084,26 @@ M = "CLK"
         }
         for block in arcs.split("define_leakage").skip(1) {
             let block = block.split("\n\n").next().unwrap_or(block);
+            let (x1, x4) = (block.contains("XI7/m"), block.contains("XI4/m"));
+            if !block.contains("-pinlist") {
+                assert!(
+                    !x1 && !x4,
+                    "a bare block carries no exposed column:\n{block}"
+                );
+                assert!(
+                    block.contains("{ DFFX1 DFFX4 }"),
+                    "no column divides a bare block, so it names every alias:\n{block}"
+                );
+                continue;
+            }
             assert!(
-                block.contains("{ DFFX1 DFFX4 }"),
-                "leakage carries no exposed column, so no group divides it:\n{block}"
+                x1 ^ x4,
+                "a walked block addresses one netlist node:\n{block}"
+            );
+            let named = if x1 { "{ DFFX1 }" } else { "{ DFFX4 }" };
+            assert!(
+                block.contains(named),
+                "the block names only the aliases that agree on it:\n{block}"
             );
         }
     }
@@ -2439,7 +2457,7 @@ Q = "CLK*M + !CLK*Q"
                 .iter()
                 .map(|l| LeakageRecord {
                     inputs: l.inputs.clone(),
-                    outputs: l.outputs.clone(),
+                    outputs: l.levels.outputs.clone(),
                 })
                 .collect(),
             constraints: cell
@@ -2529,9 +2547,9 @@ Q = "CLK*M + !CLK*Q"
             assert_same_cell_records(&exposed, &plain);
 
             // The arcs differ in exactly one way: every ARC block of the exposing run lists the node
-            // among its columns, and no block of the other run does. Leakage is rendered separately
-            // below — its blocks state the cell's own pins, so an exposed node never earns a column
-            // there and they are no part of this claim.
+            // among its columns, and no block of the other run does. Leakage is switched off for this
+            // comparison and asserted on its own below, where a walked block states the exposed node
+            // through its own `-pinlist`.
             let opts = crate::emit::arcs_tcl::ArcsTclOptions {
                 emit_leakage: false,
                 ..Default::default()
@@ -2559,11 +2577,11 @@ Q = "CLK*M + !CLK*Q"
                 "cell {cell}: no exposure-free block lists {node}: {without_node:?}"
             );
 
-            // A leakage block names no column at all — its `-when` states the inputs held and every
-            // output's level, and a walked one primes the internals through its `-prevector` — so the
-            // exposed node is nowhere in it, under EITHER run.
+            // A walked leakage block states the exposed node through its own `-pinlist`, exactly as a
+            // measured block does — so it names the node under the exposing run and none does under the
+            // exposure-free one. A bare block carries no column under either run.
             let all = crate::emit::arcs_tcl::ArcsTclOptions::default();
-            for c in [&exposed, &plain] {
+            for (c, expect_named) in [(&exposed, true), (&plain, false)] {
                 let tcl = crate::emit::arcs_tcl::cell_arcs_tcl(c, all);
                 let leakage: Vec<String> = tcl
                     .split("define_leakage")
@@ -2577,9 +2595,7 @@ Q = "CLK*M + !CLK*Q"
                 let columns = |b: &str| -> Vec<String> {
                     b.lines()
                         .map(str::trim)
-                        .filter(|l| {
-                            l.starts_with("-pinlist ") || l.starts_with("-prevector_pinlist ")
-                        })
+                        .filter(|l| l.starts_with("-pinlist "))
                         .map(str::to_owned)
                         .collect()
                 };
@@ -2589,9 +2605,13 @@ Q = "CLK*M + !CLK*Q"
                 );
                 for block in &leakage {
                     let cols = columns(block);
-                    assert!(
-                        !cols.iter().any(|l| names(l)),
-                        "cell {cell}: no leakage column names {node}: {cols:?}"
+                    if cols.is_empty() {
+                        continue; // a bare block is column-free under either run
+                    }
+                    assert_eq!(
+                        cols.iter().any(|l| names(l)),
+                        expect_named,
+                        "cell {cell}: a walked leakage column names {node} exactly when the run exposes it: {cols:?}"
                     );
                 }
             }

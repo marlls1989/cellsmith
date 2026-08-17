@@ -292,6 +292,7 @@ Q = "CLKA*D + !CLKA*(CLKB*D + !CLKB*Q)"
 name = "MCDFF"
 inputs = ["CLKA", "CLKB", "D"]
 clock = ["CLKA", "CLKB"]
+expose = ["M"]                 # so each held rest state keeps a block of its own
 constraint_arcs = true
 [cell.internal]
 M = "!CLKA*D + CLKA*M"
@@ -348,6 +349,7 @@ T = "M*!M2 + !M*M2"
 name = "HPIPE"
 inputs = ["CLKA", "CLKB", "D"]
 clock = ["CLKA", "CLKB"]
+expose = ["M1", "M2"]          # so each held rest state keeps a block of its own
 constraint_arcs = true
 [cell.internal]
 M1 = "!CLKA*D + CLKA*M1"
@@ -362,6 +364,7 @@ Q = "!CLKB*M2 + CLKB*Q"
 name = "DCMUX"
 inputs = ["CLKA", "CLKB", "DA", "DB"]
 clock = ["CLKA", "CLKB"]
+expose = ["MA", "MB"]          # so each held rest state keeps a block of its own
 constraint_arcs = true
 [cell.internal]
 MA = "!CLKA*DA + CLKA*MA"
@@ -389,6 +392,8 @@ GCLK = "CLK*EL"
 name = "ICM"
 inputs = ["CLKA", "CLKB", "RA", "RB", "S"]
 clock = ["CLKA", "CLKB"]
+# so each held rest state keeps a block of its own: every stage of both chains holds a level
+expose = ["sela1", "sela2", "enA", "selb1", "selb2", "enB"]
 constraint_arcs = true
 [cell.internal]
 sela = "!enB*!S"
@@ -427,6 +432,7 @@ Z = "A*B"
 [[cell]]
 name = "TRW"
 inputs = ["C", "D", "E"]
+expose = ["L"]                 # so each held rest state keeps a block of its own
 constraint_arcs = true
 [cell.internal]
 L = "!C*D + C*L"

@@ -325,7 +325,10 @@ inputs but differ in internal state are two arcs, each with its own prevector, a
 Whether both are *emitted* is a separate question. A block reaches only its `-pinlist` columns, so two
 such arcs render the same block wherever the state that separates them has no column of its own; the
 cell states that block once and reports the arcs it conflates, naming each of their states so the node
-worth adding to `expose` can be read off them.
+worth adding to `expose` can be read off them. A cell's rest states conflate the same way: two rest
+states sharing every column a `define_leakage` block reaches still differ in a state variable no column
+names, render one block between them, and are reported through the same channel, naming each rest
+state's full machine state.
 
 Because arcs are found by *reaching* states and *settling*, the correctness properties are structural:
 related pins are inputs, impossible arcs are never reached (they oscillate), and input-forced transitions
@@ -343,8 +346,8 @@ with no output following it, and the five constraint types — and each variant 
 transition's kind is decided in one place, `TransitionIdentity::of`, and the identity it returns — the
 transition together with that kind — is what the general pass groups the arc under. The exploration's
 rest states come out as `define_leakage` blocks, one per state the cell can sit and leak in, and the two
-forms that command takes are the variants of `LeakageBlock`: the walk that primes the cell into a rest
-state, and the condition the inputs alone settle it at.
+forms that command takes are the variants of `LeakageBlock`: the columns holding every pin and exposed
+node at the level the rest state carries, and the condition the inputs alone settle it at.
 
 Each arc class is emitted in two passes. The **general pass** always runs. It groups the class's derived
 arcs by **transition** — the output pin and the edge it makes, the related pin and the edge IT makes —
@@ -364,13 +367,40 @@ state and `combinational` from another** falls in two groups and emits **both** 
 That is the intended output: `-type` declares the arc's nature to Liberate and is decided per firing, so
 collapsing across it would drop one of the two kinds from the generated library.
 
+### The leakage blocks
+
+A `define_leakage` block measures the cell's **static leakage at one rest state** — a single settled
+point of the exploration, not a transition into it. The unit a block states is the rest state itself,
+not the input assignment that reaches it: two rest states can share an input assignment while differing
+in what the cell holds internally — a bistable's whole point — so stating the input assignment alone
+would conflate them.
+
+A rest state the inputs alone drive the cell into is stated by its `-when`: the inputs held there and
+the level every output settles at, and the block is that one line. A rest state the cell reaches only
+through a sequence of input changes — one it must be walked into — states itself through the block's own
+columns instead. `-pinlist` names the inputs, then the cell's exposed internal nodes, then the outputs,
+and `-vector` holds every one of those columns at the level the rest state carries. A `-vector` column
+**forces** its node to the level it names, which is why every column here is a `0` or a `1`. A rest state
+is measured at steady state, so forcing each column to the level the state already rests at states that
+state rather than disturbing it.
+
+The exposed columns are what tell apart two rest states sharing an input assignment: an internal node
+has no pin, so a `-when` cannot name it, and Liberate takes a node declared in the `-pinlist` like any
+other, so its `-vector` column is what states it. Two rest states differing only in a node the cell does
+not expose render one block between them, conflated and reported as above.
+
+The BFS walk that reaches a rest state is internal to the model: `LeakageState` identifies the state by
+it, and it is what distinguishes a rest state the inputs drive the cell into from one the cell is
+walked into.
+
 ### The shared machine pass
 
 The whole setup happens once, over the **minimised** model. Building the machine takes the cell's shared
 per-cell signal map (minted once when the cell is analysed, and reused here — no rebuild): each state
 variable's δ and each combinational output's δ are **direct lookups** into that map, and it runs the
-**one** exploration BFS seeded from all of them. The same shared machine yields **both** the arcs and the
-detected hazards.
+**one** exploration BFS seeded from all of them. The one shared machine is what `analyse_machine` draws
+every derivation off: the transition and hidden arcs, the detected hazards, the constraints that remedy
+them, the edge-register classification, and the leakage states.
 
 Two exploration budgets gate the whole shared pass, each charged against work the pass actually performs
 rather than the cell's declared shape (a cell is not turned away for having many inputs or many state

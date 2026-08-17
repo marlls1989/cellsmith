@@ -21,8 +21,8 @@
 //!      included) to its value there. It is not emitted: no `define_arc` carries a `-prevector`, and
 //!      the start condition reaches Liberate through `-ic`, which names the level of every `-pinlist`
 //!      entry. The walk is what identifies the start state, and both `-ic` and the vector's held
-//!      columns are read off its last step. (A `define_leakage` that must WALK the cell into its rest
-//!      state does run one — see [`super::leakage`].)
+//!      columns are read off its last step. (A `define_leakage` states its rest state through its own
+//!      columns — see [`super::leakage`].)
 
 use std::collections::HashSet;
 use std::hash::Hash;
