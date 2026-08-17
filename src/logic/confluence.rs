@@ -112,19 +112,6 @@ fn racer(node: &Minterm<Symbol>, pin: &Symbol) -> Racer {
     }
 }
 
-/// The detected hazards of one pass over the reachable state machine, split by the outcome observed —
-/// every record carries [`Cause::Race`], the cause this pass probes for. No generated constraint is
-/// nested here — `super::constraint` turns these into constraints downstream.
-#[derive(Debug, Default)]
-pub struct DetectedHazards {
-    /// [`Outcome::Indeterminate`]: races whose settled state depends on which edge lands first — one
-    /// record per observation, a pair diverging from several states filing one for each.
-    pub(crate) order_dependence: Vec<Hazard>,
-    /// [`Outcome::Oscillation`]: pairs (or single toggles) that drive a periodic, non-settling cycle —
-    /// one record per observation, a pair ringing from several states filing one for each.
-    pub(crate) oscillation: Vec<Hazard>,
-}
-
 /// Why every state value the hazard path reads is defined: a settle from a fully-initialised state
 /// leaves every state column determinate. `machine`'s `step` evaluates each δ over the node's concrete
 /// inputs and state values, and the minimise invariant I3 bounds a δ's support to the inputs plus the
@@ -163,7 +150,11 @@ pub(super) fn oscillating_group(cycle: &[Minterm<Symbol>], state_vars: &[Symbol]
 /// confluent cells (ordinary combinational / self-holding gates that always settle) and for cells with
 /// no state to latch. The input count empties only the PAIR probes: a single toggle races the cell's own
 /// feedback and is probed however few inputs there are.
-pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> DetectedHazards {
+///
+/// Every record carries [`Cause::Race`], the cause this pass probes for, and the two outcomes share the
+/// one list: a reader tells them apart by the [`Outcome`] on the record rather than by which list it
+/// came out of.
+pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<Hazard> {
     let cell = m.cell;
     let inputs = &cell.inputs;
     let n = inputs.len();
@@ -171,7 +162,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
     let state_vars = &m.state_vars;
     let k = state_vars.len();
     if k == 0 {
-        return DetectedHazards::default(); // no state to latch ⇒ always confluent
+        return Vec::new(); // no state to latch ⇒ always confluent
     }
 
     // Both coordinate halves, stepped together, exactly as the original exploration stepped them: a
@@ -200,13 +191,12 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
     // independent — the parallel unit — and the results are concatenated in the `reduce` below.
     //
     // Every observation this body makes is reported, under either outcome.
-    let per_state = |(discovered, s): (usize, &Minterm<Symbol>)| -> (Vec<Hazard>, Vec<Hazard>) {
+    let per_state = |(discovered, s): (usize, &Minterm<Symbol>)| -> Vec<Hazard> {
         debug_assert!(
             m.arc_eligible(s),
             "detect: a probe may only start from a fully-initialised state"
         );
-        let mut order_dependence: Vec<Hazard> = Vec::new();
-        let mut oscillation: Vec<Hazard> = Vec::new();
+        let mut detected: Vec<Hazard> = Vec::new();
 
         // `path_to` depends only on `s`: compute the prevector into `s` once and clone it per hazard.
         let prevector_s = ex.path_to(s, inputs);
@@ -236,7 +226,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
             if let Err(cycle) = r {
                 let group = oscillating_group(cycle, state_vars);
                 let node_levels = node_levels_at(s, &group);
-                oscillation.push(Hazard {
+                detected.push(Hazard {
                     cause: Cause::Race {
                         pins: vec![racer(s, &inputs[i])],
                     },
@@ -258,7 +248,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
         // on it — a lone toggle rings around the cell's own feedback whatever its input count, and it is
         // the record every downstream claim about a ringing single toggle rests on.
         if n < 2 {
-            return (order_dependence, oscillation);
+            return detected;
         }
 
         for i in 0..n {
@@ -299,7 +289,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                     // (e.g. a mutex's) constraint, standing in for the divergence-derived one the
                     // combinational-neighbourhood filter below discards for it.
                     let node_levels = node_levels_at(s, &group);
-                    oscillation.push(Hazard {
+                    detected.push(Hazard {
                         cause: Cause::Race {
                             pins: vec![racer(s, x), racer(s, y)],
                         },
@@ -354,7 +344,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                 let mut settled_set: BTreeSet<Minterm<Symbol>> = BTreeSet::new();
                 settled_set.insert(s_xy.project_to(&group));
                 settled_set.insert(s_yx.project_to(&group));
-                order_dependence.push(Hazard {
+                detected.push(Hazard {
                     cause: Cause::Race {
                         pins: vec![racer(s, x), racer(s, y)],
                     },
@@ -371,33 +361,23 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
             }
         }
 
-        (order_dependence, oscillation)
+        detected
     };
 
     // Probe every fully-initialised reachable state in parallel, then fold the per-state results
     // together. The filter comes AFTER `enumerate`, so `discovered` stays the BFS index of the state —
     // the key a downstream reader tells two observations apart by — rather than a position in the
-    // filtered sequence. The merge concatenates both halves, which is associative, so the folded result
-    // holds the same records regardless of state/thread order.
-    let (order_dependence, oscillation) = ex
-        .order
+    // filtered sequence. The merge concatenates, which is associative, so the folded result holds the
+    // same records regardless of state/thread order.
+    ex.order
         .par_iter()
         .enumerate()
         .filter(|(_, s)| m.arc_eligible(s))
         .map(per_state)
-        .reduce(
-            || (Vec::new(), Vec::new()),
-            |(mut oa, mut osca), (mut ob, mut oscb)| {
-                oa.append(&mut ob);
-                osca.append(&mut oscb);
-                (oa, osca)
-            },
-        );
-
-    DetectedHazards {
-        order_dependence,
-        oscillation,
-    }
+        .reduce(Vec::new, |mut a, mut b| {
+            a.append(&mut b);
+            a
+        })
 }
 
 #[cfg(test)]

@@ -45,7 +45,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use espresso_logic::{Minterm, Symbol};
+use espresso_logic::{BoolExpr, Minterm, Symbol};
 
 use crate::logic::arcs::{ArcLevels, Edge};
 
@@ -136,59 +136,25 @@ pub struct Hazard {
     pub(crate) discovered: usize,
 }
 
-/// One input state as a brace-wrapped literal product (`{S=1, R=0}`).
-fn render_state(state: &Minterm<Symbol>) -> String {
-    format!("{{{}}}", crate::logic::fixed_pairs(state, &[]).join(", "))
-}
-
-/// A prevector as the input-state path that drives the machine — establishing its hidden state along
-/// the way — into the pre-hazard state: each state a brace-wrapped literal product, joined by ` → `.
-/// The last state is the pre-hazard state.
-fn render_path(prevector: &[Minterm<Symbol>]) -> String {
-    prevector
-        .iter()
-        .map(render_state)
-        .collect::<Vec<_>>()
-        .join(" → ")
-}
-
-/// The pre-hazard state: the reachable stable state the probe toggles from — the prevector's last input
-/// state.
-fn render_pre_state(prevector: &[Minterm<Symbol>]) -> String {
-    render_state(
-        prevector
-            .last()
-            .expect("path_to seeds its chain with the probed node itself"),
-    )
-}
-
 impl Hazard {
-    /// The condition as a Boolean product of literals (`A*B`, `!R*S`, …).
-    pub fn condition_str(&self) -> String {
-        crate::logic::literals_str(&self.condition)
-    }
-
-    /// A competing settled state as a brace-wrapped literal product (`{Qa=1, Qb=0}`).
-    pub fn state_str(state: &Minterm<Symbol>) -> String {
-        render_state(state)
-    }
-
-    /// Every state the machine lands at when the timing is honoured, each rendered by [`Self::state_str`]
-    /// and kept in `settled`'s order.
-    pub fn settled_strs(&self) -> Vec<String> {
-        self.settled.iter().map(render_state).collect()
+    /// The condition as a product of literals over the fixed inputs of the state the hazard is probed
+    /// from (`A & B`, `!R & S`, …).
+    pub fn condition(&self) -> BoolExpr {
+        crate::logic::condition(&self.condition)
     }
 
     /// The path into the pre-hazard state: the sequence of input states the machine walks — driving its
     /// hidden state — to reach the state the probe acts on. Last state is the pre-hazard state.
-    pub fn path_str(&self) -> String {
-        render_path(&self.prevector)
+    pub fn path(&self) -> &[Minterm<Symbol>] {
+        &self.prevector
     }
 
     /// The pre-hazard state: the reachable stable state the probe starts from (the path's last input
     /// state).
-    pub fn pre_state_str(&self) -> String {
-        render_pre_state(&self.prevector)
+    pub fn pre_state(&self) -> &Minterm<Symbol> {
+        self.prevector
+            .last()
+            .expect("path_to seeds its chain with the probed node itself")
     }
 
     /// A fixed total order over the four (cause, outcome) cells, so that two hazards can be ordered by
@@ -238,7 +204,7 @@ Qb = "!Qa * B"
         // A `when` is the assignment the transition happens FROM, and this ring is A and B toggled
         // together: the pair rises out of the idle state, where neither request is up. (Co-asserted is
         // where it rings, and that is the pair's destination, not its condition.)
-        assert_eq!(a.condition_str(), "!A*!B");
+        assert_eq!(a.condition().to_string(), "!A & !B");
         // The A*B co-assertion is a pair-probe race, carrying the A/B pins the generated constraint
         // needs.
         let pins = match &a.cause {
@@ -257,7 +223,11 @@ Qb = "!Qa * B"
         );
         // Competing settled states: Qa high / Qb low, and the mirror.
         assert_eq!(a.settled.len(), 2);
-        let states: BTreeSet<String> = a.settled.iter().map(Hazard::state_str).collect();
+        let states: BTreeSet<String> = a
+            .settled
+            .iter()
+            .map(|s| crate::report::State(s).to_string())
+            .collect();
         assert_eq!(
             states,
             ["{Qa=1, Qb=0}".to_string(), "{Qa=0, Qb=1}".to_string()]

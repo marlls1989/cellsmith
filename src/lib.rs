@@ -6,13 +6,14 @@
 //! carries no stability guarantee across any version, and using it as a library is at your own risk.
 //!
 //! Modules: the input model ([`model`]), the logic core ([`logic`]: signal resolution, the state
-//! machine, arc and hazard derivation, and state-table regions), and the arcs / Verilog / Liberty
-//! emitters ([`emit`]).
+//! machine, arc and hazard derivation, and state-table regions), the arcs / Verilog / Liberty
+//! emitters ([`emit`]), and the diagnostics' rendering vocabulary ([`report`]).
 #![doc(hidden)]
 
 pub mod emit;
 pub mod logic;
 pub mod model;
+pub mod report;
 
 #[cfg(test)]
 mod smoke {

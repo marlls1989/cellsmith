@@ -59,12 +59,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   block's `-when` states the standing assignment its measured transition starts at, and the pins it
   switches are written as edges rather than as literals of the condition. Race-cause hazards used to
   carry the assignment the machine is left in once both edges have landed, which disagreed with the
-  `-when` the block beside them wrote: a mutex's ring is now reported and annotated under `!A*!B`,
-  the idle state its two requests rise out of, rather than under the `A*B` they land in.
+  `-when` the block beside them wrote: a mutex's ring is now reported under `!A & !B`, the idle state
+  its two requests rise out of, rather than under the `A & B` they land in.
 
 - **A cell with a single input is reported when it rings.** A race is between two pins and needs
   both, while a toggle that leaves the cell ringing around its own feedback needs only the one, so a
   one-input ring — `Q = "!(EN*Q)"` — is reported as an oscillation instead of passing silently.
+
+- **A condition is written `A & !B`.** Every `-when` value in the emitted Tcl, and the `when:` field
+  of the report on stderr, spell the product with `&` and the negation with `!`. Liberate accepts that
+  spelling of a condition as readily as the `A*!B` one it replaces.
 
 - **`constraint_arcs` takes a pin name or a list of them as well as `true`, and a name selects the
   constraints that pin has a role in.** The roles are the kind's. A non-sequential separation is
@@ -76,12 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spec error — `constraint pin "Q" is not a declared input` — rather than a selection that matches
   nothing.
 
-- **An oscillation is annotated on the constraint it motivated.** The `# oscillation:` comment in
-  the emitted Tcl, and the `/* oscillation: … */` form in the `.lib`, lead the constraint block
-  generated from the ringing observation instead of heading the file. A comment explains what it
-  accompanies, so a ring with no constraint beside it carries none — a ring observed under a lone
-  toggle names one pin, and one edge has nothing to be separated from. Every detected hazard reaches
-  the user through the report on stderr either way.
+- **A hazard is reported on stderr and nowhere else.** The emitted Tcl and `.lib` state the timing
+  that removes a hazard — the constraint blocks — and carry no comment about the hazard itself, so the
+  report on stderr is the run's whole account of what was detected, for every hazard alike rather than
+  only for the ones a constraint was asked for.
 
 - **A `define_leakage` block states its rest state through its own columns.** The `-pinlist` names the
   inputs, the cell's exposed internal nodes, and the outputs, and the `-vector` holds every one of those

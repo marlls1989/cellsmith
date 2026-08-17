@@ -356,7 +356,11 @@ mod tests {
     /// the opening edge's stable state, then the reference, where the closing edge settles. Every
     /// pulse record states exactly those two: a probe whose reference does not converge files nothing.
     fn waypoints(hz: &Hazard) -> Vec<String> {
-        let stated = hz.settled_strs();
+        let stated: Vec<String> = hz
+            .settled
+            .iter()
+            .map(|s| crate::report::State(s).to_string())
+            .collect();
         assert_eq!(
             stated.len(),
             2,
@@ -557,7 +561,7 @@ Qn = "!(S+Q)"
         assert_eq!(rings[0].group, ["Q", "Qn"]);
         // That race is the simultaneous release, so it is toggled FROM the co-asserted state, which is
         // the assignment its `when` states. (It rings at S=R=0, which is where the release lands.)
-        assert_eq!(rings[0].condition_str(), "S*R");
+        assert_eq!(rings[0].condition().to_string(), "S & R");
     }
 
     #[test]
@@ -634,7 +638,7 @@ Qb = "!Qa * B"
         assert_eq!(rings[0].group, ["Qa", "Qb"]);
         // That race is the pair asserted together, so it is toggled FROM the idle state, which is the
         // assignment its `when` states. (It rings at A=B=1, which is where the pair lands.)
-        assert_eq!(rings[0].condition_str(), "!A*!B");
+        assert_eq!(rings[0].condition().to_string(), "!A & !B");
     }
 
     #[test]

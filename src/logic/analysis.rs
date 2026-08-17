@@ -306,12 +306,7 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     // The one `hazards` record set: what the two detection passes returned, concatenated. Generation
     // reads it whole — a constraint follows its record's cause, so both passes' records reach the one
     // generator.
-    let hazards: Vec<Hazard> = detected
-        .order_dependence
-        .into_iter()
-        .chain(detected.oscillation)
-        .chain(width_dependence)
-        .collect();
+    let hazards: Vec<Hazard> = detected.into_iter().chain(width_dependence).collect();
     let constraints = match &cell.constraint_arcs_declared {
         // Nothing is wanted of any pin, so generation is skipped whole rather than run and discarded.
         ConstraintPins::Off => Vec::new(),

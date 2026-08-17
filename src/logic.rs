@@ -15,7 +15,7 @@ pub mod width;
 
 use std::collections::BTreeMap;
 
-use espresso_logic::{Minterm, Symbol};
+use espresso_logic::{BoolExpr, Minterm, Symbol};
 
 /// The fixed (non-don't-care) assignments of a minterm as a `name -> value` map. Used by the arcs
 /// emitter to read an arc's input vectors.
@@ -27,36 +27,16 @@ pub(crate) fn assignment(m: &Minterm<Symbol>) -> BTreeMap<Symbol, bool> {
         .collect()
 }
 
-/// A minterm's fixed values as a product of literals: `A*B`, `!R*S` (in the minterm's variable order).
-/// No fixed value ⇒ the tautology `1`.
-pub(crate) fn literals_str(m: &Minterm<Symbol>) -> String {
-    let pairs: Vec<(Symbol, bool)> = m
+/// A minterm's fixed values as a product of literals, in the minterm's variable order: `A & B`,
+/// `!R & S`. No fixed value ⇒ the tautology `1`.
+pub fn condition(m: &Minterm<Symbol>) -> BoolExpr {
+    let lits: Vec<(Symbol, bool)> = m
         .vars()
         .iter()
         .zip(m.iter())
         .filter_map(|(n, v)| v.map(|b| (n.clone(), b)))
         .collect();
-    if pairs.is_empty() {
-        "1".to_owned()
-    } else {
-        literal_product(&pairs)
-    }
-}
-
-/// A minterm's fixed values as `name=1`/`name=0` strings (minterm variable order), skipping any name
-/// in `skip`. Used to render competing states and hazard conditions.
-pub(crate) fn fixed_pairs(m: &Minterm<Symbol>, skip: &[&str]) -> Vec<String> {
-    m.vars()
-        .iter()
-        .zip(m.iter())
-        .filter_map(|(n, v)| {
-            let name = n.as_str();
-            if skip.contains(&name) {
-                return None;
-            }
-            v.map(|b| format!("{name}={}", if b { 1 } else { 0 }))
-        })
-        .collect()
+    product(&lits)
 }
 
 /// Mint a state-node name for `base`: `<base>_st`, escalating to `<base>_st2`, `<base>_st3`, … until
@@ -67,22 +47,38 @@ pub(crate) fn fixed_pairs(m: &Minterm<Symbol>, skip: &[&str]) -> Vec<String> {
 /// The single minting convention for both node-minting sites: a state OUTPUT's table node
 /// ([`crate::emit::statetable::build_state_model`]) and a register factored out of a read-gated output
 /// ([`edge`]).
-pub(crate) fn mint_state_node(base: &str, taken: impl Fn(&str) -> bool) -> String {
-    let mut name = format!("{base}_st");
+pub(crate) fn mint_state_node(base: &str, taken: impl Fn(&Symbol) -> bool) -> Symbol {
+    let mut name = Symbol::from(format!("{base}_st"));
     let mut k = 2;
     while taken(&name) {
-        name = format!("{base}_st{k}");
+        name = Symbol::from(format!("{base}_st{k}"));
         k += 1;
     }
     name
 }
 
-/// A product of literals `k`/`!k` joined by `*` (no tautology fallback, no sorting — the caller decides).
-pub(crate) fn literal_product(lits: &[(Symbol, bool)]) -> String {
-    lits.iter()
-        .map(|(k, v)| if *v { k.to_string() } else { format!("!{k}") })
-        .collect::<Vec<_>>()
-        .join("*")
+/// A product of literals `k`/`!k` — `A & !B & C` — as one expression. No literal ⇒ the tautology `1`.
+/// Neither sorted nor deduplicated: what the product ranges over, and in which order, is the caller's.
+///
+/// The literals are folded LEFT, and the rendering rests on that: `BoolExpr`'s `Display` writes minimal
+/// parentheses over the syntactic tree, so a left fold reads `A & B & C` where a right fold would read
+/// `A & (B & C)`. The fold runs inside [`BoolExpr::build`], espresso-logic's constructor for an
+/// expression assembled from data — it serialises the whole product in one pass, where composing with
+/// `&` reallocates the token stream at every operator.
+pub(crate) fn product(lits: &[(Symbol, bool)]) -> BoolExpr {
+    BoolExpr::build(|b| {
+        lits.iter()
+            .map(|(k, v)| {
+                let lit = b.var(k);
+                if *v {
+                    lit
+                } else {
+                    !lit
+                }
+            })
+            .reduce(|acc, lit| acc & lit)
+            .unwrap_or_else(|| b.constant(true))
+    })
 }
 
 #[cfg(test)]

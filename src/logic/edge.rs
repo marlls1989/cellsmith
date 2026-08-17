@@ -704,10 +704,10 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
             .enumerate()
             .map(|(i, c)| (c.as_str(), i))
             .collect();
-        let mut taken: BTreeSet<String> = inputs
+        let mut taken: BTreeSet<Symbol> = inputs
             .iter()
-            .map(|s| s.to_string())
-            .chain(candidates.iter().map(|s| s.to_string()))
+            .cloned()
+            .chain(candidates.iter().cloned())
             .collect();
         let mut derived_map: BTreeMap<Symbol, DerivedRegister> = BTreeMap::new();
         let mut minted: Vec<EdgeCaptures> = Vec::new();
@@ -777,7 +777,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                 None => {
                     let nm = crate::logic::mint_state_node(y.as_ref(), |n| taken.contains(n));
                     taken.insert(nm.clone());
-                    Symbol::from(nm.as_str())
+                    nm
                 }
             };
 

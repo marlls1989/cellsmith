@@ -415,17 +415,11 @@ constraint — it decides how each one renders, generally or in its own context.
   timing is honoured. The two outcomes need not agree on either, which is why neither the header nor
   a shared field carries a node set. A reading with nowhere to land states its nodes alone — a lone
   toggle has no second edge to be separated from. A constraint is the remedy for a hazard reported
-  here, so it carries no diagnostic of its own. The metastability risk the four hazards share (§1)
-  is named in the deck alone, by the comment the next bullet leads an oscillation's constraint block
-  with. This report is the run's full account of what was detected — the annotation below is not a
-  second one.
-- **The oscillation annotation.** A ring is annotated on the constraint generated from it, as a comment
-  leading that constraint's block in the emitted Tcl and the `.lib` cell's fragment: the condition the
-  cell rings under, the nodes that ring, and the competing outcomes the ring is torn between. A comment
-  explains what it accompanies, so a ring with no constraint beside it carries none — a ring observed
-  under a lone toggle names one pin, and one edge has nothing to be separated from (§5), and a cell that
-  did not opt into constraint arcs states no constraint at all. Either way the ring reaches the user
-  through the report above.
+  here, so it carries no diagnostic of its own. This report is the run's whole account of what was
+  detected: the emitted artifacts state the timing that removes a hazard and say nothing of the hazard
+  itself, so the metastability risk the four share (§1) is named here and nowhere else — including for a
+  ring the run states no constraint for, which is one observed under a lone toggle (one pin, and one edge
+  has nothing to be separated from — §5) or one in a cell that did not opt into constraint arcs.
 - **Constraint arcs.** Off by default; enabled per cell in the spec or globally with a CLI flag. A
   constraint over a pin pair renders its general block as a *pair* of characterisation arcs — the two
   sides are characterised separately — a setup and a hold arc for a directed clock↔data constraint, the

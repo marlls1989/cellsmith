@@ -183,13 +183,13 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     // a derived register have no competing output pin, so each keeps its own name. Folded masters are
     // excluded.
     let output_names: BTreeSet<Symbol> = cell.outputs.iter().map(|o| o.name.clone()).collect();
-    let mut taken: BTreeSet<String> = cell
+    let mut taken: BTreeSet<Symbol> = cell
         .inputs
         .iter()
-        .map(|s| s.to_string())
-        .chain(cell.outputs.iter().map(|o| o.name.to_string()))
-        .chain(cell.internals.iter().map(|o| o.name.to_string()))
-        .chain(derived_nodes.iter().map(|n| n.to_string()))
+        .cloned()
+        .chain(cell.outputs.iter().map(|o| o.name.clone()))
+        .chain(cell.internals.iter().map(|o| o.name.clone()))
+        .chain(derived_nodes.iter().cloned())
         .collect();
     // `internal_nodes` and `state_orig` run in lockstep, one entry per surviving state node: the former
     // carries the TABLE-NODE name (what the statetable header prints), the latter the SIGNAL name the
@@ -205,7 +205,7 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
         let node = if output_names.contains(&sig.name) {
             let minted = crate::logic::mint_state_node(sig.name.as_str(), |n| taken.contains(n));
             taken.insert(minted.clone());
-            Symbol::from(minted.as_str())
+            minted
         } else {
             sig.name.clone()
         };

@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
+use std::fmt;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -20,6 +21,7 @@ use cellsmith::emit::verilog::cell_verilog;
 use cellsmith::logic::hazard::{Cause, Hazard, Outcome, Racer};
 use cellsmith::logic::machine::{ExplorationBudget, ExplorationLimit};
 use cellsmith::model::{parse_spec, AnalysedCell, ArcClass, ArcClasses, ConstraintPins};
+use cellsmith::report::{self, Commas, State};
 
 /// Generate Cadence Liberate transition arcs, a behavioural Verilog model and a
 /// Liberty fragment for logic cells, including state-holding/hysteretic cells.
@@ -234,9 +236,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     };
     let rendered: Vec<CellArcs> = cells.par_iter().map(|c| cell_arcs(c, arc_opts)).collect();
 
-    // Each warning is one contiguous block of lines (a header plus its indented detail fields);
-    // distinct warnings are separated by a single blank line when printed, so a block reads as a unit.
-    let mut warnings: Vec<String> = Vec::new();
+    // Each warning is one contiguous block of lines (a header plus its indented detail fields), written
+    // as it is composed into the one locked handle; a blank line before every warning but the first
+    // keeps the blocks reading as units.
+    let mut err = io::stderr().lock();
+    let mut warned = false;
 
     // Diagnose the cell's detected hazards, one warning per OCCASION — one cause, which is a transition
     // out of one starting state. Detection files a record per (cause, outcome), so an occasion showing
@@ -250,7 +254,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             occasions.entry(Occasion::of(a)).or_default().push(a);
         }
         for (occasion, records) in &occasions {
-            warnings.push(hazard_warning(c, occasion, records));
+            if std::mem::replace(&mut warned, true) {
+                writeln!(err)?;
+            }
+            hazard_warning(&mut err, c, occasion, records)?;
         }
     }
 
@@ -262,25 +269,33 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         if r.masked.is_empty() {
             continue;
         }
-        let mut lines = vec![format!(
+        if std::mem::replace(&mut warned, true) {
+            writeln!(err)?;
+        }
+        writeln!(
+            err,
             "cellsmith: warning: cell {:?}: {} block(s) conflate {} measurements: too few nodes exposed to express the cell state",
             c.repr_name(),
             r.masked.len(),
             r.masked.iter().map(|m| m.states.len()).sum::<usize>(),
-        )];
+        )?;
         for m in &r.masked {
             // Every state the block covers, as equals — it expresses none of them, and which firing
             // reached the emitter first is nothing to report. What differs across them wants exposing.
-            let mut fields = vec![("block", m.arc_str())];
-            fields.extend(m.state_strs().into_iter().map(|s| ("cell state", s)));
-            lines.extend(subblock("  - ", &fields));
+            let block = m.arc_str();
+            let states: Vec<State> = m.states.iter().map(State).collect();
+            let mut fields: Vec<(&str, &dyn fmt::Display)> = vec![("block", &block)];
+            fields.extend(
+                states
+                    .iter()
+                    .map(|s| ("cell state", s as &dyn fmt::Display)),
+            );
+            subblock(&mut err, "  - ", &fields)?;
         }
-        warnings.push(lines.join("\n"));
     }
-
-    if !warnings.is_empty() {
-        eprintln!("{}", warnings.join("\n\n"));
-    }
+    // The report is complete: release the handle before the artifacts are written, each of which
+    // reports its path on this same stream.
+    drop(err);
 
     // Constraints avoid a hazard already reported by the warnings above, so the constraint arcs are
     // emitted (below, gated by the per-cell opt-in) without a separate diagnostic.
@@ -335,20 +350,23 @@ fn banner(kind: &str, body: &str) -> String {
     format!("// ===== cellsmith {kind} =====\n{body}\n")
 }
 
-/// Render one warning detail block as its lines: colon-labelled fields, indented under the header with
-/// their values column-aligned. `lead` opens the first line — a hazard warning states one block and
-/// opens it at the same indent as the rest, while the masked-arc warning states a block per conflated
-/// arc and bullets each so the blocks read apart. No trailing newline — callers join a warning's lines
-/// with `\n`.
-fn subblock(lead: &str, fields: &[(&str, String)]) -> Vec<String> {
-    fields
-        .iter()
-        .enumerate()
-        .map(|(i, (label, value))| {
-            let marker = if i == 0 { lead } else { "    " };
-            format!("{marker}{:<16} {value}", format!("{label}:"))
-        })
-        .collect()
+/// Write one warning detail block: colon-labelled fields, indented under the header with their values
+/// column-aligned. `lead` opens the first line — a hazard warning states one block and opens it at the
+/// same indent as the rest, while the masked-arc warning states a block per conflated arc and bullets
+/// each so the blocks read apart.
+fn subblock(
+    w: &mut impl io::Write,
+    lead: &str,
+    fields: &[(&str, &dyn fmt::Display)],
+) -> io::Result<()> {
+    for (i, (label, value)) in fields.iter().enumerate() {
+        let marker = if i == 0 { lead } else { "    " };
+        // The colon belongs to the label, so it is what the 16-column field is padded around: the label
+        // and its colon go out first, then the padding that would have followed them.
+        let padding = 16usize.saturating_sub(label.len() + 1);
+        writeln!(w, "{marker}{label}:{:padding$} {value}", "")?;
+    }
+    Ok(())
 }
 
 /// The occasion one hazard warning reports — the CAUSE: a transition, made from one starting state, at
@@ -378,8 +396,8 @@ impl<'a> Occasion<'a> {
 /// the order the records state them, since a pulse's are a sequence and a race's alternatives.
 #[derive(Default)]
 struct Effect<'a> {
-    victims: Vec<&'a str>,
-    landings: Vec<String>,
+    victims: Vec<&'a Symbol>,
+    landings: Vec<&'a Minterm<Symbol>>,
 }
 
 /// One occasion's warning: a header naming what causes the hazard and the state it is caused from, over
@@ -387,22 +405,27 @@ struct Effect<'a> {
 /// observed; the fields that follow from the occasion alone — its condition and the path into its state
 /// — are the same in each, so they are read from the first, while each outcome contributes a field of
 /// its own naming the nodes THAT reading puts at risk and where it leaves them.
-fn hazard_warning(cell: &AnalysedCell, occasion: &Occasion, records: &[&Hazard]) -> String {
+fn hazard_warning<'a>(
+    w: &mut impl io::Write,
+    cell: &AnalysedCell,
+    occasion: &Occasion,
+    records: &[&'a Hazard],
+) -> io::Result<()> {
     let first = records
         .first()
         .expect("an occasion is only entered by a record");
     // One entry per outcome, over the nodes and landing states every record of that outcome names.
     // `Outcome`'s own order sets the order the fields come out in, so a warning reads the same however
     // detection filed them.
-    let mut effects: BTreeMap<Outcome, Effect> = BTreeMap::new();
+    let mut effects: BTreeMap<Outcome, Effect<'a>> = BTreeMap::new();
     for h in records {
         let effect = effects.entry(h.outcome).or_default();
         for n in &h.group {
-            if !effect.victims.contains(&n.as_str()) {
-                effect.victims.push(n.as_str());
+            if !effect.victims.contains(&n) {
+                effect.victims.push(n);
             }
         }
-        effect.landings.extend(h.settled_strs());
+        effect.landings.extend(&h.settled);
     }
     // Successive landings naming the same state are one place the machine comes to rest: a pulse's two
     // waypoints coincide wherever the closing edge moves nothing the outcome names, and reporting that
@@ -411,35 +434,63 @@ fn hazard_warning(cell: &AnalysedCell, occasion: &Occasion, records: &[&Hazard])
     for effect in effects.values_mut() {
         effect.landings.dedup();
     }
-    let mut fields = vec![
-        ("when", first.condition_str()),
-        ("reached along", first.path_str()),
-    ];
+    // The values every field is written from, held here so the field list can borrow them. `orders`
+    // and `triggered by` belong to a race, and each is present only where the outcome it reports was
+    // observed there.
+    let racing = match occasion.cause {
+        Cause::Race { pins } => Some(pins.as_slice()),
+        Cause::Pulse { .. } => None,
+    };
+    let when = first.condition();
+    let path = report::Path(first.path());
+    let pre_state = State(first.pre_state());
+    let orders = racing
+        .filter(|_| effects.contains_key(&Outcome::Indeterminate))
+        .map(orders_str);
+    let trigger = racing
+        .filter(|_| effects.contains_key(&Outcome::Oscillation))
+        .map(trigger_str);
+    let landings: Vec<(&str, EffectField)> = effects
+        .iter()
+        .map(|(outcome, effect)| {
+            (
+                outcome_str(*outcome),
+                EffectField {
+                    cause: occasion.cause,
+                    effect,
+                },
+            )
+        })
+        .collect();
+
+    let mut fields: Vec<(&str, &dyn fmt::Display)> =
+        vec![("when", &when), ("reached along", &path)];
     // A pulse returns its pin to the value it started from, so the pre-pulse input state IS the
     // condition the hazard occurs under — `when` states it, and a separate pre-hazard field would only
     // restate it. A race leaves its pins where they landed, so its own starting state is worth naming.
-    if let Cause::Race { pins } = occasion.cause {
-        fields.push(("pre-hazard", first.pre_state_str()));
-        if effects.contains_key(&Outcome::Indeterminate) {
-            fields.push(("orders", orders_str(pins)));
-        }
-        if effects.contains_key(&Outcome::Oscillation) {
-            fields.push(("triggered by", trigger_str(pins)));
-        }
+    if racing.is_some() {
+        fields.push(("pre-hazard", &pre_state));
+    }
+    if let Some(orders) = &orders {
+        fields.push(("orders", orders));
+    }
+    if let Some(trigger) = &trigger {
+        fields.push(("triggered by", trigger));
     }
     fields.extend(
-        effects
+        landings
             .iter()
-            .map(|(outcome, effect)| (outcome_str(*outcome), effect_str(occasion.cause, effect))),
+            .map(|(label, effect)| (*label, effect as &dyn fmt::Display)),
     );
-    let mut lines = vec![format!(
+
+    writeln!(
+        w,
         "cellsmith: warning: cell {:?}: {} causes a hazard at {}",
         cell.repr_name(),
         cause_str(occasion.cause),
-        Hazard::state_str(occasion.state),
-    )];
-    lines.extend(subblock("    ", &fields));
-    lines.join("\n")
+        State(occasion.state),
+    )?;
+    subblock(w, "    ", &fields)
 }
 
 /// What causes the hazard, as the header names it: the timing that has to be wrong for the cell to be
@@ -480,16 +531,30 @@ fn outcome_str(outcome: Outcome) -> &'static str {
 /// The clause is absent, rather than empty, where the records name no landing at all: a lone toggle has
 /// no second edge to be separated from, and a pair whose every order rings has no timing that brings the
 /// machine to rest either. The header and `triggered by` already say which of the two it is.
-fn effect_str(cause: &Cause, effect: &Effect) -> String {
-    let victims = format!("{{{}}}", effect.victims.join(", "));
-    if effect.landings.is_empty() {
-        return victims;
+struct EffectField<'a> {
+    cause: &'a Cause,
+    effect: &'a Effect<'a>,
+}
+
+impl fmt::Display for EffectField<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{{{}}}", Commas(&self.effect.victims))?;
+        if self.effect.landings.is_empty() {
+            return Ok(());
+        }
+        let separator = match self.cause {
+            Cause::Race { .. } => " or ",
+            Cause::Pulse { .. } => " → ",
+        };
+        f.write_str(" lands at ")?;
+        for (i, state) in self.effect.landings.iter().enumerate() {
+            if i > 0 {
+                f.write_str(separator)?;
+            }
+            write!(f, "{}", State(state))?;
+        }
+        Ok(())
     }
-    let separator = match cause {
-        Cause::Race { .. } => " or ",
-        Cause::Pulse { .. } => " → ",
-    };
-    format!("{victims} lands at {}", effect.landings.join(separator))
 }
 
 /// The triggering transitions of an indeterminate race: every order its edges can arrive in, since

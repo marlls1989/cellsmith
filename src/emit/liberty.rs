@@ -49,8 +49,6 @@ use rayon::prelude::*;
 
 use crate::emit::statetable::{build_state_model, EdgeRow, EdgeTok, Next, StateModel};
 use crate::emit::tcl::Words;
-use crate::logic::constraint::constrains;
-use crate::logic::hazard::{Cause, Hazard, Outcome};
 use crate::logic::regions::{StateCube, StateRegions};
 use crate::model::AnalysedCell;
 
@@ -66,8 +64,7 @@ fn set_attr(group: &mut Group, name: &str, value: Value) {
 
 /// Wrap every cell's Liberty fragment in a single `library (<name>) { ... }` group so the output is a
 /// self-contained `.lib` that Liberate can consume directly as `user_data` — no external harness
-/// needed. Each cell fragment (oscillation comments included) is indented one level inside the
-/// library.
+/// needed. Each cell fragment is indented one level inside the library.
 pub fn library_liberty(name: &str, cells: &[AnalysedCell]) -> String {
     let mut out = format!("library ({name}) {{\n");
     let frags: Vec<String> = cells.par_iter().map(cell_liberty).collect();
@@ -87,33 +84,11 @@ pub fn library_liberty(name: &str, cells: &[AnalysedCell]) -> String {
 }
 
 /// The Liberty `cell (...) { ... }` fragment for a cell, as text (newline-terminated so fragments
-/// concatenate cleanly).
-///
-/// The fragment is prefixed with a comment per RACE-cause oscillation the cell generated a constraint
-/// from, recording the racing condition and the competing settled outcomes. A comment explains the thing
-/// it accompanies, so an oscillation the cell states no constraint for is annotated nowhere — a
-/// lone-toggle ring names one pin, and one edge has nothing to be separated from, and a cell that did not
-/// opt into constraint arcs states none at all. What was detected is reported to the user on stderr
-/// either way. A pulse-cause oscillation names no competing settled state to report here, so this reads
-/// race-cause records only.
+/// concatenate cleanly). A cell with several declared names yields one identical group per name, and the
+/// hazards detected of it are reported to the user on stderr rather than written into the library.
 pub fn cell_liberty(cell: &AnalysedCell) -> String {
-    let mut out = String::new();
-    for a in cell.hazards.iter().filter(|h| {
-        matches!(h.cause, Cause::Race { .. })
-            && h.outcome == Outcome::Oscillation
-            && cell.constraints.iter().any(|c| constrains(c, h))
-    }) {
-        let states: Vec<String> = a.settled.iter().map(Hazard::state_str).collect();
-        out.push_str(&format!(
-            "/* oscillation: {} risks metastability in {}, settling to one of {} */\n",
-            a.condition_str(),
-            a.group.join(", "),
-            states.join(" | "),
-        ));
-    }
     let groups: Vec<Group> = cell.name.iter().map(|n| cell_group(cell, n)).collect();
-    out.push_str(&format!("{}\n", Liberty(groups)));
-    out
+    format!("{}\n", Liberty(groups))
 }
 
 /// Build the `cell` group: one input `pin` per primary input, then — for a sequential cell — the single

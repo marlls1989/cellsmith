@@ -53,17 +53,16 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::hash::Hash;
 
-use espresso_logic::{Minterm, Symbol};
+use espresso_logic::{BoolExpr, Minterm, Symbol};
 use indexmap::IndexMap;
 
 use crate::emit::tcl::{Braced, IcColumn, VectorValue, Words};
 use crate::logic::arcs::{Arc, ArcLevels, Edge, ExposedLevel, HiddenArc};
 use crate::logic::assignment;
-use crate::logic::constraint::{self, Constraint, ConstraintKind, VictimNode};
+use crate::logic::constraint::{Constraint, ConstraintKind, VictimNode};
 use crate::logic::edge::EdgeLabel;
-use crate::logic::hazard::{Cause, Hazard, Outcome, Racer};
+use crate::logic::hazard::Racer;
 use crate::logic::leakage::LeakageState;
-use crate::logic::literal_product;
 use crate::model::{AnalysedCell, ArcClass};
 
 /// Knobs for the arc emitter.
@@ -91,9 +90,8 @@ impl Default for ArcsTclOptions {
 /// its resolved `when` set ADDS its conditioned blocks on top, so the same arc can appear twice. Any
 /// derived constraint arcs the cell opted into — its `constraint_arcs` was set, so generation populated
 /// `cell.constraints` — follow the delay arcs, through those same two passes: the setup/hold and non_seq
-/// pairs holding two pins apart, and the single-pin min_pulse_width blocks. A constraint an oscillation
-/// motivated leads with a comment recording the racing condition and the competing settled outcomes —
-/// the metastability risk timing arcs cannot express.
+/// pairs holding two pins apart, and the single-pin min_pulse_width blocks. The deck states blocks and
+/// nothing else: the hazards the constraints answer to are reported to the user on stderr.
 pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
     cell_arcs(cell, opts).tcl
 }
@@ -175,15 +173,6 @@ impl MaskedArc {
             Some(pins) => format!("{} {pins}", self.kind),
             None => self.kind.to_string(),
         }
-    }
-
-    /// Each conflated state as a brace-wrapped literal product (`{A=1, B=0, M=1}`), in the order the
-    /// states were reached.
-    pub fn state_strs(&self) -> Vec<String> {
-        self.states
-            .iter()
-            .map(|s| format!("{{{}}}", crate::logic::fixed_pairs(s, &[]).join(", ")))
-            .collect()
     }
 }
 
@@ -579,7 +568,7 @@ impl<'a> DefineArc<'a> {
     /// keeps its own concrete `-ic` and `-vector` and generalises solely by omitting the `-when` line.
     fn tcl(&self, cell: &AnalysedCell, group: &Group, with_when: bool) -> String {
         let when = with_when.then(|| self.when()).flatten();
-        let when = when.as_deref();
+        let when = when.as_ref();
         match self {
             DefineArc::Async(arc) => format!(
                 "define_arc \\\n\t-type async \\\n{}",
@@ -647,7 +636,7 @@ impl<'a> DefineArc<'a> {
     /// conditioned pass asks this to decide whether a representative's conditioned block would say
     /// anything its general block does not, and [`DefineArc::tcl`] writes the line from the same answer,
     /// so the skip rule and the emitted line cannot come apart.
-    fn when(&self) -> Option<String> {
+    fn when(&self) -> Option<BoolExpr> {
         match self {
             DefineArc::Async(arc) | DefineArc::Edge(arc) | DefineArc::Combinational(arc) => {
                 when_str(&arc.end, &arc.related)
@@ -1009,20 +998,10 @@ fn constraint_selection(constraints: &[Constraint]) -> HashMap<usize, usize> {
 
 /// State one constraint's blocks: its kind's fan-out, over every alias group whose netlist agrees on the
 /// columns they carry. `with_when` selects the pass, as it does for the measured blocks.
-///
-/// An oscillation's annotation ([`oscillation_note`]) leads the fan-out and rides IN the first block's
-/// text, so the comment and the block it explains stand or fall together: a block a firing already stated
-/// is not stated twice ([`Blocks::state`]), and a comment pushed separately would be left over to explain
-/// whatever block came next.
 fn state_constraint(blocks: &mut Blocks, cell: &AnalysedCell, c: &Constraint, with_when: bool) {
-    let note = oscillation_note(cell, c);
     for group in &groups(cell, &c.victim_names()) {
-        for (i, block) in constraint_blocks(c).into_iter().enumerate() {
-            let mut text = block.tcl(cell, group, with_when);
-            if let (0, Some(note)) = (i, &note) {
-                text.insert_str(0, note);
-            }
-            blocks.state(text, block.firing());
+        for block in constraint_blocks(c) {
+            blocks.state(block.tcl(cell, group, with_when), block.firing());
         }
     }
 }
@@ -1089,7 +1068,7 @@ fn constraint_body(
     group: &Group,
     pins: &RacingPins,
     arc: &ConstraintArc<'_>,
-    when: Option<&str>,
+    when: Option<&BoolExpr>,
 ) -> String {
     let cols = ConstraintColumns::of(cell, group, arc.nodes);
 
@@ -1154,33 +1133,6 @@ fn constraint_vector_str(
     )
 }
 
-/// The `#` comment line a constraint block carries where an oscillation motivated it: the condition the
-/// cell rings under, the nodes that ring, and the competing outcomes the ring is torn between. `None`
-/// where no oscillation was observed of the situation `c` constrains ([`crate::logic::constraint`]).
-///
-/// A comment explains what it sits beside, so an oscillation is annotated on the constraint generated
-/// from it and nowhere else; the run's full account of what was detected is the report on stderr. Two
-/// consequences follow from that pairing, both intended. A lone-toggle ring names ONE pin, and one edge
-/// has nothing to be separated from, so it generates no constraint and carries no annotation. A cell that
-/// did not opt into constraint arcs renders no constraint block, so it carries none either.
-///
-/// A pulse-cause oscillation names no competing settled state to report here — it is reported to the
-/// user as a warning instead — so this reads race-cause records only.
-fn oscillation_note(cell: &AnalysedCell, c: &Constraint) -> Option<String> {
-    let hazard = cell.hazards.iter().find(|h| {
-        matches!(h.cause, Cause::Race { .. })
-            && h.outcome == Outcome::Oscillation
-            && constraint::constrains(c, h)
-    })?;
-    let states: Vec<String> = hazard.settled.iter().map(Hazard::state_str).collect();
-    Some(format!(
-        "# oscillation: {} risks metastability in {{{}}}, settling to one of {}\n",
-        hazard.condition_str(),
-        hazard.group.join(", "),
-        states.join(" | "),
-    ))
-}
-
 /// The edge the arc's `related` clock pin makes, read from its value in the end state — the same
 /// derivation the vector uses to render its `R`/`F`. `Rise` when the clock settles high, `Fall` when it
 /// settles low. Together with the output and related pin it is the arc's identity in
@@ -1224,7 +1176,12 @@ fn ic_line(
 /// drives and `X` is legal only in the unmonitored-output columns (see [`vector_str`]), so a general
 /// block's generality lives in the ABSENCE of the `-when` line — `when` is `None` — not in a relaxed
 /// vector.
-fn transition_body(cell: &AnalysedCell, group: &Group, arc: &Arc, when: Option<&str>) -> String {
+fn transition_body(
+    cell: &AnalysedCell,
+    group: &Group,
+    arc: &Arc,
+    when: Option<&BoolExpr>,
+) -> String {
     let mut s = format!(
         "\t-pinlist {} \\\n",
         Braced(Words(&arc_pinlist_str(cell, &group.exposed)))
@@ -1485,12 +1442,17 @@ fn leakage_vector_str(cell: &AnalysedCell, l: &LeakageState) -> Vec<VectorValue>
     )
 }
 
-/// The `-when` condition: the other inputs' fixed values in the end state, as a product of literals
-/// (`*` AND, `!` NOT). `None` when no other input is fixed (the arc is unconditional).
+/// The `-when` condition: the other inputs' fixed values in the end state, as a product of literals.
+/// `None` when no other input is fixed (the arc is unconditional).
+///
+/// The literals are SORTED before the product is built, and every `-when` here is built that way: the
+/// expression's equality is structural over its token stream, so sorting is what makes two conditions
+/// naming the same literals one condition — the block text a firing renders is what tells two firings
+/// apart ([`Blocks::state`]).
 fn when_str(
     end: &espresso_logic::Minterm<espresso_logic::Symbol>,
     exclude: &str,
-) -> Option<String> {
+) -> Option<BoolExpr> {
     let mut lits: Vec<(Symbol, bool)> = assignment(end)
         .into_iter()
         .filter(|(k, _)| *k != exclude)
@@ -1499,14 +1461,14 @@ fn when_str(
         return None;
     }
     lits.sort();
-    Some(crate::logic::literal_product(&lits))
+    Some(crate::logic::product(&lits))
 }
 
 /// The hidden arc's `-when` condition: the other inputs' fixed values in the end state (excluding the
 /// toggled pin) plus every held output value, as a product of literals. The held outputs disambiguate
 /// the distinct stored-value contexts of a state-holding cell that share one input vector. `None` when
 /// no literal is fixed.
-fn hidden_when_str(h: &HiddenArc) -> Option<String> {
+fn hidden_when_str(h: &HiddenArc) -> Option<BoolExpr> {
     let mut lits: Vec<(Symbol, bool)> = assignment(&h.end)
         .into_iter()
         .filter(|(k, _)| *k != h.pin.as_str())
@@ -1516,7 +1478,7 @@ fn hidden_when_str(h: &HiddenArc) -> Option<String> {
         return None;
     }
     lits.sort();
-    Some(crate::logic::literal_product(&lits))
+    Some(crate::logic::product(&lits))
 }
 
 /// The constraint block's `-when` condition: the inputs it does NOT switch, at the level they hold in
@@ -1528,7 +1490,7 @@ fn hidden_when_str(h: &HiddenArc) -> Option<String> {
 /// land and measures nothing the cell does in response — so the outputs are exactly what tells two
 /// contexts of a state-holding cell apart, one input assignment reaching each over a different stored
 /// value. Naming their levels is what makes the condition name one observation.
-fn constraint_when_str(pins: &RacingPins, arc: &ConstraintArc<'_>) -> Option<String> {
+fn constraint_when_str(pins: &RacingPins, arc: &ConstraintArc<'_>) -> Option<BoolExpr> {
     let held = arc
         .prevector
         .last()
@@ -1542,7 +1504,7 @@ fn constraint_when_str(pins: &RacingPins, arc: &ConstraintArc<'_>) -> Option<Str
         return None;
     }
     lits.sort();
-    Some(crate::logic::literal_product(&lits))
+    Some(crate::logic::product(&lits))
 }
 
 /// One `define_leakage` block for a static leakage state, in one of two forms. `define_leakage` is a
@@ -1588,13 +1550,15 @@ impl<'a> LeakageBlock<'a> {
     /// block does; the bare form carries no column, so it is the one block naming every alias.
     fn tcl(&self, cell: &AnalysedCell, groups: &[Group]) -> Vec<String> {
         // Both forms rest under the same condition — the input assignment and every settled output as one
-        // product — so it is stated once here, and each arm carries it where its own form puts it.
+        // product — so it is stated once here, and each arm carries it where its own form puts it. The
+        // condition is the whole of what a leakage block states, so it is always written: a cell with no
+        // input and no output fixes no literal, and the block then rests under the tautology `1`.
         let when = match self {
             LeakageBlock::Held(l) | LeakageBlock::Resting(l) => {
                 let mut lits: Vec<(Symbol, bool)> = assignment(&l.inputs).into_iter().collect();
                 lits.extend(l.levels.outputs.iter().cloned());
                 lits.sort();
-                literal_product(&lits)
+                crate::logic::product(&lits)
             }
         };
         match self {
@@ -1750,7 +1714,7 @@ Q = "E*D + !E*Q"
             .split("define_arc")
             .filter(|frag| frag.contains("-type hidden") && frag.contains("-pin D"))
             .collect();
-        // The `-when` of one context holds Q true (`* Q`, not `!Q`) and another holds Q false (`!Q`). Only
+        // The `-when` of one context holds Q true (`& Q`, not `!Q`) and another holds Q false (`!Q`). Only
         // an arc's own `-when` line counts (a leakage `-when` rides on its `define_leakage` line).
         let when_of = |frag: &str| {
             frag.lines()
@@ -1759,7 +1723,7 @@ Q = "E*D + !E*Q"
                 .to_string()
         };
         assert!(
-            d_hidden.iter().any(|frag| when_of(frag).contains("*Q")),
+            d_hidden.iter().any(|frag| when_of(frag).contains("& Q")),
             "expected a D hidden arc whose -when holds Q true"
         );
         assert!(
@@ -2499,7 +2463,7 @@ Q = "E*D + !E*Q"
         // Under `when = true` every firing returns, each with its own distinct condition.
         let selected = analyse(&when_variant(OA22, "true"));
         let on = cell_arcs_tcl(&selected, NO_LEAKAGE);
-        let mut whens: BTreeSet<String> = BTreeSet::new();
+        let mut whens: HashSet<BoolExpr> = HashSet::new();
         for i in a_rise_y_rise(&selected) {
             let arc = &selected.arcs[i];
             let block = DefineArc::of(&selected, arc).tcl(&selected, &whole(&selected), true);
@@ -3875,7 +3839,7 @@ Q = "!CLK*M + CLK*Q"
         // and each condition names the held D beside the held Q. CLK is switched, so it is absent.
         assert_eq!(
             conditions,
-            ["D*!Q".to_string(), "!D*Q".to_string()]
+            ["D & !Q".to_string(), "!D & Q".to_string()]
                 .into_iter()
                 .collect(),
             "{tcl}"
@@ -4544,52 +4508,19 @@ Qb = "!Qa * B"
     }
 
     #[test]
-    fn mutex_annotates_the_oscillation_on_its_constraint_and_relates_inputs_only() {
-        const MUT: &str = r#"
-[[cell]]
-name = "MUT"
-inputs = ["A", "B"]
-{EXTRA}[cell.outputs]
-Qa = "!Qb * A"
-Qb = "!Qa * B"
-"#;
-        let tcl = cell_arcs_tcl(
-            &analyse(&MUT.replace("{EXTRA}", "constraint_arcs = true\n")),
-            ArcsTclOptions::default(),
-        );
+    fn mutex_constraint_relates_inputs_only() {
+        let tcl = cell_arcs_tcl(&analyse(MUT_CONSTRAINED), ArcsTclOptions::default());
         eprintln!("{tcl}");
-        // The comment explains the block it leads: the non_seq the ring motivated. Its condition is the
-        // assignment the pair toggles FROM — idle, both requests down — since the ring is what the
-        // co-assertion lands in.
-        let annotated = tcl
-            .split("\n\n")
-            .find(|b| b.starts_with("# oscillation: !A*!B risks metastability"))
-            .unwrap_or_else(|| panic!("the ring is annotated on its constraint:\n{tcl}"));
-        assert!(annotated.contains("in {Qa, Qb}"), "{annotated}");
-        assert!(
-            annotated.contains("-type non_seq_setup \\"),
-            "the annotation leads the constraint generated from the ring: {annotated}"
-        );
         // Related pins are primary inputs only — never an output (a Qb→Qa arc is a deadlock).
         assert!(!tcl.contains("-related_pin Qa"));
         assert!(!tcl.contains("-related_pin Qb"));
         assert!(tcl.contains("-related_pin A"));
         assert!(tcl.contains("-related_pin B"));
         assert!(tcl.contains("-pinlist {A B Qa Qb}"));
-
-        // The same cell stating no constraint: the ring is still detected and reported to the user, and
-        // there is no block here for a comment to explain, so none is written.
-        let bare = cell_arcs_tcl(
-            &analyse(&MUT.replace("{EXTRA}", "")),
-            ArcsTclOptions::default(),
-        );
-        eprintln!("{bare}");
-        assert!(!bare.contains("# oscillation:"), "{bare}");
     }
 
     /// A two-input mutual exclusion element opting into constraint arcs: the co-assertion ring gives it
-    /// the symmetric `non_seq_setup`/`non_seq_hold` pair and the oscillation annotation that rides in
-    /// the first of them.
+    /// the symmetric `non_seq_setup`/`non_seq_hold` pair.
     const MUT_CONSTRAINED: &str = r#"
 [[cell]]
 name = "MUT"
@@ -4614,10 +4545,6 @@ Qb = "!Qa * B"
     /// variants that carry a transition or a hidden toggle. With [`CONSTRAINT_TYPES`] these are the
     /// whole of Liberate's taxonomy here, one word per variant.
     const MEASURED_TYPES: [&str; 4] = ["async", "edge", "combinational", "hidden"];
-
-    /// The `-type` word the FIRST block of each constraint kind's fan-out leads with — the one an
-    /// oscillation annotation rides in.
-    const FIRST_FANOUT_TYPES: [&str; 3] = ["setup", "non_seq_setup", "min_pulse_width"];
 
     /// The word on a block's `-type` line: the Liberate taxonomy the block belongs to, which is the
     /// [`DefineArc`] variant that wrote it.
@@ -4723,45 +4650,6 @@ Qb = "!Qa * B"
     }
 
     #[test]
-    fn the_oscillation_note_rides_in_its_first_fanout_block() {
-        // The annotation is spliced into the text of the block it explains BEFORE that text is stated,
-        // so the two dedup together: a note pushed on its own would be left over to explain whatever
-        // block came next. It leads the FIRST member of the fan-out, so a separation's second member
-        // never carries one.
-        let cell = analyse(MUT_CONSTRAINED);
-        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
-        eprintln!("{tcl}");
-        let notes = tcl
-            .lines()
-            .filter(|l| l.starts_with("# oscillation:"))
-            .count();
-        assert!(notes > 0, "the ring is annotated:\n{tcl}");
-        for tail in tcl.split("# oscillation:").skip(1) {
-            let (_, rest) = tail
-                .split_once('\n')
-                .expect("the annotation is a line of its own");
-            assert!(
-                rest.starts_with("define_arc \\"),
-                "the note leads the block it explains:\n{rest}"
-            );
-            let block = rest.split("\n\n").next().unwrap_or(rest);
-            let word = type_word(block);
-            assert!(
-                FIRST_FANOUT_TYPES.contains(&word),
-                "the annotated block is the first of its fan-out, not a -type {word}:\n{block}"
-            );
-        }
-        let first_members = blocks(&tcl)
-            .iter()
-            .filter(|b| FIRST_FANOUT_TYPES.contains(&type_word(b)))
-            .count();
-        assert!(
-            notes <= first_members,
-            "each note rides a first fan-out block of its own:\n{tcl}"
-        );
-    }
-
-    #[test]
     fn a_block_and_its_firing_agree_on_the_type_word() {
         // Each variant states its taxonomy twice, in one arm of its own apiece: the `-type` word it
         // writes as a literal into the block header, and the [`BlockKind`] its firing names, which the
@@ -4833,8 +4721,8 @@ Q = "A*B + Q*(A+B)"
         eprintln!("{tcl}");
         // One block per rest state: the two forcing inputs, and the two hold inputs at BOTH Q levels.
         assert_eq!(tcl.matches("define_leakage").count(), 6);
-        assert!(tcl.contains("-when \"A*B*Q\""));
-        assert!(tcl.contains("-when \"!A*!B*!Q\""));
+        assert!(tcl.contains("-when \"A & B & Q\""));
+        assert!(tcl.contains("-when \"!A & !B & !Q\""));
 
         // The pair that shares an input assignment and differs only in what the cell holds: no `-when`
         // can tell the two apart, so the block states the held Q level directly through its own
@@ -4844,8 +4732,8 @@ Q = "A*B + Q*(A+B)"
                 .find(|b| b.contains(needle))
                 .unwrap_or_else(|| panic!("no leakage block containing {needle:?} in:\n{tcl}"))
         };
-        let high = block("-when \"A*!B*Q\"");
-        let low = block("-when \"A*!B*!Q\"");
+        let high = block("-when \"A & !B & Q\"");
+        let low = block("-when \"A & !B & !Q\"");
         assert!(high.contains("-pinlist {A B Q}"), "held high: {high}");
         assert!(high.contains("-vector {1 0 1}"), "held high: {high}");
         assert!(low.contains("-pinlist {A B Q}"), "held low: {low}");
@@ -4853,7 +4741,7 @@ Q = "A*B + Q*(A+B)"
 
         // A forcing input drives the cell into its state on its own, so the condition alone states the
         // block and it carries no columns.
-        for needle in ["A*B*Q", "!A*!B*!Q"] {
+        for needle in ["A & B & Q", "!A & !B & !Q"] {
             assert!(
                 tcl.contains(&format!("define_leakage -when \"{needle}\" {{ C2 }}")),
                 "a forced rest state is its condition alone:\n{tcl}"
@@ -4891,8 +4779,8 @@ Y = "A*B"
         // inputs drive it into each of them: nothing to prime, nothing to run, and the condition alone
         // states the block.
         assert_eq!(tcl.matches("define_leakage").count(), 4);
-        assert!(tcl.contains("define_leakage -when \"A*B*Y\" { AND2 }"));
-        assert!(tcl.contains("define_leakage -when \"!A*!B*!Y\" { AND2 }"));
+        assert!(tcl.contains("define_leakage -when \"A & B & Y\" { AND2 }"));
+        assert!(tcl.contains("define_leakage -when \"!A & !B & !Y\" { AND2 }"));
         for block in tcl.split("define_leakage").skip(1) {
             // The whole block, to the blank line that ends it — truncating at the first newline would
             // cut a walked block's `define_leakage \` header off and assert against nothing.
@@ -5051,7 +4939,7 @@ Q = "A*B + Q*(A+B)"
         assert!(!tcl.contains("{ C2A }"));
         assert!(!tcl.contains("{ C2B }"));
         // A leakage block fans the names into the same single trailer an arc block does.
-        assert!(tcl.contains("define_leakage -when \"A*B*Q\" { C2A C2B }"));
+        assert!(tcl.contains("define_leakage -when \"A & B & Q\" { C2A C2B }"));
         // Same arc count regardless of how many names the cell carries — one arc per transition, a
         // single trailer names both.
         assert_eq!(

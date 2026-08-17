@@ -1,15 +1,6 @@
 define_arc \
 	-type edge \
 	-pinlist {CLK D Q} \
-	-ic "0 $VDD 0" \
-	-vector {R 1 R} \
-	-related_pin CLK \
-	-pin Q \
-	{ DFF }
-
-define_arc \
-	-type edge \
-	-pinlist {CLK D Q} \
 	-ic "0 0 $VDD" \
 	-vector {R 0 F} \
 	-related_pin CLK \
@@ -17,19 +8,20 @@ define_arc \
 	{ DFF }
 
 define_arc \
-	-type hidden \
+	-type edge \
 	-pinlist {CLK D Q} \
-	-ic "$VDD $VDD $VDD" \
-	-vector {F 1 1} \
-	-pin CLK \
+	-ic "0 $VDD 0" \
+	-vector {R 1 R} \
+	-related_pin CLK \
+	-pin Q \
 	{ DFF }
 
 define_arc \
 	-type hidden \
 	-pinlist {CLK D Q} \
-	-ic "$VDD $VDD $VDD" \
-	-vector {1 F 1} \
-	-pin D \
+	-ic "$VDD 0 0" \
+	-vector {F 0 0} \
+	-pin CLK \
 	{ DFF }
 
 define_arc \
@@ -37,6 +29,14 @@ define_arc \
 	-pinlist {CLK D Q} \
 	-ic "$VDD 0 0" \
 	-vector {1 R 0} \
+	-pin D \
+	{ DFF }
+
+define_arc \
+	-type hidden \
+	-pinlist {CLK D Q} \
+	-ic "$VDD $VDD $VDD" \
+	-vector {1 F 1} \
 	-pin D \
 	{ DFF }
 
@@ -50,50 +50,50 @@ define_arc \
 
 define_leakage \
 	-pinlist {CLK D Q} \
-	-vector {1 1 1} \
-	-when "CLK*D*Q" \
+	-vector {1 0 0} \
+	-when "CLK & !D & !Q" \
 	{ DFF }
 
 define_leakage \
 	-pinlist {CLK D Q} \
-	-vector {1 0 0} \
-	-when "CLK*!D*!Q" \
+	-vector {1 1 1} \
+	-when "CLK & D & Q" \
 	{ DFF }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {0 1 1} \
-	-when "!CLK*D*Q" \
-	{ DFF }
-
-define_leakage \
-	-pinlist {CLK D Q} \
-	-vector {1 0 1} \
-	-when "CLK*!D*Q" \
+	-when "!CLK & D & Q" \
 	{ DFF }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {0 0 0} \
-	-when "!CLK*!D*!Q" \
+	-when "!CLK & !D & !Q" \
 	{ DFF }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {1 1 0} \
-	-when "CLK*D*!Q" \
+	-when "CLK & D & !Q" \
 	{ DFF }
 
 define_leakage \
 	-pinlist {CLK D Q} \
-	-vector {0 1 0} \
-	-when "!CLK*D*!Q" \
+	-vector {1 0 1} \
+	-when "CLK & !D & Q" \
 	{ DFF }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {0 0 1} \
-	-when "!CLK*!D*Q" \
+	-when "!CLK & !D & Q" \
+	{ DFF }
+
+define_leakage \
+	-pinlist {CLK D Q} \
+	-vector {0 1 0} \
+	-when "!CLK & D & !Q" \
 	{ DFF }
 
 define_arc \
@@ -138,32 +138,23 @@ define_arc \
 
 define_arc \
 	-type min_pulse_width \
+	-pinlist {CLK D M Q} \
+	-ic "$VDD $VDD 0 0" \
+	-vector {F 1 X X} \
+	-related_pin CLK \
+	-pin CLK \
+	-probe {Q M} \
+	{ DFF }
+
+define_arc \
+	-type min_pulse_width \
 	-pinlist {CLK D Q} \
-	-ic "0 $VDD 0" \
-	-vector {R 1 X} \
+	-ic "0 0 $VDD" \
+	-vector {R 0 X} \
 	-related_pin CLK \
 	-pin CLK \
 	-probe {Q} \
 	{ DFF }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLK D M Q} \
-	-ic "$VDD 0 $VDD $VDD" \
-	-vector {F 0 X X} \
-	-related_pin CLK \
-	-pin CLK \
-	-probe {Q M} \
-	{ DFF }
-
-define_arc \
-	-type combinational \
-	-pinlist {CLK D Q} \
-	-ic "0 $VDD 0" \
-	-vector {R 1 R} \
-	-related_pin CLK \
-	-pin Q \
-	{ DFF_NOCOLLAPSE }
 
 define_arc \
 	-type combinational \
@@ -175,162 +166,13 @@ define_arc \
 	{ DFF_NOCOLLAPSE }
 
 define_arc \
-	-type hidden \
-	-pinlist {CLK D Q} \
-	-ic "$VDD $VDD $VDD" \
-	-vector {F 1 1} \
-	-pin CLK \
-	{ DFF_NOCOLLAPSE }
-
-define_arc \
-	-type hidden \
-	-pinlist {CLK D Q} \
-	-ic "$VDD $VDD $VDD" \
-	-vector {1 F 1} \
-	-pin D \
-	{ DFF_NOCOLLAPSE }
-
-define_arc \
-	-type hidden \
-	-pinlist {CLK D Q} \
-	-ic "$VDD 0 0" \
-	-vector {1 R 0} \
-	-pin D \
-	{ DFF_NOCOLLAPSE }
-
-define_arc \
-	-type hidden \
-	-pinlist {CLK D Q} \
-	-ic "0 0 0" \
-	-vector {R 0 0} \
-	-pin CLK \
-	{ DFF_NOCOLLAPSE }
-
-define_leakage \
-	-pinlist {CLK D Q} \
-	-vector {1 1 1} \
-	-when "CLK*D*Q" \
-	{ DFF_NOCOLLAPSE }
-
-define_leakage \
-	-pinlist {CLK D Q} \
-	-vector {1 0 0} \
-	-when "CLK*!D*!Q" \
-	{ DFF_NOCOLLAPSE }
-
-define_leakage \
-	-pinlist {CLK D Q} \
-	-vector {0 0 0} \
-	-when "!CLK*!D*!Q" \
-	{ DFF_NOCOLLAPSE }
-
-define_leakage \
-	-pinlist {CLK D Q} \
-	-vector {0 1 1} \
-	-when "!CLK*D*Q" \
-	{ DFF_NOCOLLAPSE }
-
-define_leakage \
-	-pinlist {CLK D Q} \
-	-vector {1 0 1} \
-	-when "CLK*!D*Q" \
-	{ DFF_NOCOLLAPSE }
-
-define_leakage \
-	-pinlist {CLK D Q} \
-	-vector {1 1 0} \
-	-when "CLK*D*!Q" \
-	{ DFF_NOCOLLAPSE }
-
-define_leakage \
-	-pinlist {CLK D Q} \
-	-vector {0 1 0} \
-	-when "!CLK*D*!Q" \
-	{ DFF_NOCOLLAPSE }
-
-define_leakage \
-	-pinlist {CLK D Q} \
-	-vector {0 0 1} \
-	-when "!CLK*!D*Q" \
-	{ DFF_NOCOLLAPSE }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D M Q} \
-	-ic "0 $VDD $VDD $VDD" \
-	-vector {R F X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ DFF_NOCOLLAPSE }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D M Q} \
-	-ic "0 $VDD $VDD $VDD" \
-	-vector {R F X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ DFF_NOCOLLAPSE }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLK D Q} \
-	-ic "0 $VDD 0" \
-	-vector {R 1 X} \
-	-related_pin CLK \
-	-pin CLK \
-	-probe {Q} \
-	{ DFF_NOCOLLAPSE }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D M Q} \
-	-ic "0 0 0 0" \
-	-vector {R R X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ DFF_NOCOLLAPSE }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D M Q} \
-	-ic "0 0 0 0" \
-	-vector {R R X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ DFF_NOCOLLAPSE }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLK D M Q} \
-	-ic "$VDD 0 $VDD $VDD" \
-	-vector {F 0 X X} \
-	-related_pin CLK \
-	-pin CLK \
-	-probe {Q M} \
-	{ DFF_NOCOLLAPSE }
-
-define_arc \
 	-type combinational \
 	-pinlist {CLK D Q} \
 	-ic "0 $VDD 0" \
 	-vector {R 1 R} \
 	-related_pin CLK \
 	-pin Q \
-	{ UCDFF }
-
-define_arc \
-	-type combinational \
-	-pinlist {CLK D Q} \
-	-ic "0 0 $VDD" \
-	-vector {R 0 F} \
-	-related_pin CLK \
-	-pin Q \
-	{ UCDFF }
+	{ DFF_NOCOLLAPSE }
 
 define_arc \
 	-type hidden \
@@ -338,7 +180,7 @@ define_arc \
 	-ic "$VDD 0 0" \
 	-vector {F 0 0} \
 	-pin CLK \
-	{ UCDFF }
+	{ DFF_NOCOLLAPSE }
 
 define_arc \
 	-type hidden \
@@ -346,6 +188,156 @@ define_arc \
 	-ic "$VDD 0 0" \
 	-vector {1 R 0} \
 	-pin D \
+	{ DFF_NOCOLLAPSE }
+
+define_arc \
+	-type hidden \
+	-pinlist {CLK D Q} \
+	-ic "$VDD $VDD $VDD" \
+	-vector {1 F 1} \
+	-pin D \
+	{ DFF_NOCOLLAPSE }
+
+define_arc \
+	-type hidden \
+	-pinlist {CLK D Q} \
+	-ic "0 0 0" \
+	-vector {R 0 0} \
+	-pin CLK \
+	{ DFF_NOCOLLAPSE }
+
+define_leakage \
+	-pinlist {CLK D Q} \
+	-vector {1 0 0} \
+	-when "CLK & !D & !Q" \
+	{ DFF_NOCOLLAPSE }
+
+define_leakage \
+	-pinlist {CLK D Q} \
+	-vector {1 1 1} \
+	-when "CLK & D & Q" \
+	{ DFF_NOCOLLAPSE }
+
+define_leakage \
+	-pinlist {CLK D Q} \
+	-vector {1 1 0} \
+	-when "CLK & D & !Q" \
+	{ DFF_NOCOLLAPSE }
+
+define_leakage \
+	-pinlist {CLK D Q} \
+	-vector {0 0 0} \
+	-when "!CLK & !D & !Q" \
+	{ DFF_NOCOLLAPSE }
+
+define_leakage \
+	-pinlist {CLK D Q} \
+	-vector {0 1 1} \
+	-when "!CLK & D & Q" \
+	{ DFF_NOCOLLAPSE }
+
+define_leakage \
+	-pinlist {CLK D Q} \
+	-vector {1 0 1} \
+	-when "CLK & !D & Q" \
+	{ DFF_NOCOLLAPSE }
+
+define_leakage \
+	-pinlist {CLK D Q} \
+	-vector {0 0 1} \
+	-when "!CLK & !D & Q" \
+	{ DFF_NOCOLLAPSE }
+
+define_leakage \
+	-pinlist {CLK D Q} \
+	-vector {0 1 0} \
+	-when "!CLK & D & !Q" \
+	{ DFF_NOCOLLAPSE }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLK D Q} \
+	-ic "0 0 $VDD" \
+	-vector {R 0 X} \
+	-related_pin CLK \
+	-pin CLK \
+	-probe {Q} \
+	{ DFF_NOCOLLAPSE }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D M Q} \
+	-ic "0 0 0 0" \
+	-vector {R R X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ DFF_NOCOLLAPSE }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D M Q} \
+	-ic "0 0 0 0" \
+	-vector {R R X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ DFF_NOCOLLAPSE }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLK D M Q} \
+	-ic "$VDD $VDD 0 0" \
+	-vector {F 1 X X} \
+	-related_pin CLK \
+	-pin CLK \
+	-probe {Q M} \
+	{ DFF_NOCOLLAPSE }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D M Q} \
+	-ic "0 $VDD $VDD $VDD" \
+	-vector {R F X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ DFF_NOCOLLAPSE }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D M Q} \
+	-ic "0 $VDD $VDD $VDD" \
+	-vector {R F X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ DFF_NOCOLLAPSE }
+
+define_arc \
+	-type combinational \
+	-pinlist {CLK D Q} \
+	-ic "0 0 $VDD" \
+	-vector {R 0 F} \
+	-related_pin CLK \
+	-pin Q \
+	{ UCDFF }
+
+define_arc \
+	-type combinational \
+	-pinlist {CLK D Q} \
+	-ic "0 $VDD 0" \
+	-vector {R 1 R} \
+	-related_pin CLK \
+	-pin Q \
+	{ UCDFF }
+
+define_arc \
+	-type hidden \
+	-pinlist {CLK D Q} \
+	-ic "$VDD $VDD $VDD" \
+	-vector {F 1 1} \
+	-pin CLK \
 	{ UCDFF }
 
 define_arc \
@@ -359,67 +351,85 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLK D Q} \
-	-ic "0 0 0" \
-	-vector {R 0 0} \
-	-pin CLK \
+	-ic "$VDD 0 0" \
+	-vector {1 R 0} \
+	-pin D \
 	{ UCDFF }
 
-define_leakage \
+define_arc \
+	-type hidden \
 	-pinlist {CLK D Q} \
-	-vector {1 0 0} \
-	-when "CLK*!D*!Q" \
+	-ic "0 $VDD $VDD" \
+	-vector {R 1 1} \
+	-pin CLK \
 	{ UCDFF }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {1 1 1} \
-	-when "CLK*D*Q" \
+	-when "CLK & D & Q" \
+	{ UCDFF }
+
+define_leakage \
+	-pinlist {CLK D Q} \
+	-vector {1 0 0} \
+	-when "CLK & !D & !Q" \
 	{ UCDFF }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {1 1 0} \
-	-when "CLK*D*!Q" \
-	{ UCDFF }
-
-define_leakage \
-	-pinlist {CLK D Q} \
-	-vector {1 0 1} \
-	-when "CLK*!D*Q" \
-	{ UCDFF }
-
-define_leakage \
-	-pinlist {CLK D Q} \
-	-vector {0 0 0} \
-	-when "!CLK*!D*!Q" \
+	-when "CLK & D & !Q" \
 	{ UCDFF }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {0 1 1} \
-	-when "!CLK*D*Q" \
+	-when "!CLK & D & Q" \
 	{ UCDFF }
 
 define_leakage \
 	-pinlist {CLK D Q} \
-	-vector {0 1 0} \
-	-when "!CLK*D*!Q" \
+	-vector {1 0 1} \
+	-when "CLK & !D & Q" \
+	{ UCDFF }
+
+define_leakage \
+	-pinlist {CLK D Q} \
+	-vector {0 0 0} \
+	-when "!CLK & !D & !Q" \
 	{ UCDFF }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {0 0 1} \
-	-when "!CLK*!D*Q" \
+	-when "!CLK & !D & Q" \
+	{ UCDFF }
+
+define_leakage \
+	-pinlist {CLK D Q} \
+	-vector {0 1 0} \
+	-when "!CLK & D & !Q" \
 	{ UCDFF }
 
 define_arc \
-	-type min_pulse_width \
-	-pinlist {CLK D Q} \
-	-ic "0 $VDD 0" \
-	-vector {R 1 X} \
+	-type non_seq_setup \
+	-pinlist {CLK D M Q} \
+	-ic "0 0 0 0" \
+	-vector {R R X X} \
 	-related_pin CLK \
-	-pin CLK \
-	-probe {Q} \
+	-pin D \
+	-probe {Q M} \
+	{ UCDFF }
+
+define_arc \
+	-type non_seq_hold \
+	-pinlist {CLK D M Q} \
+	-ic "0 0 0 0" \
+	-vector {R R X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
 	{ UCDFF }
 
 define_arc \
@@ -453,33 +463,14 @@ define_arc \
 	{ UCDFF }
 
 define_arc \
-	-type non_seq_setup \
-	-pinlist {CLK D M Q} \
-	-ic "0 0 0 0" \
-	-vector {R R X X} \
+	-type min_pulse_width \
+	-pinlist {CLK D Q} \
+	-ic "0 0 $VDD" \
+	-vector {R 0 X} \
 	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
+	-pin CLK \
+	-probe {Q} \
 	{ UCDFF }
-
-define_arc \
-	-type non_seq_hold \
-	-pinlist {CLK D M Q} \
-	-ic "0 0 0 0" \
-	-vector {R R X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ UCDFF }
-
-define_arc \
-	-type edge \
-	-pinlist {CLK D M Q} \
-	-ic "$VDD 0 $VDD $VDD" \
-	-vector {F 0 F X} \
-	-related_pin CLK \
-	-pin M \
-	{ EMDFF }
 
 define_arc \
 	-type edge \
@@ -511,6 +502,15 @@ define_arc \
 define_arc \
 	-type edge \
 	-pinlist {CLK D M Q} \
+	-ic "$VDD 0 $VDD $VDD" \
+	-vector {F 0 F X} \
+	-related_pin CLK \
+	-pin M \
+	{ EMDFF }
+
+define_arc \
+	-type edge \
+	-pinlist {CLK D M Q} \
 	-ic "0 $VDD $VDD 0" \
 	-vector {R 1 X R} \
 	-related_pin CLK \
@@ -529,17 +529,9 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLK D M Q} \
-	-ic "$VDD $VDD $VDD $VDD" \
-	-vector {F 1 1 1} \
+	-ic "$VDD 0 0 0" \
+	-vector {F 0 0 0} \
 	-pin CLK \
-	{ EMDFF }
-
-define_arc \
-	-type hidden \
-	-pinlist {CLK D M Q} \
-	-ic "$VDD $VDD $VDD $VDD" \
-	-vector {1 F 1 1} \
-	-pin D \
 	{ EMDFF }
 
 define_arc \
@@ -553,6 +545,14 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLK D M Q} \
+	-ic "$VDD $VDD $VDD $VDD" \
+	-vector {1 F 1 1} \
+	-pin D \
+	{ EMDFF }
+
+define_arc \
+	-type hidden \
+	-pinlist {CLK D M Q} \
 	-ic "0 $VDD $VDD $VDD" \
 	-vector {R 1 1 1} \
 	-pin CLK \
@@ -560,70 +560,50 @@ define_arc \
 
 define_leakage \
 	-pinlist {CLK D M Q} \
-	-vector {1 1 1 1} \
-	-when "CLK*D*M*Q" \
-	{ EMDFF }
-
-define_leakage \
-	-pinlist {CLK D M Q} \
 	-vector {1 0 0 0} \
-	-when "CLK*!D*!M*!Q" \
+	-when "CLK & !D & !M & !Q" \
 	{ EMDFF }
 
 define_leakage \
 	-pinlist {CLK D M Q} \
-	-vector {1 0 1 1} \
-	-when "CLK*!D*M*Q" \
+	-vector {1 1 1 1} \
+	-when "CLK & D & M & Q" \
 	{ EMDFF }
 
 define_leakage \
 	-pinlist {CLK D M Q} \
 	-vector {1 1 0 0} \
-	-when "CLK*D*!M*!Q" \
+	-when "CLK & D & !M & !Q" \
 	{ EMDFF }
 
 define_leakage \
 	-pinlist {CLK D M Q} \
 	-vector {0 1 1 1} \
-	-when "!CLK*D*M*Q" \
+	-when "!CLK & D & M & Q" \
 	{ EMDFF }
 
 define_leakage \
 	-pinlist {CLK D M Q} \
 	-vector {0 0 0 0} \
-	-when "!CLK*!D*!M*!Q" \
+	-when "!CLK & !D & !M & !Q" \
+	{ EMDFF }
+
+define_leakage \
+	-pinlist {CLK D M Q} \
+	-vector {1 0 1 1} \
+	-when "CLK & !D & M & Q" \
 	{ EMDFF }
 
 define_leakage \
 	-pinlist {CLK D M Q} \
 	-vector {0 1 1 0} \
-	-when "!CLK*D*M*!Q" \
+	-when "!CLK & D & M & !Q" \
 	{ EMDFF }
 
 define_leakage \
 	-pinlist {CLK D M Q} \
 	-vector {0 0 0 1} \
-	-when "!CLK*!D*!M*Q" \
-	{ EMDFF }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D M Q} \
-	-ic "0 $VDD $VDD $VDD" \
-	-vector {R F X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {M Q} \
-	{ EMDFF }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D M Q} \
-	-ic "0 $VDD $VDD $VDD" \
-	-vector {R F X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {M Q} \
+	-when "!CLK & !D & !M & Q" \
 	{ EMDFF }
 
 define_arc \
@@ -649,10 +629,30 @@ define_arc \
 define_arc \
 	-type min_pulse_width \
 	-pinlist {CLK D M Q} \
-	-ic "$VDD 0 $VDD $VDD" \
-	-vector {F 0 X X} \
+	-ic "$VDD $VDD 0 0" \
+	-vector {F 1 X X} \
 	-related_pin CLK \
 	-pin CLK \
+	-probe {M Q} \
+	{ EMDFF }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D M Q} \
+	-ic "0 $VDD $VDD $VDD" \
+	-vector {R F X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {M Q} \
+	{ EMDFF }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D M Q} \
+	-ic "0 $VDD $VDD $VDD" \
+	-vector {R F X X} \
+	-related_pin CLK \
+	-pin D \
 	-probe {M Q} \
 	{ EMDFF }
 
@@ -669,8 +669,8 @@ define_arc \
 define_arc \
 	-type combinational \
 	-pinlist {CLK D Q T} \
-	-ic "0 $VDD $VDD $VDD" \
-	-vector {0 F X F} \
+	-ic "0 0 0 0" \
+	-vector {0 R X R} \
 	-related_pin D \
 	-pin T \
 	{ TAPDFF }
@@ -678,8 +678,8 @@ define_arc \
 define_arc \
 	-type combinational \
 	-pinlist {CLK D Q T} \
-	-ic "0 0 0 0" \
-	-vector {0 R X R} \
+	-ic "0 $VDD $VDD $VDD" \
+	-vector {0 F X F} \
 	-related_pin D \
 	-pin T \
 	{ TAPDFF }
@@ -723,17 +723,9 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLK D Q T} \
-	-ic "$VDD 0 0 0" \
-	-vector {F 0 0 0} \
+	-ic "$VDD $VDD $VDD $VDD" \
+	-vector {F 1 1 1} \
 	-pin CLK \
-	{ TAPDFF }
-
-define_arc \
-	-type hidden \
-	-pinlist {CLK D Q T} \
-	-ic "$VDD 0 0 0" \
-	-vector {1 R 0 0} \
-	-pin D \
 	{ TAPDFF }
 
 define_arc \
@@ -747,67 +739,65 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLK D Q T} \
-	-ic "0 $VDD $VDD $VDD" \
-	-vector {R 1 1 1} \
-	-pin CLK \
+	-ic "$VDD 0 0 0" \
+	-vector {1 R 0 0} \
+	-pin D \
 	{ TAPDFF }
 
-define_leakage \
+define_arc \
+	-type hidden \
 	-pinlist {CLK D Q T} \
-	-vector {1 0 0 0} \
-	-when "CLK*!D*!Q*!T" \
+	-ic "0 0 0 0" \
+	-vector {R 0 0 0} \
+	-pin CLK \
 	{ TAPDFF }
 
 define_leakage \
 	-pinlist {CLK D Q T} \
 	-vector {1 1 1 1} \
-	-when "CLK*D*Q*T" \
+	-when "CLK & D & Q & T" \
 	{ TAPDFF }
 
 define_leakage \
 	-pinlist {CLK D Q T} \
-	-vector {0 1 1 1} \
-	-when "!CLK*D*Q*T" \
+	-vector {1 0 0 0} \
+	-when "CLK & !D & !Q & !T" \
 	{ TAPDFF }
 
 define_leakage \
 	-pinlist {CLK D Q T} \
 	-vector {0 0 0 0} \
-	-when "!CLK*!D*!Q*!T" \
+	-when "!CLK & !D & !Q & !T" \
+	{ TAPDFF }
+
+define_leakage \
+	-pinlist {CLK D Q T} \
+	-vector {0 1 1 1} \
+	-when "!CLK & D & Q & T" \
 	{ TAPDFF }
 
 define_leakage \
 	-pinlist {CLK D Q T} \
 	-vector {1 0 1 1} \
-	-when "CLK*!D*Q*T" \
+	-when "CLK & !D & Q & T" \
 	{ TAPDFF }
 
 define_leakage \
 	-pinlist {CLK D Q T} \
 	-vector {1 1 0 0} \
-	-when "CLK*D*!Q*!T" \
+	-when "CLK & D & !Q & !T" \
 	{ TAPDFF }
 
 define_leakage \
 	-pinlist {CLK D Q T} \
 	-vector {0 0 1 0} \
-	-when "!CLK*!D*Q*!T" \
+	-when "!CLK & !D & Q & !T" \
 	{ TAPDFF }
 
 define_leakage \
 	-pinlist {CLK D Q T} \
 	-vector {0 1 0 1} \
-	-when "!CLK*D*!Q*T" \
-	{ TAPDFF }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLK D Q T} \
-	-ic "0 0 $VDD 0" \
-	-vector {R 0 X X} \
-	-related_pin CLK \
-	-pin CLK \
-	-probe {Q} \
+	-when "!CLK & D & !Q & T" \
 	{ TAPDFF }
 
 define_arc \
@@ -838,6 +828,16 @@ define_arc \
 	-related_pin CLK \
 	-pin D \
 	-probe {Q T} \
+	{ TAPDFF }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLK D Q T} \
+	-ic "0 0 $VDD 0" \
+	-vector {R 0 X X} \
+	-related_pin CLK \
+	-pin CLK \
+	-probe {Q} \
 	{ TAPDFF }
 
 define_arc \
@@ -913,49 +913,89 @@ define_arc \
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {1 0 1} \
-	-when "CLK*!D*Q" \
+	-when "CLK & !D & Q" \
 	{ IDFF }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {1 1 0} \
-	-when "CLK*D*!Q" \
+	-when "CLK & D & !Q" \
 	{ IDFF }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {0 0 1} \
-	-when "!CLK*!D*Q" \
+	-when "!CLK & !D & Q" \
 	{ IDFF }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {1 1 1} \
-	-when "CLK*D*Q" \
-	{ IDFF }
-
-define_leakage \
-	-pinlist {CLK D Q} \
-	-vector {0 1 0} \
-	-when "!CLK*D*!Q" \
+	-when "CLK & D & Q" \
 	{ IDFF }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {1 0 0} \
-	-when "CLK*!D*!Q" \
+	-when "CLK & !D & !Q" \
+	{ IDFF }
+
+define_leakage \
+	-pinlist {CLK D Q} \
+	-vector {0 1 0} \
+	-when "!CLK & D & !Q" \
 	{ IDFF }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {0 0 0} \
-	-when "!CLK*!D*!Q" \
+	-when "!CLK & !D & !Q" \
 	{ IDFF }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {0 1 1} \
-	-when "!CLK*D*Q" \
+	-when "!CLK & D & Q" \
+	{ IDFF }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D M Q} \
+	-ic "0 $VDD $VDD 0" \
+	-vector {R F X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ IDFF }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D M Q} \
+	-ic "0 $VDD $VDD 0" \
+	-vector {R F X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ IDFF }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D M Q} \
+	-ic "0 0 0 $VDD" \
+	-vector {R R X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ IDFF }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D M Q} \
+	-ic "0 0 0 $VDD" \
+	-vector {R R X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
 	{ IDFF }
 
 define_arc \
@@ -969,52 +1009,12 @@ define_arc \
 	{ IDFF }
 
 define_arc \
-	-type setup \
-	-pinlist {CLK D M Q} \
-	-ic "0 $VDD $VDD 0" \
-	-vector {R F X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ IDFF }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D M Q} \
-	-ic "0 $VDD $VDD 0" \
-	-vector {R F X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ IDFF }
-
-define_arc \
 	-type min_pulse_width \
 	-pinlist {CLK D M Q} \
 	-ic "$VDD $VDD 0 $VDD" \
 	-vector {F 1 X X} \
 	-related_pin CLK \
 	-pin CLK \
-	-probe {Q M} \
-	{ IDFF }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D M Q} \
-	-ic "0 0 0 $VDD" \
-	-vector {R R X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ IDFF }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D M Q} \
-	-ic "0 0 0 $VDD" \
-	-vector {R R X X} \
-	-related_pin CLK \
-	-pin D \
 	-probe {Q M} \
 	{ IDFF }
 
@@ -1057,17 +1057,9 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLK D Q Qn} \
-	-ic "$VDD 0 0 $VDD" \
-	-vector {F 0 0 1} \
+	-ic "$VDD $VDD $VDD 0" \
+	-vector {F 1 1 0} \
 	-pin CLK \
-	{ XN }
-
-define_arc \
-	-type hidden \
-	-pinlist {CLK D Q Qn} \
-	-ic "$VDD 0 0 $VDD" \
-	-vector {1 R 0 1} \
-	-pin D \
 	{ XN }
 
 define_arc \
@@ -1081,6 +1073,14 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLK D Q Qn} \
+	-ic "$VDD 0 0 $VDD" \
+	-vector {1 R 0 1} \
+	-pin D \
+	{ XN }
+
+define_arc \
+	-type hidden \
+	-pinlist {CLK D Q Qn} \
 	-ic "0 $VDD $VDD 0" \
 	-vector {R 1 1 0} \
 	-pin CLK \
@@ -1088,59 +1088,69 @@ define_arc \
 
 define_leakage \
 	-pinlist {CLK D Q Qn} \
-	-vector {1 0 0 1} \
-	-when "CLK*!D*!Q*Qn" \
-	{ XN }
-
-define_leakage \
-	-pinlist {CLK D Q Qn} \
 	-vector {1 1 1 0} \
-	-when "CLK*D*Q*!Qn" \
+	-when "CLK & D & Q & !Qn" \
 	{ XN }
 
 define_leakage \
 	-pinlist {CLK D Q Qn} \
-	-vector {1 0 1 0} \
-	-when "CLK*!D*Q*!Qn" \
-	{ XN }
-
-define_leakage \
-	-pinlist {CLK D Q Qn} \
-	-vector {1 1 0 1} \
-	-when "CLK*D*!Q*Qn" \
+	-vector {1 0 0 1} \
+	-when "CLK & !D & !Q & Qn" \
 	{ XN }
 
 define_leakage \
 	-pinlist {CLK D Q Qn} \
 	-vector {0 1 1 0} \
-	-when "!CLK*D*Q*!Qn" \
+	-when "!CLK & D & Q & !Qn" \
+	{ XN }
+
+define_leakage \
+	-pinlist {CLK D Q Qn} \
+	-vector {1 0 1 0} \
+	-when "CLK & !D & Q & !Qn" \
 	{ XN }
 
 define_leakage \
 	-pinlist {CLK D Q Qn} \
 	-vector {0 0 0 1} \
-	-when "!CLK*!D*!Q*Qn" \
+	-when "!CLK & !D & !Q & Qn" \
+	{ XN }
+
+define_leakage \
+	-pinlist {CLK D Q Qn} \
+	-vector {1 1 0 1} \
+	-when "CLK & D & !Q & Qn" \
 	{ XN }
 
 define_leakage \
 	-pinlist {CLK D Q Qn} \
 	-vector {0 1 0 1} \
-	-when "!CLK*D*!Q*Qn" \
+	-when "!CLK & D & !Q & Qn" \
 	{ XN }
 
 define_leakage \
 	-pinlist {CLK D Q Qn} \
 	-vector {0 0 1 0} \
-	-when "!CLK*!D*Q*!Qn" \
+	-when "!CLK & !D & Q & !Qn" \
 	{ XN }
 
 define_arc \
-	-type min_pulse_width \
+	-type setup \
 	-pinlist {CLK D M Q Qn} \
-	-ic "$VDD 0 $VDD $VDD 0" \
-	-vector {F 0 X X X} \
+	-ic "0 $VDD $VDD $VDD 0" \
+	-vector {R F X X X} \
 	-related_pin CLK \
-	-pin CLK \
+	-pin D \
+	-probe {Q Qn M} \
+	{ XN }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D M Q Qn} \
+	-ic "0 $VDD $VDD $VDD 0" \
+	-vector {R F X X X} \
+	-related_pin CLK \
+	-pin D \
 	-probe {Q Qn M} \
 	{ XN }
 
@@ -1159,26 +1169,6 @@ define_arc \
 	-pinlist {CLK D M Q Qn} \
 	-ic "0 0 0 0 $VDD" \
 	-vector {R R X X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q Qn M} \
-	{ XN }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D M Q Qn} \
-	-ic "0 $VDD $VDD $VDD 0" \
-	-vector {R F X X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q Qn M} \
-	{ XN }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D M Q Qn} \
-	-ic "0 $VDD $VDD $VDD 0" \
-	-vector {R F X X X} \
 	-related_pin CLK \
 	-pin D \
 	-probe {Q Qn M} \
@@ -1192,6 +1182,16 @@ define_arc \
 	-related_pin CLK \
 	-pin CLK \
 	-probe {Q Qn} \
+	{ XN }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLK D M Q Qn} \
+	-ic "$VDD 0 $VDD $VDD 0" \
+	-vector {F 0 X X X} \
+	-related_pin CLK \
+	-pin CLK \
+	-probe {Q Qn M} \
 	{ XN }
 
 define_arc \
@@ -1248,37 +1248,37 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLK R Q} \
-	-ic "$VDD 0 0" \
-	-vector {1 R 0} \
+	-ic "0 0 0" \
+	-vector {0 R 0} \
 	-pin R \
 	{ TFF }
 
-define_leakage -when "!CLK*!Q*R" { TFF }
+define_leakage -when "!CLK & !Q & R" { TFF }
 
-define_leakage -when "CLK*!Q*R" { TFF }
-
-define_leakage \
-	-pinlist {CLK R Q} \
-	-vector {1 0 0} \
-	-when "CLK*!Q*!R" \
-	{ TFF }
+define_leakage -when "CLK & !Q & R" { TFF }
 
 define_leakage \
 	-pinlist {CLK R Q} \
 	-vector {0 0 0} \
-	-when "!CLK*!Q*!R" \
+	-when "!CLK & !Q & !R" \
+	{ TFF }
+
+define_leakage \
+	-pinlist {CLK R Q} \
+	-vector {1 0 0} \
+	-when "CLK & !Q & !R" \
 	{ TFF }
 
 define_leakage \
 	-pinlist {CLK R Q} \
 	-vector {1 0 1} \
-	-when "CLK*Q*!R" \
+	-when "CLK & Q & !R" \
 	{ TFF }
 
 define_leakage \
 	-pinlist {CLK R Q} \
 	-vector {0 0 1} \
-	-when "!CLK*Q*!R" \
+	-when "!CLK & Q & !R" \
 	{ TFF }
 
 define_arc \
@@ -1304,10 +1304,10 @@ define_arc \
 define_arc \
 	-type min_pulse_width \
 	-pinlist {CLK R M Q} \
-	-ic "$VDD 0 $VDD $VDD" \
-	-vector {1 R X X} \
-	-related_pin R \
-	-pin R \
+	-ic "$VDD 0 0 0" \
+	-vector {F 0 X X} \
+	-related_pin CLK \
+	-pin CLK \
 	-probe {Q M} \
 	{ TFF }
 
@@ -1324,18 +1324,18 @@ define_arc \
 define_arc \
 	-type min_pulse_width \
 	-pinlist {CLK R M Q} \
-	-ic "$VDD 0 0 0" \
-	-vector {F 0 X X} \
-	-related_pin CLK \
-	-pin CLK \
+	-ic "$VDD 0 $VDD $VDD" \
+	-vector {1 R X X} \
+	-related_pin R \
+	-pin R \
 	-probe {Q M} \
 	{ TFF }
 
 define_arc \
 	-type edge \
 	-pinlist {CLK D Q} \
-	-ic "0 $VDD 0" \
-	-vector {R 1 R} \
+	-ic "$VDD 0 $VDD" \
+	-vector {F 0 F} \
 	-related_pin CLK \
 	-pin Q \
 	{ DET }
@@ -1352,8 +1352,8 @@ define_arc \
 define_arc \
 	-type edge \
 	-pinlist {CLK D Q} \
-	-ic "$VDD 0 $VDD" \
-	-vector {F 0 F} \
+	-ic "0 $VDD 0" \
+	-vector {R 1 R} \
 	-related_pin CLK \
 	-pin Q \
 	{ DET }
@@ -1370,25 +1370,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLK D Q} \
-	-ic "0 $VDD $VDD" \
-	-vector {R 1 1} \
+	-ic "$VDD $VDD $VDD" \
+	-vector {F 1 1} \
 	-pin CLK \
 	{ DET }
 
 define_arc \
 	-type hidden \
 	-pinlist {CLK D Q} \
-	-ic "0 $VDD $VDD" \
-	-vector {0 F 1} \
+	-ic "$VDD $VDD $VDD" \
+	-vector {1 F 1} \
 	-pin D \
-	{ DET }
-
-define_arc \
-	-type hidden \
-	-pinlist {CLK D Q} \
-	-ic "$VDD 0 0" \
-	-vector {F 0 0} \
-	-pin CLK \
 	{ DET }
 
 define_arc \
@@ -1399,72 +1391,60 @@ define_arc \
 	-pin D \
 	{ DET }
 
-define_leakage \
+define_arc \
+	-type hidden \
 	-pinlist {CLK D Q} \
-	-vector {0 1 1} \
-	-when "!CLK*D*Q" \
-	{ DET }
-
-define_leakage \
-	-pinlist {CLK D Q} \
-	-vector {1 0 0} \
-	-when "CLK*!D*!Q" \
+	-ic "0 $VDD $VDD" \
+	-vector {R 1 1} \
+	-pin CLK \
 	{ DET }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {1 1 1} \
-	-when "CLK*D*Q" \
+	-when "CLK & D & Q" \
+	{ DET }
+
+define_leakage \
+	-pinlist {CLK D Q} \
+	-vector {1 0 0} \
+	-when "CLK & !D & !Q" \
+	{ DET }
+
+define_leakage \
+	-pinlist {CLK D Q} \
+	-vector {0 1 1} \
+	-when "!CLK & D & Q" \
 	{ DET }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {0 0 0} \
-	-when "!CLK*!D*!Q" \
-	{ DET }
-
-define_leakage \
-	-pinlist {CLK D Q} \
-	-vector {0 1 0} \
-	-when "!CLK*D*!Q" \
-	{ DET }
-
-define_leakage \
-	-pinlist {CLK D Q} \
-	-vector {1 1 0} \
-	-when "CLK*D*!Q" \
+	-when "!CLK & !D & !Q" \
 	{ DET }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {1 0 1} \
-	-when "CLK*!D*Q" \
+	-when "CLK & !D & Q" \
+	{ DET }
+
+define_leakage \
+	-pinlist {CLK D Q} \
+	-vector {1 1 0} \
+	-when "CLK & D & !Q" \
+	{ DET }
+
+define_leakage \
+	-pinlist {CLK D Q} \
+	-vector {0 1 0} \
+	-when "!CLK & D & !Q" \
 	{ DET }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {0 0 1} \
-	-when "!CLK*!D*Q" \
-	{ DET }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D L2 Q} \
-	-ic "$VDD 0 0 0" \
-	-vector {F R X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {L2} \
-	{ DET }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D L2 Q} \
-	-ic "$VDD 0 0 0" \
-	-vector {F R X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {L2} \
+	-when "!CLK & !D & Q" \
 	{ DET }
 
 define_arc \
@@ -1510,8 +1490,8 @@ define_arc \
 define_arc \
 	-type min_pulse_width \
 	-pinlist {CLK D L1 Q} \
-	-ic "$VDD $VDD 0 0" \
-	-vector {F 1 X X} \
+	-ic "$VDD 0 $VDD $VDD" \
+	-vector {F 0 X X} \
 	-related_pin CLK \
 	-pin CLK \
 	-probe {L1} \
@@ -1535,6 +1515,26 @@ define_arc \
 	-related_pin CLK \
 	-pin D \
 	-probe {L1} \
+	{ DET }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D L2 Q} \
+	-ic "$VDD 0 0 0" \
+	-vector {F R X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {L2} \
+	{ DET }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D L2 Q} \
+	-ic "$VDD 0 0 0" \
+	-vector {F R X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {L2} \
 	{ DET }
 
 define_arc \
@@ -1609,119 +1609,99 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLK D R Q} \
-	-ic "0 0 $VDD 0" \
-	-vector {R 0 1 0} \
-	-pin CLK \
+	-ic "$VDD 0 0 0" \
+	-vector {1 0 R 0} \
+	-pin R \
 	{ MOR }
 
 define_arc \
 	-type hidden \
 	-pinlist {CLK D R Q} \
-	-ic "$VDD $VDD 0 0" \
-	-vector {1 1 R 0} \
-	-pin R \
+	-ic "0 0 $VDD 0" \
+	-vector {R 0 1 0} \
+	-pin CLK \
 	{ MOR }
 
-define_leakage -when "CLK*!D*!Q*R" { MOR }
+define_leakage -when "CLK & !D & !Q & R" { MOR }
 
-define_leakage -when "CLK*D*!Q*R" { MOR }
-
-define_leakage \
-	-pinlist {CLK D R Q} \
-	-vector {0 0 1 0} \
-	-when "!CLK*!D*!Q*R" \
-	{ MOR }
-
-define_leakage \
-	-pinlist {CLK D R Q} \
-	-vector {0 1 1 0} \
-	-when "!CLK*D*!Q*R" \
-	{ MOR }
-
-define_leakage \
-	-pinlist {CLK D R Q} \
-	-vector {1 1 0 0} \
-	-when "CLK*D*!Q*!R" \
-	{ MOR }
+define_leakage -when "CLK & D & !Q & R" { MOR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {1 1 0 1} \
-	-when "CLK*D*Q*!R" \
+	-when "CLK & D & Q & !R" \
 	{ MOR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {1 0 0 0} \
-	-when "CLK*!D*!Q*!R" \
+	-when "CLK & !D & !Q & !R" \
 	{ MOR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
-	-vector {0 1 0 1} \
-	-when "!CLK*D*Q*!R" \
+	-vector {0 0 1 0} \
+	-when "!CLK & !D & !Q & R" \
 	{ MOR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
-	-vector {0 1 0 0} \
-	-when "!CLK*D*!Q*!R" \
+	-vector {0 1 1 0} \
+	-when "!CLK & D & !Q & R" \
 	{ MOR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
-	-vector {1 0 0 1} \
-	-when "CLK*!D*Q*!R" \
+	-vector {1 1 0 0} \
+	-when "CLK & D & !Q & !R" \
 	{ MOR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {0 0 0 0} \
-	-when "!CLK*!D*!Q*!R" \
+	-when "!CLK & !D & !Q & !R" \
+	{ MOR }
+
+define_leakage \
+	-pinlist {CLK D R Q} \
+	-vector {0 1 0 0} \
+	-when "!CLK & D & !Q & !R" \
+	{ MOR }
+
+define_leakage \
+	-pinlist {CLK D R Q} \
+	-vector {0 1 0 1} \
+	-when "!CLK & D & Q & !R" \
+	{ MOR }
+
+define_leakage \
+	-pinlist {CLK D R Q} \
+	-vector {1 0 0 1} \
+	-when "CLK & !D & Q & !R" \
 	{ MOR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {0 0 0 1} \
-	-when "!CLK*!D*Q*!R" \
+	-when "!CLK & !D & Q & !R" \
 	{ MOR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {0 1 1 1} \
-	-when "!CLK*D*Q*R" \
+	-when "!CLK & D & Q & R" \
 	{ MOR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {0 0 1 1} \
-	-when "!CLK*!D*Q*R" \
+	-when "!CLK & !D & Q & R" \
 	{ MOR }
 
 define_arc \
 	-type setup \
 	-pinlist {CLK D R M Q} \
-	-ic "0 $VDD $VDD 0 0" \
-	-vector {R 1 F X X} \
-	-related_pin CLK \
-	-pin R \
-	-probe {Q M} \
-	{ MOR }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D R M Q} \
-	-ic "0 $VDD $VDD 0 0" \
-	-vector {R 1 F X X} \
-	-related_pin CLK \
-	-pin R \
-	-probe {Q M} \
-	{ MOR }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D R M Q} \
-	-ic "0 $VDD 0 $VDD $VDD" \
+	-ic "0 $VDD 0 $VDD 0" \
 	-vector {R F 0 X X} \
 	-related_pin CLK \
 	-pin D \
@@ -1731,8 +1711,28 @@ define_arc \
 define_arc \
 	-type hold \
 	-pinlist {CLK D R M Q} \
-	-ic "0 $VDD 0 $VDD $VDD" \
+	-ic "0 $VDD 0 $VDD 0" \
 	-vector {R F 0 X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ MOR }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D R M Q} \
+	-ic "0 0 0 0 0" \
+	-vector {R R 0 X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ MOR }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D R M Q} \
+	-ic "0 0 0 0 0" \
+	-vector {R R 0 X X} \
 	-related_pin CLK \
 	-pin D \
 	-probe {Q M} \
@@ -1741,10 +1741,10 @@ define_arc \
 define_arc \
 	-type min_pulse_width \
 	-pinlist {CLK D R M Q} \
-	-ic "$VDD $VDD 0 $VDD $VDD" \
-	-vector {1 1 R X X} \
-	-related_pin R \
-	-pin R \
+	-ic "$VDD $VDD 0 0 0" \
+	-vector {F 1 0 X X} \
+	-related_pin CLK \
+	-pin CLK \
 	-probe {Q M} \
 	{ MOR }
 
@@ -1761,30 +1761,30 @@ define_arc \
 define_arc \
 	-type min_pulse_width \
 	-pinlist {CLK D R M Q} \
-	-ic "$VDD $VDD 0 0 0" \
-	-vector {F 1 0 X X} \
-	-related_pin CLK \
-	-pin CLK \
+	-ic "$VDD $VDD 0 $VDD $VDD" \
+	-vector {1 1 R X X} \
+	-related_pin R \
+	-pin R \
 	-probe {Q M} \
 	{ MOR }
 
 define_arc \
 	-type setup \
 	-pinlist {CLK D R M Q} \
-	-ic "0 0 0 0 0" \
-	-vector {R R 0 X X} \
+	-ic "0 $VDD $VDD 0 0" \
+	-vector {R 1 F X X} \
 	-related_pin CLK \
-	-pin D \
+	-pin R \
 	-probe {Q M} \
 	{ MOR }
 
 define_arc \
 	-type hold \
 	-pinlist {CLK D R M Q} \
-	-ic "0 0 0 0 0" \
-	-vector {R R 0 X X} \
+	-ic "0 $VDD $VDD 0 0" \
+	-vector {R 1 F X X} \
 	-related_pin CLK \
-	-pin D \
+	-pin R \
 	-probe {Q M} \
 	{ MOR }
 
@@ -1809,8 +1809,8 @@ define_arc \
 define_arc \
 	-type edge \
 	-pinlist {CLK D R Q} \
-	-ic "0 0 0 $VDD" \
-	-vector {R 0 0 F} \
+	-ic "0 $VDD $VDD $VDD" \
+	-vector {R 1 1 F} \
 	-related_pin CLK \
 	-pin Q \
 	{ MORA }
@@ -1850,93 +1850,163 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLK D R Q} \
-	-ic "0 $VDD $VDD 0" \
-	-vector {R 1 1 0} \
-	-pin CLK \
+	-ic "$VDD 0 0 0" \
+	-vector {1 0 R 0} \
+	-pin R \
 	{ MORA }
 
 define_arc \
 	-type hidden \
 	-pinlist {CLK D R Q} \
-	-ic "$VDD $VDD 0 0" \
-	-vector {1 1 R 0} \
-	-pin R \
+	-ic "0 0 $VDD 0" \
+	-vector {R 0 1 0} \
+	-pin CLK \
 	{ MORA }
 
-define_leakage -when "CLK*!D*!Q*R" { MORA }
+define_leakage -when "CLK & !D & !Q & R" { MORA }
 
-define_leakage -when "CLK*D*!Q*R" { MORA }
-
-define_leakage \
-	-pinlist {CLK D R Q} \
-	-vector {0 1 1 0} \
-	-when "!CLK*D*!Q*R" \
-	{ MORA }
-
-define_leakage \
-	-pinlist {CLK D R Q} \
-	-vector {1 1 0 0} \
-	-when "CLK*D*!Q*!R" \
-	{ MORA }
+define_leakage -when "CLK & D & !Q & R" { MORA }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {1 0 0 0} \
-	-when "CLK*!D*!Q*!R" \
-	{ MORA }
-
-define_leakage \
-	-pinlist {CLK D R Q} \
-	-vector {1 1 0 1} \
-	-when "CLK*D*Q*!R" \
+	-when "CLK & !D & !Q & !R" \
 	{ MORA }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {0 0 1 0} \
-	-when "!CLK*!D*!Q*R" \
+	-when "!CLK & !D & !Q & R" \
+	{ MORA }
+
+define_leakage \
+	-pinlist {CLK D R Q} \
+	-vector {0 1 1 0} \
+	-when "!CLK & D & !Q & R" \
+	{ MORA }
+
+define_leakage \
+	-pinlist {CLK D R Q} \
+	-vector {1 1 0 1} \
+	-when "CLK & D & Q & !R" \
+	{ MORA }
+
+define_leakage \
+	-pinlist {CLK D R Q} \
+	-vector {1 1 0 0} \
+	-when "CLK & D & !Q & !R" \
 	{ MORA }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {0 1 0 0} \
-	-when "!CLK*D*!Q*!R" \
+	-when "!CLK & D & !Q & !R" \
 	{ MORA }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {0 1 0 1} \
-	-when "!CLK*D*Q*!R" \
-	{ MORA }
-
-define_leakage \
-	-pinlist {CLK D R Q} \
-	-vector {1 0 0 1} \
-	-when "CLK*!D*Q*!R" \
+	-when "!CLK & D & Q & !R" \
 	{ MORA }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {0 0 0 0} \
-	-when "!CLK*!D*!Q*!R" \
+	-when "!CLK & !D & !Q & !R" \
 	{ MORA }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
-	-vector {0 0 0 1} \
-	-when "!CLK*!D*Q*!R" \
+	-vector {1 0 0 1} \
+	-when "CLK & !D & Q & !R" \
 	{ MORA }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {0 1 1 1} \
-	-when "!CLK*D*Q*R" \
+	-when "!CLK & D & Q & R" \
+	{ MORA }
+
+define_leakage \
+	-pinlist {CLK D R Q} \
+	-vector {0 0 0 1} \
+	-when "!CLK & !D & Q & !R" \
 	{ MORA }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {0 0 1 1} \
-	-when "!CLK*!D*Q*R" \
+	-when "!CLK & !D & Q & R" \
+	{ MORA }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLK D R M Q} \
+	-ic "$VDD $VDD 0 $VDD $VDD" \
+	-vector {1 1 R X X} \
+	-related_pin R \
+	-pin R \
+	-probe {Q M} \
+	{ MORA }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D R M Q} \
+	-ic "0 $VDD $VDD 0 0" \
+	-vector {R 1 F X X} \
+	-related_pin CLK \
+	-pin R \
+	-probe {Q M} \
+	{ MORA }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D R M Q} \
+	-ic "0 $VDD $VDD 0 0" \
+	-vector {R 1 F X X} \
+	-related_pin CLK \
+	-pin R \
+	-probe {Q M} \
+	{ MORA }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D R M Q} \
+	-ic "0 $VDD 0 $VDD 0" \
+	-vector {R F 0 X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ MORA }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D R M Q} \
+	-ic "0 $VDD 0 $VDD 0" \
+	-vector {R F 0 X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ MORA }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D R M Q} \
+	-ic "0 0 0 0 0" \
+	-vector {R R 0 X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ MORA }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D R M Q} \
+	-ic "0 0 0 0 0" \
+	-vector {R R 0 X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
 	{ MORA }
 
 define_arc \
@@ -1950,66 +2020,6 @@ define_arc \
 	{ MORA }
 
 define_arc \
-	-type setup \
-	-pinlist {CLK D R M Q} \
-	-ic "0 $VDD 0 $VDD 0" \
-	-vector {R F 0 X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ MORA }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D R M Q} \
-	-ic "0 $VDD 0 $VDD 0" \
-	-vector {R F 0 X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ MORA }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D R M Q} \
-	-ic "0 $VDD $VDD 0 0" \
-	-vector {R 1 F X X} \
-	-related_pin CLK \
-	-pin R \
-	-probe {Q M} \
-	{ MORA }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D R M Q} \
-	-ic "0 $VDD $VDD 0 0" \
-	-vector {R 1 F X X} \
-	-related_pin CLK \
-	-pin R \
-	-probe {Q M} \
-	{ MORA }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D R M Q} \
-	-ic "0 0 0 0 0" \
-	-vector {R R 0 X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ MORA }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D R M Q} \
-	-ic "0 0 0 0 0" \
-	-vector {R R 0 X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ MORA }
-
-define_arc \
 	-type min_pulse_width \
 	-pinlist {CLK D R Q} \
 	-ic "0 $VDD 0 0" \
@@ -2017,16 +2027,6 @@ define_arc \
 	-related_pin CLK \
 	-pin CLK \
 	-probe {Q} \
-	{ MORA }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLK D R M Q} \
-	-ic "$VDD $VDD 0 $VDD $VDD" \
-	-vector {1 1 R X X} \
-	-related_pin R \
-	-pin R \
-	-probe {Q M} \
 	{ MORA }
 
 define_arc \
@@ -2099,75 +2099,85 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLK D R Q} \
-	-ic "$VDD 0 0 0" \
-	-vector {1 0 R 0} \
+	-ic "$VDD $VDD 0 0" \
+	-vector {1 1 R 0} \
 	-pin R \
 	{ BR }
 
-define_leakage -when "!CLK*!D*!Q*R" { BR }
+define_leakage -when "!CLK & !D & !Q & R" { BR }
 
-define_leakage -when "!CLK*D*!Q*R" { BR }
+define_leakage -when "!CLK & D & !Q & R" { BR }
 
-define_leakage -when "CLK*!D*!Q*R" { BR }
+define_leakage -when "CLK & !D & !Q & R" { BR }
 
-define_leakage -when "CLK*D*!Q*R" { BR }
+define_leakage -when "CLK & D & !Q & R" { BR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
-	-vector {1 1 0 1} \
-	-when "CLK*D*Q*!R" \
+	-vector {1 1 0 0} \
+	-when "CLK & D & !Q & !R" \
 	{ BR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {1 0 0 0} \
-	-when "CLK*!D*!Q*!R" \
+	-when "CLK & !D & !Q & !R" \
+	{ BR }
+
+define_leakage \
+	-pinlist {CLK D R Q} \
+	-vector {1 1 0 1} \
+	-when "CLK & D & Q & !R" \
 	{ BR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {0 1 0 0} \
-	-when "!CLK*D*!Q*!R" \
-	{ BR }
-
-define_leakage \
-	-pinlist {CLK D R Q} \
-	-vector {1 1 0 0} \
-	-when "CLK*D*!Q*!R" \
+	-when "!CLK & D & !Q & !R" \
 	{ BR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {0 0 0 0} \
-	-when "!CLK*!D*!Q*!R" \
+	-when "!CLK & !D & !Q & !R" \
 	{ BR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {1 0 0 1} \
-	-when "CLK*!D*Q*!R" \
+	-when "CLK & !D & Q & !R" \
 	{ BR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {0 1 0 1} \
-	-when "!CLK*D*Q*!R" \
+	-when "!CLK & D & Q & !R" \
 	{ BR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {0 0 0 1} \
-	-when "!CLK*!D*Q*!R" \
+	-when "!CLK & !D & Q & !R" \
 	{ BR }
 
 define_arc \
-	-type min_pulse_width \
-	-pinlist {CLK D R Q} \
-	-ic "0 $VDD 0 0" \
-	-vector {R 1 0 X} \
+	-type setup \
+	-pinlist {CLK D R M Q} \
+	-ic "0 $VDD 0 $VDD 0" \
+	-vector {R F 0 X X} \
 	-related_pin CLK \
-	-pin CLK \
-	-probe {Q} \
+	-pin D \
+	-probe {Q M} \
+	{ BR }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D R M Q} \
+	-ic "0 $VDD 0 $VDD 0" \
+	-vector {R F 0 X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
 	{ BR }
 
 define_arc \
@@ -2187,16 +2197,6 @@ define_arc \
 	-vector {R R 0 X X} \
 	-related_pin CLK \
 	-pin D \
-	-probe {Q M} \
-	{ BR }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLK D R M Q} \
-	-ic "$VDD $VDD 0 $VDD $VDD" \
-	-vector {1 1 R X X} \
-	-related_pin R \
-	-pin R \
 	-probe {Q M} \
 	{ BR }
 
@@ -2231,23 +2231,23 @@ define_arc \
 	{ BR }
 
 define_arc \
-	-type setup \
+	-type min_pulse_width \
 	-pinlist {CLK D R M Q} \
-	-ic "0 $VDD 0 $VDD 0" \
-	-vector {R F 0 X X} \
-	-related_pin CLK \
-	-pin D \
+	-ic "$VDD $VDD 0 $VDD $VDD" \
+	-vector {1 1 R X X} \
+	-related_pin R \
+	-pin R \
 	-probe {Q M} \
 	{ BR }
 
 define_arc \
-	-type hold \
-	-pinlist {CLK D R M Q} \
-	-ic "0 $VDD 0 $VDD 0" \
-	-vector {R F 0 X X} \
+	-type min_pulse_width \
+	-pinlist {CLK D R Q} \
+	-ic "0 $VDD 0 0" \
+	-vector {R 1 0 X} \
 	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
+	-pin CLK \
+	-probe {Q} \
 	{ BR }
 
 define_arc \
@@ -2325,60 +2325,60 @@ define_arc \
 	-pin R \
 	{ SYNCR }
 
-define_leakage -when "!CLK*!D*!Q*R" { SYNCR }
+define_leakage -when "!CLK & !D & !Q & R" { SYNCR }
 
-define_leakage -when "!CLK*D*!Q*R" { SYNCR }
+define_leakage -when "!CLK & D & !Q & R" { SYNCR }
 
-define_leakage -when "CLK*!D*!Q*R" { SYNCR }
+define_leakage -when "CLK & !D & !Q & R" { SYNCR }
 
-define_leakage -when "CLK*D*!Q*R" { SYNCR }
+define_leakage -when "CLK & D & !Q & R" { SYNCR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {0 1 0 0} \
-	-when "!CLK*D*!Q*!R" \
-	{ SYNCR }
-
-define_leakage \
-	-pinlist {CLK D R Q} \
-	-vector {1 0 0 0} \
-	-when "CLK*!D*!Q*!R" \
-	{ SYNCR }
-
-define_leakage \
-	-pinlist {CLK D R Q} \
-	-vector {1 1 0 0} \
-	-when "CLK*D*!Q*!R" \
-	{ SYNCR }
-
-define_leakage \
-	-pinlist {CLK D R Q} \
-	-vector {0 0 0 0} \
-	-when "!CLK*!D*!Q*!R" \
+	-when "!CLK & D & !Q & !R" \
 	{ SYNCR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {1 1 0 1} \
-	-when "CLK*D*Q*!R" \
+	-when "CLK & D & Q & !R" \
 	{ SYNCR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
-	-vector {0 1 0 1} \
-	-when "!CLK*D*Q*!R" \
+	-vector {1 1 0 0} \
+	-when "CLK & D & !Q & !R" \
+	{ SYNCR }
+
+define_leakage \
+	-pinlist {CLK D R Q} \
+	-vector {1 0 0 0} \
+	-when "CLK & !D & !Q & !R" \
+	{ SYNCR }
+
+define_leakage \
+	-pinlist {CLK D R Q} \
+	-vector {0 0 0 0} \
+	-when "!CLK & !D & !Q & !R" \
 	{ SYNCR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {1 0 0 1} \
-	-when "CLK*!D*Q*!R" \
+	-when "CLK & !D & Q & !R" \
+	{ SYNCR }
+
+define_leakage \
+	-pinlist {CLK D R Q} \
+	-vector {0 1 0 1} \
+	-when "!CLK & D & Q & !R" \
 	{ SYNCR }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {0 0 0 1} \
-	-when "!CLK*!D*Q*!R" \
+	-when "!CLK & !D & Q & !R" \
 	{ SYNCR }
 
 define_arc \
@@ -2389,6 +2389,26 @@ define_arc \
 	-related_pin CLK \
 	-pin CLK \
 	-probe {Q} \
+	{ SYNCR }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D R M Q} \
+	-ic "0 $VDD $VDD 0 0" \
+	-vector {R 1 F X X} \
+	-related_pin CLK \
+	-pin R \
+	-probe {Q M} \
+	{ SYNCR }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D R M Q} \
+	-ic "0 $VDD $VDD 0 0" \
+	-vector {R 1 F X X} \
+	-related_pin CLK \
+	-pin R \
+	-probe {Q M} \
 	{ SYNCR }
 
 define_arc \
@@ -2408,6 +2428,16 @@ define_arc \
 	-vector {R R 0 X X} \
 	-related_pin CLK \
 	-pin D \
+	-probe {Q M} \
+	{ SYNCR }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLK D R M Q} \
+	-ic "$VDD $VDD 0 $VDD $VDD" \
+	-vector {1 1 R X X} \
+	-related_pin R \
+	-pin R \
 	-probe {Q M} \
 	{ SYNCR }
 
@@ -2424,26 +2454,6 @@ define_arc \
 define_arc \
 	-type setup \
 	-pinlist {CLK D R M Q} \
-	-ic "0 $VDD $VDD 0 0" \
-	-vector {R 1 F X X} \
-	-related_pin CLK \
-	-pin R \
-	-probe {Q M} \
-	{ SYNCR }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D R M Q} \
-	-ic "0 $VDD $VDD 0 0" \
-	-vector {R 1 F X X} \
-	-related_pin CLK \
-	-pin R \
-	-probe {Q M} \
-	{ SYNCR }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D R M Q} \
 	-ic "0 $VDD 0 $VDD 0" \
 	-vector {R F 0 X X} \
 	-related_pin CLK \
@@ -2458,16 +2468,6 @@ define_arc \
 	-vector {R F 0 X X} \
 	-related_pin CLK \
 	-pin D \
-	-probe {Q M} \
-	{ SYNCR }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLK D R M Q} \
-	-ic "$VDD $VDD 0 $VDD $VDD" \
-	-vector {1 1 R X X} \
-	-related_pin R \
-	-pin R \
 	-probe {Q M} \
 	{ SYNCR }
 
@@ -2571,76 +2571,146 @@ define_arc \
 	-pin CLK \
 	{ SYNCRG }
 
-define_leakage -when "!CLK*!D*!G*!Q*R" { SYNCRG }
+define_leakage -when "!CLK & !D & !G & !Q & R" { SYNCRG }
 
-define_leakage -when "!CLK*!D*G*!Q*!R" { SYNCRG }
+define_leakage -when "!CLK & !D & G & !Q & !R" { SYNCRG }
 
-define_leakage -when "!CLK*!D*G*!Q*R" { SYNCRG }
+define_leakage -when "!CLK & !D & G & !Q & R" { SYNCRG }
 
-define_leakage -when "!CLK*D*!G*!Q*R" { SYNCRG }
+define_leakage -when "!CLK & D & !G & !Q & R" { SYNCRG }
 
-define_leakage -when "!CLK*D*G*!Q*!R" { SYNCRG }
+define_leakage -when "!CLK & D & G & !Q & !R" { SYNCRG }
 
-define_leakage -when "!CLK*D*G*!Q*R" { SYNCRG }
+define_leakage -when "!CLK & D & G & !Q & R" { SYNCRG }
 
-define_leakage -when "CLK*!D*!G*!Q*R" { SYNCRG }
+define_leakage -when "CLK & !D & !G & !Q & R" { SYNCRG }
 
-define_leakage -when "CLK*!D*G*!Q*!R" { SYNCRG }
+define_leakage -when "CLK & !D & G & !Q & !R" { SYNCRG }
 
-define_leakage -when "CLK*!D*G*!Q*R" { SYNCRG }
+define_leakage -when "CLK & !D & G & !Q & R" { SYNCRG }
 
-define_leakage -when "CLK*D*!G*!Q*R" { SYNCRG }
+define_leakage -when "CLK & D & !G & !Q & R" { SYNCRG }
 
-define_leakage -when "CLK*D*G*!Q*!R" { SYNCRG }
+define_leakage -when "CLK & D & G & !Q & !R" { SYNCRG }
 
-define_leakage -when "CLK*D*G*!Q*R" { SYNCRG }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {1 1 0 0 0} \
-	-when "CLK*D*!G*!Q*!R" \
-	{ SYNCRG }
+define_leakage -when "CLK & D & G & !Q & R" { SYNCRG }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
 	-vector {1 0 0 0 0} \
-	-when "CLK*!D*!G*!Q*!R" \
-	{ SYNCRG }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {0 0 0 0 0} \
-	-when "!CLK*!D*!G*!Q*!R" \
+	-when "CLK & !D & !G & !Q & !R" \
 	{ SYNCRG }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
 	-vector {0 1 0 0 0} \
-	-when "!CLK*D*!G*!Q*!R" \
+	-when "!CLK & D & !G & !Q & !R" \
 	{ SYNCRG }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
 	-vector {1 1 0 0 1} \
-	-when "CLK*D*!G*Q*!R" \
+	-when "CLK & D & !G & Q & !R" \
 	{ SYNCRG }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
-	-vector {0 1 0 0 1} \
-	-when "!CLK*D*!G*Q*!R" \
+	-vector {0 0 0 0 0} \
+	-when "!CLK & !D & !G & !Q & !R" \
+	{ SYNCRG }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {1 1 0 0 0} \
+	-when "CLK & D & !G & !Q & !R" \
 	{ SYNCRG }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
 	-vector {1 0 0 0 1} \
-	-when "CLK*!D*!G*Q*!R" \
+	-when "CLK & !D & !G & Q & !R" \
+	{ SYNCRG }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {0 1 0 0 1} \
+	-when "!CLK & D & !G & Q & !R" \
 	{ SYNCRG }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
 	-vector {0 0 0 0 1} \
-	-when "!CLK*!D*!G*Q*!R" \
+	-when "!CLK & !D & !G & Q & !R" \
+	{ SYNCRG }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLK D R G Q} \
+	-ic "0 $VDD 0 0 0" \
+	-vector {R 1 0 0 X} \
+	-related_pin CLK \
+	-pin CLK \
+	-probe {Q} \
+	{ SYNCRG }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D R G M Q} \
+	-ic "0 $VDD 0 0 $VDD 0" \
+	-vector {R F 0 0 X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ SYNCRG }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D R G M Q} \
+	-ic "0 $VDD 0 0 $VDD 0" \
+	-vector {R F 0 0 X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ SYNCRG }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D R G M Q} \
+	-ic "0 $VDD 0 $VDD 0 0" \
+	-vector {R 1 0 F X X} \
+	-related_pin CLK \
+	-pin G \
+	-probe {Q M} \
+	{ SYNCRG }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D R G M Q} \
+	-ic "0 $VDD 0 $VDD 0 0" \
+	-vector {R 1 0 F X X} \
+	-related_pin CLK \
+	-pin G \
+	-probe {Q M} \
+	{ SYNCRG }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D R G M Q} \
+	-ic "0 0 0 0 0 0" \
+	-vector {R R 0 0 X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ SYNCRG }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D R G M Q} \
+	-ic "0 0 0 0 0 0" \
+	-vector {R R 0 0 X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
 	{ SYNCRG }
 
 define_arc \
@@ -2664,66 +2734,6 @@ define_arc \
 	{ SYNCRG }
 
 define_arc \
-	-type setup \
-	-pinlist {CLK D R G M Q} \
-	-ic "0 0 0 0 0 0" \
-	-vector {R R 0 0 X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ SYNCRG }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D R G M Q} \
-	-ic "0 0 0 0 0 0" \
-	-vector {R R 0 0 X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ SYNCRG }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D R G M Q} \
-	-ic "0 $VDD 0 0 $VDD 0" \
-	-vector {R F 0 0 X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ SYNCRG }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D R G M Q} \
-	-ic "0 $VDD 0 0 $VDD 0" \
-	-vector {R F 0 0 X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ SYNCRG }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D R G M Q} \
-	-ic "0 $VDD $VDD 0 0 0" \
-	-vector {R 1 F 0 X X} \
-	-related_pin CLK \
-	-pin R \
-	-probe {Q M} \
-	{ SYNCRG }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D R G M Q} \
-	-ic "0 $VDD $VDD 0 0 0" \
-	-vector {R 1 F 0 X X} \
-	-related_pin CLK \
-	-pin R \
-	-probe {Q M} \
-	{ SYNCRG }
-
-define_arc \
 	-type min_pulse_width \
 	-pinlist {CLK D R G M Q} \
 	-ic "$VDD $VDD 0 0 0 0" \
@@ -2736,39 +2746,29 @@ define_arc \
 define_arc \
 	-type setup \
 	-pinlist {CLK D R G M Q} \
-	-ic "0 $VDD 0 $VDD 0 0" \
-	-vector {R 1 0 F X X} \
+	-ic "0 $VDD $VDD 0 0 0" \
+	-vector {R 1 F 0 X X} \
 	-related_pin CLK \
-	-pin G \
+	-pin R \
 	-probe {Q M} \
 	{ SYNCRG }
 
 define_arc \
 	-type hold \
 	-pinlist {CLK D R G M Q} \
-	-ic "0 $VDD 0 $VDD 0 0" \
-	-vector {R 1 0 F X X} \
+	-ic "0 $VDD $VDD 0 0 0" \
+	-vector {R 1 F 0 X X} \
 	-related_pin CLK \
-	-pin G \
+	-pin R \
 	-probe {Q M} \
 	{ SYNCRG }
 
 define_arc \
-	-type min_pulse_width \
+	-type edge \
 	-pinlist {CLK D R G Q} \
-	-ic "0 $VDD 0 0 0" \
-	-vector {R 1 0 0 X} \
+	-ic "0 $VDD $VDD 0 0" \
+	-vector {R 1 1 0 R} \
 	-related_pin CLK \
-	-pin CLK \
-	-probe {Q} \
-	{ SYNCRG }
-
-define_arc \
-	-type combinational \
-	-pinlist {CLK D R G Q} \
-	-ic "$VDD $VDD 0 $VDD $VDD" \
-	-vector {1 1 R 1 F} \
-	-related_pin R \
 	-pin Q \
 	{ GATEDR }
 
@@ -2782,11 +2782,11 @@ define_arc \
 	{ GATEDR }
 
 define_arc \
-	-type edge \
+	-type combinational \
 	-pinlist {CLK D R G Q} \
-	-ic "0 $VDD $VDD 0 0" \
-	-vector {R 1 1 0 R} \
-	-related_pin CLK \
+	-ic "$VDD $VDD 0 $VDD $VDD" \
+	-vector {1 1 R 1 F} \
+	-related_pin R \
 	-pin Q \
 	{ GATEDR }
 
@@ -2850,8 +2850,8 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLK D R G Q} \
-	-ic "$VDD 0 0 $VDD 0" \
-	-vector {1 0 R 1 0} \
+	-ic "$VDD $VDD 0 0 $VDD" \
+	-vector {1 1 R 0 1} \
 	-pin R \
 	{ GATEDR }
 
@@ -2863,165 +2863,175 @@ define_arc \
 	-pin G \
 	{ GATEDR }
 
-define_leakage -when "!CLK*!D*G*!Q*R" { GATEDR }
+define_leakage -when "!CLK & !D & G & !Q & R" { GATEDR }
 
-define_leakage -when "!CLK*D*G*!Q*R" { GATEDR }
+define_leakage -when "!CLK & D & G & !Q & R" { GATEDR }
 
-define_leakage -when "CLK*!D*G*!Q*R" { GATEDR }
+define_leakage -when "CLK & !D & G & !Q & R" { GATEDR }
 
-define_leakage -when "CLK*D*G*!Q*R" { GATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {1 0 0 1 0} \
-	-when "CLK*!D*G*!Q*!R" \
-	{ GATEDR }
+define_leakage -when "CLK & D & G & !Q & R" { GATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
 	-vector {1 1 0 0 1} \
-	-when "CLK*D*!G*Q*!R" \
-	{ GATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {1 1 0 1 1} \
-	-when "CLK*D*G*Q*!R" \
-	{ GATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {1 0 0 0 0} \
-	-when "CLK*!D*!G*!Q*!R" \
-	{ GATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {1 1 1 0 1} \
-	-when "CLK*D*!G*Q*R" \
+	-when "CLK & D & !G & Q & !R" \
 	{ GATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
 	-vector {0 1 1 0 0} \
-	-when "!CLK*D*!G*!Q*R" \
-	{ GATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {0 0 0 1 0} \
-	-when "!CLK*!D*G*!Q*!R" \
-	{ GATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {1 0 1 0 0} \
-	-when "CLK*!D*!G*!Q*R" \
-	{ GATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {1 1 0 1 0} \
-	-when "CLK*D*G*!Q*!R" \
-	{ GATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {0 1 0 1 0} \
-	-when "!CLK*D*G*!Q*!R" \
-	{ GATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {1 1 1 0 0} \
-	-when "CLK*D*!G*!Q*R" \
+	-when "!CLK & D & !G & !Q & R" \
 	{ GATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
 	-vector {0 0 1 0 0} \
-	-when "!CLK*!D*!G*!Q*R" \
+	-when "!CLK & !D & !G & !Q & R" \
 	{ GATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
-	-vector {0 1 1 0 1} \
-	-when "!CLK*D*!G*Q*R" \
+	-vector {1 0 0 0 0} \
+	-when "CLK & !D & !G & !Q & !R" \
 	{ GATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
-	-vector {1 0 1 0 1} \
-	-when "CLK*!D*!G*Q*R" \
+	-vector {1 1 1 0 1} \
+	-when "CLK & D & !G & Q & R" \
 	{ GATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
-	-vector {1 1 0 0 0} \
-	-when "CLK*D*!G*!Q*!R" \
+	-vector {1 0 0 1 0} \
+	-when "CLK & !D & G & !Q & !R" \
 	{ GATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
-	-vector {0 1 0 1 1} \
-	-when "!CLK*D*G*Q*!R" \
+	-vector {1 0 1 0 0} \
+	-when "CLK & !D & !G & !Q & R" \
+	{ GATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {1 1 0 1 0} \
+	-when "CLK & D & G & !Q & !R" \
+	{ GATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {1 1 0 1 1} \
+	-when "CLK & D & G & Q & !R" \
+	{ GATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {0 0 0 1 0} \
+	-when "!CLK & !D & G & !Q & !R" \
+	{ GATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {1 1 1 0 0} \
+	-when "CLK & D & !G & !Q & R" \
+	{ GATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {0 1 0 1 0} \
+	-when "!CLK & D & G & !Q & !R" \
 	{ GATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
 	-vector {0 1 0 0 1} \
-	-when "!CLK*D*!G*Q*!R" \
+	-when "!CLK & D & !G & Q & !R" \
 	{ GATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
 	-vector {0 1 0 0 0} \
-	-when "!CLK*D*!G*!Q*!R" \
-	{ GATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {1 0 0 1 1} \
-	-when "CLK*!D*G*Q*!R" \
-	{ GATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {1 0 0 0 1} \
-	-when "CLK*!D*!G*Q*!R" \
+	-when "!CLK & D & !G & !Q & !R" \
 	{ GATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
 	-vector {0 0 0 0 0} \
-	-when "!CLK*!D*!G*!Q*!R" \
+	-when "!CLK & !D & !G & !Q & !R" \
+	{ GATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {1 0 1 0 1} \
+	-when "CLK & !D & !G & Q & R" \
+	{ GATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {1 0 0 0 1} \
+	-when "CLK & !D & !G & Q & !R" \
+	{ GATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {0 1 0 1 1} \
+	-when "!CLK & D & G & Q & !R" \
+	{ GATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {1 1 0 0 0} \
+	-when "CLK & D & !G & !Q & !R" \
+	{ GATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {0 1 1 0 1} \
+	-when "!CLK & D & !G & Q & R" \
+	{ GATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {1 0 0 1 1} \
+	-when "CLK & !D & G & Q & !R" \
 	{ GATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
 	-vector {0 0 0 1 1} \
-	-when "!CLK*!D*G*Q*!R" \
-	{ GATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {0 0 1 0 1} \
-	-when "!CLK*!D*!G*Q*R" \
+	-when "!CLK & !D & G & Q & !R" \
 	{ GATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
 	-vector {0 0 0 0 1} \
-	-when "!CLK*!D*!G*Q*!R" \
+	-when "!CLK & !D & !G & Q & !R" \
+	{ GATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {0 0 1 0 1} \
+	-when "!CLK & !D & !G & Q & R" \
 	{ GATEDR }
 
 define_arc \
-	-type min_pulse_width \
+	-type setup \
 	-pinlist {CLK D R G M Q} \
-	-ic "$VDD $VDD 0 $VDD $VDD $VDD" \
-	-vector {1 1 R 1 X X} \
-	-related_pin R \
-	-pin R \
+	-ic "0 $VDD $VDD 0 $VDD 0" \
+	-vector {R F 1 0 X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ GATEDR }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D R G M Q} \
+	-ic "0 $VDD $VDD 0 $VDD 0" \
+	-vector {R F 1 0 X X} \
+	-related_pin CLK \
+	-pin D \
 	-probe {Q M} \
 	{ GATEDR }
 
@@ -3068,8 +3078,8 @@ define_arc \
 define_arc \
 	-type setup \
 	-pinlist {CLK D R G M Q} \
-	-ic "0 0 0 $VDD 0 0" \
-	-vector {R R 0 1 X X} \
+	-ic "0 0 $VDD 0 0 0" \
+	-vector {R R 1 0 X X} \
 	-related_pin CLK \
 	-pin D \
 	-probe {Q M} \
@@ -3078,10 +3088,30 @@ define_arc \
 define_arc \
 	-type hold \
 	-pinlist {CLK D R G M Q} \
-	-ic "0 0 0 $VDD 0 0" \
-	-vector {R R 0 1 X X} \
+	-ic "0 0 $VDD 0 0 0" \
+	-vector {R R 1 0 X X} \
 	-related_pin CLK \
 	-pin D \
+	-probe {Q M} \
+	{ GATEDR }
+
+define_arc \
+	-type non_seq_setup \
+	-pinlist {CLK D R G M Q} \
+	-ic "$VDD $VDD $VDD 0 $VDD $VDD" \
+	-vector {1 1 F R X X} \
+	-related_pin R \
+	-pin G \
+	-probe {Q M} \
+	{ GATEDR }
+
+define_arc \
+	-type non_seq_hold \
+	-pinlist {CLK D R G M Q} \
+	-ic "$VDD $VDD $VDD 0 $VDD $VDD" \
+	-vector {1 1 F R X X} \
+	-related_pin R \
+	-pin G \
 	-probe {Q M} \
 	{ GATEDR }
 
@@ -3096,62 +3126,12 @@ define_arc \
 	{ GATEDR }
 
 define_arc \
-	-type setup \
+	-type min_pulse_width \
 	-pinlist {CLK D R G M Q} \
-	-ic "0 $VDD $VDD 0 $VDD 0" \
-	-vector {R F 1 0 X X} \
+	-ic "$VDD $VDD 0 $VDD 0 0" \
+	-vector {F 1 0 1 X X} \
 	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ GATEDR }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D R G M Q} \
-	-ic "0 $VDD $VDD 0 $VDD 0" \
-	-vector {R F 1 0 X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ GATEDR }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D R G M Q} \
-	-ic "0 $VDD $VDD $VDD 0 0" \
-	-vector {R 1 F 1 X X} \
-	-related_pin CLK \
-	-pin R \
-	-probe {Q M} \
-	{ GATEDR }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D R G M Q} \
-	-ic "0 $VDD $VDD $VDD 0 0" \
-	-vector {R 1 F 1 X X} \
-	-related_pin CLK \
-	-pin R \
-	-probe {Q M} \
-	{ GATEDR }
-
-define_arc \
-	-type non_seq_setup \
-	-pinlist {CLK D R G M Q} \
-	-ic "$VDD $VDD $VDD 0 $VDD $VDD" \
-	-vector {1 1 F R X X} \
-	-related_pin R \
-	-pin G \
-	-probe {Q M} \
-	{ GATEDR }
-
-define_arc \
-	-type non_seq_hold \
-	-pinlist {CLK D R G M Q} \
-	-ic "$VDD $VDD $VDD 0 $VDD $VDD" \
-	-vector {1 1 F R X X} \
-	-related_pin R \
-	-pin G \
+	-pin CLK \
 	-probe {Q M} \
 	{ GATEDR }
 
@@ -3168,28 +3148,39 @@ define_arc \
 define_arc \
 	-type min_pulse_width \
 	-pinlist {CLK D R G M Q} \
-	-ic "$VDD $VDD 0 $VDD 0 0" \
-	-vector {F 1 0 1 X X} \
+	-ic "$VDD $VDD 0 $VDD $VDD $VDD" \
+	-vector {1 1 R 1 X X} \
+	-related_pin R \
+	-pin R \
+	-probe {Q M} \
+	{ GATEDR }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D R G M Q} \
+	-ic "0 $VDD $VDD $VDD 0 0" \
+	-vector {R 1 F 1 X X} \
 	-related_pin CLK \
-	-pin CLK \
+	-pin R \
+	-probe {Q M} \
+	{ GATEDR }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D R G M Q} \
+	-ic "0 $VDD $VDD $VDD 0 0" \
+	-vector {R 1 F 1 X X} \
+	-related_pin CLK \
+	-pin R \
 	-probe {Q M} \
 	{ GATEDR }
 
 define_arc \
 	-type edge \
 	-pinlist {CLK D R G Q} \
-	-ic "0 $VDD 0 $VDD 0" \
-	-vector {R 1 0 1 R} \
+	-ic "0 $VDD $VDD 0 0" \
+	-vector {R 1 1 0 R} \
 	-related_pin CLK \
-	-pin Q \
-	{ AGATEDR }
-
-define_arc \
-	-type async \
-	-pinlist {CLK D R G Q} \
-	-ic "$VDD $VDD $VDD 0 $VDD" \
-	-vector {1 1 1 R F} \
-	-related_pin G \
 	-pin Q \
 	{ AGATEDR }
 
@@ -3203,10 +3194,19 @@ define_arc \
 	{ AGATEDR }
 
 define_arc \
+	-type async \
+	-pinlist {CLK D R G Q} \
+	-ic "$VDD $VDD $VDD 0 $VDD" \
+	-vector {1 1 1 R F} \
+	-related_pin G \
+	-pin Q \
+	{ AGATEDR }
+
+define_arc \
 	-type edge \
 	-pinlist {CLK D R G Q} \
-	-ic "0 0 0 $VDD $VDD" \
-	-vector {R 0 0 1 F} \
+	-ic "0 0 $VDD 0 $VDD" \
+	-vector {R 0 1 0 F} \
 	-related_pin CLK \
 	-pin Q \
 	{ AGATEDR }
@@ -3262,176 +3262,186 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLK D R G Q} \
-	-ic "$VDD 0 0 $VDD 0" \
-	-vector {1 0 R 1 0} \
+	-ic "0 0 0 $VDD 0" \
+	-vector {0 0 R 1 0} \
 	-pin R \
 	{ AGATEDR }
 
 define_arc \
 	-type hidden \
 	-pinlist {CLK D R G Q} \
-	-ic "$VDD 0 0 0 0" \
-	-vector {1 0 0 R 0} \
+	-ic "0 $VDD $VDD 0 0" \
+	-vector {0 1 1 R 0} \
 	-pin G \
 	{ AGATEDR }
 
-define_leakage -when "!CLK*!D*G*!Q*R" { AGATEDR }
+define_leakage -when "!CLK & !D & G & !Q & R" { AGATEDR }
 
-define_leakage -when "!CLK*D*G*!Q*R" { AGATEDR }
+define_leakage -when "!CLK & D & G & !Q & R" { AGATEDR }
 
-define_leakage -when "CLK*!D*G*!Q*R" { AGATEDR }
+define_leakage -when "CLK & !D & G & !Q & R" { AGATEDR }
 
-define_leakage -when "CLK*D*G*!Q*R" { AGATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {1 0 0 1 0} \
-	-when "CLK*!D*G*!Q*!R" \
-	{ AGATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {1 1 0 1 0} \
-	-when "CLK*D*G*!Q*!R" \
-	{ AGATEDR }
+define_leakage -when "CLK & D & G & !Q & R" { AGATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
 	-vector {0 0 0 1 0} \
-	-when "!CLK*!D*G*!Q*!R" \
-	{ AGATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {0 1 0 1 0} \
-	-when "!CLK*D*G*!Q*!R" \
-	{ AGATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {1 0 0 0 0} \
-	-when "CLK*!D*!G*!Q*!R" \
-	{ AGATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {1 1 1 0 1} \
-	-when "CLK*D*!G*Q*R" \
-	{ AGATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {1 1 0 1 1} \
-	-when "CLK*D*G*Q*!R" \
-	{ AGATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {1 1 1 0 0} \
-	-when "CLK*D*!G*!Q*R" \
+	-when "!CLK & !D & G & !Q & !R" \
 	{ AGATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
 	-vector {0 1 1 0 0} \
-	-when "!CLK*D*!G*!Q*R" \
+	-when "!CLK & D & !G & !Q & R" \
 	{ AGATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
-	-vector {0 0 1 0 0} \
-	-when "!CLK*!D*!G*!Q*R" \
-	{ AGATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {1 1 0 0 1} \
-	-when "CLK*D*!G*Q*!R" \
+	-vector {1 0 0 0 0} \
+	-when "CLK & !D & !G & !Q & !R" \
 	{ AGATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
 	-vector {1 0 1 0 0} \
-	-when "CLK*!D*!G*!Q*R" \
+	-when "CLK & !D & !G & !Q & R" \
 	{ AGATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
-	-vector {0 1 1 0 1} \
-	-when "!CLK*D*!G*Q*R" \
+	-vector {1 1 1 0 0} \
+	-when "CLK & D & !G & !Q & R" \
 	{ AGATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
-	-vector {0 0 0 0 0} \
-	-when "!CLK*!D*!G*!Q*!R" \
+	-vector {1 1 0 0 1} \
+	-when "CLK & D & !G & Q & !R" \
+	{ AGATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {1 1 0 1 0} \
+	-when "CLK & D & G & !Q & !R" \
+	{ AGATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {1 0 0 1 0} \
+	-when "CLK & !D & G & !Q & !R" \
+	{ AGATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {1 1 0 1 1} \
+	-when "CLK & D & G & Q & !R" \
+	{ AGATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {0 0 1 0 0} \
+	-when "!CLK & !D & !G & !Q & R" \
+	{ AGATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {1 1 1 0 1} \
+	-when "CLK & D & !G & Q & R" \
+	{ AGATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {0 1 0 1 0} \
+	-when "!CLK & D & G & !Q & !R" \
 	{ AGATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
 	-vector {1 0 1 0 1} \
-	-when "CLK*!D*!G*Q*R" \
-	{ AGATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {0 1 0 0 1} \
-	-when "!CLK*D*!G*Q*!R" \
-	{ AGATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {0 1 0 0 0} \
-	-when "!CLK*D*!G*!Q*!R" \
-	{ AGATEDR }
-
-define_leakage \
-	-pinlist {CLK D R G Q} \
-	-vector {1 1 0 0 0} \
-	-when "CLK*D*!G*!Q*!R" \
+	-when "CLK & !D & !G & Q & R" \
 	{ AGATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
 	-vector {1 0 0 1 1} \
-	-when "CLK*!D*G*Q*!R" \
+	-when "CLK & !D & G & Q & !R" \
 	{ AGATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
-	-vector {0 1 0 1 1} \
-	-when "!CLK*D*G*Q*!R" \
+	-vector {0 1 0 0 1} \
+	-when "!CLK & D & !G & Q & !R" \
+	{ AGATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {0 1 1 0 1} \
+	-when "!CLK & D & !G & Q & R" \
+	{ AGATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {0 1 0 0 0} \
+	-when "!CLK & D & !G & !Q & !R" \
+	{ AGATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {0 0 0 0 0} \
+	-when "!CLK & !D & !G & !Q & !R" \
 	{ AGATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
 	-vector {1 0 0 0 1} \
-	-when "CLK*!D*!G*Q*!R" \
+	-when "CLK & !D & !G & Q & !R" \
 	{ AGATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
-	-vector {0 0 0 1 1} \
-	-when "!CLK*!D*G*Q*!R" \
+	-vector {0 1 0 1 1} \
+	-when "!CLK & D & G & Q & !R" \
 	{ AGATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
-	-vector {0 0 0 0 1} \
-	-when "!CLK*!D*!G*Q*!R" \
+	-vector {1 1 0 0 0} \
+	-when "CLK & D & !G & !Q & !R" \
 	{ AGATEDR }
 
 define_leakage \
 	-pinlist {CLK D R G Q} \
 	-vector {0 0 1 0 1} \
-	-when "!CLK*!D*!G*Q*R" \
+	-when "!CLK & !D & !G & Q & R" \
+	{ AGATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {0 0 0 1 1} \
+	-when "!CLK & !D & G & Q & !R" \
+	{ AGATEDR }
+
+define_leakage \
+	-pinlist {CLK D R G Q} \
+	-vector {0 0 0 0 1} \
+	-when "!CLK & !D & !G & Q & !R" \
+	{ AGATEDR }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLK D R G Q} \
+	-ic "0 $VDD $VDD 0 0" \
+	-vector {R 1 1 0 X} \
+	-related_pin CLK \
+	-pin CLK \
+	-probe {Q} \
 	{ AGATEDR }
 
 define_arc \
 	-type min_pulse_width \
 	-pinlist {CLK D R G M Q} \
-	-ic "$VDD $VDD 0 $VDD 0 0" \
-	-vector {F 1 0 1 X X} \
+	-ic "$VDD $VDD $VDD 0 0 0" \
+	-vector {F 1 1 0 X X} \
 	-related_pin CLK \
 	-pin CLK \
 	-probe {Q M} \
@@ -3440,29 +3450,39 @@ define_arc \
 define_arc \
 	-type setup \
 	-pinlist {CLK D R G M Q} \
-	-ic "0 $VDD $VDD $VDD 0 0" \
-	-vector {R 1 F 1 X X} \
+	-ic "0 0 0 $VDD 0 0" \
+	-vector {R R 0 1 X X} \
 	-related_pin CLK \
-	-pin R \
+	-pin D \
 	-probe {Q M} \
 	{ AGATEDR }
 
 define_arc \
 	-type hold \
 	-pinlist {CLK D R G M Q} \
-	-ic "0 $VDD $VDD $VDD 0 0" \
-	-vector {R 1 F 1 X X} \
+	-ic "0 0 0 $VDD 0 0" \
+	-vector {R R 0 1 X X} \
 	-related_pin CLK \
-	-pin R \
+	-pin D \
 	-probe {Q M} \
 	{ AGATEDR }
 
 define_arc \
-	-type min_pulse_width \
+	-type non_seq_setup \
 	-pinlist {CLK D R G M Q} \
-	-ic "$VDD $VDD $VDD 0 $VDD $VDD" \
-	-vector {1 1 1 R X X} \
-	-related_pin G \
+	-ic "$VDD $VDD 0 $VDD $VDD $VDD" \
+	-vector {1 1 R F X X} \
+	-related_pin R \
+	-pin G \
+	-probe {Q M} \
+	{ AGATEDR }
+
+define_arc \
+	-type non_seq_hold \
+	-pinlist {CLK D R G M Q} \
+	-ic "$VDD $VDD 0 $VDD $VDD $VDD" \
+	-vector {1 1 R F X X} \
+	-related_pin R \
 	-pin G \
 	-probe {Q M} \
 	{ AGATEDR }
@@ -3478,113 +3498,93 @@ define_arc \
 	{ AGATEDR }
 
 define_arc \
-	-type non_seq_setup \
-	-pinlist {CLK D R G M Q} \
-	-ic "$VDD $VDD 0 $VDD $VDD $VDD" \
-	-vector {1 1 R F X X} \
-	-related_pin R \
-	-pin G \
-	-probe {Q M} \
-	{ AGATEDR }
-
-define_arc \
-	-type non_seq_hold \
-	-pinlist {CLK D R G M Q} \
-	-ic "$VDD $VDD 0 $VDD $VDD $VDD" \
-	-vector {1 1 R F X X} \
-	-related_pin R \
-	-pin G \
-	-probe {Q M} \
-	{ AGATEDR }
-
-define_arc \
-	-type non_seq_setup \
-	-pinlist {CLK D R G M Q} \
-	-ic "$VDD $VDD $VDD 0 $VDD $VDD" \
-	-vector {1 1 F R X X} \
-	-related_pin R \
-	-pin G \
-	-probe {Q M} \
-	{ AGATEDR }
-
-define_arc \
-	-type non_seq_hold \
-	-pinlist {CLK D R G M Q} \
-	-ic "$VDD $VDD $VDD 0 $VDD $VDD" \
-	-vector {1 1 F R X X} \
-	-related_pin R \
-	-pin G \
-	-probe {Q M} \
-	{ AGATEDR }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D R G M Q} \
-	-ic "0 $VDD $VDD $VDD 0 0" \
-	-vector {R 1 1 F X X} \
-	-related_pin CLK \
-	-pin G \
-	-probe {Q M} \
-	{ AGATEDR }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D R G M Q} \
-	-ic "0 $VDD $VDD $VDD 0 0" \
-	-vector {R 1 1 F X X} \
-	-related_pin CLK \
-	-pin G \
-	-probe {Q M} \
-	{ AGATEDR }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D R G M Q} \
-	-ic "0 0 0 $VDD 0 0" \
-	-vector {R R 0 1 X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ AGATEDR }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D R G M Q} \
-	-ic "0 0 0 $VDD 0 0" \
-	-vector {R R 0 1 X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ AGATEDR }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D R G M Q} \
-	-ic "0 $VDD 0 $VDD $VDD 0" \
-	-vector {R F 0 1 X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ AGATEDR }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D R G M Q} \
-	-ic "0 $VDD 0 $VDD $VDD 0" \
-	-vector {R F 0 1 X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ AGATEDR }
-
-define_arc \
 	-type min_pulse_width \
-	-pinlist {CLK D R G Q} \
-	-ic "0 $VDD 0 $VDD 0" \
-	-vector {R 1 0 1 X} \
+	-pinlist {CLK D R G M Q} \
+	-ic "$VDD $VDD $VDD 0 $VDD $VDD" \
+	-vector {1 1 1 R X X} \
+	-related_pin G \
+	-pin G \
+	-probe {Q M} \
+	{ AGATEDR }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D R G M Q} \
+	-ic "0 $VDD $VDD $VDD 0 0" \
+	-vector {R 1 1 F X X} \
 	-related_pin CLK \
-	-pin CLK \
-	-probe {Q} \
+	-pin G \
+	-probe {Q M} \
+	{ AGATEDR }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D R G M Q} \
+	-ic "0 $VDD $VDD $VDD 0 0" \
+	-vector {R 1 1 F X X} \
+	-related_pin CLK \
+	-pin G \
+	-probe {Q M} \
+	{ AGATEDR }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D R G M Q} \
+	-ic "0 $VDD $VDD 0 $VDD 0" \
+	-vector {R F 1 0 X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ AGATEDR }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D R G M Q} \
+	-ic "0 $VDD $VDD 0 $VDD 0" \
+	-vector {R F 1 0 X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ AGATEDR }
+
+define_arc \
+	-type non_seq_setup \
+	-pinlist {CLK D R G M Q} \
+	-ic "$VDD $VDD $VDD 0 $VDD $VDD" \
+	-vector {1 1 F R X X} \
+	-related_pin R \
+	-pin G \
+	-probe {Q M} \
+	{ AGATEDR }
+
+define_arc \
+	-type non_seq_hold \
+	-pinlist {CLK D R G M Q} \
+	-ic "$VDD $VDD $VDD 0 $VDD $VDD" \
+	-vector {1 1 F R X X} \
+	-related_pin R \
+	-pin G \
+	-probe {Q M} \
+	{ AGATEDR }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D R G M Q} \
+	-ic "0 $VDD $VDD $VDD 0 0" \
+	-vector {R 1 F 1 X X} \
+	-related_pin CLK \
+	-pin R \
+	-probe {Q M} \
+	{ AGATEDR }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D R G M Q} \
+	-ic "0 $VDD $VDD $VDD 0 0" \
+	-vector {R 1 F 1 X X} \
+	-related_pin CLK \
+	-pin R \
+	-probe {Q M} \
 	{ AGATEDR }
 
 define_arc \
@@ -3657,72 +3657,72 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLK D R Q} \
-	-ic "0 0 0 0" \
-	-vector {0 0 R 0} \
+	-ic "$VDD $VDD 0 0" \
+	-vector {1 1 R 0} \
 	-pin R \
 	{ RDFF }
 
-define_leakage -when "!CLK*!D*!Q*R" { RDFF }
+define_leakage -when "!CLK & !D & !Q & R" { RDFF }
 
-define_leakage -when "!CLK*D*!Q*R" { RDFF }
+define_leakage -when "!CLK & D & !Q & R" { RDFF }
 
-define_leakage -when "CLK*!D*!Q*R" { RDFF }
+define_leakage -when "CLK & !D & !Q & R" { RDFF }
 
-define_leakage -when "CLK*D*!Q*R" { RDFF }
+define_leakage -when "CLK & D & !Q & R" { RDFF }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {1 1 0 1} \
-	-when "CLK*D*Q*!R" \
-	{ RDFF }
-
-define_leakage \
-	-pinlist {CLK D R Q} \
-	-vector {0 0 0 0} \
-	-when "!CLK*!D*!Q*!R" \
-	{ RDFF }
-
-define_leakage \
-	-pinlist {CLK D R Q} \
-	-vector {1 0 0 0} \
-	-when "CLK*!D*!Q*!R" \
-	{ RDFF }
-
-define_leakage \
-	-pinlist {CLK D R Q} \
-	-vector {0 1 0 0} \
-	-when "!CLK*D*!Q*!R" \
+	-when "CLK & D & Q & !R" \
 	{ RDFF }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {1 1 0 0} \
-	-when "CLK*D*!Q*!R" \
+	-when "CLK & D & !Q & !R" \
+	{ RDFF }
+
+define_leakage \
+	-pinlist {CLK D R Q} \
+	-vector {0 1 0 0} \
+	-when "!CLK & D & !Q & !R" \
+	{ RDFF }
+
+define_leakage \
+	-pinlist {CLK D R Q} \
+	-vector {0 0 0 0} \
+	-when "!CLK & !D & !Q & !R" \
+	{ RDFF }
+
+define_leakage \
+	-pinlist {CLK D R Q} \
+	-vector {1 0 0 0} \
+	-when "CLK & !D & !Q & !R" \
 	{ RDFF }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {1 0 0 1} \
-	-when "CLK*!D*Q*!R" \
+	-when "CLK & !D & Q & !R" \
 	{ RDFF }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {0 1 0 1} \
-	-when "!CLK*D*Q*!R" \
+	-when "!CLK & D & Q & !R" \
 	{ RDFF }
 
 define_leakage \
 	-pinlist {CLK D R Q} \
 	-vector {0 0 0 1} \
-	-when "!CLK*!D*Q*!R" \
+	-when "!CLK & !D & Q & !R" \
 	{ RDFF }
 
 define_arc \
 	-type setup \
 	-pinlist {CLK D R M Q} \
-	-ic "0 0 0 0 0" \
-	-vector {R R 0 X X} \
+	-ic "0 $VDD 0 $VDD 0" \
+	-vector {R F 0 X X} \
 	-related_pin CLK \
 	-pin D \
 	-probe {Q M} \
@@ -3731,10 +3731,20 @@ define_arc \
 define_arc \
 	-type hold \
 	-pinlist {CLK D R M Q} \
-	-ic "0 0 0 0 0" \
-	-vector {R R 0 X X} \
+	-ic "0 $VDD 0 $VDD 0" \
+	-vector {R F 0 X X} \
 	-related_pin CLK \
 	-pin D \
+	-probe {Q M} \
+	{ RDFF }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLK D R M Q} \
+	-ic "$VDD $VDD 0 $VDD $VDD" \
+	-vector {1 1 R X X} \
+	-related_pin R \
+	-pin R \
 	-probe {Q M} \
 	{ RDFF }
 
@@ -3751,8 +3761,8 @@ define_arc \
 define_arc \
 	-type setup \
 	-pinlist {CLK D R M Q} \
-	-ic "0 $VDD 0 $VDD 0" \
-	-vector {R F 0 X X} \
+	-ic "0 0 0 0 0" \
+	-vector {R R 0 X X} \
 	-related_pin CLK \
 	-pin D \
 	-probe {Q M} \
@@ -3761,30 +3771,10 @@ define_arc \
 define_arc \
 	-type hold \
 	-pinlist {CLK D R M Q} \
-	-ic "0 $VDD 0 $VDD 0" \
-	-vector {R F 0 X X} \
+	-ic "0 0 0 0 0" \
+	-vector {R R 0 X X} \
 	-related_pin CLK \
 	-pin D \
-	-probe {Q M} \
-	{ RDFF }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLK D R M Q} \
-	-ic "$VDD $VDD 0 0 0" \
-	-vector {F 1 0 X X} \
-	-related_pin CLK \
-	-pin CLK \
-	-probe {Q M} \
-	{ RDFF }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLK D R M Q} \
-	-ic "$VDD $VDD 0 $VDD $VDD" \
-	-vector {1 1 R X X} \
-	-related_pin R \
-	-pin R \
 	-probe {Q M} \
 	{ RDFF }
 
@@ -3805,6 +3795,16 @@ define_arc \
 	-vector {R 1 F X X} \
 	-related_pin CLK \
 	-pin R \
+	-probe {Q M} \
+	{ RDFF }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLK D R M Q} \
+	-ic "$VDD $VDD 0 0 0" \
+	-vector {F 1 0 X X} \
+	-related_pin CLK \
+	-pin CLK \
 	-probe {Q M} \
 	{ RDFF }
 
@@ -3917,86 +3917,76 @@ define_arc \
 	-pin R \
 	{ COEX }
 
-define_leakage -when "!B*!CLK*!D*!Q*R" { COEX }
+define_leakage -when "!B & !CLK & !D & !Q & R" { COEX }
 
-define_leakage -when "!B*!CLK*D*!Q*R" { COEX }
+define_leakage -when "!B & !CLK & D & !Q & R" { COEX }
 
-define_leakage -when "!B*CLK*!D*!Q*R" { COEX }
+define_leakage -when "!B & CLK & !D & !Q & R" { COEX }
 
-define_leakage -when "!B*CLK*D*!Q*R" { COEX }
+define_leakage -when "!B & CLK & D & !Q & R" { COEX }
 
-define_leakage -when "B*!CLK*!D*Q*!R" { COEX }
+define_leakage -when "B & !CLK & !D & Q & !R" { COEX }
 
-define_leakage -when "B*!CLK*!D*!Q*R" { COEX }
+define_leakage -when "B & !CLK & !D & !Q & R" { COEX }
 
-define_leakage -when "B*!CLK*D*Q*!R" { COEX }
+define_leakage -when "B & !CLK & D & Q & !R" { COEX }
 
-define_leakage -when "B*!CLK*D*!Q*R" { COEX }
+define_leakage -when "B & !CLK & D & !Q & R" { COEX }
 
-define_leakage -when "B*CLK*!D*Q*!R" { COEX }
+define_leakage -when "B & CLK & !D & Q & !R" { COEX }
 
-define_leakage -when "B*CLK*!D*!Q*R" { COEX }
+define_leakage -when "B & CLK & !D & !Q & R" { COEX }
 
-define_leakage -when "B*CLK*D*Q*!R" { COEX }
+define_leakage -when "B & CLK & D & Q & !R" { COEX }
 
-define_leakage -when "B*CLK*D*!Q*R" { COEX }
+define_leakage -when "B & CLK & D & !Q & R" { COEX }
 
 define_leakage \
 	-pinlist {CLK D B R Q} \
 	-vector {1 0 0 0 0} \
-	-when "!B*CLK*!D*!Q*!R" \
-	{ COEX }
-
-define_leakage \
-	-pinlist {CLK D B R Q} \
-	-vector {1 1 0 0 1} \
-	-when "!B*CLK*D*Q*!R" \
-	{ COEX }
-
-define_leakage \
-	-pinlist {CLK D B R Q} \
-	-vector {0 0 0 0 0} \
-	-when "!B*!CLK*!D*!Q*!R" \
+	-when "!B & CLK & !D & !Q & !R" \
 	{ COEX }
 
 define_leakage \
 	-pinlist {CLK D B R Q} \
 	-vector {1 1 0 0 0} \
-	-when "!B*CLK*D*!Q*!R" \
+	-when "!B & CLK & D & !Q & !R" \
 	{ COEX }
 
 define_leakage \
 	-pinlist {CLK D B R Q} \
-	-vector {0 1 0 0 0} \
-	-when "!B*!CLK*D*!Q*!R" \
-	{ COEX }
-
-define_leakage \
-	-pinlist {CLK D B R Q} \
-	-vector {0 0 0 0 1} \
-	-when "!B*!CLK*!D*Q*!R" \
+	-vector {1 1 0 0 1} \
+	-when "!B & CLK & D & Q & !R" \
 	{ COEX }
 
 define_leakage \
 	-pinlist {CLK D B R Q} \
 	-vector {0 1 0 0 1} \
-	-when "!B*!CLK*D*Q*!R" \
+	-when "!B & !CLK & D & Q & !R" \
+	{ COEX }
+
+define_leakage \
+	-pinlist {CLK D B R Q} \
+	-vector {0 1 0 0 0} \
+	-when "!B & !CLK & D & !Q & !R" \
 	{ COEX }
 
 define_leakage \
 	-pinlist {CLK D B R Q} \
 	-vector {1 0 0 0 1} \
-	-when "!B*CLK*!D*Q*!R" \
+	-when "!B & CLK & !D & Q & !R" \
 	{ COEX }
 
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLK D B R M Q} \
-	-ic "$VDD $VDD 0 0 0 0" \
-	-vector {F 1 0 0 X X} \
-	-related_pin CLK \
-	-pin CLK \
-	-probe {Q M} \
+define_leakage \
+	-pinlist {CLK D B R Q} \
+	-vector {0 0 0 0 0} \
+	-when "!B & !CLK & !D & !Q & !R" \
+	{ COEX }
+
+define_leakage \
+	-pinlist {CLK D B R Q} \
+	-vector {0 0 0 0 1} \
+	-when "!B & !CLK & !D & Q & !R" \
 	{ COEX }
 
 define_arc \
@@ -4016,6 +4006,106 @@ define_arc \
 	-vector {R R 0 0 X X} \
 	-related_pin CLK \
 	-pin D \
+	-probe {Q M} \
+	{ COEX }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLK D B R M Q} \
+	-ic "$VDD $VDD 0 0 $VDD $VDD" \
+	-vector {1 1 0 R X X} \
+	-related_pin R \
+	-pin R \
+	-probe {Q M} \
+	{ COEX }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLK D B R Q} \
+	-ic "0 $VDD 0 0 0" \
+	-vector {R 1 0 0 X} \
+	-related_pin CLK \
+	-pin CLK \
+	-probe {Q} \
+	{ COEX }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D B R M Q} \
+	-ic "0 $VDD 0 0 $VDD $VDD" \
+	-vector {R F 0 0 X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ COEX }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D B R M Q} \
+	-ic "0 $VDD 0 0 $VDD $VDD" \
+	-vector {R F 0 0 X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ COEX }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLK D B R M Q} \
+	-ic "$VDD 0 0 0 0 0" \
+	-vector {1 0 R 0 X X} \
+	-related_pin B \
+	-pin B \
+	-probe {Q M} \
+	{ COEX }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D B R M Q} \
+	-ic "0 $VDD 0 $VDD 0 0" \
+	-vector {R 1 0 F X X} \
+	-related_pin CLK \
+	-pin R \
+	-probe {Q M} \
+	{ COEX }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D B R M Q} \
+	-ic "0 $VDD 0 $VDD 0 0" \
+	-vector {R 1 0 F X X} \
+	-related_pin CLK \
+	-pin R \
+	-probe {Q M} \
+	{ COEX }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLK D B R M Q} \
+	-ic "$VDD $VDD 0 0 0 0" \
+	-vector {F 1 0 0 X X} \
+	-related_pin CLK \
+	-pin CLK \
+	-probe {Q M} \
+	{ COEX }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D B R M Q} \
+	-ic "0 0 $VDD 0 $VDD $VDD" \
+	-vector {R 0 F 0 X X} \
+	-related_pin CLK \
+	-pin B \
+	-probe {Q M} \
+	{ COEX }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D B R M Q} \
+	-ic "0 0 $VDD 0 $VDD $VDD" \
+	-vector {R 0 F 0 X X} \
+	-related_pin CLK \
+	-pin B \
 	-probe {Q M} \
 	{ COEX }
 
@@ -4040,96 +4130,6 @@ define_arc \
 	{ COEX }
 
 define_arc \
-	-type setup \
-	-pinlist {CLK D B R M Q} \
-	-ic "0 $VDD 0 $VDD 0 0" \
-	-vector {R 1 0 F X X} \
-	-related_pin CLK \
-	-pin R \
-	-probe {Q M} \
-	{ COEX }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D B R M Q} \
-	-ic "0 $VDD 0 $VDD 0 0" \
-	-vector {R 1 0 F X X} \
-	-related_pin CLK \
-	-pin R \
-	-probe {Q M} \
-	{ COEX }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLK D B R M Q} \
-	-ic "$VDD $VDD 0 0 $VDD $VDD" \
-	-vector {1 1 0 R X X} \
-	-related_pin R \
-	-pin R \
-	-probe {Q M} \
-	{ COEX }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D B R M Q} \
-	-ic "0 $VDD 0 0 $VDD 0" \
-	-vector {R F 0 0 X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ COEX }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D B R M Q} \
-	-ic "0 $VDD 0 0 $VDD 0" \
-	-vector {R F 0 0 X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ COEX }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLK D B R Q} \
-	-ic "0 $VDD 0 0 0" \
-	-vector {R 1 0 0 X} \
-	-related_pin CLK \
-	-pin CLK \
-	-probe {Q} \
-	{ COEX }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLK D B R M Q} \
-	-ic "$VDD 0 0 0 0 0" \
-	-vector {1 0 R 0 X X} \
-	-related_pin B \
-	-pin B \
-	-probe {Q M} \
-	{ COEX }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D B R M Q} \
-	-ic "0 0 $VDD 0 $VDD $VDD" \
-	-vector {R 0 F 0 X X} \
-	-related_pin CLK \
-	-pin B \
-	-probe {Q M} \
-	{ COEX }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D B R M Q} \
-	-ic "0 0 $VDD 0 $VDD $VDD" \
-	-vector {R 0 F 0 X X} \
-	-related_pin CLK \
-	-pin B \
-	-probe {Q M} \
-	{ COEX }
-
-define_arc \
 	-type async \
 	-pinlist {CLK D PRE CLR Q} \
 	-ic "0 0 $VDD 0 $VDD" \
@@ -4150,8 +4150,8 @@ define_arc \
 define_arc \
 	-type async \
 	-pinlist {CLK D PRE CLR Q} \
-	-ic "$VDD 0 0 0 0" \
-	-vector {1 0 R 0 R} \
+	-ic "$VDD $VDD 0 0 0" \
+	-vector {1 1 R 0 R} \
 	-related_pin PRE \
 	-pin Q \
 	{ CAFF }
@@ -4233,99 +4233,119 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLK D PRE CLR Q} \
-	-ic "$VDD 0 0 0 0" \
-	-vector {1 0 0 R 0} \
+	-ic "$VDD $VDD 0 0 0" \
+	-vector {1 1 0 R 0} \
 	-pin CLR \
 	{ CAFF }
 
-define_leakage -when "!CLK*!CLR*!D*PRE*Q" { CAFF }
+define_leakage -when "!CLK & !CLR & !D & PRE & Q" { CAFF }
 
-define_leakage -when "!CLK*!CLR*D*PRE*Q" { CAFF }
+define_leakage -when "!CLK & !CLR & D & PRE & Q" { CAFF }
 
-define_leakage -when "!CLK*CLR*!D*!PRE*!Q" { CAFF }
+define_leakage -when "!CLK & CLR & !D & !PRE & !Q" { CAFF }
 
-define_leakage -when "!CLK*CLR*!D*PRE*!Q" { CAFF }
+define_leakage -when "!CLK & CLR & !D & PRE & !Q" { CAFF }
 
-define_leakage -when "!CLK*CLR*D*!PRE*!Q" { CAFF }
+define_leakage -when "!CLK & CLR & D & !PRE & !Q" { CAFF }
 
-define_leakage -when "!CLK*CLR*D*PRE*!Q" { CAFF }
+define_leakage -when "!CLK & CLR & D & PRE & !Q" { CAFF }
 
-define_leakage -when "CLK*!CLR*!D*PRE*Q" { CAFF }
+define_leakage -when "CLK & !CLR & !D & PRE & Q" { CAFF }
 
-define_leakage -when "CLK*!CLR*D*PRE*Q" { CAFF }
+define_leakage -when "CLK & !CLR & D & PRE & Q" { CAFF }
 
-define_leakage -when "CLK*CLR*!D*!PRE*!Q" { CAFF }
+define_leakage -when "CLK & CLR & !D & !PRE & !Q" { CAFF }
 
-define_leakage -when "CLK*CLR*!D*PRE*!Q" { CAFF }
+define_leakage -when "CLK & CLR & !D & PRE & !Q" { CAFF }
 
-define_leakage -when "CLK*CLR*D*!PRE*!Q" { CAFF }
+define_leakage -when "CLK & CLR & D & !PRE & !Q" { CAFF }
 
-define_leakage -when "CLK*CLR*D*PRE*!Q" { CAFF }
-
-define_leakage \
-	-pinlist {CLK D PRE CLR Q} \
-	-vector {1 1 0 0 1} \
-	-when "CLK*!CLR*D*!PRE*Q" \
-	{ CAFF }
-
-define_leakage \
-	-pinlist {CLK D PRE CLR Q} \
-	-vector {1 0 0 0 0} \
-	-when "CLK*!CLR*!D*!PRE*!Q" \
-	{ CAFF }
-
-define_leakage \
-	-pinlist {CLK D PRE CLR Q} \
-	-vector {0 1 0 0 0} \
-	-when "!CLK*!CLR*D*!PRE*!Q" \
-	{ CAFF }
-
-define_leakage \
-	-pinlist {CLK D PRE CLR Q} \
-	-vector {0 0 0 0 1} \
-	-when "!CLK*!CLR*!D*!PRE*Q" \
-	{ CAFF }
+define_leakage -when "CLK & CLR & D & PRE & !Q" { CAFF }
 
 define_leakage \
 	-pinlist {CLK D PRE CLR Q} \
 	-vector {0 1 0 0 1} \
-	-when "!CLK*!CLR*D*!PRE*Q" \
-	{ CAFF }
-
-define_leakage \
-	-pinlist {CLK D PRE CLR Q} \
-	-vector {0 0 0 0 0} \
-	-when "!CLK*!CLR*!D*!PRE*!Q" \
-	{ CAFF }
-
-define_leakage \
-	-pinlist {CLK D PRE CLR Q} \
-	-vector {1 0 0 0 1} \
-	-when "CLK*!CLR*!D*!PRE*Q" \
+	-when "!CLK & !CLR & D & !PRE & Q" \
 	{ CAFF }
 
 define_leakage \
 	-pinlist {CLK D PRE CLR Q} \
 	-vector {1 1 0 0 0} \
-	-when "CLK*!CLR*D*!PRE*!Q" \
+	-when "CLK & !CLR & D & !PRE & !Q" \
+	{ CAFF }
+
+define_leakage \
+	-pinlist {CLK D PRE CLR Q} \
+	-vector {1 0 0 0 1} \
+	-when "CLK & !CLR & !D & !PRE & Q" \
+	{ CAFF }
+
+define_leakage \
+	-pinlist {CLK D PRE CLR Q} \
+	-vector {0 1 0 0 0} \
+	-when "!CLK & !CLR & D & !PRE & !Q" \
+	{ CAFF }
+
+define_leakage \
+	-pinlist {CLK D PRE CLR Q} \
+	-vector {1 1 0 0 1} \
+	-when "CLK & !CLR & D & !PRE & Q" \
+	{ CAFF }
+
+define_leakage \
+	-pinlist {CLK D PRE CLR Q} \
+	-vector {0 0 0 0 1} \
+	-when "!CLK & !CLR & !D & !PRE & Q" \
+	{ CAFF }
+
+define_leakage \
+	-pinlist {CLK D PRE CLR Q} \
+	-vector {1 0 0 0 0} \
+	-when "CLK & !CLR & !D & !PRE & !Q" \
+	{ CAFF }
+
+define_leakage \
+	-pinlist {CLK D PRE CLR Q} \
+	-vector {0 0 0 0 0} \
+	-when "!CLK & !CLR & !D & !PRE & !Q" \
+	{ CAFF }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLK D PRE CLR M Q} \
+	-ic "$VDD $VDD 0 0 0 0" \
+	-vector {F 1 0 0 X X} \
+	-related_pin CLK \
+	-pin CLK \
+	-probe {Q M} \
 	{ CAFF }
 
 define_arc \
 	-type setup \
 	-pinlist {CLK D PRE CLR M Q} \
-	-ic "0 0 $VDD 0 $VDD $VDD" \
-	-vector {R 0 F 0 X X} \
+	-ic "0 $VDD 0 $VDD 0 0" \
+	-vector {R 1 0 F X X} \
 	-related_pin CLK \
-	-pin PRE \
+	-pin CLR \
 	-probe {Q M} \
 	{ CAFF }
 
 define_arc \
 	-type hold \
 	-pinlist {CLK D PRE CLR M Q} \
-	-ic "0 0 $VDD 0 $VDD $VDD" \
-	-vector {R 0 F 0 X X} \
+	-ic "0 $VDD 0 $VDD 0 0" \
+	-vector {R 1 0 F X X} \
 	-related_pin CLK \
+	-pin CLR \
+	-probe {Q M} \
+	{ CAFF }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLK D PRE CLR M Q} \
+	-ic "$VDD $VDD 0 0 0 0" \
+	-vector {1 1 R 0 X X} \
+	-related_pin PRE \
 	-pin PRE \
 	-probe {Q M} \
 	{ CAFF }
@@ -4334,67 +4354,7 @@ define_arc \
 	-type min_pulse_width \
 	-pinlist {CLK D PRE CLR M Q} \
 	-ic "$VDD 0 0 0 $VDD $VDD" \
-	-vector {F 0 0 0 X X} \
-	-related_pin CLK \
-	-pin CLK \
-	-probe {Q M} \
-	{ CAFF }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLK D PRE CLR M Q} \
-	-ic "$VDD 0 0 0 0 0" \
-	-vector {1 0 R 0 X X} \
-	-related_pin PRE \
-	-pin PRE \
-	-probe {Q M} \
-	{ CAFF }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D PRE CLR M Q} \
-	-ic "0 $VDD 0 0 $VDD 0" \
-	-vector {R F 0 0 X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ CAFF }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D PRE CLR M Q} \
-	-ic "0 $VDD 0 0 $VDD 0" \
-	-vector {R F 0 0 X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ CAFF }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D PRE CLR M Q} \
-	-ic "0 0 0 0 0 $VDD" \
-	-vector {R R 0 0 X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ CAFF }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D PRE CLR M Q} \
-	-ic "0 0 0 0 0 $VDD" \
-	-vector {R R 0 0 X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ CAFF }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLK D PRE CLR M Q} \
-	-ic "$VDD $VDD 0 0 $VDD $VDD" \
-	-vector {1 1 0 R X X} \
+	-vector {1 0 0 R X X} \
 	-related_pin CLR \
 	-pin CLR \
 	-probe {Q M} \
@@ -4408,6 +4368,26 @@ define_arc \
 	-related_pin CLK \
 	-pin CLK \
 	-probe {Q} \
+	{ CAFF }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D PRE CLR M Q} \
+	-ic "0 0 0 0 0 $VDD" \
+	-vector {R R 0 0 X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ CAFF }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D PRE CLR M Q} \
+	-ic "0 0 0 0 0 $VDD" \
+	-vector {R R 0 0 X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
 	{ CAFF }
 
 define_arc \
@@ -4433,20 +4413,40 @@ define_arc \
 define_arc \
 	-type setup \
 	-pinlist {CLK D PRE CLR M Q} \
-	-ic "0 $VDD 0 $VDD 0 0" \
-	-vector {R 1 0 F X X} \
+	-ic "0 0 $VDD 0 $VDD $VDD" \
+	-vector {R 0 F 0 X X} \
 	-related_pin CLK \
-	-pin CLR \
+	-pin PRE \
 	-probe {Q M} \
 	{ CAFF }
 
 define_arc \
 	-type hold \
 	-pinlist {CLK D PRE CLR M Q} \
-	-ic "0 $VDD 0 $VDD 0 0" \
-	-vector {R 1 0 F X X} \
+	-ic "0 0 $VDD 0 $VDD $VDD" \
+	-vector {R 0 F 0 X X} \
 	-related_pin CLK \
-	-pin CLR \
+	-pin PRE \
+	-probe {Q M} \
+	{ CAFF }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D PRE CLR M Q} \
+	-ic "0 $VDD 0 0 $VDD $VDD" \
+	-vector {R F 0 0 X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ CAFF }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D PRE CLR M Q} \
+	-ic "0 $VDD 0 0 $VDD $VDD" \
+	-vector {R F 0 0 X X} \
+	-related_pin CLK \
+	-pin D \
 	-probe {Q M} \
 	{ CAFF }
 
@@ -4471,8 +4471,8 @@ define_arc \
 define_arc \
 	-type edge \
 	-pinlist {CLK D Q} \
-	-ic "0 $VDD 0" \
-	-vector {R 1 R} \
+	-ic "0 0 $VDD" \
+	-vector {R 0 F} \
 	-related_pin CLK \
 	-pin Q \
 	{ DLAT }
@@ -4480,8 +4480,8 @@ define_arc \
 define_arc \
 	-type edge \
 	-pinlist {CLK D Q} \
-	-ic "0 0 $VDD" \
-	-vector {R 0 F} \
+	-ic "0 $VDD 0" \
+	-vector {R 1 R} \
 	-related_pin CLK \
 	-pin Q \
 	{ DLAT }
@@ -4497,17 +4497,9 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLK D Q} \
-	-ic "0 0 0" \
-	-vector {R 0 0} \
+	-ic "0 $VDD $VDD" \
+	-vector {R 1 1} \
 	-pin CLK \
-	{ DLAT }
-
-define_arc \
-	-type hidden \
-	-pinlist {CLK D Q} \
-	-ic "0 0 0" \
-	-vector {0 R 0} \
-	-pin D \
 	{ DLAT }
 
 define_arc \
@@ -4518,52 +4510,40 @@ define_arc \
 	-pin D \
 	{ DLAT }
 
-define_leakage -when "CLK*!D*!Q" { DLAT }
-
-define_leakage -when "CLK*D*Q" { DLAT }
-
-define_leakage \
+define_arc \
+	-type hidden \
 	-pinlist {CLK D Q} \
-	-vector {0 0 0} \
-	-when "!CLK*!D*!Q" \
+	-ic "0 0 0" \
+	-vector {0 R 0} \
+	-pin D \
 	{ DLAT }
+
+define_leakage -when "CLK & !D & !Q" { DLAT }
+
+define_leakage -when "CLK & D & Q" { DLAT }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {0 1 1} \
-	-when "!CLK*D*Q" \
+	-when "!CLK & D & Q" \
 	{ DLAT }
 
 define_leakage \
 	-pinlist {CLK D Q} \
-	-vector {0 1 0} \
-	-when "!CLK*D*!Q" \
+	-vector {0 0 0} \
+	-when "!CLK & !D & !Q" \
 	{ DLAT }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {0 0 1} \
-	-when "!CLK*!D*Q" \
+	-when "!CLK & !D & Q" \
 	{ DLAT }
 
-define_arc \
-	-type setup \
+define_leakage \
 	-pinlist {CLK D Q} \
-	-ic "$VDD $VDD $VDD" \
-	-vector {F F X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q} \
-	{ DLAT }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D Q} \
-	-ic "$VDD $VDD $VDD" \
-	-vector {F F X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q} \
+	-vector {0 1 0} \
+	-when "!CLK & D & !Q" \
 	{ DLAT }
 
 define_arc \
@@ -4581,6 +4561,26 @@ define_arc \
 	-pinlist {CLK D Q} \
 	-ic "$VDD 0 0" \
 	-vector {F R X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q} \
+	{ DLAT }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D Q} \
+	-ic "$VDD $VDD $VDD" \
+	-vector {F F X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q} \
+	{ DLAT }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D Q} \
+	-ic "$VDD $VDD $VDD" \
+	-vector {F F X} \
 	-related_pin CLK \
 	-pin D \
 	-probe {Q} \
@@ -4589,8 +4589,8 @@ define_arc \
 define_arc \
 	-type min_pulse_width \
 	-pinlist {CLK D Q} \
-	-ic "0 $VDD 0" \
-	-vector {R 1 X} \
+	-ic "0 0 $VDD" \
+	-vector {R 0 X} \
 	-related_pin CLK \
 	-pin CLK \
 	-probe {Q} \
@@ -4643,17 +4643,9 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {EN D Q} \
-	-ic "0 0 0" \
-	-vector {R 0 0} \
+	-ic "0 $VDD $VDD" \
+	-vector {R 1 1} \
 	-pin EN \
-	{ DLAT_EN }
-
-define_arc \
-	-type hidden \
-	-pinlist {EN D Q} \
-	-ic "0 0 0" \
-	-vector {0 R 0} \
-	-pin D \
 	{ DLAT_EN }
 
 define_arc \
@@ -4664,39 +4656,47 @@ define_arc \
 	-pin D \
 	{ DLAT_EN }
 
-define_leakage -when "!D*EN*!Q" { DLAT_EN }
-
-define_leakage -when "D*EN*Q" { DLAT_EN }
-
-define_leakage \
+define_arc \
+	-type hidden \
 	-pinlist {EN D Q} \
-	-vector {0 0 0} \
-	-when "!D*!EN*!Q" \
+	-ic "0 0 0" \
+	-vector {0 R 0} \
+	-pin D \
 	{ DLAT_EN }
+
+define_leakage -when "!D & EN & !Q" { DLAT_EN }
+
+define_leakage -when "D & EN & Q" { DLAT_EN }
 
 define_leakage \
 	-pinlist {EN D Q} \
 	-vector {0 1 1} \
-	-when "D*!EN*Q" \
+	-when "D & !EN & Q" \
+	{ DLAT_EN }
+
+define_leakage \
+	-pinlist {EN D Q} \
+	-vector {0 0 0} \
+	-when "!D & !EN & !Q" \
 	{ DLAT_EN }
 
 define_leakage \
 	-pinlist {EN D Q} \
 	-vector {0 0 1} \
-	-when "!D*!EN*Q" \
+	-when "!D & !EN & Q" \
 	{ DLAT_EN }
 
 define_leakage \
 	-pinlist {EN D Q} \
 	-vector {0 1 0} \
-	-when "D*!EN*!Q" \
+	-when "D & !EN & !Q" \
 	{ DLAT_EN }
 
 define_arc \
 	-type setup \
 	-pinlist {EN D Q} \
-	-ic "$VDD $VDD $VDD" \
-	-vector {F F X} \
+	-ic "$VDD 0 0" \
+	-vector {F R X} \
 	-related_pin EN \
 	-pin D \
 	-probe {Q} \
@@ -4705,8 +4705,8 @@ define_arc \
 define_arc \
 	-type hold \
 	-pinlist {EN D Q} \
-	-ic "$VDD $VDD $VDD" \
-	-vector {F F X} \
+	-ic "$VDD 0 0" \
+	-vector {F R X} \
 	-related_pin EN \
 	-pin D \
 	-probe {Q} \
@@ -4725,8 +4725,8 @@ define_arc \
 define_arc \
 	-type setup \
 	-pinlist {EN D Q} \
-	-ic "$VDD 0 0" \
-	-vector {F R X} \
+	-ic "$VDD $VDD $VDD" \
+	-vector {F F X} \
 	-related_pin EN \
 	-pin D \
 	-probe {Q} \
@@ -4735,8 +4735,8 @@ define_arc \
 define_arc \
 	-type hold \
 	-pinlist {EN D Q} \
-	-ic "$VDD 0 0" \
-	-vector {F R X} \
+	-ic "$VDD $VDD $VDD" \
+	-vector {F F X} \
 	-related_pin EN \
 	-pin D \
 	-probe {Q} \
@@ -4763,8 +4763,8 @@ define_arc \
 define_arc \
 	-type combinational \
 	-pinlist {E D Q} \
-	-ic "0 $VDD 0" \
-	-vector {R 1 R} \
+	-ic "0 0 $VDD" \
+	-vector {R 0 F} \
 	-related_pin E \
 	-pin Q \
 	{ DLAT_E }
@@ -4772,8 +4772,8 @@ define_arc \
 define_arc \
 	-type combinational \
 	-pinlist {E D Q} \
-	-ic "0 0 $VDD" \
-	-vector {R 0 F} \
+	-ic "0 $VDD 0" \
+	-vector {R 1 R} \
 	-related_pin E \
 	-pin Q \
 	{ DLAT_E }
@@ -4789,17 +4789,9 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {E D Q} \
-	-ic "0 0 0" \
-	-vector {R 0 0} \
+	-ic "0 $VDD $VDD" \
+	-vector {R 1 1} \
 	-pin E \
-	{ DLAT_E }
-
-define_arc \
-	-type hidden \
-	-pinlist {E D Q} \
-	-ic "0 0 0" \
-	-vector {0 R 0} \
-	-pin D \
 	{ DLAT_E }
 
 define_arc \
@@ -4810,81 +4802,89 @@ define_arc \
 	-pin D \
 	{ DLAT_E }
 
-define_leakage -when "!D*E*!Q" { DLAT_E }
-
-define_leakage -when "D*E*Q" { DLAT_E }
-
-define_leakage \
+define_arc \
+	-type hidden \
 	-pinlist {E D Q} \
-	-vector {0 0 0} \
-	-when "!D*!E*!Q" \
+	-ic "0 0 0" \
+	-vector {0 R 0} \
+	-pin D \
 	{ DLAT_E }
+
+define_leakage -when "!D & E & !Q" { DLAT_E }
+
+define_leakage -when "D & E & Q" { DLAT_E }
 
 define_leakage \
 	-pinlist {E D Q} \
 	-vector {0 1 1} \
-	-when "D*!E*Q" \
+	-when "D & !E & Q" \
 	{ DLAT_E }
 
 define_leakage \
 	-pinlist {E D Q} \
-	-vector {0 1 0} \
-	-when "D*!E*!Q" \
+	-vector {0 0 0} \
+	-when "!D & !E & !Q" \
 	{ DLAT_E }
 
 define_leakage \
 	-pinlist {E D Q} \
 	-vector {0 0 1} \
-	-when "!D*!E*Q" \
+	-when "!D & !E & Q" \
+	{ DLAT_E }
+
+define_leakage \
+	-pinlist {E D Q} \
+	-vector {0 1 0} \
+	-when "D & !E & !Q" \
+	{ DLAT_E }
+
+define_arc \
+	-type non_seq_setup \
+	-pinlist {E D Q} \
+	-ic "$VDD $VDD $VDD" \
+	-vector {F F X} \
+	-related_pin E \
+	-pin D \
+	-probe {Q} \
+	{ DLAT_E }
+
+define_arc \
+	-type non_seq_hold \
+	-pinlist {E D Q} \
+	-ic "$VDD $VDD $VDD" \
+	-vector {F F X} \
+	-related_pin E \
+	-pin D \
+	-probe {Q} \
+	{ DLAT_E }
+
+define_arc \
+	-type non_seq_setup \
+	-pinlist {E D Q} \
+	-ic "$VDD 0 0" \
+	-vector {F R X} \
+	-related_pin E \
+	-pin D \
+	-probe {Q} \
+	{ DLAT_E }
+
+define_arc \
+	-type non_seq_hold \
+	-pinlist {E D Q} \
+	-ic "$VDD 0 0" \
+	-vector {F R X} \
+	-related_pin E \
+	-pin D \
+	-probe {Q} \
 	{ DLAT_E }
 
 define_arc \
 	-type min_pulse_width \
 	-pinlist {E D Q} \
-	-ic "0 $VDD 0" \
-	-vector {R 1 X} \
+	-ic "0 0 $VDD" \
+	-vector {R 0 X} \
 	-related_pin E \
 	-pin E \
-	-probe {Q} \
-	{ DLAT_E }
-
-define_arc \
-	-type non_seq_setup \
-	-pinlist {E D Q} \
-	-ic "$VDD $VDD $VDD" \
-	-vector {F F X} \
-	-related_pin E \
-	-pin D \
-	-probe {Q} \
-	{ DLAT_E }
-
-define_arc \
-	-type non_seq_hold \
-	-pinlist {E D Q} \
-	-ic "$VDD $VDD $VDD" \
-	-vector {F F X} \
-	-related_pin E \
-	-pin D \
-	-probe {Q} \
-	{ DLAT_E }
-
-define_arc \
-	-type non_seq_setup \
-	-pinlist {E D Q} \
-	-ic "$VDD 0 0" \
-	-vector {F R X} \
-	-related_pin E \
-	-pin D \
-	-probe {Q} \
-	{ DLAT_E }
-
-define_arc \
-	-type non_seq_hold \
-	-pinlist {E D Q} \
-	-ic "$VDD 0 0" \
-	-vector {F R X} \
-	-related_pin E \
-	-pin D \
 	-probe {Q} \
 	{ DLAT_E }
 
@@ -4920,24 +4920,24 @@ define_arc \
 	-pin D \
 	{ GLAT }
 
-define_leakage -when "CLK*D*Q" { GLAT }
+define_leakage -when "CLK & D & Q" { GLAT }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {0 1 1} \
-	-when "!CLK*D*Q" \
+	-when "!CLK & D & Q" \
 	{ GLAT }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {1 0 1} \
-	-when "CLK*!D*Q" \
+	-when "CLK & !D & Q" \
 	{ GLAT }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {0 0 1} \
-	-when "!CLK*!D*Q" \
+	-when "!CLK & !D & Q" \
 	{ GLAT }
 
 define_arc \
@@ -4961,24 +4961,6 @@ define_arc \
 define_arc \
 	-type edge \
 	-pinlist {CLKA CLKB D Q} \
-	-ic "0 0 $VDD 0" \
-	-vector {R 0 1 R} \
-	-related_pin CLKA \
-	-pin Q \
-	{ MUXLAT }
-
-define_arc \
-	-type edge \
-	-pinlist {CLKA CLKB D Q} \
-	-ic "0 0 $VDD 0" \
-	-vector {0 R 1 R} \
-	-related_pin CLKB \
-	-pin Q \
-	{ MUXLAT }
-
-define_arc \
-	-type edge \
-	-pinlist {CLKA CLKB D Q} \
 	-ic "0 0 0 $VDD" \
 	-vector {R 0 0 F} \
 	-related_pin CLKA \
@@ -4990,6 +4972,24 @@ define_arc \
 	-pinlist {CLKA CLKB D Q} \
 	-ic "0 0 0 $VDD" \
 	-vector {0 R 0 F} \
+	-related_pin CLKB \
+	-pin Q \
+	{ MUXLAT }
+
+define_arc \
+	-type edge \
+	-pinlist {CLKA CLKB D Q} \
+	-ic "0 0 $VDD 0" \
+	-vector {R 0 1 R} \
+	-related_pin CLKA \
+	-pin Q \
+	{ MUXLAT }
+
+define_arc \
+	-type edge \
+	-pinlist {CLKA CLKB D Q} \
+	-ic "0 0 $VDD 0" \
+	-vector {0 R 1 R} \
 	-related_pin CLKB \
 	-pin Q \
 	{ MUXLAT }
@@ -5029,53 +5029,73 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLKA CLKB D Q} \
-	-ic "0 0 0 0" \
-	-vector {0 0 R 0} \
+	-ic "0 0 $VDD $VDD" \
+	-vector {0 0 F 1} \
 	-pin D \
 	{ MUXLAT }
 
 define_arc \
 	-type hidden \
 	-pinlist {CLKA CLKB D Q} \
-	-ic "0 0 $VDD $VDD" \
-	-vector {0 0 F 1} \
+	-ic "0 0 0 0" \
+	-vector {0 0 R 0} \
 	-pin D \
 	{ MUXLAT }
 
-define_leakage -when "!CLKA*CLKB*!D*!Q" { MUXLAT }
+define_leakage -when "!CLKA & CLKB & !D & !Q" { MUXLAT }
 
-define_leakage -when "!CLKA*CLKB*D*Q" { MUXLAT }
+define_leakage -when "!CLKA & CLKB & D & Q" { MUXLAT }
 
-define_leakage -when "CLKA*!CLKB*!D*!Q" { MUXLAT }
+define_leakage -when "CLKA & !CLKB & !D & !Q" { MUXLAT }
 
-define_leakage -when "CLKA*!CLKB*D*Q" { MUXLAT }
+define_leakage -when "CLKA & !CLKB & D & Q" { MUXLAT }
 
-define_leakage -when "CLKA*CLKB*!D*!Q" { MUXLAT }
+define_leakage -when "CLKA & CLKB & !D & !Q" { MUXLAT }
 
-define_leakage -when "CLKA*CLKB*D*Q" { MUXLAT }
-
-define_leakage \
-	-pinlist {CLKA CLKB D Q} \
-	-vector {0 0 0 0} \
-	-when "!CLKA*!CLKB*!D*!Q" \
-	{ MUXLAT }
+define_leakage -when "CLKA & CLKB & D & Q" { MUXLAT }
 
 define_leakage \
 	-pinlist {CLKA CLKB D Q} \
 	-vector {0 0 1 1} \
-	-when "!CLKA*!CLKB*D*Q" \
+	-when "!CLKA & !CLKB & D & Q" \
 	{ MUXLAT }
 
 define_leakage \
 	-pinlist {CLKA CLKB D Q} \
-	-vector {0 0 1 0} \
-	-when "!CLKA*!CLKB*D*!Q" \
+	-vector {0 0 0 0} \
+	-when "!CLKA & !CLKB & !D & !Q" \
 	{ MUXLAT }
 
 define_leakage \
 	-pinlist {CLKA CLKB D Q} \
 	-vector {0 0 0 1} \
-	-when "!CLKA*!CLKB*!D*Q" \
+	-when "!CLKA & !CLKB & !D & Q" \
+	{ MUXLAT }
+
+define_leakage \
+	-pinlist {CLKA CLKB D Q} \
+	-vector {0 0 1 0} \
+	-when "!CLKA & !CLKB & D & !Q" \
+	{ MUXLAT }
+
+define_arc \
+	-type setup \
+	-pinlist {CLKA CLKB D Q} \
+	-ic "$VDD 0 $VDD $VDD" \
+	-vector {F 0 F X} \
+	-related_pin CLKA \
+	-pin D \
+	-probe {Q} \
+	{ MUXLAT }
+
+define_arc \
+	-type hold \
+	-pinlist {CLKA CLKB D Q} \
+	-ic "$VDD 0 $VDD $VDD" \
+	-vector {F 0 F X} \
+	-related_pin CLKA \
+	-pin D \
+	-probe {Q} \
 	{ MUXLAT }
 
 define_arc \
@@ -5099,10 +5119,40 @@ define_arc \
 	{ MUXLAT }
 
 define_arc \
+	-type setup \
+	-pinlist {CLKA CLKB D Q} \
+	-ic "$VDD 0 0 0" \
+	-vector {F 0 R X} \
+	-related_pin CLKA \
+	-pin D \
+	-probe {Q} \
+	{ MUXLAT }
+
+define_arc \
+	-type hold \
+	-pinlist {CLKA CLKB D Q} \
+	-ic "$VDD 0 0 0" \
+	-vector {F 0 R X} \
+	-related_pin CLKA \
+	-pin D \
+	-probe {Q} \
+	{ MUXLAT }
+
+define_arc \
 	-type min_pulse_width \
 	-pinlist {CLKA CLKB D Q} \
-	-ic "0 0 $VDD 0" \
-	-vector {0 R 1 X} \
+	-ic "0 0 0 $VDD" \
+	-vector {R 0 0 X} \
+	-related_pin CLKA \
+	-pin CLKA \
+	-probe {Q} \
+	{ MUXLAT }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLKA CLKB D Q} \
+	-ic "0 0 0 $VDD" \
+	-vector {0 R 0 X} \
 	-related_pin CLKB \
 	-pin CLKB \
 	-probe {Q} \
@@ -5111,36 +5161,6 @@ define_arc \
 define_arc \
 	-type setup \
 	-pinlist {CLKA CLKB D Q} \
-	-ic "$VDD 0 0 0" \
-	-vector {F 0 R X} \
-	-related_pin CLKA \
-	-pin D \
-	-probe {Q} \
-	{ MUXLAT }
-
-define_arc \
-	-type hold \
-	-pinlist {CLKA CLKB D Q} \
-	-ic "$VDD 0 0 0" \
-	-vector {F 0 R X} \
-	-related_pin CLKA \
-	-pin D \
-	-probe {Q} \
-	{ MUXLAT }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLKA CLKB D Q} \
-	-ic "0 0 $VDD 0" \
-	-vector {R 0 1 X} \
-	-related_pin CLKA \
-	-pin CLKA \
-	-probe {Q} \
-	{ MUXLAT }
-
-define_arc \
-	-type setup \
-	-pinlist {CLKA CLKB D Q} \
 	-ic "0 $VDD $VDD $VDD" \
 	-vector {0 F F X} \
 	-related_pin CLKB \
@@ -5154,26 +5174,6 @@ define_arc \
 	-ic "0 $VDD $VDD $VDD" \
 	-vector {0 F F X} \
 	-related_pin CLKB \
-	-pin D \
-	-probe {Q} \
-	{ MUXLAT }
-
-define_arc \
-	-type setup \
-	-pinlist {CLKA CLKB D Q} \
-	-ic "$VDD 0 $VDD $VDD" \
-	-vector {F 0 F X} \
-	-related_pin CLKA \
-	-pin D \
-	-probe {Q} \
-	{ MUXLAT }
-
-define_arc \
-	-type hold \
-	-pinlist {CLKA CLKB D Q} \
-	-ic "$VDD 0 $VDD $VDD" \
-	-vector {F 0 F X} \
-	-related_pin CLKA \
 	-pin D \
 	-probe {Q} \
 	{ MUXLAT }
@@ -5267,137 +5267,117 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLKA CLKB D M Q} \
-	-ic "0 0 0 0 0" \
-	-vector {0 0 R X 0} \
-	-pin D \
+	-ic "$VDD $VDD 0 0 0" \
+	-vector {F 1 0 X 0} \
+	-pin CLKA \
 	{ MCDFF }
 
 define_arc \
 	-type hidden \
 	-pinlist {CLKA CLKB D M Q} \
-	-ic "$VDD $VDD $VDD $VDD $VDD" \
-	-vector {F 1 1 X 1} \
-	-pin CLKA \
+	-ic "$VDD $VDD 0 0 0" \
+	-vector {1 1 R X 0} \
+	-pin D \
 	{ MCDFF }
 
-define_leakage -when "!CLKA*CLKB*!D*!Q" { MCDFF }
+define_leakage -when "!CLKA & CLKB & !D & !Q" { MCDFF }
 
-define_leakage -when "!CLKA*CLKB*D*Q" { MCDFF }
+define_leakage -when "!CLKA & CLKB & D & Q" { MCDFF }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M Q} \
 	-vector {0 0 1 1 1} \
-	-when "!CLKA*!CLKB*D*Q" \
-	{ MCDFF }
-
-define_leakage \
-	-pinlist {CLKA CLKB D M Q} \
-	-vector {0 0 0 0 0} \
-	-when "!CLKA*!CLKB*!D*!Q" \
-	{ MCDFF }
-
-define_leakage \
-	-pinlist {CLKA CLKB D M Q} \
-	-vector {1 1 1 1 1} \
-	-when "CLKA*CLKB*D*Q" \
+	-when "!CLKA & !CLKB & D & Q" \
 	{ MCDFF }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M Q} \
 	-vector {1 1 0 0 0} \
-	-when "CLKA*CLKB*!D*!Q" \
+	-when "CLKA & CLKB & !D & !Q" \
 	{ MCDFF }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M Q} \
-	-vector {1 1 0 1 1} \
-	-when "CLKA*CLKB*!D*Q" \
+	-vector {0 0 0 0 0} \
+	-when "!CLKA & !CLKB & !D & !Q" \
+	{ MCDFF }
+
+define_leakage \
+	-pinlist {CLKA CLKB D M Q} \
+	-vector {1 1 1 1 1} \
+	-when "CLKA & CLKB & D & Q" \
 	{ MCDFF }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M Q} \
 	-vector {1 0 1 1 1} \
-	-when "CLKA*!CLKB*D*Q" \
+	-when "CLKA & !CLKB & D & Q" \
+	{ MCDFF }
+
+define_leakage \
+	-pinlist {CLKA CLKB D M Q} \
+	-vector {1 1 0 1 1} \
+	-when "CLKA & CLKB & !D & Q" \
 	{ MCDFF }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M Q} \
 	-vector {0 0 1 1 0} \
-	-when "!CLKA*!CLKB*D*!Q" \
+	-when "!CLKA & !CLKB & D & !Q" \
 	{ MCDFF }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M Q} \
 	-vector {0 0 0 0 1} \
-	-when "!CLKA*!CLKB*!D*Q" \
+	-when "!CLKA & !CLKB & !D & Q" \
 	{ MCDFF }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M Q} \
 	-vector {1 0 0 0 0} \
-	-when "CLKA*!CLKB*!D*!Q" \
+	-when "CLKA & !CLKB & !D & !Q" \
 	{ MCDFF }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M Q} \
 	-vector {1 1 1 0 0} \
-	-when "CLKA*CLKB*D*!Q" \
-	{ MCDFF }
-
-define_leakage \
-	-pinlist {CLKA CLKB D M Q} \
-	-vector {1 0 0 1 1} \
-	-when "CLKA*!CLKB*!D*Q" \
-	{ MCDFF }
-
-define_leakage \
-	-pinlist {CLKA CLKB D M Q} \
-	-vector {1 0 1 0 0} \
-	-when "CLKA*!CLKB*D*!Q" \
-	{ MCDFF }
-
-define_leakage \
-	-pinlist {CLKA CLKB D M Q} \
-	-vector {1 0 1 1 0} \
-	-when "CLKA*!CLKB*D*!Q" \
+	-when "CLKA & CLKB & D & !Q" \
 	{ MCDFF }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M Q} \
 	-vector {1 0 0 0 1} \
-	-when "CLKA*!CLKB*!D*Q" \
+	-when "CLKA & !CLKB & !D & Q" \
+	{ MCDFF }
+
+define_leakage \
+	-pinlist {CLKA CLKB D M Q} \
+	-vector {1 0 0 1 1} \
+	-when "CLKA & !CLKB & !D & Q" \
+	{ MCDFF }
+
+define_leakage \
+	-pinlist {CLKA CLKB D M Q} \
+	-vector {1 0 1 0 0} \
+	-when "CLKA & !CLKB & D & !Q" \
+	{ MCDFF }
+
+define_leakage \
+	-pinlist {CLKA CLKB D M Q} \
+	-vector {1 0 1 1 0} \
+	-when "CLKA & !CLKB & D & !Q" \
 	{ MCDFF }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M Q} \
 	-vector {1 0 1 0 1} \
-	-when "CLKA*!CLKB*D*Q" \
+	-when "CLKA & !CLKB & D & Q" \
 	{ MCDFF }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M Q} \
 	-vector {1 0 0 1 0} \
-	-when "CLKA*!CLKB*!D*!Q" \
-	{ MCDFF }
-
-define_arc \
-	-type setup \
-	-pinlist {CLKA CLKB D M Q} \
-	-ic "0 $VDD 0 0 0" \
-	-vector {R 1 R X X} \
-	-related_pin CLKA \
-	-pin D \
-	-probe {Q M} \
-	{ MCDFF }
-
-define_arc \
-	-type hold \
-	-pinlist {CLKA CLKB D M Q} \
-	-ic "0 $VDD 0 0 0" \
-	-vector {R 1 R X X} \
-	-related_pin CLKA \
-	-pin D \
-	-probe {Q M} \
+	-when "CLKA & !CLKB & !D & !Q" \
 	{ MCDFF }
 
 define_arc \
@@ -5411,12 +5391,22 @@ define_arc \
 	{ MCDFF }
 
 define_arc \
-	-type min_pulse_width \
+	-type setup \
 	-pinlist {CLKA CLKB D M Q} \
-	-ic "$VDD $VDD 0 $VDD $VDD" \
-	-vector {F 1 0 X X} \
+	-ic "0 $VDD 0 0 0" \
+	-vector {R 1 R X X} \
 	-related_pin CLKA \
-	-pin CLKA \
+	-pin D \
+	-probe {Q M} \
+	{ MCDFF }
+
+define_arc \
+	-type hold \
+	-pinlist {CLKA CLKB D M Q} \
+	-ic "0 $VDD 0 0 0" \
+	-vector {R 1 R X X} \
+	-related_pin CLKA \
+	-pin D \
 	-probe {Q M} \
 	{ MCDFF }
 
@@ -5437,6 +5427,16 @@ define_arc \
 	-vector {R 1 F X X} \
 	-related_pin CLKA \
 	-pin D \
+	-probe {Q M} \
+	{ MCDFF }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLKA CLKB D M Q} \
+	-ic "$VDD $VDD 0 $VDD $VDD" \
+	-vector {F 1 0 X X} \
+	-related_pin CLKA \
+	-pin CLKA \
 	-probe {Q M} \
 	{ MCDFF }
 
@@ -5455,6 +5455,15 @@ define_arc \
 	-ic "0 $VDD $VDD $VDD $VDD" \
 	-vector {0 1 F X F} \
 	-related_pin D \
+	-pin Q \
+	{ MCDFFX1 }
+
+define_arc \
+	-type edge \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-ic "0 0 0 0 $VDD" \
+	-vector {0 R 0 X F} \
+	-related_pin CLKB \
 	-pin Q \
 	{ MCDFFX1 }
 
@@ -5486,15 +5495,6 @@ define_arc \
 	{ MCDFFX1 }
 
 define_arc \
-	-type edge \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-ic "0 0 0 0 $VDD" \
-	-vector {0 R 0 X F} \
-	-related_pin CLKB \
-	-pin Q \
-	{ MCDFFX1 }
-
-define_arc \
 	-type hidden \
 	-pinlist {CLKA CLKB D XI7/m Q} \
 	-ic "0 $VDD 0 0 0" \
@@ -5508,6 +5508,22 @@ define_arc \
 	-ic "0 $VDD 0 0 0" \
 	-vector {0 F 0 X 0} \
 	-pin CLKB \
+	{ MCDFFX1 }
+
+define_arc \
+	-type hidden \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-ic "0 0 $VDD $VDD $VDD" \
+	-vector {0 R 1 X 1} \
+	-pin CLKB \
+	{ MCDFFX1 }
+
+define_arc \
+	-type hidden \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-ic "0 0 $VDD $VDD $VDD" \
+	-vector {0 0 F X 1} \
+	-pin D \
 	{ MCDFFX1 }
 
 define_arc \
@@ -5527,22 +5543,6 @@ define_arc \
 	{ MCDFFX1 }
 
 define_arc \
-	-type hidden \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-ic "0 0 0 0 0" \
-	-vector {0 R 0 X 0} \
-	-pin CLKB \
-	{ MCDFFX1 }
-
-define_arc \
-	-type hidden \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-ic "0 0 $VDD $VDD $VDD" \
-	-vector {0 0 F X 1} \
-	-pin D \
-	{ MCDFFX1 }
-
-define_arc \
 	-type combinational \
 	-pinlist {CLKA CLKB D XI4/m Q} \
 	-ic "0 $VDD 0 0 0" \
@@ -5557,6 +5557,15 @@ define_arc \
 	-ic "0 $VDD $VDD $VDD $VDD" \
 	-vector {0 1 F X F} \
 	-related_pin D \
+	-pin Q \
+	{ MCDFFX4 }
+
+define_arc \
+	-type edge \
+	-pinlist {CLKA CLKB D XI4/m Q} \
+	-ic "0 0 0 0 $VDD" \
+	-vector {0 R 0 X F} \
+	-related_pin CLKB \
 	-pin Q \
 	{ MCDFFX4 }
 
@@ -5588,15 +5597,6 @@ define_arc \
 	{ MCDFFX4 }
 
 define_arc \
-	-type edge \
-	-pinlist {CLKA CLKB D XI4/m Q} \
-	-ic "0 0 0 0 $VDD" \
-	-vector {0 R 0 X F} \
-	-related_pin CLKB \
-	-pin Q \
-	{ MCDFFX4 }
-
-define_arc \
 	-type hidden \
 	-pinlist {CLKA CLKB D XI4/m Q} \
 	-ic "0 $VDD 0 0 0" \
@@ -5615,6 +5615,22 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLKA CLKB D XI4/m Q} \
+	-ic "0 0 $VDD $VDD $VDD" \
+	-vector {0 R 1 X 1} \
+	-pin CLKB \
+	{ MCDFFX4 }
+
+define_arc \
+	-type hidden \
+	-pinlist {CLKA CLKB D XI4/m Q} \
+	-ic "0 0 $VDD $VDD $VDD" \
+	-vector {0 0 F X 1} \
+	-pin D \
+	{ MCDFFX4 }
+
+define_arc \
+	-type hidden \
+	-pinlist {CLKA CLKB D XI4/m Q} \
 	-ic "$VDD $VDD 0 0 0" \
 	-vector {F 1 0 X 0} \
 	-pin CLKA \
@@ -5628,216 +5644,260 @@ define_arc \
 	-pin D \
 	{ MCDFFX4 }
 
-define_arc \
-	-type hidden \
+define_leakage -when "!CLKA & CLKB & !D & !Q" { MCDFFX1 MCDFFX4 }
+
+define_leakage -when "!CLKA & CLKB & D & Q" { MCDFFX1 MCDFFX4 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-vector {0 0 1 1 1} \
+	-when "!CLKA & !CLKB & D & Q" \
+	{ MCDFFX1 }
+
+define_leakage \
 	-pinlist {CLKA CLKB D XI4/m Q} \
-	-ic "0 0 0 0 0" \
-	-vector {0 R 0 X 0} \
+	-vector {0 0 1 1 1} \
+	-when "!CLKA & !CLKB & D & Q" \
+	{ MCDFFX4 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-vector {1 1 0 0 0} \
+	-when "CLKA & CLKB & !D & !Q" \
+	{ MCDFFX1 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI4/m Q} \
+	-vector {1 1 0 0 0} \
+	-when "CLKA & CLKB & !D & !Q" \
+	{ MCDFFX4 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-vector {0 0 0 0 0} \
+	-when "!CLKA & !CLKB & !D & !Q" \
+	{ MCDFFX1 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI4/m Q} \
+	-vector {0 0 0 0 0} \
+	-when "!CLKA & !CLKB & !D & !Q" \
+	{ MCDFFX4 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-vector {1 1 1 1 1} \
+	-when "CLKA & CLKB & D & Q" \
+	{ MCDFFX1 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI4/m Q} \
+	-vector {1 1 1 1 1} \
+	-when "CLKA & CLKB & D & Q" \
+	{ MCDFFX4 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-vector {1 0 0 0 0} \
+	-when "CLKA & !CLKB & !D & !Q" \
+	{ MCDFFX1 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI4/m Q} \
+	-vector {1 0 0 0 0} \
+	-when "CLKA & !CLKB & !D & !Q" \
+	{ MCDFFX4 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-vector {0 0 0 0 1} \
+	-when "!CLKA & !CLKB & !D & Q" \
+	{ MCDFFX1 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI4/m Q} \
+	-vector {0 0 0 0 1} \
+	-when "!CLKA & !CLKB & !D & Q" \
+	{ MCDFFX4 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-vector {1 1 0 1 1} \
+	-when "CLKA & CLKB & !D & Q" \
+	{ MCDFFX1 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI4/m Q} \
+	-vector {1 1 0 1 1} \
+	-when "CLKA & CLKB & !D & Q" \
+	{ MCDFFX4 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-vector {1 1 1 0 0} \
+	-when "CLKA & CLKB & D & !Q" \
+	{ MCDFFX1 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI4/m Q} \
+	-vector {1 1 1 0 0} \
+	-when "CLKA & CLKB & D & !Q" \
+	{ MCDFFX4 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-vector {1 0 1 1 1} \
+	-when "CLKA & !CLKB & D & Q" \
+	{ MCDFFX1 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI4/m Q} \
+	-vector {1 0 1 1 1} \
+	-when "CLKA & !CLKB & D & Q" \
+	{ MCDFFX4 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-vector {0 0 1 1 0} \
+	-when "!CLKA & !CLKB & D & !Q" \
+	{ MCDFFX1 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI4/m Q} \
+	-vector {0 0 1 1 0} \
+	-when "!CLKA & !CLKB & D & !Q" \
+	{ MCDFFX4 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-vector {1 0 0 1 1} \
+	-when "CLKA & !CLKB & !D & Q" \
+	{ MCDFFX1 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI4/m Q} \
+	-vector {1 0 0 1 1} \
+	-when "CLKA & !CLKB & !D & Q" \
+	{ MCDFFX4 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-vector {1 0 1 0 0} \
+	-when "CLKA & !CLKB & D & !Q" \
+	{ MCDFFX1 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI4/m Q} \
+	-vector {1 0 1 0 0} \
+	-when "CLKA & !CLKB & D & !Q" \
+	{ MCDFFX4 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-vector {1 0 0 0 1} \
+	-when "CLKA & !CLKB & !D & Q" \
+	{ MCDFFX1 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI4/m Q} \
+	-vector {1 0 0 0 1} \
+	-when "CLKA & !CLKB & !D & Q" \
+	{ MCDFFX4 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-vector {1 0 1 1 0} \
+	-when "CLKA & !CLKB & D & !Q" \
+	{ MCDFFX1 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI4/m Q} \
+	-vector {1 0 1 1 0} \
+	-when "CLKA & !CLKB & D & !Q" \
+	{ MCDFFX4 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-vector {1 0 0 1 0} \
+	-when "CLKA & !CLKB & !D & !Q" \
+	{ MCDFFX1 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI4/m Q} \
+	-vector {1 0 0 1 0} \
+	-when "CLKA & !CLKB & !D & !Q" \
+	{ MCDFFX4 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-vector {1 0 1 0 1} \
+	-when "CLKA & !CLKB & D & Q" \
+	{ MCDFFX1 }
+
+define_leakage \
+	-pinlist {CLKA CLKB D XI4/m Q} \
+	-vector {1 0 1 0 1} \
+	-when "CLKA & !CLKB & D & Q" \
+	{ MCDFFX4 }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-ic "0 0 0 0 $VDD" \
+	-vector {0 R 0 X X} \
+	-related_pin CLKB \
 	-pin CLKB \
+	-probe {Q} \
+	{ MCDFFX1 }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLKA CLKB D XI4/m Q} \
+	-ic "0 0 0 0 $VDD" \
+	-vector {0 R 0 X X} \
+	-related_pin CLKB \
+	-pin CLKB \
+	-probe {Q} \
 	{ MCDFFX4 }
 
 define_arc \
-	-type hidden \
-	-pinlist {CLKA CLKB D XI4/m Q} \
-	-ic "0 0 $VDD $VDD $VDD" \
-	-vector {0 0 F X 1} \
+	-type setup \
+	-pinlist {CLKA CLKB D XI7/m Q} \
+	-ic "0 $VDD 0 0 0" \
+	-vector {R 1 R X X} \
+	-related_pin CLKA \
 	-pin D \
-	{ MCDFFX4 }
-
-define_leakage -when "!CLKA*CLKB*!D*!Q" { MCDFFX1 MCDFFX4 }
-
-define_leakage -when "!CLKA*CLKB*D*Q" { MCDFFX1 MCDFFX4 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-vector {1 1 0 0 0} \
-	-when "CLKA*CLKB*!D*!Q" \
+	-probe {Q XI7/m} \
 	{ MCDFFX1 }
 
-define_leakage \
-	-pinlist {CLKA CLKB D XI4/m Q} \
-	-vector {1 1 0 0 0} \
-	-when "CLKA*CLKB*!D*!Q" \
-	{ MCDFFX4 }
-
-define_leakage \
+define_arc \
+	-type hold \
 	-pinlist {CLKA CLKB D XI7/m Q} \
-	-vector {0 0 0 0 0} \
-	-when "!CLKA*!CLKB*!D*!Q" \
+	-ic "0 $VDD 0 0 0" \
+	-vector {R 1 R X X} \
+	-related_pin CLKA \
+	-pin D \
+	-probe {Q XI7/m} \
 	{ MCDFFX1 }
 
-define_leakage \
+define_arc \
+	-type setup \
 	-pinlist {CLKA CLKB D XI4/m Q} \
-	-vector {0 0 0 0 0} \
-	-when "!CLKA*!CLKB*!D*!Q" \
+	-ic "0 $VDD 0 0 0" \
+	-vector {R 1 R X X} \
+	-related_pin CLKA \
+	-pin D \
+	-probe {Q XI4/m} \
 	{ MCDFFX4 }
 
-define_leakage \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-vector {0 0 1 1 1} \
-	-when "!CLKA*!CLKB*D*Q" \
-	{ MCDFFX1 }
-
-define_leakage \
+define_arc \
+	-type hold \
 	-pinlist {CLKA CLKB D XI4/m Q} \
-	-vector {0 0 1 1 1} \
-	-when "!CLKA*!CLKB*D*Q" \
-	{ MCDFFX4 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-vector {1 1 1 1 1} \
-	-when "CLKA*CLKB*D*Q" \
-	{ MCDFFX1 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI4/m Q} \
-	-vector {1 1 1 1 1} \
-	-when "CLKA*CLKB*D*Q" \
-	{ MCDFFX4 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-vector {1 0 0 0 0} \
-	-when "CLKA*!CLKB*!D*!Q" \
-	{ MCDFFX1 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI4/m Q} \
-	-vector {1 0 0 0 0} \
-	-when "CLKA*!CLKB*!D*!Q" \
-	{ MCDFFX4 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-vector {1 0 1 1 1} \
-	-when "CLKA*!CLKB*D*Q" \
-	{ MCDFFX1 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI4/m Q} \
-	-vector {1 0 1 1 1} \
-	-when "CLKA*!CLKB*D*Q" \
-	{ MCDFFX4 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-vector {1 1 0 1 1} \
-	-when "CLKA*CLKB*!D*Q" \
-	{ MCDFFX1 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI4/m Q} \
-	-vector {1 1 0 1 1} \
-	-when "CLKA*CLKB*!D*Q" \
-	{ MCDFFX4 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-vector {1 1 1 0 0} \
-	-when "CLKA*CLKB*D*!Q" \
-	{ MCDFFX1 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI4/m Q} \
-	-vector {1 1 1 0 0} \
-	-when "CLKA*CLKB*D*!Q" \
-	{ MCDFFX4 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-vector {0 0 1 1 0} \
-	-when "!CLKA*!CLKB*D*!Q" \
-	{ MCDFFX1 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI4/m Q} \
-	-vector {0 0 1 1 0} \
-	-when "!CLKA*!CLKB*D*!Q" \
-	{ MCDFFX4 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-vector {0 0 0 0 1} \
-	-when "!CLKA*!CLKB*!D*Q" \
-	{ MCDFFX1 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI4/m Q} \
-	-vector {0 0 0 0 1} \
-	-when "!CLKA*!CLKB*!D*Q" \
-	{ MCDFFX4 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-vector {1 0 0 0 1} \
-	-when "CLKA*!CLKB*!D*Q" \
-	{ MCDFFX1 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI4/m Q} \
-	-vector {1 0 0 0 1} \
-	-when "CLKA*!CLKB*!D*Q" \
-	{ MCDFFX4 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-vector {1 0 1 1 0} \
-	-when "CLKA*!CLKB*D*!Q" \
-	{ MCDFFX1 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI4/m Q} \
-	-vector {1 0 1 1 0} \
-	-when "CLKA*!CLKB*D*!Q" \
-	{ MCDFFX4 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-vector {1 0 1 0 0} \
-	-when "CLKA*!CLKB*D*!Q" \
-	{ MCDFFX1 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI4/m Q} \
-	-vector {1 0 1 0 0} \
-	-when "CLKA*!CLKB*D*!Q" \
-	{ MCDFFX4 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-vector {1 0 0 1 1} \
-	-when "CLKA*!CLKB*!D*Q" \
-	{ MCDFFX1 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI4/m Q} \
-	-vector {1 0 0 1 1} \
-	-when "CLKA*!CLKB*!D*Q" \
-	{ MCDFFX4 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-vector {1 0 0 1 0} \
-	-when "CLKA*!CLKB*!D*!Q" \
-	{ MCDFFX1 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI4/m Q} \
-	-vector {1 0 0 1 0} \
-	-when "CLKA*!CLKB*!D*!Q" \
-	{ MCDFFX4 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-vector {1 0 1 0 1} \
-	-when "CLKA*!CLKB*D*Q" \
-	{ MCDFFX1 }
-
-define_leakage \
-	-pinlist {CLKA CLKB D XI4/m Q} \
-	-vector {1 0 1 0 1} \
-	-when "CLKA*!CLKB*D*Q" \
+	-ic "0 $VDD 0 0 0" \
+	-vector {R 1 R X X} \
+	-related_pin CLKA \
+	-pin D \
+	-probe {Q XI4/m} \
 	{ MCDFFX4 }
 
 define_arc \
@@ -5878,26 +5938,6 @@ define_arc \
 	-related_pin CLKA \
 	-pin D \
 	-probe {Q XI4/m} \
-	{ MCDFFX4 }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-ic "0 0 $VDD $VDD 0" \
-	-vector {0 R 1 X X} \
-	-related_pin CLKB \
-	-pin CLKB \
-	-probe {Q} \
-	{ MCDFFX1 }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLKA CLKB D XI4/m Q} \
-	-ic "0 0 $VDD $VDD 0" \
-	-vector {0 R 1 X X} \
-	-related_pin CLKB \
-	-pin CLKB \
-	-probe {Q} \
 	{ MCDFFX4 }
 
 define_arc \
@@ -5917,46 +5957,6 @@ define_arc \
 	-vector {F 1 0 X X} \
 	-related_pin CLKA \
 	-pin CLKA \
-	-probe {Q XI4/m} \
-	{ MCDFFX4 }
-
-define_arc \
-	-type setup \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-ic "0 $VDD 0 0 0" \
-	-vector {R 1 R X X} \
-	-related_pin CLKA \
-	-pin D \
-	-probe {Q XI7/m} \
-	{ MCDFFX1 }
-
-define_arc \
-	-type hold \
-	-pinlist {CLKA CLKB D XI7/m Q} \
-	-ic "0 $VDD 0 0 0" \
-	-vector {R 1 R X X} \
-	-related_pin CLKA \
-	-pin D \
-	-probe {Q XI7/m} \
-	{ MCDFFX1 }
-
-define_arc \
-	-type setup \
-	-pinlist {CLKA CLKB D XI4/m Q} \
-	-ic "0 $VDD 0 0 0" \
-	-vector {R 1 R X X} \
-	-related_pin CLKA \
-	-pin D \
-	-probe {Q XI4/m} \
-	{ MCDFFX4 }
-
-define_arc \
-	-type hold \
-	-pinlist {CLKA CLKB D XI4/m Q} \
-	-ic "0 $VDD 0 0 0" \
-	-vector {R 1 R X X} \
-	-related_pin CLKA \
-	-pin D \
 	-probe {Q XI4/m} \
 	{ MCDFFX4 }
 
@@ -6028,32 +6028,32 @@ define_arc \
 	-pin D \
 	{ TCASC }
 
-define_leakage -when "!CLK*!D*!Q" { TCASC }
+define_leakage -when "!CLK & !D & !Q" { TCASC }
 
-define_leakage -when "!CLK*D*Q" { TCASC }
+define_leakage -when "!CLK & D & Q" { TCASC }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {1 0 0} \
-	-when "CLK*!D*!Q" \
+	-when "CLK & !D & !Q" \
 	{ TCASC }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {1 1 1} \
-	-when "CLK*D*Q" \
+	-when "CLK & D & Q" \
 	{ TCASC }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {1 1 0} \
-	-when "CLK*D*!Q" \
+	-when "CLK & D & !Q" \
 	{ TCASC }
 
 define_leakage \
 	-pinlist {CLK D Q} \
 	-vector {1 0 1} \
-	-when "CLK*!D*Q" \
+	-when "CLK & !D & Q" \
 	{ TCASC }
 
 define_arc \
@@ -6071,26 +6071,6 @@ define_arc \
 	-pinlist {CLK D M Q} \
 	-ic "0 0 0 0" \
 	-vector {R R X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ TCASC }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D M Q} \
-	-ic "0 $VDD $VDD $VDD" \
-	-vector {R F X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {Q M} \
-	{ TCASC }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D M Q} \
-	-ic "0 $VDD $VDD $VDD" \
-	-vector {R F X X} \
 	-related_pin CLK \
 	-pin D \
 	-probe {Q M} \
@@ -6107,10 +6087,30 @@ define_arc \
 	{ TCASC }
 
 define_arc \
+	-type setup \
+	-pinlist {CLK D M Q} \
+	-ic "0 $VDD $VDD $VDD" \
+	-vector {R F X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ TCASC }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D M Q} \
+	-ic "0 $VDD $VDD $VDD" \
+	-vector {R F X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {Q M} \
+	{ TCASC }
+
+define_arc \
 	-type combinational \
 	-pinlist {CLK D T} \
-	-ic "$VDD $VDD 0" \
-	-vector {1 F R} \
+	-ic "$VDD 0 0" \
+	-vector {1 R R} \
 	-related_pin D \
 	-pin T \
 	{ XLAT }
@@ -6118,8 +6118,8 @@ define_arc \
 define_arc \
 	-type combinational \
 	-pinlist {CLK D T} \
-	-ic "$VDD 0 0" \
-	-vector {1 R R} \
+	-ic "$VDD $VDD 0" \
+	-vector {1 F R} \
 	-related_pin D \
 	-pin T \
 	{ XLAT }
@@ -6154,8 +6154,8 @@ define_arc \
 define_arc \
 	-type edge \
 	-pinlist {CLK D T} \
-	-ic "0 0 $VDD" \
-	-vector {R 0 F} \
+	-ic "0 $VDD $VDD" \
+	-vector {R 1 F} \
 	-related_pin CLK \
 	-pin T \
 	{ XLAT }
@@ -6163,8 +6163,8 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLK D T} \
-	-ic "$VDD $VDD 0" \
-	-vector {F 1 0} \
+	-ic "$VDD 0 0" \
+	-vector {F 0 0} \
 	-pin CLK \
 	{ XLAT }
 
@@ -6178,50 +6178,50 @@ define_arc \
 
 define_leakage \
 	-pinlist {CLK D T} \
-	-vector {1 1 0} \
-	-when "CLK*D*!T" \
+	-vector {1 0 0} \
+	-when "CLK & !D & !T" \
 	{ XLAT }
 
 define_leakage \
 	-pinlist {CLK D T} \
-	-vector {1 0 0} \
-	-when "CLK*!D*!T" \
+	-vector {1 1 0} \
+	-when "CLK & D & !T" \
 	{ XLAT }
 
 define_leakage \
 	-pinlist {CLK D T} \
 	-vector {0 1 0} \
-	-when "!CLK*D*!T" \
+	-when "!CLK & D & !T" \
 	{ XLAT }
 
 define_leakage \
 	-pinlist {CLK D T} \
 	-vector {0 0 0} \
-	-when "!CLK*!D*!T" \
+	-when "!CLK & !D & !T" \
 	{ XLAT }
 
 define_leakage \
 	-pinlist {CLK D T} \
 	-vector {1 0 1} \
-	-when "CLK*!D*T" \
+	-when "CLK & !D & T" \
 	{ XLAT }
 
 define_leakage \
 	-pinlist {CLK D T} \
 	-vector {1 1 1} \
-	-when "CLK*D*T" \
-	{ XLAT }
-
-define_leakage \
-	-pinlist {CLK D T} \
-	-vector {0 0 1} \
-	-when "!CLK*!D*T" \
+	-when "CLK & D & T" \
 	{ XLAT }
 
 define_leakage \
 	-pinlist {CLK D T} \
 	-vector {0 1 1} \
-	-when "!CLK*D*T" \
+	-when "!CLK & D & T" \
+	{ XLAT }
+
+define_leakage \
+	-pinlist {CLK D T} \
+	-vector {0 0 1} \
+	-when "!CLK & !D & T" \
 	{ XLAT }
 
 define_arc \
@@ -6245,63 +6245,13 @@ define_arc \
 	{ XLAT }
 
 define_arc \
-	-type setup \
+	-type min_pulse_width \
 	-pinlist {CLK D M2 T} \
-	-ic "$VDD 0 0 0" \
-	-vector {F R X X} \
+	-ic "0 $VDD 0 $VDD" \
+	-vector {R 1 X X} \
 	-related_pin CLK \
-	-pin D \
+	-pin CLK \
 	-probe {M2} \
-	{ XLAT }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D M2 T} \
-	-ic "$VDD 0 0 0" \
-	-vector {F R X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {M2} \
-	{ XLAT }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D M T} \
-	-ic "0 0 0 0" \
-	-vector {R R X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {M} \
-	{ XLAT }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D M T} \
-	-ic "0 0 0 0" \
-	-vector {R R X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {M} \
-	{ XLAT }
-
-define_arc \
-	-type setup \
-	-pinlist {CLK D M T} \
-	-ic "0 $VDD $VDD 0" \
-	-vector {R F X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {M} \
-	{ XLAT }
-
-define_arc \
-	-type hold \
-	-pinlist {CLK D M T} \
-	-ic "0 $VDD $VDD 0" \
-	-vector {R F X X} \
-	-related_pin CLK \
-	-pin D \
-	-probe {M} \
 	{ XLAT }
 
 define_arc \
@@ -6315,23 +6265,64 @@ define_arc \
 	{ XLAT }
 
 define_arc \
-	-type min_pulse_width \
-	-pinlist {CLK D M2 T} \
-	-ic "0 0 $VDD $VDD" \
-	-vector {R 0 X X} \
+	-type setup \
+	-pinlist {CLK D M T} \
+	-ic "0 0 0 0" \
+	-vector {R R X X} \
 	-related_pin CLK \
-	-pin CLK \
+	-pin D \
+	-probe {M} \
+	{ XLAT }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D M T} \
+	-ic "0 0 0 0" \
+	-vector {R R X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {M} \
+	{ XLAT }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D M2 T} \
+	-ic "$VDD 0 0 0" \
+	-vector {F R X X} \
+	-related_pin CLK \
+	-pin D \
 	-probe {M2} \
 	{ XLAT }
 
 define_arc \
-	-type edge \
-	-pinlist {CLKA CLKB D M1 M2 Q} \
-	-ic "0 0 $VDD $VDD 0 0" \
-	-vector {R 0 1 X X R} \
-	-related_pin CLKA \
-	-pin Q \
-	{ HPIPE }
+	-type hold \
+	-pinlist {CLK D M2 T} \
+	-ic "$VDD 0 0 0" \
+	-vector {F R X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {M2} \
+	{ XLAT }
+
+define_arc \
+	-type setup \
+	-pinlist {CLK D M T} \
+	-ic "0 $VDD $VDD 0" \
+	-vector {R F X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {M} \
+	{ XLAT }
+
+define_arc \
+	-type hold \
+	-pinlist {CLK D M T} \
+	-ic "0 $VDD $VDD 0" \
+	-vector {R F X X} \
+	-related_pin CLK \
+	-pin D \
+	-probe {M} \
+	{ XLAT }
 
 define_arc \
 	-type edge \
@@ -6345,9 +6336,9 @@ define_arc \
 define_arc \
 	-type edge \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
-	-ic "$VDD $VDD 0 0 0 $VDD" \
-	-vector {1 F 0 X X F} \
-	-related_pin CLKB \
+	-ic "0 0 $VDD $VDD 0 0" \
+	-vector {R 0 1 X X R} \
+	-related_pin CLKA \
 	-pin Q \
 	{ HPIPE }
 
@@ -6361,27 +6352,28 @@ define_arc \
 	{ HPIPE }
 
 define_arc \
+	-type edge \
+	-pinlist {CLKA CLKB D M1 M2 Q} \
+	-ic "$VDD $VDD 0 0 0 $VDD" \
+	-vector {1 F 0 X X F} \
+	-related_pin CLKB \
+	-pin Q \
+	{ HPIPE }
+
+define_arc \
 	-type hidden \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
-	-ic "$VDD 0 $VDD $VDD $VDD $VDD" \
-	-vector {F 0 1 X X 1} \
+	-ic "$VDD 0 0 0 0 0" \
+	-vector {F 0 0 X X 0} \
 	-pin CLKA \
 	{ HPIPE }
 
 define_arc \
 	-type hidden \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
-	-ic "$VDD 0 $VDD $VDD $VDD $VDD" \
-	-vector {1 R 1 X X 1} \
+	-ic "$VDD 0 0 0 0 0" \
+	-vector {1 R 0 X X 0} \
 	-pin CLKB \
-	{ HPIPE }
-
-define_arc \
-	-type hidden \
-	-pinlist {CLKA CLKB D M1 M2 Q} \
-	-ic "$VDD 0 $VDD $VDD $VDD $VDD" \
-	-vector {1 0 F X X 1} \
-	-pin D \
 	{ HPIPE }
 
 define_arc \
@@ -6395,8 +6387,16 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
-	-ic "0 0 $VDD $VDD $VDD $VDD" \
-	-vector {R 0 1 X X 1} \
+	-ic "$VDD 0 $VDD $VDD $VDD $VDD" \
+	-vector {1 0 F X X 1} \
+	-pin D \
+	{ HPIPE }
+
+define_arc \
+	-type hidden \
+	-pinlist {CLKA CLKB D M1 M2 Q} \
+	-ic "0 0 0 0 0 0" \
+	-vector {R 0 0 X X 0} \
 	-pin CLKA \
 	{ HPIPE }
 
@@ -6410,166 +6410,146 @@ define_arc \
 
 define_leakage \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
-	-vector {1 0 1 1 1 1} \
-	-when "CLKA*!CLKB*D*Q" \
+	-vector {1 0 0 0 0 0} \
+	-when "CLKA & !CLKB & !D & !Q" \
 	{ HPIPE }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
-	-vector {1 0 0 0 0 0} \
-	-when "CLKA*!CLKB*!D*!Q" \
+	-vector {1 0 1 1 1 1} \
+	-when "CLKA & !CLKB & D & Q" \
 	{ HPIPE }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
 	-vector {1 0 1 0 0 0} \
-	-when "CLKA*!CLKB*D*!Q" \
-	{ HPIPE }
-
-define_leakage \
-	-pinlist {CLKA CLKB D M1 M2 Q} \
-	-vector {0 0 1 1 1 1} \
-	-when "!CLKA*!CLKB*D*Q" \
-	{ HPIPE }
-
-define_leakage \
-	-pinlist {CLKA CLKB D M1 M2 Q} \
-	-vector {1 0 0 1 1 1} \
-	-when "CLKA*!CLKB*!D*Q" \
+	-when "CLKA & !CLKB & D & !Q" \
 	{ HPIPE }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
 	-vector {0 0 0 0 0 0} \
-	-when "!CLKA*!CLKB*!D*!Q" \
+	-when "!CLKA & !CLKB & !D & !Q" \
+	{ HPIPE }
+
+define_leakage \
+	-pinlist {CLKA CLKB D M1 M2 Q} \
+	-vector {0 0 1 1 1 1} \
+	-when "!CLKA & !CLKB & D & Q" \
 	{ HPIPE }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
 	-vector {1 1 0 0 0 0} \
-	-when "CLKA*CLKB*!D*!Q" \
+	-when "CLKA & CLKB & !D & !Q" \
 	{ HPIPE }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
 	-vector {1 1 1 1 1 1} \
-	-when "CLKA*CLKB*D*Q" \
+	-when "CLKA & CLKB & D & Q" \
 	{ HPIPE }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
-	-vector {0 1 1 1 1 1} \
-	-when "!CLKA*CLKB*D*Q" \
-	{ HPIPE }
-
-define_leakage \
-	-pinlist {CLKA CLKB D M1 M2 Q} \
-	-vector {0 0 1 1 0 0} \
-	-when "!CLKA*!CLKB*D*!Q" \
-	{ HPIPE }
-
-define_leakage \
-	-pinlist {CLKA CLKB D M1 M2 Q} \
-	-vector {1 1 1 0 0 0} \
-	-when "CLKA*CLKB*D*!Q" \
-	{ HPIPE }
-
-define_leakage \
-	-pinlist {CLKA CLKB D M1 M2 Q} \
-	-vector {0 1 0 0 0 0} \
-	-when "!CLKA*CLKB*!D*!Q" \
+	-vector {1 0 0 1 1 1} \
+	-when "CLKA & !CLKB & !D & Q" \
 	{ HPIPE }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
 	-vector {0 0 0 0 1 1} \
-	-when "!CLKA*!CLKB*!D*Q" \
+	-when "!CLKA & !CLKB & !D & Q" \
+	{ HPIPE }
+
+define_leakage \
+	-pinlist {CLKA CLKB D M1 M2 Q} \
+	-vector {1 1 1 0 0 0} \
+	-when "CLKA & CLKB & D & !Q" \
 	{ HPIPE }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
 	-vector {1 1 0 1 1 1} \
-	-when "CLKA*CLKB*!D*Q" \
+	-when "CLKA & CLKB & !D & Q" \
+	{ HPIPE }
+
+define_leakage \
+	-pinlist {CLKA CLKB D M1 M2 Q} \
+	-vector {0 0 1 1 0 0} \
+	-when "!CLKA & !CLKB & D & !Q" \
+	{ HPIPE }
+
+define_leakage \
+	-pinlist {CLKA CLKB D M1 M2 Q} \
+	-vector {0 1 1 1 1 1} \
+	-when "!CLKA & CLKB & D & Q" \
+	{ HPIPE }
+
+define_leakage \
+	-pinlist {CLKA CLKB D M1 M2 Q} \
+	-vector {0 1 0 0 0 0} \
+	-when "!CLKA & CLKB & !D & !Q" \
 	{ HPIPE }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
 	-vector {0 1 0 0 1 1} \
-	-when "!CLKA*CLKB*!D*Q" \
+	-when "!CLKA & CLKB & !D & Q" \
 	{ HPIPE }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
 	-vector {0 1 1 1 0 0} \
-	-when "!CLKA*CLKB*D*!Q" \
-	{ HPIPE }
-
-define_leakage \
-	-pinlist {CLKA CLKB D M1 M2 Q} \
-	-vector {1 1 0 0 0 1} \
-	-when "CLKA*CLKB*!D*Q" \
+	-when "!CLKA & CLKB & D & !Q" \
 	{ HPIPE }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
 	-vector {1 1 1 1 1 0} \
-	-when "CLKA*CLKB*D*!Q" \
+	-when "CLKA & CLKB & D & !Q" \
+	{ HPIPE }
+
+define_leakage \
+	-pinlist {CLKA CLKB D M1 M2 Q} \
+	-vector {1 1 0 0 0 1} \
+	-when "CLKA & CLKB & !D & Q" \
 	{ HPIPE }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
 	-vector {0 1 0 0 0 1} \
-	-when "!CLKA*CLKB*!D*Q" \
-	{ HPIPE }
-
-define_leakage \
-	-pinlist {CLKA CLKB D M1 M2 Q} \
-	-vector {0 1 1 1 1 0} \
-	-when "!CLKA*CLKB*D*!Q" \
-	{ HPIPE }
-
-define_leakage \
-	-pinlist {CLKA CLKB D M1 M2 Q} \
-	-vector {1 1 0 1 1 0} \
-	-when "CLKA*CLKB*!D*!Q" \
+	-when "!CLKA & CLKB & !D & Q" \
 	{ HPIPE }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
 	-vector {1 1 1 0 0 1} \
-	-when "CLKA*CLKB*D*Q" \
+	-when "CLKA & CLKB & D & Q" \
 	{ HPIPE }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
-	-vector {0 1 1 1 0 1} \
-	-when "!CLKA*CLKB*D*Q" \
+	-vector {0 1 1 1 1 0} \
+	-when "!CLKA & CLKB & D & !Q" \
+	{ HPIPE }
+
+define_leakage \
+	-pinlist {CLKA CLKB D M1 M2 Q} \
+	-vector {1 1 0 1 1 0} \
+	-when "CLKA & CLKB & !D & !Q" \
 	{ HPIPE }
 
 define_leakage \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
 	-vector {0 1 0 0 1 0} \
-	-when "!CLKA*CLKB*!D*!Q" \
+	-when "!CLKA & CLKB & !D & !Q" \
 	{ HPIPE }
 
-define_arc \
-	-type min_pulse_width \
+define_leakage \
 	-pinlist {CLKA CLKB D M1 M2 Q} \
-	-ic "0 0 $VDD $VDD 0 0" \
-	-vector {R 0 1 X X X} \
-	-related_pin CLKA \
-	-pin CLKA \
-	-probe {Q M2} \
-	{ HPIPE }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLKA CLKB D M1 M2 Q} \
-	-ic "$VDD $VDD 0 0 0 $VDD" \
-	-vector {1 F 0 X X X} \
-	-related_pin CLKB \
-	-pin CLKB \
-	-probe {Q} \
+	-vector {0 1 1 1 0 1} \
+	-when "!CLKA & CLKB & D & Q" \
 	{ HPIPE }
 
 define_arc \
@@ -6600,6 +6580,26 @@ define_arc \
 	-related_pin CLKA \
 	-pin CLKA \
 	-probe {Q M1 M2} \
+	{ HPIPE }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLKA CLKB D M1 M2 Q} \
+	-ic "$VDD $VDD $VDD $VDD $VDD 0" \
+	-vector {1 F 1 X X X} \
+	-related_pin CLKB \
+	-pin CLKB \
+	-probe {Q} \
+	{ HPIPE }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLKA CLKB D M1 M2 Q} \
+	-ic "0 0 0 0 $VDD $VDD" \
+	-vector {R 0 0 X X X} \
+	-related_pin CLKA \
+	-pin CLKA \
+	-probe {Q M2} \
 	{ HPIPE }
 
 define_arc \
@@ -6641,10 +6641,10 @@ define_arc \
 	{ DCMUX }
 
 define_arc \
-	-type edge \
+	-type combinational \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-ic "0 0 0 $VDD 0 $VDD $VDD" \
-	-vector {R 0 0 1 X X F} \
+	-ic "$VDD $VDD $VDD 0 $VDD 0 $VDD" \
+	-vector {F 1 1 0 X X F} \
 	-related_pin CLKA \
 	-pin Q \
 	{ DCMUX }
@@ -6652,17 +6652,8 @@ define_arc \
 define_arc \
 	-type edge \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-ic "0 0 $VDD 0 $VDD 0 $VDD" \
-	-vector {0 R 1 0 X X F} \
-	-related_pin CLKB \
-	-pin Q \
-	{ DCMUX }
-
-define_arc \
-	-type combinational \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-ic "$VDD $VDD $VDD 0 $VDD 0 $VDD" \
-	-vector {F 1 1 0 X X F} \
+	-ic "0 0 0 $VDD 0 $VDD $VDD" \
+	-vector {R 0 0 1 X X F} \
 	-related_pin CLKA \
 	-pin Q \
 	{ DCMUX }
@@ -6677,59 +6668,20 @@ define_arc \
 	{ DCMUX }
 
 define_arc \
+	-type edge \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-ic "0 0 $VDD 0 $VDD 0 $VDD" \
+	-vector {0 R 1 0 X X F} \
+	-related_pin CLKB \
+	-pin Q \
+	{ DCMUX }
+
+define_arc \
 	-type hidden \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-ic "$VDD 0 $VDD 0 $VDD 0 $VDD" \
-	-vector {F 0 1 0 X X 1} \
+	-ic "$VDD 0 0 $VDD 0 $VDD 0" \
+	-vector {F 0 0 1 X X 0} \
 	-pin CLKA \
-	{ DCMUX }
-
-define_arc \
-	-type hidden \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-ic "$VDD 0 $VDD 0 $VDD 0 $VDD" \
-	-vector {1 R 1 0 X X 1} \
-	-pin CLKB \
-	{ DCMUX }
-
-define_arc \
-	-type hidden \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-ic "$VDD 0 $VDD 0 $VDD 0 $VDD" \
-	-vector {1 0 F 0 X X 1} \
-	-pin DA \
-	{ DCMUX }
-
-define_arc \
-	-type hidden \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-ic "$VDD 0 $VDD 0 $VDD 0 $VDD" \
-	-vector {1 0 1 R X X 1} \
-	-pin DB \
-	{ DCMUX }
-
-define_arc \
-	-type hidden \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-ic "0 $VDD $VDD $VDD $VDD $VDD $VDD" \
-	-vector {R 1 1 1 X X 1} \
-	-pin CLKA \
-	{ DCMUX }
-
-define_arc \
-	-type hidden \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-ic "0 $VDD $VDD $VDD $VDD $VDD $VDD" \
-	-vector {0 F 1 1 X X 1} \
-	-pin CLKB \
-	{ DCMUX }
-
-define_arc \
-	-type hidden \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-ic "0 $VDD $VDD $VDD $VDD $VDD $VDD" \
-	-vector {0 1 1 F X X 1} \
-	-pin DB \
 	{ DCMUX }
 
 define_arc \
@@ -6740,264 +6692,322 @@ define_arc \
 	-pin DA \
 	{ DCMUX }
 
-define_leakage \
+define_arc \
+	-type hidden \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {1 0 1 0 1 0 1} \
-	-when "CLKA*!CLKB*DA*!DB*Q" \
+	-ic "$VDD 0 0 $VDD 0 $VDD 0" \
+	-vector {1 0 0 F X X 0} \
+	-pin DB \
 	{ DCMUX }
 
-define_leakage \
+define_arc \
+	-type hidden \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {0 1 1 1 1 1 1} \
-	-when "!CLKA*CLKB*DA*DB*Q" \
+	-ic "0 $VDD 0 0 0 0 0" \
+	-vector {R 1 0 0 X X 0} \
+	-pin CLKA \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-ic "0 $VDD 0 0 0 0 0" \
+	-vector {0 F 0 0 X X 0} \
+	-pin CLKB \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-ic "0 $VDD 0 0 0 0 0" \
+	-vector {0 1 0 R X X 0} \
+	-pin DB \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-ic "$VDD 0 $VDD $VDD $VDD $VDD $VDD" \
+	-vector {1 R 1 1 X X 1} \
+	-pin CLKB \
+	{ DCMUX }
+
+define_arc \
+	-type hidden \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-ic "$VDD 0 $VDD $VDD $VDD $VDD $VDD" \
+	-vector {1 0 F 1 X X 1} \
+	-pin DA \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
 	-vector {1 0 0 1 0 1 0} \
-	-when "CLKA*!CLKB*!DA*DB*!Q" \
-	{ DCMUX }
-
-define_leakage \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {1 0 1 1 1 1 1} \
-	-when "CLKA*!CLKB*DA*DB*Q" \
+	-when "CLKA & !CLKB & !DA & DB & !Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
 	-vector {0 1 0 0 0 0 0} \
-	-when "!CLKA*CLKB*!DA*!DB*!Q" \
+	-when "!CLKA & CLKB & !DA & !DB & !Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {0 1 1 0 1 0 0} \
-	-when "!CLKA*CLKB*DA*!DB*!Q" \
+	-vector {1 0 1 1 1 1 1} \
+	-when "CLKA & !CLKB & DA & DB & Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {0 1 0 1 0 1 1} \
-	-when "!CLKA*CLKB*!DA*DB*Q" \
+	-vector {1 0 1 0 1 0 1} \
+	-when "CLKA & !CLKB & DA & !DB & Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
 	-vector {1 0 0 0 0 0 0} \
-	-when "CLKA*!CLKB*!DA*!DB*!Q" \
+	-when "CLKA & !CLKB & !DA & !DB & !Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {0 1 1 1 1 0 0} \
-	-when "!CLKA*CLKB*DA*DB*!Q" \
+	-vector {0 1 1 0 1 0 0} \
+	-when "!CLKA & CLKB & DA & !DB & !Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {0 0 1 1 1 1 1} \
-	-when "!CLKA*!CLKB*DA*DB*Q" \
+	-vector {0 1 1 1 1 1 1} \
+	-when "!CLKA & CLKB & DA & DB & Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {1 0 1 1 0 1 0} \
-	-when "CLKA*!CLKB*DA*DB*!Q" \
-	{ DCMUX }
-
-define_leakage \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {1 0 1 0 0 0 0} \
-	-when "CLKA*!CLKB*DA*!DB*!Q" \
-	{ DCMUX }
-
-define_leakage \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {0 0 1 0 1 0 0} \
-	-when "!CLKA*!CLKB*DA*!DB*!Q" \
-	{ DCMUX }
-
-define_leakage \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {0 1 0 1 0 0 0} \
-	-when "!CLKA*CLKB*!DA*DB*!Q" \
-	{ DCMUX }
-
-define_leakage \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {0 0 0 1 0 1 1} \
-	-when "!CLKA*!CLKB*!DA*DB*Q" \
-	{ DCMUX }
-
-define_leakage \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {0 1 0 0 0 1 1} \
-	-when "!CLKA*CLKB*!DA*!DB*Q" \
-	{ DCMUX }
-
-define_leakage \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {0 0 1 0 1 0 1} \
-	-when "!CLKA*!CLKB*DA*!DB*Q" \
-	{ DCMUX }
-
-define_leakage \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {0 1 1 0 1 1 1} \
-	-when "!CLKA*CLKB*DA*!DB*Q" \
+	-vector {0 1 0 1 0 1 1} \
+	-when "!CLKA & CLKB & !DA & DB & Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
 	-vector {1 1 1 0 1 0 1} \
-	-when "CLKA*CLKB*DA*!DB*Q" \
+	-when "CLKA & CLKB & DA & !DB & Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {1 1 0 0 0 0 0} \
-	-when "CLKA*CLKB*!DA*!DB*!Q" \
+	-vector {0 1 0 0 0 1 1} \
+	-when "!CLKA & CLKB & !DA & !DB & Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {1 0 0 1 1 1 1} \
-	-when "CLKA*!CLKB*!DA*DB*Q" \
+	-vector {0 0 0 1 0 1 1} \
+	-when "!CLKA & !CLKB & !DA & DB & Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
 	-vector {1 0 0 0 1 0 1} \
-	-when "CLKA*!CLKB*!DA*!DB*Q" \
+	-when "CLKA & !CLKB & !DA & !DB & Q" \
+	{ DCMUX }
+
+define_leakage \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-vector {1 0 0 1 1 1 1} \
+	-when "CLKA & !CLKB & !DA & DB & Q" \
+	{ DCMUX }
+
+define_leakage \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-vector {1 0 1 1 0 1 0} \
+	-when "CLKA & !CLKB & DA & DB & !Q" \
+	{ DCMUX }
+
+define_leakage \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-vector {0 1 1 1 1 0 0} \
+	-when "!CLKA & CLKB & DA & DB & !Q" \
+	{ DCMUX }
+
+define_leakage \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-vector {0 1 0 1 0 0 0} \
+	-when "!CLKA & CLKB & !DA & DB & !Q" \
+	{ DCMUX }
+
+define_leakage \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-vector {1 0 1 0 0 0 0} \
+	-when "CLKA & !CLKB & DA & !DB & !Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
 	-vector {1 1 1 1 1 1 1} \
-	-when "CLKA*CLKB*DA*DB*Q" \
+	-when "CLKA & CLKB & DA & DB & Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {0 0 0 1 0 1 0} \
-	-when "!CLKA*!CLKB*!DA*DB*!Q" \
+	-vector {0 0 1 0 1 0 0} \
+	-when "!CLKA & !CLKB & DA & !DB & !Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {0 0 0 0 0 0 0} \
-	-when "!CLKA*!CLKB*!DA*!DB*!Q" \
+	-vector {0 0 1 1 1 1 1} \
+	-when "!CLKA & !CLKB & DA & DB & Q" \
+	{ DCMUX }
+
+define_leakage \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-vector {1 1 0 0 0 0 0} \
+	-when "CLKA & CLKB & !DA & !DB & !Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
 	-vector {1 1 0 1 0 1 1} \
-	-when "CLKA*CLKB*!DA*DB*Q" \
+	-when "CLKA & CLKB & !DA & DB & Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {1 1 0 0 0 1 1} \
-	-when "CLKA*CLKB*!DA*!DB*Q" \
+	-vector {0 1 1 0 1 1 1} \
+	-when "!CLKA & CLKB & DA & !DB & Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {1 1 1 1 0 1 1} \
-	-when "CLKA*CLKB*DA*DB*Q" \
+	-vector {0 0 0 1 0 1 0} \
+	-when "!CLKA & !CLKB & !DA & DB & !Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {0 0 1 1 1 1 0} \
-	-when "!CLKA*!CLKB*DA*DB*!Q" \
+	-vector {0 0 1 0 1 0 1} \
+	-when "!CLKA & !CLKB & DA & !DB & Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {1 1 0 1 1 1 1} \
-	-when "CLKA*CLKB*!DA*DB*Q" \
-	{ DCMUX }
-
-define_leakage \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {1 1 1 0 0 0 0} \
-	-when "CLKA*CLKB*DA*!DB*!Q" \
-	{ DCMUX }
-
-define_leakage \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {0 0 0 0 0 0 1} \
-	-when "!CLKA*!CLKB*!DA*!DB*Q" \
-	{ DCMUX }
-
-define_leakage \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {1 1 0 1 0 0 0} \
-	-when "CLKA*CLKB*!DA*DB*!Q" \
+	-vector {0 0 0 0 0 0 0} \
+	-when "!CLKA & !CLKB & !DA & !DB & !Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
 	-vector {1 1 0 0 1 0 1} \
-	-when "CLKA*CLKB*!DA*!DB*Q" \
+	-when "CLKA & CLKB & !DA & !DB & Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {1 1 1 0 1 1 1} \
-	-when "CLKA*CLKB*DA*!DB*Q" \
+	-vector {1 1 0 1 0 0 0} \
+	-when "CLKA & CLKB & !DA & DB & !Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
 	-vector {1 1 1 1 1 0 1} \
-	-when "CLKA*CLKB*DA*DB*Q" \
+	-when "CLKA & CLKB & DA & DB & Q" \
+	{ DCMUX }
+
+define_leakage \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-vector {0 0 0 0 0 0 1} \
+	-when "!CLKA & !CLKB & !DA & !DB & Q" \
+	{ DCMUX }
+
+define_leakage \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-vector {1 1 1 0 1 1 1} \
+	-when "CLKA & CLKB & DA & !DB & Q" \
+	{ DCMUX }
+
+define_leakage \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-vector {0 0 1 1 1 1 0} \
+	-when "!CLKA & !CLKB & DA & DB & !Q" \
+	{ DCMUX }
+
+define_leakage \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-vector {1 1 0 0 0 1 1} \
+	-when "CLKA & CLKB & !DA & !DB & Q" \
+	{ DCMUX }
+
+define_leakage \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-vector {1 1 1 0 0 0 0} \
+	-when "CLKA & CLKB & DA & !DB & !Q" \
+	{ DCMUX }
+
+define_leakage \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-vector {1 1 1 1 0 1 1} \
+	-when "CLKA & CLKB & DA & DB & Q" \
+	{ DCMUX }
+
+define_leakage \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-vector {1 1 0 1 1 1 1} \
+	-when "CLKA & CLKB & !DA & DB & Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
 	-vector {1 1 0 0 1 1 1} \
-	-when "CLKA*CLKB*!DA*!DB*Q" \
-	{ DCMUX }
-
-define_leakage \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-vector {1 1 1 0 0 1 1} \
-	-when "CLKA*CLKB*DA*!DB*Q" \
+	-when "CLKA & CLKB & !DA & !DB & Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
 	-vector {1 1 1 1 0 0 0} \
-	-when "CLKA*CLKB*DA*DB*!Q" \
+	-when "CLKA & CLKB & DA & DB & !Q" \
 	{ DCMUX }
 
 define_leakage \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
 	-vector {1 1 0 1 1 0 1} \
-	-when "CLKA*CLKB*!DA*DB*Q" \
+	-when "CLKA & CLKB & !DA & DB & Q" \
+	{ DCMUX }
+
+define_leakage \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-vector {1 1 1 0 0 1 1} \
+	-when "CLKA & CLKB & DA & !DB & Q" \
+	{ DCMUX }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-ic "0 0 0 $VDD 0 $VDD $VDD" \
+	-vector {R 0 0 1 X X X} \
+	-related_pin CLKA \
+	-pin CLKA \
+	-probe {Q} \
 	{ DCMUX }
 
 define_arc \
 	-type setup \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-ic "0 $VDD $VDD 0 $VDD 0 0" \
-	-vector {R 1 F 0 X X X} \
-	-related_pin CLKA \
-	-pin DA \
-	-probe {Q MA} \
+	-ic "$VDD 0 0 0 0 0 0" \
+	-vector {1 R 0 R X X X} \
+	-related_pin CLKB \
+	-pin DB \
+	-probe {Q MB} \
 	{ DCMUX }
 
 define_arc \
 	-type hold \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-ic "0 $VDD $VDD 0 $VDD 0 0" \
-	-vector {R 1 F 0 X X X} \
-	-related_pin CLKA \
-	-pin DA \
-	-probe {Q MA} \
+	-ic "$VDD 0 0 0 0 0 0" \
+	-vector {1 R 0 R X X X} \
+	-related_pin CLKB \
+	-pin DB \
+	-probe {Q MB} \
 	{ DCMUX }
 
 define_arc \
@@ -7023,21 +7033,51 @@ define_arc \
 define_arc \
 	-type min_pulse_width \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-ic "0 0 $VDD 0 $VDD 0 $VDD" \
-	-vector {0 R 1 0 X X X} \
+	-ic "0 $VDD 0 0 0 $VDD $VDD" \
+	-vector {0 F 0 0 X X X} \
 	-related_pin CLKB \
 	-pin CLKB \
-	-probe {Q} \
+	-probe {Q MB} \
 	{ DCMUX }
 
 define_arc \
-	-type min_pulse_width \
+	-type setup \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-ic "0 0 $VDD 0 $VDD 0 0" \
-	-vector {R 0 1 0 X X X} \
+	-ic "0 $VDD $VDD 0 $VDD 0 0" \
+	-vector {R 1 F 0 X X X} \
 	-related_pin CLKA \
-	-pin CLKA \
-	-probe {Q} \
+	-pin DA \
+	-probe {Q MA} \
+	{ DCMUX }
+
+define_arc \
+	-type hold \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-ic "0 $VDD $VDD 0 $VDD 0 0" \
+	-vector {R 1 F 0 X X X} \
+	-related_pin CLKA \
+	-pin DA \
+	-probe {Q MA} \
+	{ DCMUX }
+
+define_arc \
+	-type setup \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-ic "0 $VDD 0 0 0 0 0" \
+	-vector {R 1 R 0 X X X} \
+	-related_pin CLKA \
+	-pin DA \
+	-probe {Q MA} \
+	{ DCMUX }
+
+define_arc \
+	-type hold \
+	-pinlist {CLKA CLKB DA DB MA MB Q} \
+	-ic "0 $VDD 0 0 0 0 0" \
+	-vector {R 1 R 0 X X X} \
+	-related_pin CLKA \
+	-pin DA \
+	-probe {Q MA} \
 	{ DCMUX }
 
 define_arc \
@@ -7063,61 +7103,21 @@ define_arc \
 define_arc \
 	-type min_pulse_width \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-ic "$VDD 0 $VDD $VDD 0 $VDD 0" \
-	-vector {F 0 1 1 X X X} \
-	-related_pin CLKA \
-	-pin CLKA \
-	-probe {Q MA} \
-	{ DCMUX }
-
-define_arc \
-	-type setup \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-ic "0 $VDD 0 0 0 0 0" \
-	-vector {R 1 R 0 X X X} \
-	-related_pin CLKA \
-	-pin DA \
-	-probe {Q MA} \
-	{ DCMUX }
-
-define_arc \
-	-type hold \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-ic "0 $VDD 0 0 0 0 0" \
-	-vector {R 1 R 0 X X X} \
-	-related_pin CLKA \
-	-pin DA \
-	-probe {Q MA} \
+	-ic "0 0 0 $VDD 0 $VDD 0" \
+	-vector {0 R 0 1 X X X} \
+	-related_pin CLKB \
+	-pin CLKB \
+	-probe {Q} \
 	{ DCMUX }
 
 define_arc \
 	-type min_pulse_width \
 	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-ic "0 $VDD $VDD $VDD $VDD 0 0" \
-	-vector {0 F 1 1 X X X} \
-	-related_pin CLKB \
-	-pin CLKB \
-	-probe {Q MB} \
-	{ DCMUX }
-
-define_arc \
-	-type setup \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-ic "$VDD 0 0 0 0 0 0" \
-	-vector {1 R 0 R X X X} \
-	-related_pin CLKB \
-	-pin DB \
-	-probe {Q MB} \
-	{ DCMUX }
-
-define_arc \
-	-type hold \
-	-pinlist {CLKA CLKB DA DB MA MB Q} \
-	-ic "$VDD 0 0 0 0 0 0" \
-	-vector {1 R 0 R X X X} \
-	-related_pin CLKB \
-	-pin DB \
-	-probe {Q MB} \
+	-ic "$VDD 0 0 0 $VDD 0 $VDD" \
+	-vector {F 0 0 0 X X X} \
+	-related_pin CLKA \
+	-pin CLKA \
+	-probe {Q MA} \
 	{ DCMUX }
 
 define_arc \
@@ -7170,39 +7170,39 @@ define_arc \
 	-pin CLK \
 	{ ICG }
 
-define_leakage -when "!CLK*!EN*!GCLK" { ICG }
+define_leakage -when "!CLK & !EN & !GCLK" { ICG }
 
-define_leakage -when "!CLK*EN*!GCLK" { ICG }
-
-define_leakage \
-	-pinlist {CLK EN GCLK} \
-	-vector {1 0 0} \
-	-when "CLK*!EN*!GCLK" \
-	{ ICG }
+define_leakage -when "!CLK & EN & !GCLK" { ICG }
 
 define_leakage \
 	-pinlist {CLK EN GCLK} \
 	-vector {1 1 1} \
-	-when "CLK*EN*GCLK" \
+	-when "CLK & EN & GCLK" \
 	{ ICG }
 
 define_leakage \
 	-pinlist {CLK EN GCLK} \
-	-vector {1 1 0} \
-	-when "CLK*EN*!GCLK" \
+	-vector {1 0 0} \
+	-when "CLK & !EN & !GCLK" \
 	{ ICG }
 
 define_leakage \
 	-pinlist {CLK EN GCLK} \
 	-vector {1 0 1} \
-	-when "CLK*!EN*GCLK" \
+	-when "CLK & !EN & GCLK" \
+	{ ICG }
+
+define_leakage \
+	-pinlist {CLK EN GCLK} \
+	-vector {1 1 0} \
+	-when "CLK & EN & !GCLK" \
 	{ ICG }
 
 define_arc \
 	-type setup \
 	-pinlist {CLK EN EL GCLK} \
-	-ic "0 $VDD $VDD 0" \
-	-vector {R F X X} \
+	-ic "0 0 0 0" \
+	-vector {R R X X} \
 	-related_pin CLK \
 	-pin EN \
 	-probe {EL} \
@@ -7211,8 +7211,8 @@ define_arc \
 define_arc \
 	-type hold \
 	-pinlist {CLK EN EL GCLK} \
-	-ic "0 $VDD $VDD 0" \
-	-vector {R F X X} \
+	-ic "0 0 0 0" \
+	-vector {R R X X} \
 	-related_pin CLK \
 	-pin EN \
 	-probe {EL} \
@@ -7221,8 +7221,8 @@ define_arc \
 define_arc \
 	-type min_pulse_width \
 	-pinlist {CLK EN EL GCLK} \
-	-ic "$VDD $VDD 0 0" \
-	-vector {F 1 X X} \
+	-ic "$VDD 0 $VDD $VDD" \
+	-vector {F 0 X X} \
 	-related_pin CLK \
 	-pin CLK \
 	-probe {EL} \
@@ -7231,8 +7231,8 @@ define_arc \
 define_arc \
 	-type setup \
 	-pinlist {CLK EN EL GCLK} \
-	-ic "0 0 0 0" \
-	-vector {R R X X} \
+	-ic "0 $VDD $VDD 0" \
+	-vector {R F X X} \
 	-related_pin CLK \
 	-pin EN \
 	-probe {EL} \
@@ -7241,8 +7241,8 @@ define_arc \
 define_arc \
 	-type hold \
 	-pinlist {CLK EN EL GCLK} \
-	-ic "0 0 0 0" \
-	-vector {R R X X} \
+	-ic "0 $VDD $VDD 0" \
+	-vector {R F X X} \
 	-related_pin CLK \
 	-pin EN \
 	-probe {EL} \
@@ -7251,36 +7251,18 @@ define_arc \
 define_arc \
 	-type combinational \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "$VDD 0 $VDD 0 $VDD 0 0 0 $VDD $VDD $VDD 0" \
-	-vector {1 R 1 0 1 X X X X X X R} \
+	-ic "0 $VDD 0 $VDD 0 $VDD $VDD $VDD 0 0 0 0" \
+	-vector {R 1 0 1 0 X X X X X X R} \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "0 0 $VDD 0 $VDD 0 0 0 $VDD $VDD $VDD 0" \
+	-vector {0 R 1 0 1 X X X X X X R} \
 	-related_pin CLKB \
-	-pin GCLK \
-	{ ICM }
-
-define_arc \
-	-type combinational \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "0 0 0 $VDD 0 $VDD $VDD $VDD 0 0 0 0" \
-	-vector {R 0 0 1 0 X X X X X X R} \
-	-related_pin CLKA \
-	-pin GCLK \
-	{ ICM }
-
-define_arc \
-	-type combinational \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "$VDD $VDD 0 $VDD 0 $VDD $VDD $VDD 0 0 0 $VDD" \
-	-vector {F 1 0 1 0 X X X X X X F} \
-	-related_pin CLKA \
-	-pin GCLK \
-	{ ICM }
-
-define_arc \
-	-type combinational \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "$VDD $VDD 0 $VDD 0 $VDD $VDD $VDD 0 0 0 $VDD" \
-	-vector {1 1 R 1 0 X X X X X X F} \
-	-related_pin RA \
 	-pin GCLK \
 	{ ICM }
 
@@ -7299,6 +7281,24 @@ define_arc \
 	-ic "0 $VDD $VDD 0 $VDD 0 0 0 $VDD $VDD $VDD $VDD" \
 	-vector {0 1 1 R 1 X X X X X X F} \
 	-related_pin RB \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "$VDD 0 0 $VDD 0 $VDD $VDD $VDD 0 0 0 $VDD" \
+	-vector {F 0 0 1 0 X X X X X X F} \
+	-related_pin CLKA \
+	-pin GCLK \
+	{ ICM }
+
+define_arc \
+	-type combinational \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "$VDD 0 0 $VDD 0 $VDD $VDD $VDD 0 0 0 $VDD" \
+	-vector {1 0 R 1 0 X X X X X X F} \
+	-related_pin RA \
 	-pin GCLK \
 	{ ICM }
 
@@ -7369,741 +7369,781 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "$VDD $VDD 0 $VDD 0 0 0 0 0 0 0 0" \
-	-vector {1 1 R 1 0 X X X X X X 0} \
+	-ic "0 $VDD 0 $VDD $VDD 0 0 0 0 0 0 0" \
+	-vector {0 1 R 1 1 X X X X X X 0} \
 	-pin RA \
 	{ ICM }
 
 define_arc \
 	-type hidden \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "0 $VDD $VDD 0 0 0 0 0 0 0 0 0" \
-	-vector {0 1 1 R 0 X X X X X X 0} \
+	-ic "0 $VDD $VDD 0 $VDD 0 0 0 0 0 0 0" \
+	-vector {0 1 1 R 1 X X X X X X 0} \
 	-pin RB \
 	{ ICM }
 
-define_leakage -when "!CLKA*!CLKB*!GCLK*RA*RB*!S" { ICM }
+define_leakage -when "!CLKA & !CLKB & !GCLK & RA & RB & !S" { ICM }
 
-define_leakage -when "!CLKA*!CLKB*!GCLK*RA*RB*S" { ICM }
+define_leakage -when "!CLKA & !CLKB & !GCLK & RA & RB & S" { ICM }
 
-define_leakage -when "!CLKA*CLKB*!GCLK*RA*RB*!S" { ICM }
+define_leakage -when "!CLKA & CLKB & !GCLK & RA & RB & !S" { ICM }
 
-define_leakage -when "!CLKA*CLKB*!GCLK*RA*RB*S" { ICM }
+define_leakage -when "!CLKA & CLKB & !GCLK & RA & RB & S" { ICM }
 
-define_leakage -when "CLKA*!CLKB*!GCLK*RA*RB*!S" { ICM }
+define_leakage -when "CLKA & !CLKB & !GCLK & RA & RB & !S" { ICM }
 
-define_leakage -when "CLKA*!CLKB*!GCLK*RA*RB*S" { ICM }
+define_leakage -when "CLKA & !CLKB & !GCLK & RA & RB & S" { ICM }
 
-define_leakage -when "CLKA*CLKB*!GCLK*RA*RB*!S" { ICM }
+define_leakage -when "CLKA & CLKB & !GCLK & RA & RB & !S" { ICM }
 
-define_leakage -when "CLKA*CLKB*!GCLK*RA*RB*S" { ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 1 0 0 0 0 0 0 0 0} \
-	-when "CLKA*CLKB*!GCLK*!RA*RB*!S" \
-	{ ICM }
+define_leakage -when "CLKA & CLKB & !GCLK & RA & RB & S" { ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 1 0 0 0 0 0 0 0 0 0} \
-	-when "!CLKA*CLKB*!GCLK*RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 0 1 0 0 0 0 0 0 0 0 0} \
-	-when "!CLKA*!CLKB*!GCLK*RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 1 0 0 0 0 0 0 0 0 0} \
-	-when "CLKA*CLKB*!GCLK*RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 0 0 1 1 0 0 0 0 0 0 0} \
-	-when "!CLKA*!CLKB*!GCLK*!RA*RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 1 0 1 0 0 0 1 0 0 0} \
-	-when "CLKA*!CLKB*!GCLK*RA*!RB*S" \
+	-vector {0 1 0 1 1 0 0 0 0 0 0 0} \
+	-when "!CLKA & CLKB & !GCLK & !RA & RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {0 1 1 0 1 0 0 0 0 0 0 0} \
-	-when "!CLKA*CLKB*!GCLK*RA*!RB*S" \
+	-when "!CLKA & CLKB & !GCLK & RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 0 0 1 0 1 0 0 0 0 0 0} \
-	-when "!CLKA*!CLKB*!GCLK*!RA*RB*!S" \
+	-vector {1 1 1 0 0 0 0 0 0 0 0 0} \
+	-when "CLKA & CLKB & !GCLK & RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 0 1 0 1 0 0 0 0 0 0} \
-	-when "!CLKA*CLKB*!GCLK*!RA*RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 0 1 1 0 0 0 0 0 0 0} \
-	-when "CLKA*!CLKB*!GCLK*!RA*RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 1 1 0 0 0 0 0 0 0} \
-	-when "CLKA*CLKB*!GCLK*!RA*RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 1 0 0 0 0 0 0 0 0 0} \
-	-when "CLKA*!CLKB*!GCLK*RA*!RB*!S" \
+	-vector {1 1 0 1 0 0 0 0 0 0 0 0} \
+	-when "CLKA & CLKB & !GCLK & !RA & RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {1 1 1 0 1 0 0 0 0 0 0 0} \
-	-when "CLKA*CLKB*!GCLK*RA*!RB*S" \
+	-when "CLKA & CLKB & !GCLK & RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 0 1 0 0 0 0 0 0 0 0} \
-	-when "CLKA*!CLKB*!GCLK*!RA*RB*!S" \
+	-vector {0 0 0 1 1 0 0 0 0 0 0 0} \
+	-when "!CLKA & !CLKB & !GCLK & !RA & RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 0 1 1 0 0 0 0 0 0 0} \
-	-when "!CLKA*CLKB*!GCLK*!RA*RB*S" \
+	-vector {0 1 0 1 0 1 0 0 0 0 0 0} \
+	-when "!CLKA & CLKB & !GCLK & !RA & RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 0 1 1 0 0 0 0 0 0 0} \
+	-when "CLKA & CLKB & !GCLK & !RA & RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 0 0 1 0 1 0 0 0 0 0 0} \
+	-when "!CLKA & !CLKB & !GCLK & !RA & RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 1 1 0 0 0 0 0 0 0 0 0} \
+	-when "!CLKA & CLKB & !GCLK & RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 0 1 0 0 0 0 0 0 0 0 0} \
+	-when "CLKA & !CLKB & !GCLK & RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 0 1 0 0 0 0 0 0 0 0 0} \
+	-when "!CLKA & !CLKB & !GCLK & RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 0 1 0 1 0 0 0 1 0 0 0} \
+	-when "CLKA & !CLKB & !GCLK & RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {0 0 1 0 1 0 0 0 1 0 0 0} \
-	-when "!CLKA*!CLKB*!GCLK*RA*!RB*S" \
+	-when "!CLKA & !CLKB & !GCLK & RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 0 0 1 0 0 0 1 0 0 0} \
-	-when "CLKA*!CLKB*!GCLK*!RA*!RB*S" \
+	-vector {1 0 0 1 0 0 0 0 0 0 0 0} \
+	-when "CLKA & !CLKB & !GCLK & !RA & RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 0 0 0 1 0 0 0 0 0 0} \
-	-when "!CLKA*CLKB*!GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 1 0 1 0 0 0 1 1 1 0} \
-	-when "CLKA*!CLKB*!GCLK*RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 0 0 1 0 0 0 0 0 0 0} \
-	-when "!CLKA*CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 0 1 0 0 0 0 0 0 0} \
-	-when "CLKA*CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 0 0 1 0 1 1 1 0 0 0 0} \
-	-when "!CLKA*!CLKB*!GCLK*!RA*RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 0 0 0 0 1 0 0 0 0 0 0} \
-	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 1 0 1 0 0 0 1 1 0 0} \
-	-when "CLKA*CLKB*!GCLK*RA*!RB*S" \
+	-vector {1 0 0 1 1 0 0 0 0 0 0 0} \
+	-when "CLKA & !CLKB & !GCLK & !RA & RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {0 1 0 1 0 1 1 1 0 0 0 0} \
-	-when "!CLKA*CLKB*!GCLK*!RA*RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 0 0 0 0 0 0 0 0 0} \
-	-when "CLKA*CLKB*!GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 1 0 1 1 0 0 0 0 0} \
-	-when "CLKA*CLKB*!GCLK*!RA*RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 0 0 0 0 0 0 0 0 0 0} \
-	-when "CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 0 1 0 1 0 0 0 1 1 1 0} \
-	-when "!CLKA*!CLKB*!GCLK*RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 0 0 0 1 0 0 0 1 0 0 0} \
-	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 1 0 1 0 0 0 1 1 0 0} \
-	-when "!CLKA*CLKB*!GCLK*RA*!RB*S" \
+	-when "!CLKA & CLKB & !GCLK & !RA & RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {1 0 0 1 0 1 1 0 0 0 0 0} \
-	-when "CLKA*!CLKB*!GCLK*!RA*RB*!S" \
+	-when "CLKA & !CLKB & !GCLK & !RA & RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 0 1 0 0 0 1 1 0 0} \
-	-when "CLKA*CLKB*!GCLK*!RA*!RB*S" \
+	-vector {0 0 1 0 1 0 0 0 1 1 1 0} \
+	-when "!CLKA & !CLKB & !GCLK & RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 1 0 1 1 1 0 0 0 1} \
-	-when "CLKA*CLKB*GCLK*!RA*RB*!S" \
+	-vector {0 1 1 0 1 0 0 0 1 1 0 0} \
+	-when "!CLKA & CLKB & !GCLK & RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 0 0 1 0 0 0 1 1 1 0} \
-	-when "CLKA*!CLKB*!GCLK*!RA*!RB*S" \
+	-vector {0 0 0 0 0 1 0 0 0 0 0 0} \
+	-when "!CLKA & !CLKB & !GCLK & !RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 0 0 1 0 0 0 1 1 0 0} \
-	-when "!CLKA*CLKB*!GCLK*!RA*!RB*S" \
+	-vector {1 1 1 0 1 0 0 0 1 1 0 0} \
+	-when "CLKA & CLKB & !GCLK & RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 0 1 1 1 1 0 0 0 0 0} \
-	-when "CLKA*!CLKB*!GCLK*!RA*RB*S" \
+	-vector {1 0 0 0 0 0 0 0 0 0 0 0} \
+	-when "CLKA & !CLKB & !GCLK & !RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 1 1 1 1 0 0 0 0 0} \
-	-when "CLKA*CLKB*!GCLK*!RA*RB*S" \
+	-vector {0 0 0 1 0 1 1 1 0 0 0 0} \
+	-when "!CLKA & !CLKB & !GCLK & !RA & RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 0 0 0 0 0 0 0 0 0 0} \
+	-when "CLKA & CLKB & !GCLK & !RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 0 1 0 1 1 0 0 0 0 0} \
+	-when "CLKA & CLKB & !GCLK & !RA & RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 1 0 0 0 1 0 0 0 0 0 0} \
+	-when "!CLKA & CLKB & !GCLK & !RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 0 0 1 0 0 0 0 0 0 0} \
+	-when "CLKA & CLKB & !GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 0 1 0 1 0 0 0 1 1 1 0} \
+	-when "CLKA & !CLKB & !GCLK & RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 1 0 0 1 0 0 0 0 0 0 0} \
+	-when "!CLKA & CLKB & !GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 0 0 0 1 0 0 0 1 0 0 0} \
+	-when "!CLKA & !CLKB & !GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 0 0 0 1 0 0 0 1 0 0 0} \
+	-when "CLKA & !CLKB & !GCLK & !RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {0 1 1 0 1 0 0 0 1 1 1 1} \
-	-when "!CLKA*CLKB*GCLK*RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 1 0 0 0 0 0 1 1 0 0} \
-	-when "!CLKA*CLKB*!GCLK*RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 0 0 0 1 0 0 0 1 1 1 0} \
-	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 0 0 0 1 1 1 0 0 0 0} \
-	-when "!CLKA*CLKB*!GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 0 0 1 1 0 0 0 0 0} \
-	-when "CLKA*CLKB*!GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 1 0 0 0 0 0 0 1 1 0} \
-	-when "CLKA*!CLKB*!GCLK*RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 0 0 0 1 1 0 0 0 0 0} \
-	-when "CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 0 0 1 1 0 1 1 0 0 0 0} \
-	-when "!CLKA*!CLKB*!GCLK*!RA*RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 0 1 0 0 0 0 0 0 1 1 0} \
-	-when "!CLKA*!CLKB*!GCLK*RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 1 0 0 0 0 0 1 1 0 0} \
-	-when "CLKA*CLKB*!GCLK*RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 0 0 0 0 1 1 1 0 0 0 0} \
-	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 1 0 1 0 0 0 1 1 1 1} \
-	-when "CLKA*CLKB*GCLK*RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 0 1 0 1 1 1 0 0 0 1} \
-	-when "CLKA*!CLKB*GCLK*!RA*RB*!S" \
+	-when "!CLKA & CLKB & GCLK & RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {0 1 0 1 1 0 1 1 0 0 0 0} \
-	-when "!CLKA*CLKB*!GCLK*!RA*RB*S" \
+	-when "!CLKA & CLKB & !GCLK & !RA & RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 1 0 0 0 0 0 0 0 1 1} \
-	-when "CLKA*CLKB*GCLK*RA*!RB*!S" \
+	-vector {1 1 0 0 1 0 0 0 1 1 0 0} \
+	-when "CLKA & CLKB & !GCLK & !RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 0 0 1 0 0 0 1 1 1 1} \
-	-when "!CLKA*CLKB*GCLK*!RA*!RB*S" \
+	-vector {0 0 0 0 0 1 1 1 0 0 0 0} \
+	-when "!CLKA & !CLKB & !GCLK & !RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 0 0 0 0 0 0 0 1 1 0} \
-	-when "CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
+	-vector {1 1 0 1 1 1 1 0 0 0 0 0} \
+	-when "CLKA & CLKB & !GCLK & !RA & RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 0 1 0 0 0 0 0 0 1 1 0} \
+	-when "CLKA & !CLKB & !GCLK & RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 0 0 0 1 0 0 0 1 1 1 0} \
+	-when "!CLKA & !CLKB & !GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 0 0 0 0 1 1 0 0 0 0 0} \
+	-when "CLKA & !CLKB & !GCLK & !RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 1 0 0 0 1 1 1 0 0 0 0} \
+	-when "!CLKA & CLKB & !GCLK & !RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 0 0 0 1 1 0 0 0 0 0} \
+	-when "CLKA & CLKB & !GCLK & !RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 0 0 0 1 0 0 0 1 1 1 0} \
+	-when "CLKA & !CLKB & !GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 1 1 0 0 0 0 0 1 1 0 0} \
+	-when "!CLKA & CLKB & !GCLK & RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 0 0 1 1 0 1 1 0 0 0 0} \
+	-when "!CLKA & !CLKB & !GCLK & !RA & RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 1 0 0 1 0 0 0 1 1 0 0} \
+	-when "!CLKA & CLKB & !GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 0 0 1 1 1 1 0 0 0 0 0} \
+	-when "CLKA & !CLKB & !GCLK & !RA & RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 0 0 1 0 1 1 1 0 0 0 1} \
+	-when "CLKA & !CLKB & GCLK & !RA & RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 1 0 1 0 0 0 1 1 1 1} \
+	-when "CLKA & CLKB & GCLK & RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 0 1 0 0 0 0 0 0 1 1 0} \
+	-when "!CLKA & !CLKB & !GCLK & RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 0 1 0 1 1 1 0 0 0 1} \
+	-when "CLKA & CLKB & GCLK & !RA & RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 1 0 0 0 0 0 1 1 0 0} \
+	-when "CLKA & CLKB & !GCLK & RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {1 1 1 0 0 0 0 0 1 1 1 1} \
-	-when "CLKA*CLKB*GCLK*RA*!RB*!S" \
+	-when "CLKA & CLKB & GCLK & RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 0 0 0 0 0 1 1 0 0} \
-	-when "CLKA*CLKB*!GCLK*!RA*!RB*!S" \
+	-vector {0 1 0 0 1 0 0 0 1 1 1 1} \
+	-when "!CLKA & CLKB & GCLK & !RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 0 0 1 1 1 0 0 0 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 0 1 1 0 0 1 0 0 0 1} \
-	-when "CLKA*!CLKB*GCLK*!RA*RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 1 1 0 0 1 0 0 0 1} \
-	-when "CLKA*CLKB*GCLK*!RA*RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 0 0 1 0 1 1 0 0 0 0} \
-	-when "!CLKA*CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 0 0 0 0 0 0 0 0 1 1 0} \
-	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 0 0 0 1 0 1 1 0 0 0 0} \
-	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 1 1 1 1 1 0 0 0 1} \
-	-when "CLKA*CLKB*GCLK*!RA*RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 0 1 1 1 0 0 0 0 0} \
-	-when "CLKA*CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 1 0 0 0 0 0 0 0 1 1} \
-	-when "!CLKA*CLKB*GCLK*RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 0 1 0 0 0 1 1 1 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
+	-vector {1 1 1 0 0 0 0 0 0 0 1 1} \
+	-when "CLKA & CLKB & GCLK & RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {0 1 0 0 0 1 0 0 1 1 0 0} \
-	-when "!CLKA*CLKB*!GCLK*!RA*!RB*!S" \
+	-when "!CLKA & CLKB & !GCLK & !RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 0 0 1 1 1 0 1 0 0 0} \
-	-when "CLKA*!CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 0 0 0 1 1 1 0 0 0 1} \
-	-when "CLKA*!CLKB*GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 1 0 0 0 0 0 1 1 1 1} \
-	-when "!CLKA*CLKB*GCLK*RA*!RB*!S" \
+	-vector {1 1 0 0 1 0 0 0 1 1 1 1} \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {1 0 0 1 1 1 1 1 0 0 0 1} \
-	-when "CLKA*!CLKB*GCLK*!RA*RB*S" \
+	-when "CLKA & !CLKB & GCLK & !RA & RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 0 1 1 1 1 1 0 0 0 1} \
+	-when "CLKA & CLKB & GCLK & !RA & RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 0 0 0 0 0 0 1 1 0 0} \
+	-when "CLKA & CLKB & !GCLK & !RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 0 0 0 0 1 1 1 0 0 0 1} \
+	-when "CLKA & !CLKB & GCLK & !RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 0 0 0 0 0 0 0 0 1 1 0} \
+	-when "CLKA & !CLKB & !GCLK & !RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 0 0 1 1 0 0 1 0 0 0 1} \
+	-when "CLKA & !CLKB & GCLK & !RA & RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 1 1 0 0 0 0 0 0 0 1 1} \
+	-when "!CLKA & CLKB & GCLK & RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 0 0 0 1 0 1 1 0 0 0 0} \
+	-when "!CLKA & !CLKB & !GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 1 1 0 0 0 0 0 1 1 1 1} \
+	-when "!CLKA & CLKB & GCLK & RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 1 0 0 1 0 1 1 0 0 0 0} \
+	-when "!CLKA & CLKB & !GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 0 0 0 0 0 0 0 0 1 1 0} \
+	-when "!CLKA & !CLKB & !GCLK & !RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 0 0 1 1 1 0 0 0 0 0} \
+	-when "CLKA & CLKB & !GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 0 0 0 1 1 1 0 1 0 0 0} \
+	-when "CLKA & !CLKB & !GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 0 1 1 0 0 1 0 0 0 1} \
+	-when "CLKA & CLKB & GCLK & !RA & RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 0 0 0 1 1 1 0 0 0 1} \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {1 1 0 0 0 0 0 0 0 0 1 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 0 1 0 0 1 0 0 0 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 1 0 1 0 0 0 0 0 1 1} \
-	-when "CLKA*CLKB*GCLK*RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 0 0 0 0 0 0 1 1 1 1} \
-	-when "!CLKA*CLKB*GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 0 0 0 0 0 1 1 1 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 0 0 0 0 0 0 0 0 1 1} \
-	-when "!CLKA*CLKB*GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 0 1 1 1 0 1 1 0 0} \
-	-when "CLKA*CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 0 1 1 1 1 0 0 0 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 1 0 1 0 0 0 0 0 1 1} \
-	-when "!CLKA*CLKB*GCLK*RA*!RB*S" \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {1 0 0 0 1 0 0 1 0 0 0 1} \
-	-when "CLKA*!CLKB*GCLK*!RA*!RB*S" \
+	-when "CLKA & !CLKB & GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 0 0 0 0 0 0 1 1 1 1} \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {1 0 0 1 0 0 0 1 0 0 0 1} \
-	-when "CLKA*!CLKB*GCLK*!RA*RB*!S" \
+	-when "CLKA & !CLKB & GCLK & !RA & RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 0 0 1 1 1 1 0 0 0 1} \
-	-when "CLKA*!CLKB*GCLK*!RA*!RB*S" \
+	-vector {0 1 0 0 0 0 0 0 1 1 1 1} \
+	-when "!CLKA & CLKB & GCLK & !RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 1 0 1 0 0 0 0 0 1 1} \
+	-when "CLKA & CLKB & GCLK & RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {1 1 0 1 0 0 0 1 0 0 0 1} \
-	-when "CLKA*CLKB*GCLK*!RA*RB*!S" \
+	-when "CLKA & CLKB & GCLK & !RA & RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 1 0 0 0 0 0 0 0 0 1 1} \
+	-when "!CLKA & CLKB & GCLK & !RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 0 0 1 1 1 1 0 0 0 1} \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 1 1 0 1 0 0 0 0 0 1 1} \
+	-when "!CLKA & CLKB & GCLK & RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 0 0 1 1 1 0 1 1 0 0} \
+	-when "CLKA & CLKB & !GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 0 0 1 0 0 1 0 0 0 1} \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 0 0 0 1 1 1 1 0 0 0 1} \
+	-when "CLKA & !CLKB & GCLK & !RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {1 1 0 0 0 1 1 0 1 1 0 0} \
-	-when "CLKA*CLKB*!GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 0 0 0 1 1 1 1 1 0 0} \
-	-when "!CLKA*CLKB*!GCLK*!RA*!RB*!S" \
+	-when "CLKA & CLKB & !GCLK & !RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {1 0 0 0 0 0 0 1 0 0 0 1} \
-	-when "CLKA*!CLKB*GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 0 0 1 1 1 0 1 1 1 0} \
-	-when "CLKA*!CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 0 0 0 1 1 0 0 1 1 0} \
-	-when "CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 0 0 1 0 1 1 1 1 0 0} \
-	-when "!CLKA*CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 0 0 0 0 1 0 0 0 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
+	-when "CLKA & !CLKB & GCLK & !RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {0 1 0 0 1 0 0 0 0 0 1 1} \
-	-when "!CLKA*CLKB*GCLK*!RA*!RB*S" \
+	-when "!CLKA & CLKB & GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 0 0 0 1 1 1 0 1 1 1 0} \
+	-when "CLKA & !CLKB & !GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 1 0 0 1 0 1 1 1 1 0 0} \
+	-when "!CLKA & CLKB & !GCLK & !RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {1 1 0 0 1 0 0 0 0 0 1 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 0 1 1 1 0 1 1 1 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
+	-vector {1 1 0 0 0 0 0 1 0 0 0 1} \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 1 0 0 0 1 1 1 1 1 0 0} \
+	-when "!CLKA & CLKB & !GCLK & !RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 0 0 0 0 1 1 0 0 1 1 0} \
+	-when "CLKA & !CLKB & !GCLK & !RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {1 1 0 0 0 1 1 1 1 1 0 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 0 0 0 1 0 1 1 0 1 1 0} \
-	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 0 0 0 0 0 1 1 0 1 1 0} \
-	-when "!CLKA*!CLKB*!GCLK*!RA*!RB*!S" \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {1 1 0 0 1 0 0 1 1 1 0 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 0 0 0 0 0 1 1 0 1 1 0} \
+	-when "!CLKA & !CLKB & !GCLK & !RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 0 0 1 1 1 0 1 1 1 1} \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 0 0 0 1 0 1 1 0 1 1 0} \
+	-when "!CLKA & !CLKB & !GCLK & !RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {1 1 0 0 0 1 1 0 0 0 1 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 0 0 0 0 1 1 1 0 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 0 0 1 0 1 1 0 0 1 1} \
-	-when "!CLKA*CLKB*GCLK*!RA*!RB*S" \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {1 1 0 0 1 1 1 1 1 1 0 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 0 0 1 0 1 1 1 1 1 1} \
-	-when "!CLKA*CLKB*GCLK*!RA*!RB*S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 0 0 1 1 0 1 1 1 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 0 0 0 0 0 1 0 1 1 1} \
-	-when "CLKA*!CLKB*GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {0 1 0 0 0 0 1 1 0 0 1 1} \
-	-when "!CLKA*CLKB*GCLK*!RA*!RB*!S" \
-	{ ICM }
-
-define_leakage \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 0 0 0 1 1 1 0 1 1 1} \
-	-when "CLKA*!CLKB*GCLK*!RA*!RB*!S" \
+	-vector {0 1 0 0 1 0 1 1 0 0 1 1} \
+	-when "!CLKA & CLKB & GCLK & !RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {1 0 0 0 1 0 0 1 0 1 1 1} \
-	-when "CLKA*!CLKB*GCLK*!RA*!RB*S" \
+	-when "CLKA & !CLKB & GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 0 0 0 0 1 1 1 0 1 1 1} \
+	-when "CLKA & !CLKB & GCLK & !RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 0 0 0 1 1 0 1 1 1 1} \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {1 1 0 0 1 1 1 0 0 0 1 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 0 0 1 1 1 0 0 1 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
+	-vector {1 0 0 0 0 0 0 1 0 1 1 1} \
+	-when "CLKA & !CLKB & GCLK & !RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 0 0 0 1 1 1 1 0 1 1 1} \
-	-when "CLKA*!CLKB*GCLK*!RA*!RB*S" \
+	-vector {1 1 0 0 0 0 0 1 1 1 0 1} \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 0 1 0 0 1 1 1 1 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
+	-vector {0 1 0 0 0 0 1 1 0 0 1 1} \
+	-when "!CLKA & CLKB & GCLK & !RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {0 1 0 0 1 0 1 1 1 1 1 1} \
+	-when "!CLKA & CLKB & GCLK & !RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {0 1 0 0 0 0 1 1 1 1 1 1} \
-	-when "!CLKA*CLKB*GCLK*!RA*!RB*!S" \
+	-when "!CLKA & CLKB & GCLK & !RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 0 0 0 0 1 0 0 1 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
+	-vector {1 1 0 0 0 1 1 1 0 0 1 1} \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 0 0 1 0 0 1 1 1 1 1} \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 0 0 0 1 1 1 1 0 1 1 1} \
+	-when "CLKA & !CLKB & GCLK & !RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {1 1 0 0 1 0 0 1 0 0 1 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-vector {1 1 0 0 1 1 1 1 0 0 1 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*S" \
+	-vector {1 1 0 0 0 0 0 1 0 0 1 1} \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & !S" \
 	{ ICM }
 
 define_leakage \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-vector {1 1 0 0 0 0 0 1 1 1 1 1} \
-	-when "CLKA*CLKB*GCLK*!RA*!RB*!S" \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & !S" \
+	{ ICM }
+
+define_leakage \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-vector {1 1 0 0 1 1 1 1 0 0 1 1} \
+	-when "CLKA & CLKB & GCLK & !RA & !RB & S" \
+	{ ICM }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "0 $VDD 0 0 0 0 0 0 $VDD $VDD $VDD $VDD" \
+	-vector {0 1 0 R 0 X X X X X X X} \
+	-related_pin RB \
+	-pin RB \
+	-probe {enB sela1 selb1 selb2} \
+	{ ICM }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "0 0 0 0 $VDD 0 $VDD $VDD 0 0 0 0" \
+	-vector {R 0 0 0 1 X X X X X X X} \
+	-related_pin CLKA \
+	-pin CLKA \
+	-probe {enA sela2 selb1} \
+	{ ICM }
+
+define_arc \
+	-type setup \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "0 $VDD 0 $VDD $VDD 0 0 0 0 0 0 0" \
+	-vector {R 1 0 1 F X X X X X X X} \
+	-related_pin CLKA \
+	-pin S \
+	-probe {sela1 sela2} \
+	{ ICM }
+
+define_arc \
+	-type hold \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "0 $VDD 0 $VDD $VDD 0 0 0 0 0 0 0" \
+	-vector {R 1 0 1 F X X X X X X X} \
+	-related_pin CLKA \
+	-pin S \
+	-probe {sela1 sela2} \
 	{ ICM }
 
 define_arc \
@@ -8129,11 +8169,11 @@ define_arc \
 define_arc \
 	-type min_pulse_width \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "0 0 0 0 $VDD 0 $VDD $VDD 0 0 0 0" \
-	-vector {R 0 0 0 1 X X X X X X X} \
-	-related_pin CLKA \
-	-pin CLKA \
-	-probe {enA sela2 selb1} \
+	-ic "$VDD 0 0 0 $VDD $VDD $VDD $VDD 0 0 0 $VDD" \
+	-vector {1 0 R 0 1 X X X X X X X} \
+	-related_pin RA \
+	-pin RA \
+	-probe {enA sela1 sela2 selb1} \
 	{ ICM }
 
 define_arc \
@@ -8167,106 +8207,6 @@ define_arc \
 	{ ICM }
 
 define_arc \
-	-type setup \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "0 0 0 $VDD $VDD 0 0 0 0 0 0 0" \
-	-vector {R 0 0 1 F X X X X X X X} \
-	-related_pin CLKA \
-	-pin S \
-	-probe {sela1 sela2} \
-	{ ICM }
-
-define_arc \
-	-type hold \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "0 0 0 $VDD $VDD 0 0 0 0 0 0 0" \
-	-vector {R 0 0 1 F X X X X X X X} \
-	-related_pin CLKA \
-	-pin S \
-	-probe {sela1 sela2} \
-	{ ICM }
-
-define_arc \
-	-type setup \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "0 0 $VDD 0 0 0 0 0 0 0 0 0" \
-	-vector {0 R 1 0 R X X X X X X X} \
-	-related_pin CLKB \
-	-pin S \
-	-probe {selb1 selb2} \
-	{ ICM }
-
-define_arc \
-	-type hold \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "0 0 $VDD 0 0 0 0 0 0 0 0 0" \
-	-vector {0 R 1 0 R X X X X X X X} \
-	-related_pin CLKB \
-	-pin S \
-	-probe {selb1 selb2} \
-	{ ICM }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "0 $VDD 0 0 0 0 0 0 $VDD $VDD $VDD $VDD" \
-	-vector {0 1 0 R 0 X X X X X X X} \
-	-related_pin RB \
-	-pin RB \
-	-probe {enB sela1 selb1 selb2} \
-	{ ICM }
-
-define_arc \
-	-type setup \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "0 0 0 $VDD 0 $VDD 0 0 0 0 0 0" \
-	-vector {R 0 0 1 R X X X X X X X} \
-	-related_pin CLKA \
-	-pin S \
-	-probe {sela1 sela2} \
-	{ ICM }
-
-define_arc \
-	-type hold \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "0 0 0 $VDD 0 $VDD 0 0 0 0 0 0" \
-	-vector {R 0 0 1 R X X X X X X X} \
-	-related_pin CLKA \
-	-pin S \
-	-probe {sela1 sela2} \
-	{ ICM }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "$VDD 0 0 0 $VDD $VDD $VDD $VDD 0 0 0 $VDD" \
-	-vector {1 0 R 0 1 X X X X X X X} \
-	-related_pin RA \
-	-pin RA \
-	-probe {enA sela1 sela2 selb1} \
-	{ ICM }
-
-define_arc \
-	-type setup \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "$VDD 0 $VDD 0 $VDD 0 0 0 $VDD 0 0 0" \
-	-vector {1 R 1 0 F X X X X X X X} \
-	-related_pin CLKB \
-	-pin S \
-	-probe {selb1 selb2} \
-	{ ICM }
-
-define_arc \
-	-type hold \
-	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
-	-ic "$VDD 0 $VDD 0 $VDD 0 0 0 $VDD 0 0 0" \
-	-vector {1 R 1 0 F X X X X X X X} \
-	-related_pin CLKB \
-	-pin S \
-	-probe {selb1 selb2} \
-	{ ICM }
-
-define_arc \
 	-type min_pulse_width \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-ic "0 0 0 0 0 0 0 0 0 $VDD $VDD 0" \
@@ -8277,6 +8217,46 @@ define_arc \
 	{ ICM }
 
 define_arc \
+	-type setup \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "$VDD 0 $VDD 0 0 0 0 0 0 0 0 0" \
+	-vector {1 R 1 0 R X X X X X X X} \
+	-related_pin CLKB \
+	-pin S \
+	-probe {selb1 selb2} \
+	{ ICM }
+
+define_arc \
+	-type hold \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "$VDD 0 $VDD 0 0 0 0 0 0 0 0 0" \
+	-vector {1 R 1 0 R X X X X X X X} \
+	-related_pin CLKB \
+	-pin S \
+	-probe {selb1 selb2} \
+	{ ICM }
+
+define_arc \
+	-type setup \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "$VDD 0 $VDD 0 $VDD 0 0 0 $VDD 0 0 0" \
+	-vector {1 R 1 0 F X X X X X X X} \
+	-related_pin CLKB \
+	-pin S \
+	-probe {selb1 selb2} \
+	{ ICM }
+
+define_arc \
+	-type hold \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "$VDD 0 $VDD 0 $VDD 0 0 0 $VDD 0 0 0" \
+	-vector {1 R 1 0 F X X X X X X X} \
+	-related_pin CLKB \
+	-pin S \
+	-probe {selb1 selb2} \
+	{ ICM }
+
+define_arc \
 	-type min_pulse_width \
 	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
 	-ic "$VDD 0 0 0 $VDD $VDD $VDD 0 $VDD 0 0 0" \
@@ -8284,6 +8264,26 @@ define_arc \
 	-related_pin CLKA \
 	-pin CLKA \
 	-probe {enA sela1 sela2 selb1} \
+	{ ICM }
+
+define_arc \
+	-type setup \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "0 $VDD 0 $VDD 0 $VDD 0 0 0 0 0 0" \
+	-vector {R 1 0 1 R X X X X X X X} \
+	-related_pin CLKA \
+	-pin S \
+	-probe {sela1 sela2} \
+	{ ICM }
+
+define_arc \
+	-type hold \
+	-pinlist {CLKA CLKB RA RB S sela1 sela2 enA selb1 selb2 enB GCLK} \
+	-ic "0 $VDD 0 $VDD 0 $VDD 0 0 0 0 0 0" \
+	-vector {R 1 0 1 R X X X X X X X} \
+	-related_pin CLKA \
+	-pin S \
+	-probe {sela1 sela2} \
 	{ ICM }
 
 define_arc \
@@ -8336,52 +8336,32 @@ define_arc \
 	-pin C \
 	{ GL }
 
-define_leakage -when "!C*!D*!Y" { GL }
+define_leakage -when "!C & !D & !Y" { GL }
 
-define_leakage -when "!C*D*!Y" { GL }
+define_leakage -when "!C & D & !Y" { GL }
 
 define_leakage \
 	-pinlist {C D Y} \
 	-vector {1 0 0} \
-	-when "C*!D*!Y" \
+	-when "C & !D & !Y" \
 	{ GL }
 
 define_leakage \
 	-pinlist {C D Y} \
 	-vector {1 1 1} \
-	-when "C*D*Y" \
-	{ GL }
-
-define_leakage \
-	-pinlist {C D Y} \
-	-vector {1 1 0} \
-	-when "C*D*!Y" \
+	-when "C & D & Y" \
 	{ GL }
 
 define_leakage \
 	-pinlist {C D Y} \
 	-vector {1 0 1} \
-	-when "C*!D*Y" \
+	-when "C & !D & Y" \
 	{ GL }
 
-define_arc \
-	-type non_seq_setup \
-	-pinlist {C D L Y} \
-	-ic "0 0 0 0" \
-	-vector {R R X X} \
-	-related_pin C \
-	-pin D \
-	-probe {L} \
-	{ GL }
-
-define_arc \
-	-type non_seq_hold \
-	-pinlist {C D L Y} \
-	-ic "0 0 0 0" \
-	-vector {R R X X} \
-	-related_pin C \
-	-pin D \
-	-probe {L} \
+define_leakage \
+	-pinlist {C D Y} \
+	-vector {1 1 0} \
+	-when "C & D & !Y" \
 	{ GL }
 
 define_arc \
@@ -8399,6 +8379,26 @@ define_arc \
 	-pinlist {C D L Y} \
 	-ic "0 $VDD $VDD 0" \
 	-vector {R F X X} \
+	-related_pin C \
+	-pin D \
+	-probe {L} \
+	{ GL }
+
+define_arc \
+	-type non_seq_setup \
+	-pinlist {C D L Y} \
+	-ic "0 0 0 0" \
+	-vector {R R X X} \
+	-related_pin C \
+	-pin D \
+	-probe {L} \
+	{ GL }
+
+define_arc \
+	-type non_seq_hold \
+	-pinlist {C D L Y} \
+	-ic "0 0 0 0" \
+	-vector {R R X X} \
 	-related_pin C \
 	-pin D \
 	-probe {L} \
@@ -8407,8 +8407,8 @@ define_arc \
 define_arc \
 	-type min_pulse_width \
 	-pinlist {C D L Y} \
-	-ic "$VDD $VDD 0 0" \
-	-vector {F 1 X X} \
+	-ic "$VDD 0 $VDD $VDD" \
+	-vector {F 0 X X} \
 	-related_pin C \
 	-pin C \
 	-probe {L} \
@@ -8462,8 +8462,8 @@ define_arc \
 define_arc \
 	-type combinational \
 	-pinlist {A B C D Y Z} \
-	-ic "$VDD $VDD $VDD $VDD $VDD $VDD" \
-	-vector {1 1 F 1 F X} \
+	-ic "$VDD 0 $VDD $VDD $VDD 0" \
+	-vector {1 0 F 1 F X} \
 	-related_pin C \
 	-pin Y \
 	{ MIX }
@@ -8527,128 +8527,148 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {A B C D Y Z} \
-	-ic "$VDD 0 $VDD 0 0 0" \
-	-vector {1 0 F 0 0 0} \
+	-ic "0 $VDD $VDD 0 0 0" \
+	-vector {0 1 F 0 0 0} \
 	-pin C \
 	{ MIX }
 
-define_leakage -when "!A*!B*!C*!D*!Y*!Z" { MIX }
+define_leakage -when "!A & !B & !C & !D & !Y & !Z" { MIX }
 
-define_leakage -when "!A*!B*!C*D*!Y*!Z" { MIX }
+define_leakage -when "!A & !B & !C & D & !Y & !Z" { MIX }
 
-define_leakage -when "!A*B*!C*!D*!Y*!Z" { MIX }
+define_leakage -when "!A & B & !C & !D & !Y & !Z" { MIX }
 
-define_leakage -when "!A*B*!C*D*!Y*!Z" { MIX }
+define_leakage -when "!A & B & !C & D & !Y & !Z" { MIX }
 
-define_leakage -when "A*!B*!C*!D*!Y*!Z" { MIX }
+define_leakage -when "A & !B & !C & !D & !Y & !Z" { MIX }
 
-define_leakage -when "A*!B*!C*D*!Y*!Z" { MIX }
+define_leakage -when "A & !B & !C & D & !Y & !Z" { MIX }
 
-define_leakage -when "A*B*!C*!D*!Y*Z" { MIX }
+define_leakage -when "A & B & !C & !D & !Y & Z" { MIX }
 
-define_leakage -when "A*B*!C*D*!Y*Z" { MIX }
-
-define_leakage \
-	-pinlist {A B C D Y Z} \
-	-vector {1 0 1 0 0 0} \
-	-when "A*!B*C*!D*!Y*!Z" \
-	{ MIX }
-
-define_leakage \
-	-pinlist {A B C D Y Z} \
-	-vector {1 1 1 0 0 1} \
-	-when "A*B*C*!D*!Y*Z" \
-	{ MIX }
+define_leakage -when "A & B & !C & D & !Y & Z" { MIX }
 
 define_leakage \
 	-pinlist {A B C D Y Z} \
 	-vector {0 1 1 0 0 0} \
-	-when "!A*B*C*!D*!Y*!Z" \
-	{ MIX }
-
-define_leakage \
-	-pinlist {A B C D Y Z} \
-	-vector {1 1 1 1 1 1} \
-	-when "A*B*C*D*Y*Z" \
-	{ MIX }
-
-define_leakage \
-	-pinlist {A B C D Y Z} \
-	-vector {1 0 1 1 1 0} \
-	-when "A*!B*C*D*Y*!Z" \
+	-when "!A & B & C & !D & !Y & !Z" \
 	{ MIX }
 
 define_leakage \
 	-pinlist {A B C D Y Z} \
 	-vector {0 0 1 0 0 0} \
-	-when "!A*!B*C*!D*!Y*!Z" \
+	-when "!A & !B & C & !D & !Y & !Z" \
 	{ MIX }
 
 define_leakage \
 	-pinlist {A B C D Y Z} \
-	-vector {0 0 1 1 1 0} \
-	-when "!A*!B*C*D*Y*!Z" \
+	-vector {1 0 1 1 1 0} \
+	-when "A & !B & C & D & Y & !Z" \
 	{ MIX }
 
 define_leakage \
 	-pinlist {A B C D Y Z} \
 	-vector {0 1 1 1 1 0} \
-	-when "!A*B*C*D*Y*!Z" \
+	-when "!A & B & C & D & Y & !Z" \
 	{ MIX }
 
 define_leakage \
 	-pinlist {A B C D Y Z} \
-	-vector {1 0 1 0 1 0} \
-	-when "A*!B*C*!D*Y*!Z" \
+	-vector {1 1 1 1 1 1} \
+	-when "A & B & C & D & Y & Z" \
 	{ MIX }
 
 define_leakage \
 	-pinlist {A B C D Y Z} \
-	-vector {0 0 1 0 1 0} \
-	-when "!A*!B*C*!D*Y*!Z" \
+	-vector {1 0 1 0 0 0} \
+	-when "A & !B & C & !D & !Y & !Z" \
 	{ MIX }
 
 define_leakage \
 	-pinlist {A B C D Y Z} \
-	-vector {1 0 1 1 0 0} \
-	-when "A*!B*C*D*!Y*!Z" \
+	-vector {0 0 1 1 1 0} \
+	-when "!A & !B & C & D & Y & !Z" \
 	{ MIX }
 
 define_leakage \
 	-pinlist {A B C D Y Z} \
-	-vector {0 1 1 0 1 0} \
-	-when "!A*B*C*!D*Y*!Z" \
-	{ MIX }
-
-define_leakage \
-	-pinlist {A B C D Y Z} \
-	-vector {0 1 1 1 0 0} \
-	-when "!A*B*C*D*!Y*!Z" \
+	-vector {1 1 1 0 0 1} \
+	-when "A & B & C & !D & !Y & Z" \
 	{ MIX }
 
 define_leakage \
 	-pinlist {A B C D Y Z} \
 	-vector {1 1 1 1 0 1} \
-	-when "A*B*C*D*!Y*Z" \
+	-when "A & B & C & D & !Y & Z" \
+	{ MIX }
+
+define_leakage \
+	-pinlist {A B C D Y Z} \
+	-vector {0 1 1 1 0 0} \
+	-when "!A & B & C & D & !Y & !Z" \
+	{ MIX }
+
+define_leakage \
+	-pinlist {A B C D Y Z} \
+	-vector {1 0 1 0 1 0} \
+	-when "A & !B & C & !D & Y & !Z" \
 	{ MIX }
 
 define_leakage \
 	-pinlist {A B C D Y Z} \
 	-vector {0 0 1 1 0 0} \
-	-when "!A*!B*C*D*!Y*!Z" \
+	-when "!A & !B & C & D & !Y & !Z" \
+	{ MIX }
+
+define_leakage \
+	-pinlist {A B C D Y Z} \
+	-vector {1 0 1 1 0 0} \
+	-when "A & !B & C & D & !Y & !Z" \
+	{ MIX }
+
+define_leakage \
+	-pinlist {A B C D Y Z} \
+	-vector {0 1 1 0 1 0} \
+	-when "!A & B & C & !D & Y & !Z" \
+	{ MIX }
+
+define_leakage \
+	-pinlist {A B C D Y Z} \
+	-vector {0 0 1 0 1 0} \
+	-when "!A & !B & C & !D & Y & !Z" \
 	{ MIX }
 
 define_leakage \
 	-pinlist {A B C D Y Z} \
 	-vector {1 1 1 0 1 1} \
-	-when "A*B*C*!D*Y*Z" \
+	-when "A & B & C & !D & Y & Z" \
+	{ MIX }
+
+define_arc \
+	-type non_seq_setup \
+	-pinlist {A B C D L Y Z} \
+	-ic "0 0 0 $VDD $VDD 0 0" \
+	-vector {0 0 R F X X X} \
+	-related_pin C \
+	-pin D \
+	-probe {L} \
+	{ MIX }
+
+define_arc \
+	-type non_seq_hold \
+	-pinlist {A B C D L Y Z} \
+	-ic "0 0 0 $VDD $VDD 0 0" \
+	-vector {0 0 R F X X X} \
+	-related_pin C \
+	-pin D \
+	-probe {L} \
 	{ MIX }
 
 define_arc \
 	-type min_pulse_width \
 	-pinlist {A B C D L Y Z} \
-	-ic "$VDD 0 $VDD 0 $VDD $VDD 0" \
-	-vector {1 0 F 0 X X X} \
+	-ic "$VDD $VDD $VDD $VDD 0 0 $VDD" \
+	-vector {1 1 F 1 X X X} \
 	-related_pin C \
 	-pin C \
 	-probe {L} \
@@ -8669,26 +8689,6 @@ define_arc \
 	-pinlist {A B C D L Y Z} \
 	-ic "0 0 0 0 0 0 0" \
 	-vector {0 0 R R X X X} \
-	-related_pin C \
-	-pin D \
-	-probe {L} \
-	{ MIX }
-
-define_arc \
-	-type non_seq_setup \
-	-pinlist {A B C D L Y Z} \
-	-ic "0 0 0 $VDD $VDD 0 0" \
-	-vector {0 0 R F X X X} \
-	-related_pin C \
-	-pin D \
-	-probe {L} \
-	{ MIX }
-
-define_arc \
-	-type non_seq_hold \
-	-pinlist {A B C D L Y Z} \
-	-ic "0 0 0 $VDD $VDD 0 0" \
-	-vector {0 0 R F X X X} \
 	-related_pin C \
 	-pin D \
 	-probe {L} \
@@ -8757,17 +8757,17 @@ define_arc \
 define_arc \
 	-type hidden \
 	-pinlist {C D E L Z2} \
-	-ic "$VDD 0 $VDD 0 $VDD" \
-	-vector {F 0 1 X 1} \
-	-pin C \
+	-ic "$VDD $VDD 0 $VDD $VDD" \
+	-vector {1 1 R X 1} \
+	-pin E \
 	{ TRW }
 
 define_arc \
 	-type hidden \
 	-pinlist {C D E L Z2} \
-	-ic "$VDD $VDD 0 $VDD $VDD" \
-	-vector {1 1 R X 1} \
-	-pin E \
+	-ic "$VDD $VDD $VDD $VDD $VDD" \
+	-vector {F 1 1 X 1} \
+	-pin C \
 	{ TRW }
 
 define_arc \
@@ -8778,111 +8778,120 @@ define_arc \
 	-pin E \
 	{ TRW }
 
-define_leakage -when "!C*!D*!E*!Z2" { TRW }
+define_leakage -when "!C & !D & !E & !Z2" { TRW }
 
-define_leakage -when "!C*!D*E*Z2" { TRW }
+define_leakage -when "!C & !D & E & Z2" { TRW }
 
-define_leakage -when "!C*D*!E*!Z2" { TRW }
+define_leakage -when "!C & D & !E & !Z2" { TRW }
 
-define_leakage -when "!C*D*E*Z2" { TRW }
-
-define_leakage \
-	-pinlist {C D E L Z2} \
-	-vector {1 0 1 0 1} \
-	-when "C*!D*E*Z2" \
-	{ TRW }
+define_leakage -when "!C & D & E & Z2" { TRW }
 
 define_leakage \
 	-pinlist {C D E L Z2} \
 	-vector {1 1 0 1 1} \
-	-when "C*D*!E*Z2" \
+	-when "C & D & !E & Z2" \
 	{ TRW }
 
 define_leakage \
 	-pinlist {C D E L Z2} \
 	-vector {1 1 1 1 1} \
-	-when "C*D*E*Z2" \
+	-when "C & D & E & Z2" \
 	{ TRW }
 
 define_leakage \
 	-pinlist {C D E L Z2} \
 	-vector {1 0 0 0 0} \
-	-when "C*!D*!E*!Z2" \
+	-when "C & !D & !E & !Z2" \
 	{ TRW }
 
 define_leakage \
 	-pinlist {C D E L Z2} \
-	-vector {1 0 0 1 1} \
-	-when "C*!D*!E*Z2" \
-	{ TRW }
-
-define_leakage \
-	-pinlist {C D E L Z2} \
-	-vector {1 1 0 0 0} \
-	-when "C*D*!E*!Z2" \
+	-vector {1 0 1 0 1} \
+	-when "C & !D & E & Z2" \
 	{ TRW }
 
 define_leakage \
 	-pinlist {C D E L Z2} \
 	-vector {1 0 1 1 1} \
-	-when "C*!D*E*Z2" \
+	-when "C & !D & E & Z2" \
+	{ TRW }
+
+define_leakage \
+	-pinlist {C D E L Z2} \
+	-vector {1 0 0 1 1} \
+	-when "C & !D & !E & Z2" \
+	{ TRW }
+
+define_leakage \
+	-pinlist {C D E L Z2} \
+	-vector {1 1 0 0 0} \
+	-when "C & D & !E & !Z2" \
 	{ TRW }
 
 define_leakage \
 	-pinlist {C D E L Z2} \
 	-vector {1 1 1 0 1} \
-	-when "C*D*E*Z2" \
+	-when "C & D & E & Z2" \
+	{ TRW }
+
+define_arc \
+	-type non_seq_setup \
+	-pinlist {C D E L Z2} \
+	-ic "0 $VDD 0 $VDD 0" \
+	-vector {R F 0 X X} \
+	-related_pin C \
+	-pin D \
+	-probe {L} \
+	{ TRW }
+
+define_arc \
+	-type non_seq_hold \
+	-pinlist {C D E L Z2} \
+	-ic "0 $VDD 0 $VDD 0" \
+	-vector {R F 0 X X} \
+	-related_pin C \
+	-pin D \
+	-probe {L} \
+	{ TRW }
+
+define_arc \
+	-type non_seq_setup \
+	-pinlist {C D E L Z2} \
+	-ic "0 0 0 0 0" \
+	-vector {R R 0 X X} \
+	-related_pin C \
+	-pin D \
+	-probe {L} \
+	{ TRW }
+
+define_arc \
+	-type non_seq_hold \
+	-pinlist {C D E L Z2} \
+	-ic "0 0 0 0 0" \
+	-vector {R R 0 X X} \
+	-related_pin C \
+	-pin D \
+	-probe {L} \
 	{ TRW }
 
 define_arc \
 	-type min_pulse_width \
 	-pinlist {C D E L Z2} \
-	-ic "$VDD 0 0 $VDD $VDD" \
-	-vector {F 0 0 X X} \
+	-ic "$VDD 0 $VDD $VDD $VDD" \
+	-vector {F 0 1 X X} \
 	-related_pin C \
 	-pin C \
 	-probe {L} \
 	{ TRW }
 
 define_arc \
-	-type non_seq_setup \
-	-pinlist {C D E L Z2} \
-	-ic "0 0 0 0 0" \
-	-vector {R R 0 X X} \
-	-related_pin C \
-	-pin D \
-	-probe {L} \
-	{ TRW }
-
-define_arc \
-	-type non_seq_hold \
-	-pinlist {C D E L Z2} \
-	-ic "0 0 0 0 0" \
-	-vector {R R 0 X X} \
-	-related_pin C \
-	-pin D \
-	-probe {L} \
-	{ TRW }
-
-define_arc \
-	-type non_seq_setup \
-	-pinlist {C D E L Z2} \
-	-ic "0 $VDD 0 $VDD 0" \
-	-vector {R F 0 X X} \
-	-related_pin C \
-	-pin D \
-	-probe {L} \
-	{ TRW }
-
-define_arc \
-	-type non_seq_hold \
-	-pinlist {C D E L Z2} \
-	-ic "0 $VDD 0 $VDD 0" \
-	-vector {R F 0 X X} \
-	-related_pin C \
-	-pin D \
-	-probe {L} \
-	{ TRW }
+	-type combinational \
+	-pinlist {A Q_st Q} \
+	-ic "$VDD 0 $VDD" \
+	-vector {F 0 F} \
+	-related_pin A \
+	-pin Q \
+	{ COLL }
 
 define_arc \
 	-type combinational \
@@ -8899,15 +8908,6 @@ define_arc \
 	-ic "0 $VDD $VDD" \
 	-vector {0 F F} \
 	-related_pin Q_st \
-	-pin Q \
-	{ COLL }
-
-define_arc \
-	-type combinational \
-	-pinlist {A Q_st Q} \
-	-ic "$VDD 0 $VDD" \
-	-vector {F 0 F} \
-	-related_pin A \
 	-pin Q \
 	{ COLL }
 
@@ -8952,51 +8952,41 @@ define_arc \
 	-pin Q_st \
 	{ COLL }
 
-define_leakage -when "!A*!Q*!Q_st" { COLL }
+define_leakage -when "!A & !Q & !Q_st" { COLL }
 
-define_leakage -when "A*Q*Q_st" { COLL }
+define_leakage -when "A & Q & Q_st" { COLL }
+
+define_leakage \
+	-pinlist {A Q_st Q} \
+	-vector {1 0 1} \
+	-when "A & Q & !Q_st" \
+	{ COLL }
 
 define_leakage \
 	-pinlist {A Q_st Q} \
 	-vector {0 1 0} \
-	-when "!A*!Q*Q_st" \
+	-when "!A & !Q & Q_st" \
 	{ COLL }
 
 define_leakage \
 	-pinlist {A Q_st Q} \
 	-vector {0 1 1} \
-	-when "!A*Q*Q_st" \
-	{ COLL }
-
-define_leakage \
-	-pinlist {A Q_st Q} \
-	-vector {1 0 1} \
-	-when "A*Q*!Q_st" \
+	-when "!A & Q & Q_st" \
 	{ COLL }
 
 define_leakage \
 	-pinlist {A Q_st Q} \
 	-vector {1 0 0} \
-	-when "A*!Q*!Q_st" \
+	-when "A & !Q & !Q_st" \
 	{ COLL }
 
 define_arc \
-	-type non_seq_setup \
+	-type min_pulse_width \
 	-pinlist {A Q_st Q} \
 	-ic "$VDD 0 $VDD" \
-	-vector {F R X} \
+	-vector {F 0 X} \
 	-related_pin A \
-	-pin Q_st \
-	-probe {Q} \
-	{ COLL }
-
-define_arc \
-	-type non_seq_hold \
-	-pinlist {A Q_st Q} \
-	-ic "$VDD 0 $VDD" \
-	-vector {F R X} \
-	-related_pin A \
-	-pin Q_st \
+	-pin A \
 	-probe {Q} \
 	{ COLL }
 
@@ -9031,22 +9021,22 @@ define_arc \
 	{ COLL }
 
 define_arc \
-	-type min_pulse_width \
+	-type non_seq_setup \
 	-pinlist {A Q_st Q} \
 	-ic "$VDD 0 $VDD" \
-	-vector {F 0 X} \
+	-vector {F R X} \
 	-related_pin A \
-	-pin A \
+	-pin Q_st \
 	-probe {Q} \
 	{ COLL }
 
 define_arc \
-	-type min_pulse_width \
+	-type non_seq_hold \
 	-pinlist {A Q_st Q} \
-	-ic "0 $VDD 0" \
-	-vector {R 1 X} \
+	-ic "$VDD 0 $VDD" \
+	-vector {F R X} \
 	-related_pin A \
-	-pin A \
+	-pin Q_st \
 	-probe {Q} \
 	{ COLL }
 
@@ -9057,6 +9047,16 @@ define_arc \
 	-vector {1 R X} \
 	-related_pin Q_st \
 	-pin Q_st \
+	-probe {Q} \
+	{ COLL }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {A Q_st Q} \
+	-ic "0 $VDD 0" \
+	-vector {R 1 X} \
+	-related_pin A \
+	-pin A \
 	-probe {Q} \
 	{ COLL }
 
@@ -9083,6 +9083,33 @@ define_arc \
 	-pinlist {A B Q Qc Qn} \
 	-ic "0 $VDD 0 0 $VDD" \
 	-vector {R 1 X X F} \
+	-related_pin A \
+	-pin Qn \
+	{ C2P }
+
+define_arc \
+	-type combinational \
+	-pinlist {A B Q Qc Qn} \
+	-ic "$VDD 0 $VDD $VDD 0" \
+	-vector {F 0 F X X} \
+	-related_pin A \
+	-pin Q \
+	{ C2P }
+
+define_arc \
+	-type combinational \
+	-pinlist {A B Q Qc Qn} \
+	-ic "$VDD 0 $VDD $VDD 0" \
+	-vector {F 0 X F X} \
+	-related_pin A \
+	-pin Qc \
+	{ C2P }
+
+define_arc \
+	-type combinational \
+	-pinlist {A B Q Qc Qn} \
+	-ic "$VDD 0 $VDD $VDD 0" \
+	-vector {F 0 X X R} \
 	-related_pin A \
 	-pin Qn \
 	{ C2P }
@@ -9142,33 +9169,6 @@ define_arc \
 	{ C2P }
 
 define_arc \
-	-type combinational \
-	-pinlist {A B Q Qc Qn} \
-	-ic "$VDD 0 $VDD $VDD 0" \
-	-vector {F 0 F X X} \
-	-related_pin A \
-	-pin Q \
-	{ C2P }
-
-define_arc \
-	-type combinational \
-	-pinlist {A B Q Qc Qn} \
-	-ic "$VDD 0 $VDD $VDD 0" \
-	-vector {F 0 X F X} \
-	-related_pin A \
-	-pin Qc \
-	{ C2P }
-
-define_arc \
-	-type combinational \
-	-pinlist {A B Q Qc Qn} \
-	-ic "$VDD 0 $VDD $VDD 0" \
-	-vector {F 0 X X R} \
-	-related_pin A \
-	-pin Qn \
-	{ C2P }
-
-define_arc \
 	-type hidden \
 	-pinlist {A B Q Qc Qn} \
 	-ic "0 0 0 0 $VDD" \
@@ -9200,38 +9200,38 @@ define_arc \
 	-pin B \
 	{ C2P }
 
-define_leakage -when "!A*!B*!Q*!Qc*Qn" { C2P }
+define_leakage -when "!A & !B & !Q & !Qc & Qn" { C2P }
 
-define_leakage -when "A*B*Q*Qc*!Qn" { C2P }
+define_leakage -when "A & B & Q & Qc & !Qn" { C2P }
 
 define_leakage \
 	-pinlist {A B Q Qc Qn} \
 	-vector {0 1 0 0 1} \
-	-when "!A*B*!Q*!Qc*Qn" \
-	{ C2P }
-
-define_leakage \
-	-pinlist {A B Q Qc Qn} \
-	-vector {1 0 0 0 1} \
-	-when "A*!B*!Q*!Qc*Qn" \
-	{ C2P }
-
-define_leakage \
-	-pinlist {A B Q Qc Qn} \
-	-vector {0 1 1 1 0} \
-	-when "!A*B*Q*Qc*!Qn" \
+	-when "!A & B & !Q & !Qc & Qn" \
 	{ C2P }
 
 define_leakage \
 	-pinlist {A B Q Qc Qn} \
 	-vector {1 0 1 1 0} \
-	-when "A*!B*Q*Qc*!Qn" \
+	-when "A & !B & Q & Qc & !Qn" \
+	{ C2P }
+
+define_leakage \
+	-pinlist {A B Q Qc Qn} \
+	-vector {1 0 0 0 1} \
+	-when "A & !B & !Q & !Qc & Qn" \
+	{ C2P }
+
+define_leakage \
+	-pinlist {A B Q Qc Qn} \
+	-vector {0 1 1 1 0} \
+	-when "!A & B & Q & Qc & !Qn" \
 	{ C2P }
 
 define_arc \
 	-type non_seq_setup \
 	-pinlist {A B Q Qc Qn} \
-	-ic "$VDD 0 0 0 $VDD" \
+	-ic "$VDD 0 $VDD $VDD 0" \
 	-vector {F R X X X} \
 	-related_pin A \
 	-pin B \
@@ -9241,19 +9241,9 @@ define_arc \
 define_arc \
 	-type non_seq_hold \
 	-pinlist {A B Q Qc Qn} \
-	-ic "$VDD 0 0 0 $VDD" \
+	-ic "$VDD 0 $VDD $VDD 0" \
 	-vector {F R X X X} \
 	-related_pin A \
-	-pin B \
-	-probe {Q} \
-	{ C2P }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {A B Q Qc Qn} \
-	-ic "$VDD 0 0 0 $VDD" \
-	-vector {1 R X X X} \
-	-related_pin B \
 	-pin B \
 	-probe {Q} \
 	{ C2P }
@@ -9274,16 +9264,6 @@ define_arc \
 	-ic "0 $VDD 0 0 $VDD" \
 	-vector {R F X X X} \
 	-related_pin A \
-	-pin B \
-	-probe {Q} \
-	{ C2P }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {A B Q Qc Qn} \
-	-ic "0 $VDD $VDD $VDD 0" \
-	-vector {0 F X X X} \
-	-related_pin B \
 	-pin B \
 	-probe {Q} \
 	{ C2P }
@@ -9309,6 +9289,26 @@ define_arc \
 	{ C2P }
 
 define_arc \
+	-type min_pulse_width \
+	-pinlist {A B Q Qc Qn} \
+	-ic "$VDD 0 0 0 $VDD" \
+	-vector {1 R X X X} \
+	-related_pin B \
+	-pin B \
+	-probe {Q} \
+	{ C2P }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {A B Q Qc Qn} \
+	-ic "0 $VDD $VDD $VDD 0" \
+	-vector {0 F X X X} \
+	-related_pin B \
+	-pin B \
+	-probe {Q} \
+	{ C2P }
+
+define_arc \
 	-type async \
 	-pinlist {A B R Q} \
 	-ic "$VDD $VDD 0 $VDD" \
@@ -9323,6 +9323,15 @@ define_arc \
 	-ic "$VDD $VDD $VDD 0" \
 	-vector {1 1 F R} \
 	-related_pin R \
+	-pin Q \
+	{ RC2 }
+
+define_arc \
+	-type combinational \
+	-pinlist {A B R Q} \
+	-ic "$VDD 0 0 0" \
+	-vector {1 R 0 R} \
+	-related_pin B \
 	-pin Q \
 	{ RC2 }
 
@@ -9350,15 +9359,6 @@ define_arc \
 	-ic "0 $VDD 0 0" \
 	-vector {R 1 0 R} \
 	-related_pin A \
-	-pin Q \
-	{ RC2 }
-
-define_arc \
-	-type combinational \
-	-pinlist {A B R Q} \
-	-ic "$VDD 0 0 0" \
-	-vector {1 R 0 R} \
-	-related_pin B \
 	-pin Q \
 	{ RC2 }
 
@@ -9410,70 +9410,40 @@ define_arc \
 	-pin A \
 	{ RC2 }
 
-define_leakage -when "!A*!B*!Q*!R" { RC2 }
+define_leakage -when "!A & !B & !Q & !R" { RC2 }
 
-define_leakage -when "!A*!B*!Q*R" { RC2 }
+define_leakage -when "!A & !B & !Q & R" { RC2 }
 
-define_leakage -when "!A*B*!Q*R" { RC2 }
+define_leakage -when "!A & B & !Q & R" { RC2 }
 
-define_leakage -when "A*!B*!Q*R" { RC2 }
+define_leakage -when "A & !B & !Q & R" { RC2 }
 
-define_leakage -when "A*B*Q*!R" { RC2 }
+define_leakage -when "A & B & Q & !R" { RC2 }
 
-define_leakage -when "A*B*!Q*R" { RC2 }
+define_leakage -when "A & B & !Q & R" { RC2 }
+
+define_leakage \
+	-pinlist {A B R Q} \
+	-vector {1 0 0 0} \
+	-when "A & !B & !Q & !R" \
+	{ RC2 }
 
 define_leakage \
 	-pinlist {A B R Q} \
 	-vector {0 1 0 1} \
-	-when "!A*B*Q*!R" \
+	-when "!A & B & Q & !R" \
 	{ RC2 }
 
 define_leakage \
 	-pinlist {A B R Q} \
 	-vector {1 0 0 1} \
-	-when "A*!B*Q*!R" \
+	-when "A & !B & Q & !R" \
 	{ RC2 }
 
 define_leakage \
 	-pinlist {A B R Q} \
 	-vector {0 1 0 0} \
-	-when "!A*B*!Q*!R" \
-	{ RC2 }
-
-define_leakage \
-	-pinlist {A B R Q} \
-	-vector {1 0 0 0} \
-	-when "A*!B*!Q*!R" \
-	{ RC2 }
-
-define_arc \
-	-type non_seq_setup \
-	-pinlist {A B R Q} \
-	-ic "$VDD 0 0 $VDD" \
-	-vector {F R 0 X} \
-	-related_pin A \
-	-pin B \
-	-probe {Q} \
-	{ RC2 }
-
-define_arc \
-	-type non_seq_hold \
-	-pinlist {A B R Q} \
-	-ic "$VDD 0 0 $VDD" \
-	-vector {F R 0 X} \
-	-related_pin A \
-	-pin B \
-	-probe {Q} \
-	{ RC2 }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {A B R Q} \
-	-ic "$VDD 0 0 $VDD" \
-	-vector {F 0 0 X} \
-	-related_pin A \
-	-pin A \
-	-probe {Q} \
+	-when "!A & B & !Q & !R" \
 	{ RC2 }
 
 define_arc \
@@ -9513,46 +9483,6 @@ define_arc \
 	-vector {F 1 F X} \
 	-related_pin A \
 	-pin R \
-	-probe {Q} \
-	{ RC2 }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {A B R Q} \
-	-ic "0 $VDD 0 0" \
-	-vector {R 1 0 X} \
-	-related_pin A \
-	-pin A \
-	-probe {Q} \
-	{ RC2 }
-
-define_arc \
-	-type non_seq_setup \
-	-pinlist {A B R Q} \
-	-ic "0 $VDD 0 $VDD" \
-	-vector {R F 0 X} \
-	-related_pin A \
-	-pin B \
-	-probe {Q} \
-	{ RC2 }
-
-define_arc \
-	-type non_seq_hold \
-	-pinlist {A B R Q} \
-	-ic "0 $VDD 0 $VDD" \
-	-vector {R F 0 X} \
-	-related_pin A \
-	-pin B \
-	-probe {Q} \
-	{ RC2 }
-
-define_arc \
-	-type min_pulse_width \
-	-pinlist {A B R Q} \
-	-ic "$VDD 0 0 0" \
-	-vector {1 R 0 X} \
-	-related_pin B \
-	-pin B \
 	-probe {Q} \
 	{ RC2 }
 
@@ -9573,6 +9503,76 @@ define_arc \
 	-vector {0 1 R X} \
 	-related_pin R \
 	-pin R \
+	-probe {Q} \
+	{ RC2 }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {A B R Q} \
+	-ic "0 $VDD 0 0" \
+	-vector {R 1 0 X} \
+	-related_pin A \
+	-pin A \
+	-probe {Q} \
+	{ RC2 }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {A B R Q} \
+	-ic "$VDD 0 0 0" \
+	-vector {1 R 0 X} \
+	-related_pin B \
+	-pin B \
+	-probe {Q} \
+	{ RC2 }
+
+define_arc \
+	-type non_seq_setup \
+	-pinlist {A B R Q} \
+	-ic "0 $VDD 0 $VDD" \
+	-vector {R F 0 X} \
+	-related_pin A \
+	-pin B \
+	-probe {Q} \
+	{ RC2 }
+
+define_arc \
+	-type non_seq_hold \
+	-pinlist {A B R Q} \
+	-ic "0 $VDD 0 $VDD" \
+	-vector {R F 0 X} \
+	-related_pin A \
+	-pin B \
+	-probe {Q} \
+	{ RC2 }
+
+define_arc \
+	-type min_pulse_width \
+	-pinlist {A B R Q} \
+	-ic "$VDD 0 0 $VDD" \
+	-vector {F 0 0 X} \
+	-related_pin A \
+	-pin A \
+	-probe {Q} \
+	{ RC2 }
+
+define_arc \
+	-type non_seq_setup \
+	-pinlist {A B R Q} \
+	-ic "$VDD 0 0 0" \
+	-vector {F R 0 X} \
+	-related_pin A \
+	-pin B \
+	-probe {Q} \
+	{ RC2 }
+
+define_arc \
+	-type non_seq_hold \
+	-pinlist {A B R Q} \
+	-ic "$VDD 0 0 0" \
+	-vector {F R 0 X} \
+	-related_pin A \
+	-pin B \
 	-probe {Q} \
 	{ RC2 }
 

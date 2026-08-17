@@ -77,20 +77,23 @@ Three properties follow from this construction:
 
 A cross-coupled cell is also **bistable**: co-asserting a mutex's two requests walks the joint
 next-state around a cycle it never leaves, so the machine reaches no **stable state** — an **oscillation
-hazard**, whose physical risk is metastability. An oscillation is annotated on the constraint it
-motivated: the comment leads the blocks generated to separate the racing pair, naming the condition the
+hazard**, whose physical risk is metastability. A ring is reported on stderr, naming the condition the
 pair toggles OUT of, the group of nodes involved and the states honouring the timing settles them to:
 
 ```
-# oscillation: !A*!B risks metastability in {Qa, Qb}, settling to one of {Qa=0, Qb=1} | {Qa=1, Qb=0}
+cellsmith: warning: cell "MUT": too little separation between A↑ and B↑ causes a hazard at {A=0, B=0, Qa=0, Qb=0}
+    when:            !A & !B
+    reached along:   {A=0, B=0}
+    pre-hazard:      {A=0, B=0}
+    triggered by:    simultaneous toggle A↑ & B↑
+    oscillation:     {Qa, Qb} lands at {Qa=0, Qb=1} or {Qa=1, Qb=0}
 ```
 
-(and the equivalent `/* oscillation: ... */` form heading the cell's Liberty stub). A comment explains
-what it accompanies, so a ring with no constraint beside it carries none — constraint arcs are opt-in,
-through a cell's `constraint_arcs` key or `--constraints` for every input pin of every cell, and a ring
-observed under a lone toggle names one pin, which has nothing to be separated from. Detection does not
-depend on that selection: the hazard report on stderr carries every hazard, one entry per cause — what
-the timing is between — and the state it goes wrong from. The hazard is derived from the functions
+The emitted artifacts carry the timing that removes the hazard and nothing else: the constraint blocks
+separating the racing pair, which are opt-in through a cell's `constraint_arcs` key or `--constraints`
+for every input pin of every cell. Detection does not depend on that selection: the hazard report on
+stderr carries every hazard, one entry per cause — what the timing is between — and the state it goes
+wrong from, whether or not a constraint was asked for. The hazard is derived from the functions
 themselves; there is no spec key to declare or silence it. The arbitration *choice* itself is a physical
 property Liberate characterises separately, outside cellsmith's deterministic timing arcs.
 
