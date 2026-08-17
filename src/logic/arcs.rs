@@ -175,7 +175,6 @@ pub struct Arc {
     pub(crate) prevector: Vec<Minterm<Symbol>>,
     /// The levels the cell's outputs hold at `start` — the arc's `-ic` initial condition.
     pub(crate) levels: ArcLevels,
-    pub(crate) is_async: bool,
 }
 
 /// A whole-cell internal-power ('hidden') arc: the input `pin` toggles between two settled
@@ -212,7 +211,6 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
     let deltas: Vec<machine::Delta<B, C>> = m.coordinate_deltas();
     let ex = &m.explored;
 
-    let async_set: HashSet<&str> = cell.async_pins.iter().map(|s| s.as_str()).collect();
     // Arcs are identified by their FULL context: transition arcs by (output, related, edge-direction,
     // full machine start state), hidden ('hidden') arcs by (toggled pin, edge-direction, full machine
     // start state). Nothing merges — every context a firing can happen in emits its own arc with its
@@ -283,7 +281,6 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
                             end: end.clone(),
                             prevector: prevector.clone(),
                             levels: levels.clone(),
-                            is_async: async_set.contains(related.as_str()),
                         });
                     }
 
@@ -899,7 +896,7 @@ Y = "!(A*B)"
         );
         let arcs = cell.arcs.clone();
         assert!(!arcs.is_empty());
-        assert!(arcs.iter().all(|a| !a.is_async));
+        assert!(arcs.iter().all(|a| !cell.async_pins.contains(&a.related)));
     }
 
     #[test]
@@ -915,10 +912,12 @@ Q = "(A*B + Q*(A+B))*!R"
 "#,
         );
         let arcs = cell.arcs.clone();
-        assert!(arcs.iter().any(|a| a.related == "R" && a.is_async));
+        assert!(arcs
+            .iter()
+            .any(|a| a.related == "R" && cell.async_pins.contains(&a.related)));
         assert!(arcs
             .iter()
             .filter(|a| a.related != "R")
-            .all(|a| !a.is_async));
+            .all(|a| !cell.async_pins.contains(&a.related)));
     }
 }

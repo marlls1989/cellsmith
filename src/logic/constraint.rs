@@ -55,7 +55,7 @@ use crate::model::ConstraintPins;
 ///
 /// Picking the variant IS the classification — a minimum pulse width holds one pin against its own
 /// second edge, so there is no second pin for it to name.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum ConstraintKind {
     /// A directed separation: the constrained pin is data, and this is the declared clock it is held
     /// around.

@@ -572,7 +572,9 @@ Q = "!R*(CLK*M + !CLK*Q)"
             "a clocked DFF produces transition arcs"
         );
         assert!(
-            cell.arcs.iter().any(|a| a.is_async),
+            cell.arcs
+                .iter()
+                .any(|a| cell.async_pins.contains(&a.related)),
             "R is a declared async pin, so its arcs are async-typed",
         );
         assert!(

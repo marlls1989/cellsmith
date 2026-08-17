@@ -1,7 +1,16 @@
-//! Emit Cadence Liberate `define_arc` blocks for a cell's transition arcs.
+//! Emit Cadence Liberate `define_arc` and `define_leakage` blocks for a cell.
 //!
 //! A block states its start condition and its stimulus, and nothing about how the cell was walked
 //! there: `-type` leads, then the pins in declaration order.
+//!
+//! A block form is a variant. The nine variants of `DefineArc` ARE Liberate's `-type` taxonomy — the
+//! three measured transitions, the hidden arc and the five constraint types — and each renders its whole
+//! `define_arc` block, writing its `-type` word as a literal in its own arm. `LeakageBlock` does the same
+//! for `define_leakage`, a command that carries no `-type`: its two variants are the two forms that
+//! command takes, the walk that primes the cell into a rest state and the condition the inputs alone
+//! settle it at. What the arms have in common they take from helpers naming no kind, `ConstraintColumns`
+//! among them — the columns one constraint block carries, under the model's names and the netlist's
+//! alike, with the level `-ic` starts each probed victim node at.
 //!
 //! Arc typing follows the per-arc labels in `crate::logic::edge`, which are SOURCED FROM the arc
 //! pipeline itself: each emitted delay arc looks up its own `(output, related clock, clock direction)`
@@ -9,7 +18,11 @@
 //! holds independently of the clock level, and Liberate has one token for it: `-type edge`. An
 //! unlabelled arc — a data change propagating through an already-transparent latch, or a clock acting by
 //! its level rather than being held — stays `-type combinational`, and a declared-async related pin
-//! takes precedence with `-type async`.
+//! takes precedence with `-type async`. `TransitionIdentity::of` applies that rule, and is the one place
+//! a measured transition's kind is decided; picking the variant IS the classification, so the `-type` a
+//! block writes and the identity the emitter grouped it under agree by construction. `HiddenIdentity` —
+//! a toggled pin and the edge it makes — is a hidden arc's identity in the same way, one kind of block
+//! with nothing to classify.
 //!
 //! **No `define_arc` carries a `-prevector`. That is a DELIBERATE CHOICE, not an omission: `-ic` is
 //! cheaper than a prevector.** A prevector is a simulation the characterisation run has to perform to
@@ -33,6 +46,7 @@
 //! reads that view — the `define_cell` pinlist (`pinlist_str`) and every other artifact keep to the
 //! cell's actual pins.
 
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 
@@ -86,10 +100,10 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
 /// differ only there are one block. Exposing those nodes is what tells them apart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaskedArc {
-    /// The `-type` the block carries.
-    pub(crate) arc_type: ArcType,
-    /// The pins the block measures between.
-    pub(crate) kind: MaskedKind,
+    /// The block on one line, written by the [`DefineArc`] variant that rendered it: its `-type` word,
+    /// then the pins it measures between. Text for the report on stderr — what kind of block it is is
+    /// the variant, and nothing reads a kind back out of this.
+    pub(crate) arc: String,
     /// The cell states the one emitted block conflates. None of them is the block's: which firing
     /// reached the emitter first decides nothing, since the block says the same of every one. Read
     /// against each other they agree on what the block states and differ on what it cannot — and what
@@ -97,58 +111,11 @@ pub struct MaskedArc {
     pub states: Vec<Minterm<Symbol>>,
 }
 
-/// The pins a block measures between, which differ by what kind of block it is.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum MaskedKind {
-    /// A transition arc: a related pin's edge driving an output pin's edge.
-    Transition {
-        related: Symbol,
-        related_edge: Edge,
-        pin: Symbol,
-        edge: Edge,
-    },
-    /// A hidden arc: an input toggle that settles with no output following it.
-    Toggle { pin: Symbol, edge: Edge },
-    /// A constraint arc: the two edges it holds apart.
-    Constraint {
-        related: Symbol,
-        related_edge: Edge,
-        pin: Symbol,
-        pin_edge: Edge,
-    },
-    /// A minimum-pulse-width constraint: the constrained pin and the pulse's opening edge.
-    Pulse { pin: Symbol, edge: Edge },
-}
-
 impl MaskedArc {
     /// The arc on one line: `combinational A↑ -> Q↓`, `hidden S↑`, `setup CLK↑ & D↑`,
     /// `min_pulse_width CLK↑`.
     pub fn arc_str(&self) -> String {
-        let ty = self.arc_type.token();
-        match &self.kind {
-            MaskedKind::Transition {
-                related,
-                related_edge,
-                pin,
-                edge,
-            } => format!(
-                "{ty} {related}{} -> {pin}{}",
-                related_edge.arrow(),
-                edge.arrow()
-            ),
-            MaskedKind::Toggle { pin, edge } => format!("{ty} {pin}{}", edge.arrow()),
-            MaskedKind::Constraint {
-                related,
-                related_edge,
-                pin,
-                pin_edge,
-            } => format!(
-                "{ty} {related}{} & {pin}{}",
-                related_edge.arrow(),
-                pin_edge.arrow()
-            ),
-            MaskedKind::Pulse { pin, edge } => format!("{ty} {pin}{}", edge.arrow()),
-        }
+        self.arc.clone()
     }
 
     /// Each conflated state as a brace-wrapped literal product (`{A=1, B=0, M=1}`), in the order the
@@ -207,12 +174,10 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
     // emits what it always did.
     let general = generalised(
         &cell.arcs,
-        |arc| ArcIdentity::of(cell, arc),
+        |arc| TransitionIdentity::of(cell, arc),
         |arc| arc.prevector.len(),
     );
-    let general_hidden = generalised(&cell.hidden_arcs, ArcIdentity::of_hidden, |h| {
-        h.prevector.len()
-    });
+    let general_hidden = generalised(&cell.hidden_arcs, HiddenIdentity::of, |h| h.prevector.len());
     let measured = groups(cell, &[]);
     let mut blocks = Blocks::new();
     for group in &measured {
@@ -222,15 +187,17 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
             .enumerate()
             .filter(|(i, _)| general.contains_key(i))
         {
-            blocks.state(format_arc(cell, group, arc, false), arc_firing(cell, arc));
+            let block = DefineArc::of(cell, arc);
+            blocks.state(block.tcl(cell, group, false), block.firing());
         }
         if cell.when.contains(ArcClass::Transition) {
             for (i, arc) in cell.arcs.iter().enumerate() {
+                let block = DefineArc::of(cell, arc);
                 let redundant = general
                     .get(&i)
-                    .is_some_and(|&cases| cases == 1 || when_str(&arc.end, &arc.related).is_none());
+                    .is_some_and(|&cases| cases == 1 || block.when().is_none());
                 if !redundant {
-                    blocks.state(format_arc(cell, group, arc, true), arc_firing(cell, arc));
+                    blocks.state(block.tcl(cell, group, true), block.firing());
                 }
             }
         }
@@ -241,7 +208,8 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
                 .enumerate()
                 .filter(|(i, _)| general_hidden.contains_key(i))
             {
-                blocks.state(format_hidden_arc(cell, group, h, false), hidden_firing(h));
+                let block = DefineArc::Hidden(h);
+                blocks.state(block.tcl(cell, group, false), block.firing());
             }
             if cell.when.contains(ArcClass::Hidden) {
                 // The same rule as the transition pass, over the hidden class's own condition (which
@@ -249,11 +217,12 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
                 // toggles from a single context, or which renders no `-when`, is fully characterised by
                 // its general block.
                 for (i, h) in cell.hidden_arcs.iter().enumerate() {
+                    let block = DefineArc::Hidden(h);
                     let redundant = general_hidden
                         .get(&i)
-                        .is_some_and(|&cases| cases == 1 || hidden_when_str(h).is_none());
+                        .is_some_and(|&cases| cases == 1 || block.when().is_none());
                     if !redundant {
-                        blocks.state(format_hidden_arc(cell, group, h, true), hidden_firing(h));
+                        blocks.state(block.tcl(cell, group, true), block.firing());
                     }
                 }
             }
@@ -263,7 +232,7 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
     // every alias.
     if opts.emit_leakage {
         for l in &cell.leakage {
-            blocks.out.push_str(&format_leakage(cell, l));
+            blocks.out.push_str(&LeakageBlock::of(l).render(cell));
         }
     }
     // Constraint arcs emit whatever generation produced: `cell.constraints` is populated only when the
@@ -291,7 +260,7 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
     if cell.when.contains(ArcClass::Constraint) {
         for (i, c) in cell.constraints.iter().enumerate() {
             let redundant = general_constraints.get(&i).is_some_and(|&cases| {
-                cases == 1 || constraint_when_str(&constraint_arc(c)).is_none()
+                cases == 1 || constraint_blocks(c).iter().all(|b| b.when().is_none())
             });
             if !redundant {
                 state_constraint(&mut blocks, cell, c, true);
@@ -345,94 +314,73 @@ impl Blocks {
     }
 }
 
-/// The firing a transition block renders, carrying the one state it measures from.
-fn arc_firing(cell: &AnalysedCell, arc: &Arc) -> MaskedArc {
-    MaskedArc {
-        arc_type: ArcIdentity::of(cell, arc).arc_type(),
-        kind: MaskedKind::Transition {
-            related: arc.related.clone(),
-            related_edge: related_edge(arc),
-            pin: arc.output.clone(),
-            edge: arc.edge,
-        },
-        states: vec![arc.start.clone()],
-    }
+/// What one identity holds while the fold runs: the lowest-rank item met so far, by rank and by index,
+/// and how many items the identity has taken.
+struct Incumbent<R> {
+    rank: R,
+    index: usize,
+    count: usize,
 }
 
-/// The firing a hidden block renders: the toggle is the whole of it, no output follows.
-fn hidden_firing(h: &HiddenArc) -> MaskedArc {
-    MaskedArc {
-        arc_type: ArcIdentity::of_hidden(h).arc_type(),
-        kind: MaskedKind::Toggle {
-            pin: h.pin.clone(),
-            edge: h.edge,
-        },
-        states: vec![h.start.clone()],
+/// One representative per identity: each identity's lowest-rank index into `items`, mapped to how many
+/// items carry that identity. `key` states the identity an item falls under and `rank` orders the items
+/// within it. Only a strictly lower rank displaces the incumbent, so where several items tie at the
+/// minimum any one of them may be kept. A caller reads the map by index: `contains_key` recognises a
+/// representative, and the count tells it how many items that representative speaks for.
+///
+/// `items` arrives enumerated, so a caller that drops items before the fold still keys the map on the
+/// position an item holds in the collection it came from (see [`constraint_selection`]).
+fn representatives<T, K: Hash + Eq, R: Ord>(
+    items: impl Iterator<Item = (usize, T)>,
+    key: impl Fn(&T) -> K,
+    rank: impl Fn(&T) -> R,
+) -> HashMap<usize, usize> {
+    let mut groups: HashMap<K, Incumbent<R>> = HashMap::new();
+    for (index, item) in items {
+        let rank = rank(&item);
+        match groups.entry(key(&item)) {
+            Entry::Occupied(mut group) => {
+                let group = group.get_mut();
+                group.count += 1;
+                if rank < group.rank {
+                    group.rank = rank;
+                    group.index = index;
+                }
+            }
+            Entry::Vacant(group) => {
+                group.insert(Incumbent {
+                    rank,
+                    index,
+                    count: 1,
+                });
+            }
+        }
     }
-}
-
-/// The firing a constraint block renders, at the state `state` the hazard was probed from: the pins the
-/// block switches are what it measures between, so the firing reads them off the block's own arc. Two
-/// constraints probed from states the columns cannot tell apart render the same block, and it is these
-/// states that say what would tell them apart.
-fn constraint_firing(block: &ConstraintBlock<'_>, state: &Minterm<Symbol>) -> MaskedArc {
-    MaskedArc {
-        arc_type: block.arc_type,
-        kind: match &block.arc.switching {
-            Switching::Pair { related, pin } => MaskedKind::Constraint {
-                related: related.pin.clone(),
-                related_edge: related.edge,
-                pin: pin.pin.clone(),
-                pin_edge: pin.edge,
-            },
-            Switching::Single { pin } => MaskedKind::Pulse {
-                pin: pin.pin.clone(),
-                edge: pin.edge,
-            },
-        },
-        states: vec![state.clone()],
-    }
+    groups
+        .into_values()
+        .map(|group| (group.index, group.count))
+        .collect()
 }
 
 /// The general arcs of one class: each identity's representative index into `items`, mapped to the
-/// number of firings that identity has. `key` groups the firings — every firing carrying one
-/// [`ArcIdentity`] falls in a single group and one block comes out of it, generalising over the contexts
-/// the firings differed in. The representative is one with the SHORTEST prevector: only a strictly
-/// shorter prevector displaces the incumbent, so where several firings tie at the minimum any one may be
-/// kept. The conditioned pass reads this map by index: `contains_key` recognises a representative, and
-/// the firing count tells it whether the representative stands for a single context (see
-/// [`cell_arcs_tcl`]).
+/// number of firings that identity has. `key` groups the firings — every firing carrying one identity,
+/// a [`TransitionIdentity`] for a measured transition and a [`HiddenIdentity`] for a toggle, falls in a
+/// single group and one block comes out of it, generalising over the contexts the firings differed in.
+/// The rank [`representatives`] picks the representative by is the prevector
+/// length, so the representative is one with the SHORTEST prevector: only a strictly shorter prevector
+/// displaces the incumbent, and where several firings tie at the minimum any one may be kept. The
+/// conditioned pass reads this map by index: `contains_key` recognises a representative, and the firing
+/// count tells it whether the representative stands for a single context (see [`cell_arcs_tcl`]).
 fn generalised<T, K: Hash + Eq>(
     items: &[T],
     key: impl Fn(&T) -> K,
     prevector_len: impl Fn(&T) -> usize,
 ) -> HashMap<usize, usize> {
-    // Per identity: the strictly-shortest-prevector winner and the firing count.
-    let mut groups: HashMap<
-        K,
-        (
-            usize, /* winner len */
-            usize, /* winner index */
-            usize, /* count */
-        ),
-    > = HashMap::new();
-    for (i, item) in items.iter().enumerate() {
-        let len = prevector_len(item);
-        groups
-            .entry(key(item))
-            .and_modify(|g| {
-                g.2 += 1;
-                if len < g.0 {
-                    g.0 = len;
-                    g.1 = i;
-                }
-            })
-            .or_insert((len, i, 1));
-    }
-    groups
-        .into_values()
-        .map(|(_, i, count)| (i, count))
-        .collect()
+    representatives(
+        items.iter().enumerate(),
+        |item| key(item),
+        |item| prevector_len(item),
+    )
 }
 
 /// The event a transition arc measures: the output pin and the edge it makes, the related pin and the
@@ -448,28 +396,32 @@ struct Transition {
     related_edge: Edge,
 }
 
-/// An emitted arc's identity. The variant IS Liberate's `-type` taxonomy: the three transition kinds
-/// carry the [`Transition`] event they measure, while a hidden arc — an input toggle no output follows —
-/// carries the toggled pin and its edge and structurally holds no related pin.
+/// A transition arc's identity. The variant IS Liberate's `-type` taxonomy for a measured transition,
+/// and it carries the [`Transition`] event the arc measures.
 ///
 /// The kind is part of the identity because `-type` declares the arc's nature to Liberate and is decided
-/// per firing, from the full machine start state (see [`ArcIdentity::of`]): a transition that classifies
-/// differently from different start states is two arc kinds, and collapsing across it would delete one
-/// of them from the output.
+/// per firing, from the full machine start state (see [`TransitionIdentity::of`]): a transition that
+/// classifies differently from different start states is two arc kinds, and collapsing across it would
+/// delete one of them from the output.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum ArcIdentity {
+enum TransitionIdentity {
     Async(Transition),
     Edge(Transition),
     Combinational(Transition),
-    Hidden { pin: Symbol, edge: Edge },
 }
 
-impl ArcIdentity {
-    /// A transition arc's identity: [`ArcIdentity::Async`] for a declared-async related pin, else
-    /// [`ArcIdentity::Edge`] when the arc's FULL context `(output, related, direction, machine start)` is
-    /// labelled a clock-edge timing arc in [`crate::logic::edge::EdgeArcs::labels`], else
-    /// [`ArcIdentity::Combinational`]. There is ONE edge category, so two firings that differ only in
-    /// internal state can classify differently.
+impl TransitionIdentity {
+    /// A transition arc's identity, and the one place its kind is decided. Async is a
+    /// declaration the spec makes about a PIN, so it is read off the cell's `async_pins`: every arc
+    /// the pin relates is [`TransitionIdentity::Async`]. Failing that the arc is
+    /// [`TransitionIdentity::Edge`] when its FULL context `(output, related, direction, machine start)`
+    /// is labelled a clock-edge timing arc in [`crate::logic::edge::EdgeArcs::labels`], else
+    /// [`TransitionIdentity::Combinational`]. There is ONE edge category, so two firings that differ
+    /// only in internal state can classify differently.
+    ///
+    /// Classification sits downstream of arc derivation because those labels are derived FROM the
+    /// arcs — [`crate::logic::analysis::analyse_machine`] classifies the arc list it has just built —
+    /// so a kind exists only once the whole list does.
     fn of(cell: &AnalysedCell, arc: &Arc) -> Self {
         let related_edge = related_edge(arc);
         let transition = Transition {
@@ -478,71 +430,256 @@ impl ArcIdentity {
             related: arc.related.clone(),
             related_edge,
         };
-        if arc.is_async {
-            ArcIdentity::Async(transition)
+        if cell.async_pins.contains(&arc.related) {
+            TransitionIdentity::Async(transition)
         } else if cell.edge.labels.contains(&EdgeLabel {
             output: arc.output.clone(),
             clock: arc.related.clone(),
             clock_edge: related_edge,
             start: arc.start.clone(),
         }) {
-            ArcIdentity::Edge(transition)
+            TransitionIdentity::Edge(transition)
         } else {
-            ArcIdentity::Combinational(transition)
+            TransitionIdentity::Combinational(transition)
         }
     }
+}
 
-    /// A hidden arc's identity: the toggled pin and the edge it makes. That pair IS the event; the other
-    /// inputs' held levels and the held outputs are its condition and ride in [`hidden_when_str`], so
-    /// they are absent here for the same reason as in [`Transition`].
-    fn of_hidden(h: &HiddenArc) -> Self {
-        ArcIdentity::Hidden {
+/// A hidden arc's identity: the toggled pin and the edge it makes. That pair IS the event; the other
+/// inputs' held levels and the held outputs are its condition and ride in [`hidden_when_str`], so they
+/// are absent here for the same reason as in [`Transition`]. A hidden arc is one kind of block, so
+/// nothing here classifies — a toggle no output follows structurally holds no related pin either.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct HiddenIdentity {
+    pin: Symbol,
+    edge: Edge,
+}
+
+impl HiddenIdentity {
+    fn of(h: &HiddenArc) -> Self {
+        HiddenIdentity {
             pin: h.pin.clone(),
             edge: h.edge,
         }
     }
+}
 
-    /// The `-type` word Liberate reads, and the ONE source of it: every `define_arc` block the emitter
-    /// renders takes its type line from here.
-    fn arc_type(&self) -> ArcType {
-        match self {
-            ArcIdentity::Async(_) => ArcType::Async,
-            ArcIdentity::Edge(_) => ArcType::Edge,
-            ArcIdentity::Combinational(_) => ArcType::Combinational,
-            ArcIdentity::Hidden { .. } => ArcType::Hidden,
+/// One `define_arc` block, as the arc type it is. The variant IS Liberate's `-type` taxonomy — picking
+/// the variant is the classification — and each variant renders its whole block, writing its `-type`
+/// word as a literal in its own arm, so the word lives in exactly one place per kind.
+///
+/// A variant holds the arc it renders from, so the block's text, the condition deciding whether the
+/// conditioned pass emits it at all, and the one-line description its firing reports are three
+/// renderings of one value. A constraint variant holds the pins it switches alongside it — the two a
+/// separation holds apart, or the one a minimum pulse width constrains against its own second edge — so
+/// the `-type` word and the pins named on `-related_pin` and `-pin` are the one choice, and a block
+/// cannot hold a shape of pins its type does not switch.
+enum DefineArc<'a> {
+    /// A transition an asynchronous pin drives, that pin being declared such by the spec.
+    Async(&'a Arc),
+    /// A transition a clock edge drives.
+    Edge(&'a Arc),
+    /// A transition the cell's logic drives directly.
+    Combinational(&'a Arc),
+    /// An input toggle that settles with no output following it, drawn for its internal power.
+    Hidden(&'a HiddenArc),
+    /// The setup member of a directed clock↔data separation, over the clock and the data pin it holds
+    /// apart.
+    Setup(RacingPins, ConstraintArc<'a>),
+    /// The hold member of a directed clock↔data separation, over the same pair.
+    Hold(RacingPins, ConstraintArc<'a>),
+    /// The setup member of a symmetric separation — an oscillation or a mutual exclusion, where neither
+    /// pin is the clock of the other — over the pair it holds apart.
+    NonSeqSetup(RacingPins, ConstraintArc<'a>),
+    /// The hold member of a symmetric separation, over the same pair.
+    NonSeqHold(RacingPins, ConstraintArc<'a>),
+    /// The width a pulse must keep for the probed nodes to go on behaving, over the ONE pin it
+    /// constrains against that pin's own second edge.
+    MinPulseWidth(Racer, ConstraintArc<'a>),
+}
+
+impl<'a> DefineArc<'a> {
+    /// The block a measured transition renders as, classified by [`TransitionIdentity::of`] — the one
+    /// place a transition's kind is decided, so the block's `-type` and everything read off this value
+    /// agree by construction.
+    fn of(cell: &AnalysedCell, arc: &'a Arc) -> Self {
+        match TransitionIdentity::of(cell, arc) {
+            TransitionIdentity::Async(_) => DefineArc::Async(arc),
+            TransitionIdentity::Edge(_) => DefineArc::Edge(arc),
+            TransitionIdentity::Combinational(_) => DefineArc::Combinational(arc),
         }
     }
-}
 
-/// Every `-type` a `define_arc` of this emitter can carry: the four a measured block classifies into,
-/// the four halves of a constraint pair, and the single-pin minimum-pulse-width block, which is one
-/// block rather than half of a pair.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum ArcType {
-    Async,
-    Edge,
-    Combinational,
-    Hidden,
-    Setup,
-    Hold,
-    NonSeqSetup,
-    NonSeqHold,
-    MinPulseWidth,
-}
-
-impl ArcType {
-    /// The Liberate keyword, as it is written after `-type`.
-    pub(crate) fn token(self) -> &'static str {
+    /// The whole block. `with_when` selects which of the two passes in [`cell_arcs_tcl`] it belongs to:
+    /// the conditioned one, naming the context this firing was measured in, or the general one, which
+    /// keeps its own concrete `-ic` and `-vector` and generalises solely by omitting the `-when` line.
+    fn tcl(&self, cell: &AnalysedCell, group: &Group, with_when: bool) -> String {
+        let when = with_when.then(|| self.when()).flatten();
+        let when = when.as_deref();
         match self {
-            ArcType::Async => "async",
-            ArcType::Edge => "edge",
-            ArcType::Combinational => "combinational",
-            ArcType::Hidden => "hidden",
-            ArcType::Setup => "setup",
-            ArcType::Hold => "hold",
-            ArcType::NonSeqSetup => "non_seq_setup",
-            ArcType::NonSeqHold => "non_seq_hold",
-            ArcType::MinPulseWidth => "min_pulse_width",
+            DefineArc::Async(arc) => format!(
+                "define_arc \\\n\t-type async \\\n{}",
+                transition_body(cell, group, arc, when)
+            ),
+            DefineArc::Edge(arc) => format!(
+                "define_arc \\\n\t-type edge \\\n{}",
+                transition_body(cell, group, arc, when)
+            ),
+            DefineArc::Combinational(arc) => format!(
+                "define_arc \\\n\t-type combinational \\\n{}",
+                transition_body(cell, group, arc, when)
+            ),
+            // A hidden arc names no related pin — the toggle is the whole of it — so it has no body in
+            // common with the transitions and writes its own.
+            DefineArc::Hidden(h) => {
+                let mut s = String::from("define_arc \\\n\t-type hidden \\\n");
+                s.push_str(&format!(
+                    "\t-pinlist {{{}}} \\\n",
+                    arc_pinlist_str(cell, &group.exposed)
+                ));
+                s.push_str(&ic_line(
+                    cell,
+                    &cell.exposed,
+                    &h.prevector,
+                    &h.levels,
+                    &HashMap::new(),
+                ));
+                s.push_str(&format!(
+                    "\t-vector {{{}}} \\\n",
+                    hidden_vector_str(cell, h)
+                ));
+                if let Some(w) = when {
+                    s.push_str(&format!("\t-when \"{w}\" \\\n"));
+                }
+                s.push_str(&format!("\t-pin {} \\\n", h.pin));
+                s.push_str(&format!("\t{}\n", name_block(&group.names)));
+                s.push('\n');
+                s
+            }
+            DefineArc::Setup(pins, arc) => format!(
+                "define_arc \\\n\t-type setup \\\n{}",
+                constraint_body(cell, group, pins, arc, when)
+            ),
+            DefineArc::Hold(pins, arc) => format!(
+                "define_arc \\\n\t-type hold \\\n{}",
+                constraint_body(cell, group, pins, arc, when)
+            ),
+            DefineArc::NonSeqSetup(pins, arc) => format!(
+                "define_arc \\\n\t-type non_seq_setup \\\n{}",
+                constraint_body(cell, group, pins, arc, when)
+            ),
+            DefineArc::NonSeqHold(pins, arc) => format!(
+                "define_arc \\\n\t-type non_seq_hold \\\n{}",
+                constraint_body(cell, group, pins, arc, when)
+            ),
+            DefineArc::MinPulseWidth(pin, arc) => format!(
+                "define_arc \\\n\t-type min_pulse_width \\\n{}",
+                constraint_body(cell, group, &RacingPins::pulse(pin), arc, when)
+            ),
+        }
+    }
+
+    /// The block's `-when` condition, or `None` where it is unconditional. The ONE source of it: the
+    /// conditioned pass asks this to decide whether a representative's conditioned block would say
+    /// anything its general block does not, and [`DefineArc::tcl`] writes the line from the same answer,
+    /// so the skip rule and the emitted line cannot come apart.
+    fn when(&self) -> Option<String> {
+        match self {
+            DefineArc::Async(arc) | DefineArc::Edge(arc) | DefineArc::Combinational(arc) => {
+                when_str(&arc.end, &arc.related)
+            }
+            DefineArc::Hidden(h) => hidden_when_str(h),
+            DefineArc::Setup(pins, arc)
+            | DefineArc::Hold(pins, arc)
+            | DefineArc::NonSeqSetup(pins, arc)
+            | DefineArc::NonSeqHold(pins, arc) => constraint_when_str(pins, arc),
+            DefineArc::MinPulseWidth(pin, arc) => constraint_when_str(&RacingPins::pulse(pin), arc),
+        }
+    }
+
+    /// The firing this block renders, carrying the one state it measures from: the block on one line,
+    /// led by its own `-type` word, and that state. [`Blocks::state`] gathers these, and a block
+    /// several firings render reports every state it conflates.
+    fn firing(&self) -> MaskedArc {
+        match self {
+            DefineArc::Async(arc) => MaskedArc {
+                arc: format!(
+                    "async {}{} -> {}{}",
+                    arc.related,
+                    related_edge(arc).arrow(),
+                    arc.output,
+                    arc.edge.arrow()
+                ),
+                states: vec![arc.start.clone()],
+            },
+            DefineArc::Edge(arc) => MaskedArc {
+                arc: format!(
+                    "edge {}{} -> {}{}",
+                    arc.related,
+                    related_edge(arc).arrow(),
+                    arc.output,
+                    arc.edge.arrow()
+                ),
+                states: vec![arc.start.clone()],
+            },
+            DefineArc::Combinational(arc) => MaskedArc {
+                arc: format!(
+                    "combinational {}{} -> {}{}",
+                    arc.related,
+                    related_edge(arc).arrow(),
+                    arc.output,
+                    arc.edge.arrow()
+                ),
+                states: vec![arc.start.clone()],
+            },
+            DefineArc::Hidden(h) => MaskedArc {
+                arc: format!("hidden {}{}", h.pin, h.edge.arrow()),
+                states: vec![h.start.clone()],
+            },
+            DefineArc::Setup(pins, arc) => MaskedArc {
+                arc: format!(
+                    "setup {}{} & {}{}",
+                    pins.related.pin,
+                    pins.related.edge.arrow(),
+                    pins.pin.pin,
+                    pins.pin.edge.arrow()
+                ),
+                states: vec![arc.state.clone()],
+            },
+            DefineArc::Hold(pins, arc) => MaskedArc {
+                arc: format!(
+                    "hold {}{} & {}{}",
+                    pins.related.pin,
+                    pins.related.edge.arrow(),
+                    pins.pin.pin,
+                    pins.pin.edge.arrow()
+                ),
+                states: vec![arc.state.clone()],
+            },
+            DefineArc::NonSeqSetup(pins, arc) => MaskedArc {
+                arc: format!(
+                    "non_seq_setup {}{} & {}{}",
+                    pins.related.pin,
+                    pins.related.edge.arrow(),
+                    pins.pin.pin,
+                    pins.pin.edge.arrow()
+                ),
+                states: vec![arc.state.clone()],
+            },
+            DefineArc::NonSeqHold(pins, arc) => MaskedArc {
+                arc: format!(
+                    "non_seq_hold {}{} & {}{}",
+                    pins.related.pin,
+                    pins.related.edge.arrow(),
+                    pins.pin.pin,
+                    pins.pin.edge.arrow()
+                ),
+                states: vec![arc.state.clone()],
+            },
+            DefineArc::MinPulseWidth(pin, arc) => MaskedArc {
+                arc: format!("min_pulse_width {}{}", pin.pin, pin.edge.arrow()),
+                states: vec![arc.state.clone()],
+            },
         }
     }
 }
@@ -568,7 +705,7 @@ struct Group {
     /// What this group's netlist calls each node the BLOCK carries beyond the cell's exposures — the
     /// victim nodes its own constraint probes, and nothing else. A block groups on the columns it
     /// carries, so it holds names for those and no others.
-    probed: BTreeMap<Symbol, Symbol>,
+    probed: HashMap<Symbol, Symbol>,
 }
 
 impl Group {
@@ -624,142 +761,111 @@ fn groups(cell: &AnalysedCell, extra: &[Symbol]) -> Vec<Group> {
         .collect()
 }
 
-/// The pins a constraint block switches, and the edge each makes: the PAIR a constraint holds apart, or
-/// the SINGLE pin a minimum-pulse-width block constrains — the pulse relating that pin to itself, so the
-/// block names it on both `-related_pin` and `-pin`.
-enum Switching {
-    Pair { related: Racer, pin: Racer },
-    Single { pin: Racer },
+/// The two pins one constraint block switches, and the edge each makes: the pin it names on
+/// `-related_pin` and the pin it names on `-pin`, in that order. A separation carries the pair it holds
+/// apart; a minimum pulse width carries its one pin and relates it to itself ([`RacingPins::pulse`]).
+struct RacingPins {
+    related: Racer,
+    pin: Racer,
 }
 
-impl Switching {
-    /// The pin the block names on `-related_pin`, with the edge it makes. For [`Switching::Single`] that
-    /// is the one pin: naming it twice follows FROM the variant — a pulse constrains a pin against
-    /// itself — rather than from two fields that happen to be equal.
-    fn related(&self) -> &Racer {
-        match self {
-            Switching::Pair { related, .. } => related,
-            Switching::Single { pin } => pin,
+impl RacingPins {
+    /// The pins a minimum-pulse-width block switches: the one pin it constrains, raced against its own
+    /// second edge, so the block names that pin on both `-related_pin` and `-pin`.
+    fn pulse(pin: &Racer) -> Self {
+        RacingPins {
+            related: pin.clone(),
+            pin: pin.clone(),
         }
     }
 
-    /// The pin the block names on `-pin`, with the edge it makes.
-    fn pin(&self) -> &Racer {
-        match self {
-            Switching::Pair { pin, .. } | Switching::Single { pin } => pin,
-        }
-    }
-
-    /// The edge `input` makes in the block's `-vector`, or `None` where it is none of the switching
+    /// The edge `input` makes in the block's `-vector`, or `None` where it is neither of the switching
     /// pins — the vector then holding it at the level it starts from.
     fn edge_of(&self, input: &str) -> Option<Edge> {
-        match self {
-            Switching::Pair { related, pin } => [related, pin]
-                .into_iter()
-                .find(|r| r.pin.as_str() == input)
-                .map(|r| r.edge),
-            Switching::Single { pin } => (pin.pin.as_str() == input).then_some(pin.edge),
-        }
+        [&self.related, &self.pin]
+            .into_iter()
+            .find(|r| r.pin.as_str() == input)
+            .map(|r| r.edge)
     }
 }
 
-/// What one constraint `define_arc` renders from: the pins it switches, the victim nodes with the level
-/// each holds at the probed state, and the walk into that state with the levels sampled there.
-/// The four are read at one state and rendered by one block, so they travel as a named whole — several
-/// of them share a type, and telling them apart by position is what a name spares the block.
+/// What one constraint `define_arc` renders from besides the pins its variant carries: the victim nodes
+/// with the level each holds at the probed state, the walk into that state with the levels sampled
+/// there, and the probed state itself. The four are read at one state and rendered by one block, so they
+/// travel as a named whole — several of them share a type, and telling them apart by position is what a
+/// name spares the block.
 struct ConstraintArc<'a> {
-    switching: Switching,
     nodes: &'a [VictimNode],
     prevector: &'a [Minterm<Symbol>],
     levels: &'a ArcLevels,
+    /// The state the hazard was probed from, which the block's firing reports. Two constraints probed
+    /// from states the columns cannot tell apart render the same block, and it is these states that say
+    /// what would tell them apart.
+    state: &'a Minterm<Symbol>,
 }
 
-/// One `define_arc` block a constraint renders: the `-type` it leads with, beside the arc it renders
-/// from. A block carries exactly one type, so how many blocks a constraint fans out to is a property of
-/// its kind rather than of the token.
-struct ConstraintBlock<'a> {
-    arc_type: ArcType,
-    arc: ConstraintArc<'a>,
-}
-
-/// The pins every block of `c` switches: the pair a separation holds apart, or the one pin a minimum
-/// pulse width constrains against its own second edge. A constraint's members all switch the same pins —
-/// what differs between them is the `-type` — so this is a property of the constraint rather than of the
-/// block.
-fn constraint_switching(c: &Constraint) -> Switching {
-    let pin = Racer {
-        pin: c.pin.clone(),
-        edge: c.pin_edge,
-    };
-    let related = |name: &Symbol, edge: Edge| Racer {
-        pin: name.clone(),
-        edge,
-    };
-    match &c.kind {
-        ConstraintKind::SetupHold { clock, clock_edge } => Switching::Pair {
-            related: related(clock, *clock_edge),
-            pin,
-        },
-        ConstraintKind::NonSeq { other, other_edge } => Switching::Pair {
-            related: related(other, *other_edge),
-            pin,
-        },
-        ConstraintKind::MinPulseWidth => Switching::Single { pin },
+/// The arc every block of `c` renders from: the victim nodes with the level each holds at the probed
+/// state, the walk into that state with the levels sampled there, and that state.
+fn constraint_arc(c: &Constraint) -> ConstraintArc<'_> {
+    ConstraintArc {
+        nodes: &c.nodes,
+        prevector: &c.prevector,
+        levels: &c.levels,
+        state: &c.state,
     }
 }
 
-/// The `-type` each block of `c` leads with — how many blocks its kind fans out to, and which.
+/// The blocks one constraint renders, in emission order — how many its kind fans out to, and which.
+/// Each renders from the pins its variant carries and the one arc the constraint states
+/// ([`constraint_arc`]). A constraint's members all switch the same pins, what differs between them
+/// being the `-type`; the kind deciding the fan-out is the kind naming the related pin, and both are
+/// read here in one match, so no member can be handed the pins of another kind.
 ///
 /// A SEPARATION is a pair — the setup member and the hold member, which Liberate characterises as
 /// separate arcs: `setup`/`hold` for a directed clock↔data constraint, `non_seq_setup`/`non_seq_hold`
 /// for a symmetric (oscillation / mutual-exclusion) one.
 ///
-/// A MINIMUM PULSE WIDTH is ONE block of `-type min_pulse_width`: the constrained pin's column carries
-/// the pulse's OPENING edge alone, and Liberate searches for the width at which the probed nodes stop
-/// behaving. There is no pair here — a pair's two members are the two sides of a separation between two
-/// pins, and a pulse has one pin, which the block names on both `-related_pin` and `-pin`.
-fn constraint_types(c: &Constraint) -> Vec<ArcType> {
+/// A MINIMUM PULSE WIDTH is ONE block: the constrained pin's column carries the pulse's OPENING edge
+/// alone, and Liberate searches for the width at which the probed nodes stop behaving. There is no pair
+/// here — a pair's two members are the two sides of a separation between two pins, and a pulse has one
+/// pin, which the block names on both `-related_pin` and `-pin`.
+fn constraint_blocks(c: &Constraint) -> Vec<DefineArc<'_>> {
+    let pin = Racer {
+        pin: c.pin.clone(),
+        edge: c.pin_edge,
+    };
+    let separation = |related: &Symbol, edge: Edge| RacingPins {
+        related: Racer {
+            pin: related.clone(),
+            edge,
+        },
+        pin: pin.clone(),
+    };
     match &c.kind {
-        ConstraintKind::SetupHold { .. } => vec![ArcType::Setup, ArcType::Hold],
-        ConstraintKind::NonSeq { .. } => vec![ArcType::NonSeqSetup, ArcType::NonSeqHold],
-        ConstraintKind::MinPulseWidth => vec![ArcType::MinPulseWidth],
+        ConstraintKind::SetupHold { clock, clock_edge } => vec![
+            DefineArc::Setup(separation(clock, *clock_edge), constraint_arc(c)),
+            DefineArc::Hold(separation(clock, *clock_edge), constraint_arc(c)),
+        ],
+        ConstraintKind::NonSeq { other, other_edge } => vec![
+            DefineArc::NonSeqSetup(separation(other, *other_edge), constraint_arc(c)),
+            DefineArc::NonSeqHold(separation(other, *other_edge), constraint_arc(c)),
+        ],
+        ConstraintKind::MinPulseWidth => vec![DefineArc::MinPulseWidth(pin, constraint_arc(c))],
     }
 }
 
-/// The arc every block of `c` renders from: the pins it switches, the victim nodes with the level each
-/// holds at the probed state, and the walk into that state with the levels sampled there.
-fn constraint_arc(c: &Constraint) -> ConstraintArc<'_> {
-    ConstraintArc {
-        switching: constraint_switching(c),
-        nodes: &c.nodes,
-        prevector: &c.prevector,
-        levels: &c.levels,
-    }
-}
-
-/// The blocks one constraint renders, in emission order: one per `-type` its kind calls for
-/// ([`constraint_types`]), each rendering from the one arc the constraint states
-/// ([`constraint_arc`]).
-fn constraint_blocks(c: &Constraint) -> Vec<ConstraintBlock<'_>> {
-    constraint_types(c)
-        .into_iter()
-        .map(|arc_type| ConstraintBlock {
-            arc_type,
-            arc: constraint_arc(c),
-        })
-        .collect()
-}
-
-/// What an emitted constraint block states of the arc it renders: the `-type`s its kind fans out to, the
-/// pins it relates with the edge each makes, and the nodes it probes. Everything else a block carries —
-/// the `-ic` levels, the `-vector`'s held digits and the `-when` — names the OBSERVATION it was measured
-/// from, so one identity comes out as one general block however many observations were made of it, and
-/// each of those observations returns as its own conditioned block under `--when`.
+/// What an emitted constraint block states of the arc it renders: the constraint's kind, the pin it
+/// constrains with the edge that pin makes, and the nodes it probes. The kind is the whole of the
+/// classification: it decides which `-type`s the constraint fans out to and which pin each of those
+/// blocks relates to, with the edge THAT pin makes ([`constraint_blocks`] reads both off it) — a
+/// separation's related half is the pins its variant carries, and a minimum pulse width relates the
+/// constrained pin to itself, which is the `pin` and `pin_edge` already here. Everything else a block
+/// carries — the `-ic` levels, the `-vector`'s held digits and the `-when` — names the OBSERVATION it
+/// was measured from, so one identity comes out as one general block however many observations were
+/// made of it, and each of those observations returns as its own conditioned block under `--when`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ConstraintIdentity {
-    types: Vec<ArcType>,
-    related: Symbol,
-    related_edge: Edge,
+    kind: ConstraintKind,
     pin: Symbol,
     pin_edge: Edge,
     /// The victim nodes probed, by name ([`Constraint::victim_names`]). An identity states WHICH nodes the
@@ -771,13 +877,8 @@ struct ConstraintIdentity {
 
 impl ConstraintIdentity {
     fn of(c: &Constraint) -> Self {
-        // A minimum pulse width relates its pin to itself, so the related half of the identity is that
-        // same pin and edge — which is what the block writes on `-related_pin`.
-        let related = constraint_switching(c).related().clone();
         ConstraintIdentity {
-            types: constraint_types(c),
-            related: related.pin,
-            related_edge: related.edge,
+            kind: c.kind.clone(),
             pin: c.pin.clone(),
             pin_edge: c.pin_edge,
             nodes: c.victim_names(),
@@ -813,10 +914,9 @@ impl ConstraintRank {
 /// Does `outer` speak for `inner` — is `inner` an observation of the same constraint over a strict subset
 /// of the victim nodes `outer` probes?
 ///
-/// The comparison runs within everything that identifies the constraint EXCEPT its victim nodes: the
-/// kind with its payload pins and edges, plus the constrained pin and the edge it makes — which is
-/// [`ConstraintIdentity`] minus its `nodes`, the kind being what decides the `-type`s and the related
-/// pin. What is left to order within such a group is the node sets, by containment.
+/// The comparison is [`ConstraintIdentity`] minus its `nodes`: the kind, the constrained pin and the
+/// edge that pin makes, compared field for field. What is left to order within such a group is the node
+/// sets, by containment.
 ///
 /// One constraint decides different nodes from different states, and on a cell whose internals form a
 /// chain those node sets nest — one set per depth the cascade was cut at, every one of them the same
@@ -847,34 +947,20 @@ fn strictly_within(inner: &[Symbol], outer: &[Symbol]) -> bool {
 /// into the cell's constraints, mapped to the number of observations that identity carries — read
 /// exactly as the delay arcs read [`generalised`]'s map.
 ///
-/// An observation another one dominates supplies no general block ([`dominates`]); what is left groups by
-/// [`ConstraintIdentity`], and each group's representative — the observation its general block is
-/// rendered from — is its minimum [`ConstraintRank`]. Every observation renders a conditioned block
-/// regardless, so nothing here decides whether one is characterised, only how.
+/// An observation another one dominates supplies no general block ([`dominates`]) and is dropped before
+/// the fold; what is left goes to [`representatives`] keyed by [`ConstraintIdentity`] and ranked by
+/// [`ConstraintRank`], so each group's representative — the observation its general block is rendered
+/// from — is its minimum rank. Every observation renders a conditioned block regardless, so nothing here
+/// decides whether one is characterised, only how.
 fn constraint_selection(constraints: &[Constraint]) -> HashMap<usize, usize> {
-    // Per identity: the minimum-rank winner and the observation count.
-    let mut groups: HashMap<ConstraintIdentity, (ConstraintRank, usize, usize)> = HashMap::new();
-    for (i, c) in constraints
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| !constraints.iter().any(|o| dominates(o, c)))
-    {
-        let rank = ConstraintRank::of(c);
-        groups
-            .entry(ConstraintIdentity::of(c))
-            .and_modify(|g| {
-                g.2 += 1;
-                if rank < g.0 {
-                    g.0 = rank;
-                    g.1 = i;
-                }
-            })
-            .or_insert((rank, i, 1));
-    }
-    groups
-        .into_values()
-        .map(|(_, i, count)| (i, count))
-        .collect()
+    representatives(
+        constraints
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| !constraints.iter().any(|o| dominates(o, c))),
+        |c| ConstraintIdentity::of(c),
+        |c| ConstraintRank::of(c),
+    )
 }
 
 /// State one constraint's blocks: its kind's fan-out, over every alias group whose netlist agrees on the
@@ -888,77 +974,107 @@ fn state_constraint(blocks: &mut Blocks, cell: &AnalysedCell, c: &Constraint, wi
     let note = oscillation_note(cell, c);
     for group in &groups(cell, &c.victim_names()) {
         for (i, block) in constraint_blocks(c).into_iter().enumerate() {
-            let mut text =
-                constraint_block(cell, group, &block.arc, block.arc_type.token(), with_when);
+            let mut text = block.tcl(cell, group, with_when);
             if let (0, Some(note)) = (i, &note) {
                 text.insert_str(0, note);
             }
-            blocks.state(text, constraint_firing(&block, &c.state));
+            blocks.state(text, block.firing());
         }
     }
 }
 
-/// One constraint `define_arc` of the given `-type`. Liberate cannot infer how to prepare these
-/// non-standard state-holding cells, so every pin is listed and fully specified: `-ic` states the
-/// pre-toggle condition of every column, and the full `-vector` carries the switching pins as `R`/`F`,
-/// the other inputs at their held value, and the outputs as `X`. `with_when` selects which of the two
-/// passes in [`cell_arcs_tcl`] the block belongs to: the conditioned one, naming the input context this
-/// observation was made in ([`constraint_when_str`]), or the general one, which stands for the constraint
-/// however it was reached and generalises solely by omitting the `-when` line.
-fn constraint_block(
+/// The columns one constraint `define_arc` carries, twice over: as the model names them and as the
+/// group's netlist does, beside the start level of every victim node that earned one and the `-probe`
+/// naming every victim.
+struct ConstraintColumns {
+    /// The columns in model coordinates, which `-ic` and `-vector` are rendered over.
+    model: Vec<Symbol>,
+    /// The same columns under the group's netlist names, which `-pinlist` prints.
+    listed: Vec<Symbol>,
+    /// The level a victim node that earned a column holds at the probed state, read back as `-ic`
+    /// renders that column.
+    probed: HashMap<Symbol, bool>,
+    /// The `-probe` line's nodes, separated by spaces: every victim node of the constraint under the
+    /// group's netlist names, the ones that earned a column of their own and the ones that did not
+    /// alike.
+    probe_list: String,
+}
+
+impl ConstraintColumns {
+    /// The columns a block over `group` carries for the victim `nodes` of its constraint: the cell's
+    /// exposures first, then one per victim node that has no column yet.
+    ///
+    /// The victim nodes are measured, so each needs a column: one `-probe` names them all, and the
+    /// columns are what `-ic` initialises them through. A node already has a column when the cell
+    /// exposes it or when it is an output pin, and a second would misalign every column after it, so
+    /// only the rest are added. Both namings of an added column are appended together, which is what
+    /// keeps `-pinlist` and the lines rendered over `model` describing the same column at each
+    /// position.
+    fn of(cell: &AnalysedCell, group: &Group, nodes: &[VictimNode]) -> Self {
+        let mut model = cell.exposed.clone();
+        let mut listed = group.exposed.clone();
+        let mut probed: HashMap<Symbol, bool> = HashMap::new();
+        for p in nodes {
+            if cell.exposed.contains(&p.node) || cell.outputs.iter().any(|o| o.name == p.node) {
+                continue;
+            }
+            model.push(p.node.clone());
+            listed.push(group.probed_name(&p.node));
+            probed.insert(p.node.clone(), p.level);
+        }
+        let probe_list = nodes
+            .iter()
+            .map(|p| group.probed_name(&p.node).to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        Self {
+            model,
+            listed,
+            probed,
+            probe_list,
+        }
+    }
+}
+
+/// A constraint block below its `-type` line, which is the arm's to write. The five constraint kinds
+/// state the same things of the arc they render from and differ in that word alone.
+///
+/// Liberate cannot infer how to prepare these non-standard state-holding cells, so every pin is listed
+/// and fully specified: `-ic` states the pre-toggle condition of every column, and the full `-vector`
+/// carries the switching pins as `R`/`F`, the other inputs at their held value, and the outputs as `X`.
+/// A general block stands for the constraint however it was reached and generalises solely by omitting
+/// the `-when` line — `when` is `None`; a conditioned one names the input context this observation was
+/// made in ([`constraint_when_str`]).
+fn constraint_body(
     cell: &AnalysedCell,
     group: &Group,
+    pins: &RacingPins,
     arc: &ConstraintArc<'_>,
-    arc_type: &str,
-    with_when: bool,
+    when: Option<&str>,
 ) -> String {
-    // The victim nodes are measured, so each needs a column: one `-probe` names them
-    // all, and the columns are what `-ic` initialises them through. A node already has a column when
-    // the cell exposes it or when it is an output pin, and a second would misalign every column after
-    // it, so only the rest are added.
-    let mut model = cell.exposed.clone();
-    let mut listed = group.exposed.clone();
-    let mut probed: BTreeMap<Symbol, bool> = BTreeMap::new();
-    for p in arc.nodes {
-        if cell.exposed.contains(&p.node) || cell.outputs.iter().any(|o| o.name == p.node) {
-            continue;
-        }
-        model.push(p.node.clone());
-        listed.push(group.probed_name(&p.node));
-        probed.insert(p.node.clone(), p.level);
-    }
-    let probe_list = arc
-        .nodes
-        .iter()
-        .map(|p| group.probed_name(&p.node).to_string())
-        .collect::<Vec<_>>()
-        .join(" ");
+    let columns = ConstraintColumns::of(cell, group, arc.nodes);
 
-    let mut s = String::from("define_arc \\\n");
-    s.push_str(&format!("\t-type {arc_type} \\\n"));
-    s.push_str(&format!(
+    let mut s = format!(
         "\t-pinlist {{{}}} \\\n",
-        arc_pinlist_str(cell, &listed)
+        arc_pinlist_str(cell, &columns.listed)
+    );
+    s.push_str(&ic_line(
+        cell,
+        &columns.model,
+        arc.prevector,
+        arc.levels,
+        &columns.probed,
     ));
-    if cell.state_holding {
-        s.push_str(&format!(
-            "\t-ic \"{}\" \\\n",
-            ic_str(cell, &model, arc.prevector, arc.levels, &probed)
-        ));
-    }
     s.push_str(&format!(
         "\t-vector {{{}}} \\\n",
-        constraint_vector_str(cell, &model, arc)
+        constraint_vector_str(cell, &columns.model, pins, arc)
     ));
-    if let (true, Some(w)) = (with_when, constraint_when_str(arc)) {
+    if let Some(w) = when {
         s.push_str(&format!("\t-when \"{w}\" \\\n"));
     }
-    s.push_str(&format!(
-        "\t-related_pin {} \\\n",
-        arc.switching.related().pin
-    ));
-    s.push_str(&format!("\t-pin {} \\\n", arc.switching.pin().pin));
-    s.push_str(&format!("\t-probe {{{probe_list}}} \\\n"));
+    s.push_str(&format!("\t-related_pin {} \\\n", pins.related.pin));
+    s.push_str(&format!("\t-pin {} \\\n", pins.pin.pin));
+    s.push_str(&format!("\t-probe {{{}}} \\\n", columns.probe_list));
     s.push_str(&format!("\t{}\n", name_block(&group.names)));
     s.push('\n');
     s
@@ -975,6 +1091,7 @@ fn constraint_block(
 fn constraint_vector_str(
     cell: &AnalysedCell,
     exposed: &[Symbol],
+    pins: &RacingPins,
     arc: &ConstraintArc<'_>,
 ) -> String {
     let held = assignment(
@@ -985,7 +1102,7 @@ fn constraint_vector_str(
     vector(
         cell,
         exposed,
-        |input| match arc.switching.edge_of(input) {
+        |input| match pins.edge_of(input) {
             Some(edge) => edge.rf().to_string(),
             None => if *held
                 .get(input)
@@ -1045,55 +1162,55 @@ fn related_edge(arc: &Arc) -> Edge {
     }
 }
 
-/// One transition `define_arc`. `with_when` selects which of the two passes in [`cell_arcs_tcl`] the
-/// block belongs to: the conditioned one, carrying the arc's `-when`, or the general one. Either way the
-/// block renders THIS arc's own concrete `-ic` and `-vector`: `-vector` is the stimulus Liberate drives
-/// and `X` is legal only in the unmonitored-output columns (see [`vector_str`]), so a general block's
-/// generality lives in the ABSENCE of the `-when` line, not in a relaxed vector.
-fn format_arc(cell: &AnalysedCell, group: &Group, arc: &Arc, with_when: bool) -> String {
-    let type_line = format!(
-        "\t-type {} \\\n",
-        ArcIdentity::of(cell, arc).arc_type().token()
-    );
-    let pinlist = format!(
+/// The `-ic` line, or nothing at all where the cell holds no state and has no start condition to state.
+/// The ONE source of the line: every `define_arc` a state-holding cell renders carries it, over the
+/// `model` columns the block lists and the levels sampled at the state the arc was measured from.
+///
+/// The `-ic` VALUES are one double-quoted word, never a braced one: Tcl substitutes no variable inside
+/// braces, so a braced `$VDD` would reach Liberate as that literal text instead of the supply voltage. A
+/// single column within the word carries braces of its own where [`ic_column`] wraps it.
+fn ic_line(
+    cell: &AnalysedCell,
+    model: &[Symbol],
+    prevector: &[Minterm<Symbol>],
+    levels: &ArcLevels,
+    probed: &HashMap<Symbol, bool>,
+) -> String {
+    if !cell.state_holding {
+        return String::new();
+    }
+    format!(
+        "\t-ic \"{}\" \\\n",
+        ic_str(cell, model, prevector, levels, probed)
+    )
+}
+
+/// A transition block below its `-type` line, which is the arm's to write. The three transition kinds
+/// state the same things of the arc they measure and differ in that word alone.
+///
+/// The block renders THIS arc's own concrete `-ic` and `-vector`: `-vector` is the stimulus Liberate
+/// drives and `X` is legal only in the unmonitored-output columns (see [`vector_str`]), so a general
+/// block's generality lives in the ABSENCE of the `-when` line — `when` is `None` — not in a relaxed
+/// vector.
+fn transition_body(cell: &AnalysedCell, group: &Group, arc: &Arc, when: Option<&str>) -> String {
+    let mut s = format!(
         "\t-pinlist {{{}}} \\\n",
         arc_pinlist_str(cell, &group.exposed)
     );
-    // The `-ic` VALUES are one double-quoted word, never a braced one: Tcl substitutes no variable
-    // inside braces, so a braced `$VDD` would reach Liberate as that literal text instead of the supply
-    // voltage. A single column within the word carries braces of its own where [`ic_column`] wraps it.
-    let ic = if cell.state_holding {
-        format!(
-            "\t-ic \"{}\" \\\n",
-            ic_str(
-                cell,
-                &cell.exposed,
-                &arc.prevector,
-                &arc.levels,
-                &BTreeMap::new()
-            )
-        )
-    } else {
-        String::new()
-    };
-    let vector = format!("\t-vector {{{}}} \\\n", vector_str(cell, arc));
-    let when = match (with_when, when_str(&arc.end, &arc.related)) {
-        (true, Some(w)) => format!("\t-when \"{w}\" \\\n"),
-        _ => String::new(),
-    };
-    let related = format!("\t-related_pin {} \\\n", arc.related);
-    let pin = format!("\t-pin {} \\\n", arc.output);
-    let name = format!("\t{}\n", name_block(&group.names));
-
-    let mut s = String::from("define_arc \\\n");
-    s.push_str(&type_line);
-    s.push_str(&pinlist);
-    s.push_str(&ic);
-    s.push_str(&vector);
-    s.push_str(&when);
-    s.push_str(&related);
-    s.push_str(&pin);
-    s.push_str(&name);
+    s.push_str(&ic_line(
+        cell,
+        &cell.exposed,
+        &arc.prevector,
+        &arc.levels,
+        &HashMap::new(),
+    ));
+    s.push_str(&format!("\t-vector {{{}}} \\\n", vector_str(cell, arc)));
+    if let Some(w) = when {
+        s.push_str(&format!("\t-when \"{w}\" \\\n"));
+    }
+    s.push_str(&format!("\t-related_pin {} \\\n", arc.related));
+    s.push_str(&format!("\t-pin {} \\\n", arc.output));
+    s.push_str(&format!("\t{}\n", name_block(&group.names)));
     s.push('\n');
     s
 }
@@ -1103,7 +1220,7 @@ fn format_arc(cell: &AnalysedCell, group: &Group, arc: &Arc, with_when: bool) ->
 /// arc measures no output transition). An exposed node reads `X`: a `-vector` column FORCES its value
 /// for the measurement, and an internal node driven by the cell must be left to follow the cell. Its
 /// start level reaches Liberate through `-ic` instead. Mirrors [`vector_str`] for [`Arc`], and is the
-/// ONE source of `format_hidden_arc`'s `-vector` line.
+/// ONE source of the `-vector` line [`DefineArc::Hidden`] writes.
 fn hidden_vector_str(cell: &AnalysedCell, h: &HiddenArc) -> String {
     let held: BTreeMap<&str, bool> = h
         .levels
@@ -1141,47 +1258,6 @@ fn hidden_vector_str(cell: &AnalysedCell, h: &HiddenArc) -> String {
             .to_string()
         },
     )
-}
-
-/// A hidden (whole-cell internal-power) `define_arc` of `-type hidden`: the toggled input drives an
-/// `R`/`F` edge, every other input sits at its held value in the end state, and every output is pinned
-/// at its held `1`/`0` value (never `X` — a hidden arc measures no output transition). Unlike transition
-/// arcs there is no `-related_pin`, and `-type hidden` always leads regardless of edge direction.
-/// `with_when` selects which of the two passes in [`cell_arcs_tcl`] the block belongs to: the
-/// conditioned one, carrying the arc's `-when`, or the general one, which keeps its own concrete
-/// `-ic` and `-vector` and generalises solely by omitting the `-when` line.
-fn format_hidden_arc(cell: &AnalysedCell, group: &Group, h: &HiddenArc, with_when: bool) -> String {
-    let vec = hidden_vector_str(cell, h);
-
-    let mut s = String::from("define_arc \\\n");
-    s.push_str(&format!(
-        "\t-type {} \\\n",
-        ArcIdentity::of_hidden(h).arc_type().token()
-    ));
-    s.push_str(&format!(
-        "\t-pinlist {{{}}} \\\n",
-        arc_pinlist_str(cell, &group.exposed)
-    ));
-    if cell.state_holding {
-        s.push_str(&format!(
-            "\t-ic \"{}\" \\\n",
-            ic_str(
-                cell,
-                &cell.exposed,
-                &h.prevector,
-                &h.levels,
-                &BTreeMap::new()
-            )
-        ));
-    }
-    s.push_str(&format!("\t-vector {{{vec}}} \\\n"));
-    if let (true, Some(w)) = (with_when, hidden_when_str(h)) {
-        s.push_str(&format!("\t-when \"{w}\" \\\n"));
-    }
-    s.push_str(&format!("\t-pin {} \\\n", h.pin.as_str()));
-    s.push_str(&format!("\t{}\n", name_block(&group.names)));
-    s.push('\n');
-    s
 }
 
 /// The cell's pins: inputs then outputs, in declaration order. This is what `define_cell` declares the
@@ -1469,7 +1545,7 @@ fn ic_str(
     exposed: &[Symbol],
     prevector: &[espresso_logic::Minterm<espresso_logic::Symbol>],
     levels: &ArcLevels,
-    probed: &BTreeMap<Symbol, bool>,
+    probed: &HashMap<Symbol, bool>,
 ) -> String {
     let held = assignment(
         prevector
@@ -1589,14 +1665,14 @@ fn hidden_when_str(h: &HiddenArc) -> Option<String> {
 /// land and measures nothing the cell does in response — so the outputs are exactly what tells two
 /// contexts of a state-holding cell apart, one input assignment reaching each over a different stored
 /// value. Naming their levels is what makes the condition name one observation.
-fn constraint_when_str(arc: &ConstraintArc<'_>) -> Option<String> {
+fn constraint_when_str(pins: &RacingPins, arc: &ConstraintArc<'_>) -> Option<String> {
     let held = arc
         .prevector
         .last()
         .expect("path_to seeds its chain with the probed node itself");
     let mut lits: Vec<(Symbol, bool)> = assignment(held)
         .into_iter()
-        .filter(|(k, _)| arc.switching.edge_of(k.as_str()).is_none())
+        .filter(|(k, _)| pins.edge_of(k.as_str()).is_none())
         .collect();
     lits.extend(arc.levels.outputs.iter().map(|(s, v)| (s.clone(), *v)));
     if lits.is_empty() {
@@ -1606,50 +1682,78 @@ fn constraint_when_str(arc: &ConstraintArc<'_>) -> Option<String> {
     Some(crate::logic::literal_product(&lits))
 }
 
-/// One `define_leakage` block for a static leakage state, in one of two forms.
+/// One `define_leakage` block for a static leakage state, in one of two forms. `define_leakage` is a
+/// command of its own: the block carries no `-type` and no `-pinlist`, and names the cell rather than a
+/// [`Group`], so the form it takes is what this type ranges over and the variant IS that form.
 ///
-/// A state the cell must be WALKED into runs the walk: the `-prevector` primes the internal nodes,
-/// which is what distinguishes two rest states sharing an input assignment, and the `-when` names the
-/// condition the cell rests at. The walk is rendered whole, its last step being the state itself.
-///
-/// A state the INPUTS drive the cell into on their own is the bare condition: `define_leakage -when
-/// "…" { … }`. There is nothing to prime, so there is nothing to run, and the condition alone states
-/// it. Its walk is a single step — `Explored::path_to` seeds the chain with the state itself — which
-/// is the state that condition already names.
-///
-/// Two bare blocks cannot collide, which is why leakage needs no equivalent of [`Blocks::state`]:
-/// walk-free means the inputs alone drive the cell into the state, so the inputs determine it, and two
-/// states resting under one `-when` cannot differ.
-fn format_leakage(cell: &AnalysedCell, l: &LeakageState) -> String {
-    let mut lits: Vec<(Symbol, bool)> = assignment(&l.inputs).into_iter().collect();
-    lits.extend(l.outputs.iter().cloned());
-    lits.sort();
-    let when = literal_product(&lits);
+/// A leakage block goes straight into the output: leakage needs no equivalent of [`Blocks::state`],
+/// because no two of these blocks can coincide. One block is one rest state — `leakage::derive` reads
+/// `Explored::order`, which holds each reachable state once. Two [`LeakageBlock::Resting`] blocks cannot
+/// collide: walk-free means the inputs alone drive the cell into the state, so the inputs determine it,
+/// and two states resting under one `-when` cannot differ. Two [`LeakageBlock::Primed`] blocks commonly
+/// share a `-when` — the condition names the inputs and every settled output, so two states it cannot
+/// separate differ in an internal node, and the cell leaks differently in each — and with no `-pinlist`
+/// there is no `-ic` to state that node's level, which leaves the walk as the only part of the block
+/// naming which state is meant. The walks do separate them: replaying one re-derives exactly one state,
+/// its first step's inputs settling to the start state and each later step being a single input toggle
+/// settled (`machine::explore`), so two states cannot share a walk.
+enum LeakageBlock<'a> {
+    /// A state the cell must be WALKED into, which runs the walk: the `-prevector` primes the internal
+    /// nodes, which is what distinguishes two rest states sharing an input assignment, and the `-when`
+    /// names the condition the cell rests at. The walk is rendered whole, its last step being the state
+    /// itself.
+    Primed(&'a LeakageState),
+    /// A state the INPUTS drive the cell into on their own, which is the bare condition: `define_leakage
+    /// -when "…" { … }`. There is nothing to prime, so there is nothing to run, and the condition alone
+    /// states it. Its walk is a single step — `Explored::path_to` seeds the chain with the state itself
+    /// — which is the state that condition already names.
+    Resting(&'a LeakageState),
+}
 
-    // A state the inputs drive the cell into on their own needs no priming, and with nothing to prime
-    // there is nothing to run: the condition alone states it, and the block is that one line. Its walk
-    // is a single step — `Explored::path_to` seeds the chain with the state itself — which is the state
-    // the condition already names.
-    if l.prevector.len() <= 1 {
-        return format!(
-            "define_leakage -when \"{when}\" {}\n\n",
-            name_block(&cell.name)
-        );
+impl<'a> LeakageBlock<'a> {
+    /// The form a rest state renders as, read off the walk that reaches it.
+    fn of(l: &'a LeakageState) -> Self {
+        if l.prevector.len() <= 1 {
+            LeakageBlock::Resting(l)
+        } else {
+            LeakageBlock::Primed(l)
+        }
     }
 
-    let mut s = String::from("define_leakage \\\n");
-    s.push_str(&format!(
-        "\t-prevector_pinlist {{{}}} \\\n",
-        cell.inputs.join(" ")
-    ));
-    s.push_str(&format!(
-        "\t-prevector {{{}}} \\\n",
-        prevector_str(cell, &l.prevector)
-    ));
-    s.push_str(&format!("\t-when \"{when}\" \\\n"));
-    s.push_str(&format!("\t{}\n", name_block(&cell.name)));
-    s.push('\n');
-    s
+    /// The whole block. Both forms rest under the same condition — the input assignment and every
+    /// settled output as one product — so it is stated once here, and each arm carries it where its own
+    /// form puts it.
+    fn render(&self, cell: &AnalysedCell) -> String {
+        let when = match self {
+            LeakageBlock::Primed(l) | LeakageBlock::Resting(l) => {
+                let mut lits: Vec<(Symbol, bool)> = assignment(&l.inputs).into_iter().collect();
+                lits.extend(l.outputs.iter().cloned());
+                lits.sort();
+                literal_product(&lits)
+            }
+        };
+        match self {
+            LeakageBlock::Resting(_) => format!(
+                "define_leakage -when \"{when}\" {}\n\n",
+                name_block(&cell.name)
+            ),
+            LeakageBlock::Primed(l) => {
+                let mut s = String::from("define_leakage \\\n");
+                s.push_str(&format!(
+                    "\t-prevector_pinlist {{{}}} \\\n",
+                    cell.inputs.join(" ")
+                ));
+                s.push_str(&format!(
+                    "\t-prevector {{{}}} \\\n",
+                    prevector_str(cell, &l.prevector)
+                ));
+                s.push_str(&format!("\t-when \"{when}\" \\\n"));
+                s.push_str(&format!("\t{}\n", name_block(&cell.name)));
+                s.push('\n');
+                s
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1819,11 +1923,8 @@ Y = "A*B"
         let default = cell_arcs_tcl(&cell, NO_LEAKAGE);
         eprintln!("{default}");
         assert!(!default.lines().any(|l| l.trim_start().starts_with("-when")));
-        let events: HashSet<ArcIdentity> = cell
-            .hidden_arcs
-            .iter()
-            .map(ArcIdentity::of_hidden)
-            .collect();
+        let events: HashSet<HiddenIdentity> =
+            cell.hidden_arcs.iter().map(HiddenIdentity::of).collect();
         assert!(!events.is_empty(), "AND2 emits hidden arcs");
         let hidden = blocks(&default)
             .iter()
@@ -1884,13 +1985,9 @@ Q = "A*B + Q*(A+B)"
         let transitions: HashSet<_> = cell
             .arcs
             .iter()
-            .map(|a| ArcIdentity::of(&cell, a))
+            .map(|a| TransitionIdentity::of(&cell, a))
             .collect();
-        let events: HashSet<_> = cell
-            .hidden_arcs
-            .iter()
-            .map(ArcIdentity::of_hidden)
-            .collect();
+        let events: HashSet<_> = cell.hidden_arcs.iter().map(HiddenIdentity::of).collect();
         let firings = cell.arcs.len() + cell.hidden_arcs.len();
         assert_eq!(
             blocks(&default).len(),
@@ -1905,7 +2002,7 @@ Q = "A*B + Q*(A+B)"
 
         // Every discovered firing is emitted with its own condition once the class is selected.
         for a in &selected.arcs {
-            let conditioned = format_arc(&selected, &whole(&selected), a, true);
+            let conditioned = DefineArc::of(&selected, a).tcl(&selected, &whole(&selected), true);
             assert!(
                 has_when(&conditioned) && on.contains(&conditioned),
                 "a discovered firing is missing under `when`:\n{conditioned}"
@@ -2074,12 +2171,11 @@ Y = "A*B"
     fn conditioned_counts(cell: &AnalysedCell) -> (usize, usize) {
         let general = generalised(
             &cell.arcs,
-            |a| ArcIdentity::of(cell, a),
+            |a| TransitionIdentity::of(cell, a),
             |a| a.prevector.len(),
         );
-        let general_hidden = generalised(&cell.hidden_arcs, ArcIdentity::of_hidden, |h| {
-            h.prevector.len()
-        });
+        let general_hidden =
+            generalised(&cell.hidden_arcs, HiddenIdentity::of, |h| h.prevector.len());
         // Mirror the emitter's skip rule: a representative is redundant — its conditioned block is not
         // emitted — when its identity has a single firing or it renders no condition.
         let redundant = |map: &HashMap<usize, usize>, i: usize, no_when: bool| {
@@ -2099,16 +2195,19 @@ Y = "A*B"
         )
     }
 
-    /// The A→Y arcs of `cell`, grouped by [`ArcIdentity`] — the source the general pass groups, so a
+    /// The A→Y arcs of `cell`, grouped by [`TransitionIdentity`] — the source the general pass groups, so a
     /// premise read from it fails loudly on a fixture where nothing collides.
-    fn ay_groups(cell: &AnalysedCell) -> HashMap<ArcIdentity, Vec<&Arc>> {
+    fn ay_groups(cell: &AnalysedCell) -> HashMap<TransitionIdentity, Vec<&Arc>> {
         let mut groups: HashMap<_, Vec<&Arc>> = HashMap::new();
         for a in cell
             .arcs
             .iter()
             .filter(|a| a.output == "Y" && a.related == "A")
         {
-            groups.entry(ArcIdentity::of(cell, a)).or_default().push(a);
+            groups
+                .entry(TransitionIdentity::of(cell, a))
+                .or_default()
+                .push(a);
         }
         groups
     }
@@ -2130,7 +2229,7 @@ Y = "A*B"
         eprintln!("{default}");
         let survivors = group
             .iter()
-            .filter(|a| default.contains(&format_arc(&cell, &whole(&cell), a, false)))
+            .filter(|a| default.contains(&DefineArc::of(&cell, a).tcl(&cell, &whole(&cell), false)))
             .count();
         assert_eq!(survivors, 1, "the colliding A→Y arcs collapse to one block");
     }
@@ -2156,7 +2255,7 @@ Y = "A*B"
         let default = cell_arcs_tcl(&cell, NO_LEAKAGE);
         let survivor = group
             .iter()
-            .find(|a| default.contains(&format_arc(&cell, &whole(&cell), a, false)))
+            .find(|a| default.contains(&DefineArc::of(&cell, a).tcl(&cell, &whole(&cell), false)))
             .expect("the surviving A→Y block");
         assert_eq!(
             survivor.prevector.len(),
@@ -2183,7 +2282,7 @@ Y = "A*B"
             let transitions: HashSet<_> = cell
                 .arcs
                 .iter()
-                .map(|a| ArcIdentity::of(&cell, a))
+                .map(|a| TransitionIdentity::of(&cell, a))
                 .collect();
             assert_eq!(
                 non_hidden,
@@ -2193,11 +2292,7 @@ Y = "A*B"
 
             // Hidden side: one block per distinct (pin, edge) toggle event.
             let hidden = tcl.matches("-type hidden").count();
-            let events: HashSet<_> = cell
-                .hidden_arcs
-                .iter()
-                .map(ArcIdentity::of_hidden)
-                .collect();
+            let events: HashSet<_> = cell.hidden_arcs.iter().map(HiddenIdentity::of).collect();
             assert_eq!(
                 hidden,
                 events.len(),
@@ -2222,13 +2317,13 @@ Q = "E*D + !E*Q"
         let cell = analyse(DLAT);
         // PREMISE: a D toggle is measured from several held-Q contexts, each of which renders a
         // condition.
-        let mut contexts: HashMap<ArcIdentity, usize> = HashMap::new();
+        let mut contexts: HashMap<HiddenIdentity, usize> = HashMap::new();
         for h in cell.hidden_arcs.iter().filter(|h| h.pin == "D") {
             assert!(
                 hidden_when_str(h).is_some(),
                 "premise: every D hidden arc renders a condition"
             );
-            *contexts.entry(ArcIdentity::of_hidden(h)).or_default() += 1;
+            *contexts.entry(HiddenIdentity::of(h)).or_default() += 1;
         }
         assert!(
             contexts.values().any(|n| *n >= 2),
@@ -2272,9 +2367,7 @@ Q = "E*D + !E*Q"
                 .to_string()
         };
         for (event, n) in &contexts {
-            let ArcIdentity::Hidden { edge, .. } = event else {
-                panic!("a hidden arc's identity is ArcIdentity::Hidden: {event:?}");
-            };
+            let HiddenIdentity { edge, .. } = event;
             let rf = edge.rf().to_string();
             let conditioned: Vec<String> = d_hidden(&selected)
                 .into_iter()
@@ -2302,7 +2395,7 @@ Q = "E*D + !E*Q"
     const GENERALISED_FIXTURES: [&str; 4] = [OA22, MAJ3, TWO, DLAT];
 
     /// A block's text with the `define_arc` keyword stripped — the form [`blocks`] yields, so a rendering
-    /// produced by [`format_arc`] can be compared against an emitted block.
+    /// produced by [`DefineArc::tcl`] can be compared against an emitted block.
     fn body(rendered: &str) -> String {
         rendered.trim_start_matches("define_arc").trim().to_string()
     }
@@ -2317,7 +2410,7 @@ Q = "E*D + !E*Q"
             .map(|b| {
                 cell.arcs
                     .iter()
-                    .find(|a| body(&format_arc(cell, &whole(cell), a, false)) == *b)
+                    .find(|a| body(&DefineArc::of(cell, a).tcl(cell, &whole(cell), false)) == *b)
                     .unwrap_or_else(|| {
                         panic!("a general block is no discovered arc's own rendering:\n{b}")
                     })
@@ -2333,7 +2426,7 @@ Q = "E*D + !E*Q"
             .map(|b| {
                 cell.hidden_arcs
                     .iter()
-                    .find(|h| body(&format_hidden_arc(cell, &whole(cell), h, false)) == *b)
+                    .find(|h| body(&DefineArc::Hidden(h).tcl(cell, &whole(cell), false)) == *b)
                     .unwrap_or_else(|| {
                         panic!("a general hidden block is no discovered arc's own rendering:\n{b}")
                     })
@@ -2351,13 +2444,9 @@ Q = "E*D + !E*Q"
             let transitions: HashSet<_> = cell
                 .arcs
                 .iter()
-                .map(|a| ArcIdentity::of(&cell, a))
+                .map(|a| TransitionIdentity::of(&cell, a))
                 .collect();
-            let events: HashSet<_> = cell
-                .hidden_arcs
-                .iter()
-                .map(ArcIdentity::of_hidden)
-                .collect();
+            let events: HashSet<_> = cell.hidden_arcs.iter().map(HiddenIdentity::of).collect();
             // PREMISE: the fixture fires some transition or toggle from several contexts, so there is
             // something to generalise over.
             assert!(
@@ -2369,7 +2458,7 @@ Q = "E*D + !E*Q"
             let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
             let mut emitted: HashMap<_, usize> = HashMap::new();
             for a in general_transition_arcs(&cell, &tcl) {
-                *emitted.entry(ArcIdentity::of(&cell, a)).or_default() += 1;
+                *emitted.entry(TransitionIdentity::of(&cell, a)).or_default() += 1;
             }
             assert!(
                 emitted.values().all(|n| *n == 1),
@@ -2383,7 +2472,7 @@ Q = "E*D + !E*Q"
 
             let mut emitted_h: HashMap<_, usize> = HashMap::new();
             for h in general_hidden_arcs(&cell, &tcl) {
-                *emitted_h.entry(ArcIdentity::of_hidden(h)).or_default() += 1;
+                *emitted_h.entry(HiddenIdentity::of(h)).or_default() += 1;
             }
             assert!(
                 emitted_h.values().all(|n| *n == 1),
@@ -2431,14 +2520,14 @@ Q = "E*D + !E*Q"
             let mut shortest: HashMap<_, usize> = HashMap::new();
             for a in &cell.arcs {
                 let best = shortest
-                    .entry(ArcIdentity::of(&cell, a))
+                    .entry(TransitionIdentity::of(&cell, a))
                     .or_insert(usize::MAX);
                 *best = (*best).min(a.prevector.len());
             }
             let mut shortest_h: HashMap<_, usize> = HashMap::new();
             for h in &cell.hidden_arcs {
                 let best = shortest_h
-                    .entry(ArcIdentity::of_hidden(h))
+                    .entry(HiddenIdentity::of(h))
                     .or_insert(usize::MAX);
                 *best = (*best).min(h.prevector.len());
             }
@@ -2453,14 +2542,14 @@ Q = "E*D + !E*Q"
             for a in general_transition_arcs(&cell, &tcl) {
                 assert_eq!(
                     a.prevector.len(),
-                    shortest[&ArcIdentity::of(&cell, a)],
+                    shortest[&TransitionIdentity::of(&cell, a)],
                     "the representative carries its transition group's shortest prevector"
                 );
             }
             for h in general_hidden_arcs(&cell, &tcl) {
                 assert_eq!(
                     h.prevector.len(),
-                    shortest_h[&ArcIdentity::of_hidden(h)],
+                    shortest_h[&HiddenIdentity::of(h)],
                     "the representative carries its toggle event's shortest prevector"
                 );
             }
@@ -2529,7 +2618,7 @@ Q = "E*D + !E*Q"
         let mut whens: BTreeSet<String> = BTreeSet::new();
         for i in a_rise_y_rise(&selected) {
             let arc = &selected.arcs[i];
-            let block = format_arc(&selected, &whole(&selected), arc, true);
+            let block = DefineArc::of(&selected, arc).tcl(&selected, &whole(&selected), true);
             assert!(
                 on.contains(&block),
                 "a discovered A-rise→Y-rise firing is missing under `when`:\n{block}"
@@ -2560,7 +2649,7 @@ Q = "E*D + !E*Q"
             .filter(|a| a.output == "Y" && a.related == "A")
         {
             contexts
-                .entry((ArcIdentity::of(&cell, a), vector_str(&cell, a)))
+                .entry((TransitionIdentity::of(&cell, a), vector_str(&cell, a)))
                 .or_default()
                 .push(a);
         }
@@ -2578,7 +2667,7 @@ Q = "E*D + !E*Q"
         eprintln!("{default}");
         let emitted = ay_groups(&cell)[key]
             .iter()
-            .filter(|a| default.contains(&format_arc(&cell, &whole(&cell), a, false)))
+            .filter(|a| default.contains(&DefineArc::of(&cell, a).tcl(&cell, &whole(&cell), false)))
             .count();
         assert_eq!(
             emitted, 1,
@@ -2631,11 +2720,11 @@ Q = "E*D + !E*Q"
         // suppressed. A conditioned block is present exactly when it is not suppressed.
         let general = generalised(
             &cell.arcs,
-            |a| ArcIdentity::of(&cell, a),
+            |a| TransitionIdentity::of(&cell, a),
             |a| a.prevector.len(),
         );
         for (i, a) in cell.arcs.iter().enumerate() {
-            let conditioned = format_arc(&cell, &whole(&cell), a, true);
+            let conditioned = DefineArc::of(&cell, a).tcl(&cell, &whole(&cell), true);
             if !has_when(&conditioned) {
                 continue;
             }
@@ -2739,9 +2828,9 @@ Q = "E*D + !E*Q"
     fn single_context_transition_suppresses_its_conditioned_copy() {
         let cell = analyse(&when_variant(AND2, "\"transition\""));
         // premise: every AND2 transition fires from exactly one context.
-        let mut firings: HashMap<ArcIdentity, usize> = HashMap::new();
+        let mut firings: HashMap<TransitionIdentity, usize> = HashMap::new();
         for a in &cell.arcs {
-            *firings.entry(ArcIdentity::of(&cell, a)).or_default() += 1;
+            *firings.entry(TransitionIdentity::of(&cell, a)).or_default() += 1;
         }
         assert!(
             !firings.is_empty() && firings.values().all(|&n| n == 1),
@@ -2820,7 +2909,7 @@ Y = "!A"
         let keys: HashSet<_> = cell
             .arcs
             .iter()
-            .map(|a| ArcIdentity::of(&cell, a))
+            .map(|a| TransitionIdentity::of(&cell, a))
             .collect();
         assert_eq!(
             keys.len(),
@@ -3572,19 +3661,19 @@ Y = "!W"
         }
     }
 
-    /// The `-type` line a minimum-pulse-width block leads with, read off the enum the emitter renders
-    /// it from.
-    fn pulse_type() -> String {
-        format!("-type {}", ArcType::MinPulseWidth.token())
+    /// The `-type` line a minimum-pulse-width block leads with, as [`DefineArc::MinPulseWidth`] writes
+    /// it.
+    fn pulse_type() -> &'static str {
+        "-type min_pulse_width"
     }
 
     /// The PAIR constraint blocks of `tcl` — the setup/hold and non_seq members — each truncated at its
     /// own trailing blank line. Every block probing its victim nodes carries a `-probe`, the
-    /// single-pin [`ArcType::MinPulseWidth`] blocks included, so the type is what tells the two apart.
+    /// single-pin [`DefineArc::MinPulseWidth`] blocks included, so the type is what tells the two apart.
     fn pair_blocks(tcl: &str) -> Vec<String> {
         blocks(tcl)
             .into_iter()
-            .filter(|b| b.contains("-probe") && !b.contains(&pulse_type()))
+            .filter(|b| b.contains("-probe") && !b.contains(pulse_type()))
             .collect()
     }
 
@@ -3601,7 +3690,7 @@ Y = "!W"
     fn pulse_blocks(tcl: &str) -> Vec<String> {
         blocks(tcl)
             .into_iter()
-            .filter(|b| b.contains(&pulse_type()))
+            .filter(|b| b.contains(pulse_type()))
             .collect()
     }
 
@@ -4519,12 +4608,9 @@ Q = "!R*(B + CLK*M + !CLK*Q)"
         assert!(q_arc("R", "async"), "R->Q is -type async");
     }
 
-    /// BOTH_RESET: edge and async arcs coexist on one output pin. CLK's rising edge captures
-    /// (`-type edge`); the declared async clear R forces Q low (`-type async`).
-    #[test]
-    fn both_reset_edge_and_async_coexist_on_one_pin() {
-        let cell = analyse(
-            r#"
+    /// A rising-edge DFF with a declared asynchronous clear: the clear reaches
+    /// [`DefineArc::Async`], which a spec naming no `async` pin has no way to build.
+    const BOTH_RESET: &str = r#"
 [[cell]]
 name = "BR"
 inputs = ["CLK", "D", "R"]
@@ -4534,8 +4620,13 @@ async = ["R"]
 M = "!R*(!CLK*D + CLK*M)"
 [cell.outputs]
 Q = "!R*(CLK*M + !CLK*Q)"
-"#,
-        );
+"#;
+
+    /// Edge and async arcs coexist on one output pin: CLK's rising edge captures (`-type edge`), and
+    /// the declared async clear R forces Q low (`-type async`).
+    #[test]
+    fn both_reset_edge_and_async_coexist_on_one_pin() {
+        let cell = analyse(BOTH_RESET);
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
         let has_clk_edge = tcl.split("define_arc").any(|frag| {
@@ -4656,6 +4747,238 @@ Qb = "!Qa * B"
         );
         eprintln!("{bare}");
         assert!(!bare.contains("# oscillation:"), "{bare}");
+    }
+
+    /// A two-input mutual exclusion element opting into constraint arcs: the co-assertion ring gives it
+    /// the symmetric `non_seq_setup`/`non_seq_hold` pair and the oscillation annotation that rides in
+    /// the first of them.
+    const MUT_CONSTRAINED: &str = r#"
+[[cell]]
+name = "MUT"
+inputs = ["A", "B"]
+constraint_arcs = true
+[cell.outputs]
+Qa = "!Qb * A"
+Qb = "!Qa * B"
+"#;
+
+    /// The `-type` words a constraint block leads with — the five [`DefineArc`] variants a constraint
+    /// fans out to.
+    const CONSTRAINT_TYPES: [&str; 5] = [
+        "setup",
+        "hold",
+        "non_seq_setup",
+        "non_seq_hold",
+        "min_pulse_width",
+    ];
+
+    /// The `-type` words a block rendered from a measurement leads with — the four [`DefineArc`]
+    /// variants that carry a transition or a hidden toggle. With [`CONSTRAINT_TYPES`] these are the
+    /// whole of Liberate's taxonomy here, one word per variant.
+    const MEASURED_TYPES: [&str; 4] = ["async", "edge", "combinational", "hidden"];
+
+    /// The `-type` word the FIRST block of each constraint kind's fan-out leads with — the one an
+    /// oscillation annotation rides in.
+    const FIRST_FANOUT_TYPES: [&str; 3] = ["setup", "non_seq_setup", "min_pulse_width"];
+
+    /// The word on a block's `-type` line: the Liberate taxonomy the block belongs to, which is the
+    /// [`DefineArc`] variant that wrote it.
+    fn type_word(block: &str) -> &str {
+        block
+            .lines()
+            .map(str::trim)
+            .find_map(|l| l.strip_prefix("-type "))
+            .and_then(|w| w.split_whitespace().next())
+            .unwrap_or_else(|| panic!("every define_arc block leads with its -type:\n{block}"))
+    }
+
+    /// A block with its `-type` line dropped — everything the block states apart from which taxonomy it
+    /// is in, which is what two members of one fan-out have in common.
+    fn without_type(block: &str) -> String {
+        block
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("-type "))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Whether the block carries a `-<tag>` line of its own.
+    fn has_line(block: &str, tag: &str) -> bool {
+        block
+            .lines()
+            .any(|l| l.trim_start().starts_with(&format!("{tag} ")))
+    }
+
+    /// Every block of `tcl` whose `-type` is `word`, each stripped of that line, sorted — the fan-out
+    /// member's contribution as a multiset, so emission order does not enter the comparison.
+    fn remainders(tcl: &str, word: &str) -> Vec<String> {
+        let mut r: Vec<String> = blocks(tcl)
+            .iter()
+            .filter(|b| type_word(b) == word)
+            .map(|b| without_type(b))
+            .collect();
+        r.sort();
+        r
+    }
+
+    #[test]
+    fn setup_and_hold_blocks_differ_only_in_the_type_word() {
+        // A separation is characterised from both sides, and the two sides measure the same thing: the
+        // members of a pair are rendered from ONE arc, so they state the same columns, the same
+        // `-related_pin`/`-pin` and the same probe, and differ in the word after `-type` alone. Each
+        // member writes its own block, so this is what catches one arm drifting from its sibling.
+        for (src, pair) in [
+            (IC_DFF, ["setup", "hold"]),
+            (MUT_CONSTRAINED, ["non_seq_setup", "non_seq_hold"]),
+        ] {
+            let cell = analyse(src);
+            let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+            eprintln!("{tcl}");
+            let (first, second) = (remainders(&tcl, pair[0]), remainders(&tcl, pair[1]));
+            assert!(
+                !first.is_empty(),
+                "the fixture emits -type {} blocks:\n{tcl}",
+                pair[0]
+            );
+            assert_eq!(
+                first, second,
+                "the {} and {} blocks say the same of the arc they share:\n{tcl}",
+                pair[0], pair[1]
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_constraint_block_carries_probe_and_only_hidden_omits_related_pin() {
+        // Two lines each belong to one part of the taxonomy and nowhere else: `-probe` names the nodes
+        // a constraint watches, and every measured block relates a pin except a hidden one, whose
+        // toggle is the whole of it. Read as `iff` over every block a fixture emits, so an arm that
+        // borrowed a sibling's body is caught from either side.
+        let mut words: HashSet<String> = HashSet::new();
+        for src in [IC_DFF, MUT_CONSTRAINED] {
+            let cell = analyse(src);
+            let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+            eprintln!("{tcl}");
+            for block in blocks(&tcl) {
+                let word = type_word(&block);
+                assert_eq!(
+                    has_line(&block, "-probe"),
+                    CONSTRAINT_TYPES.contains(&word),
+                    "only a constraint block probes:\n{block}"
+                );
+                assert_eq!(
+                    !has_line(&block, "-related_pin"),
+                    word == "hidden",
+                    "only a hidden block relates no pin:\n{block}"
+                );
+                words.insert(word.to_string());
+            }
+        }
+        assert!(
+            words.contains("hidden"),
+            "the fixtures cover the hidden arm, got {words:?}"
+        );
+        assert!(
+            CONSTRAINT_TYPES.iter().any(|t| words.contains(*t)),
+            "the fixtures cover the constraint arms, got {words:?}"
+        );
+    }
+
+    #[test]
+    fn the_oscillation_note_rides_in_its_first_fanout_block() {
+        // The annotation is spliced into the text of the block it explains BEFORE that text is stated,
+        // so the two dedup together: a note pushed on its own would be left over to explain whatever
+        // block came next. It leads the FIRST member of the fan-out, so a separation's second member
+        // never carries one.
+        let cell = analyse(MUT_CONSTRAINED);
+        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        let notes = tcl
+            .lines()
+            .filter(|l| l.starts_with("# oscillation:"))
+            .count();
+        assert!(notes > 0, "the ring is annotated:\n{tcl}");
+        for tail in tcl.split("# oscillation:").skip(1) {
+            let (_, rest) = tail
+                .split_once('\n')
+                .expect("the annotation is a line of its own");
+            assert!(
+                rest.starts_with("define_arc \\"),
+                "the note leads the block it explains:\n{rest}"
+            );
+            let block = rest.split("\n\n").next().unwrap_or(rest);
+            let word = type_word(block);
+            assert!(
+                FIRST_FANOUT_TYPES.contains(&word),
+                "the annotated block is the first of its fan-out, not a -type {word}:\n{block}"
+            );
+        }
+        let first_members = blocks(&tcl)
+            .iter()
+            .filter(|b| FIRST_FANOUT_TYPES.contains(&type_word(b)))
+            .count();
+        assert!(
+            notes <= first_members,
+            "each note rides a first fan-out block of its own:\n{tcl}"
+        );
+    }
+
+    #[test]
+    fn a_block_and_its_firing_agree_on_the_type_word() {
+        // Each variant states its `-type` word twice, as two literals of its own arm: once in the block
+        // header it renders, once leading the one-line description its firing reports. Reading both off
+        // ONE value is what holds them together, and a report naming a taxonomy its block is not in is
+        // what the two drifting apart looks like. That holds only for a word some fixture reaches, so
+        // the words seen are collected and asserted to be the whole taxonomy — a fixture list that
+        // stopped reaching a variant would drop its description out of the comparison silently.
+        let mut words: HashSet<String> = HashSet::new();
+        for src in [IC_DFF, MUT_CONSTRAINED, BOTH_RESET] {
+            let cell = analyse(src);
+            let cell = cell.arc_view();
+            let mut agree = |block: &DefineArc<'_>, group: &Group| {
+                let tcl = block.tcl(cell, group, false);
+                let reported = block.firing().arc_str();
+                let word = type_word(&tcl);
+                assert_eq!(
+                    word,
+                    reported
+                        .split_whitespace()
+                        .next()
+                        .expect("a firing leads with its -type word"),
+                    "the block and its firing name one taxonomy:\n{tcl}{reported}"
+                );
+                words.insert(word.to_string());
+            };
+            let measured = whole(cell);
+            let mut checked = 0;
+            for arc in &cell.arcs {
+                agree(&DefineArc::of(cell, arc), &measured);
+                checked += 1;
+            }
+            for h in &cell.hidden_arcs {
+                agree(&DefineArc::Hidden(h), &measured);
+                checked += 1;
+            }
+            for c in &cell.constraints {
+                // A constraint block carries its victim nodes' columns on top of the cell's exposures,
+                // so it groups on those too.
+                let probing = one_group(cell, &c.victim_names());
+                for block in constraint_blocks(c) {
+                    agree(&block, &probing);
+                    checked += 1;
+                }
+            }
+            assert!(checked > 0, "the fixture emits blocks to check");
+        }
+        let taxonomy: HashSet<String> = MEASURED_TYPES
+            .iter()
+            .chain(&CONSTRAINT_TYPES)
+            .map(|w| w.to_string())
+            .collect();
+        assert_eq!(
+            words, taxonomy,
+            "the fixtures reach every -type word, so every firing's description is read"
+        );
     }
 
     #[test]
@@ -5202,20 +5525,25 @@ Q = "CLKB*M + !CLKB*Q"
             rendered.tcl
         );
         for m in &rendered.masked {
-            assert_eq!(
-                m.arc_type,
-                ArcType::Hidden,
-                "a masked toggle carries the hidden -type: {m:?}"
-            );
-            assert!(
-                matches!(m.kind, MaskedKind::Toggle { .. }),
-                "a toggle no output follows: {m:?}"
-            );
-            assert!(
-                m.arc_str().starts_with("hidden "),
-                "it reads as its kind and edge: {}",
-                m.arc_str()
-            );
+            // The report reads as the block's own kind and toggle, in full: every state the block
+            // conflates is one firing of exactly the toggle the description names. Reading the whole
+            // string back is what catches one variant rendering another's word — a `hidden` block
+            // reported as `edge S↑` names no firing of this cell.
+            for s in &m.states {
+                let firings = cell
+                    .arc_view()
+                    .hidden_arcs
+                    .iter()
+                    .filter(|h| {
+                        h.start == *s
+                            && format!("hidden {}{}", h.pin, h.edge.arrow()) == m.arc_str()
+                    })
+                    .count();
+                assert_eq!(
+                    firings, 1,
+                    "each conflated state is one firing of the toggle the report names: {m:?}"
+                );
+            }
             assert!(
                 m.states.len() > 1,
                 "only a block covering several states is reported: {m:?}"

@@ -132,3 +132,15 @@ raise it as one rather than letting it accrete silently at the edge of the code.
 
 A commit message ends with the description of the change — never an AI-attribution line or
 session trailer.
+
+A pull request is squash-merged and its branch is kept: `master` reads as one commit per
+delivered change, and the step-by-step history that produced it stays on the branch. That is
+why the branch outlives the merge — `gh pr merge --squash`, never with `--delete-branch`.
+
+The record being kept is the pull request's own branch. Branches a tool cuts for its own
+working copies, and the commits it folds together before handing the work back, are
+scaffolding; removing them is ordinary cleanup, and a squashed unit of work arriving on the
+branch is that tool doing its job. Read the rule for what it protects — the history someone
+would go looking for after the merge — rather than as a prohibition on every ref that ever
+existed. Restoring scaffolding that was correctly cleaned up costs as much as losing the
+record would.

@@ -3368,7 +3368,15 @@ GCLK = "CLK*EL"
                 let mut v: Vec<String> = c
                     .arcs
                     .iter()
-                    .map(|a| format!("{:?} {} {} {}", a.edge, a.output, a.related, a.is_async))
+                    .map(|a| {
+                        format!(
+                            "{:?} {} {} {}",
+                            a.edge,
+                            a.output,
+                            a.related,
+                            c.async_pins.contains(&a.related)
+                        )
+                    })
                     .collect();
                 v.sort();
                 v
