@@ -346,8 +346,8 @@ with no output following it, and the five constraint types — and each variant 
 transition's kind is decided in one place, `TransitionIdentity::of`, and the identity it returns — the
 transition together with that kind — is what the general pass groups the arc under. The exploration's
 rest states come out as `define_leakage` blocks, one per state the cell can sit and leak in, and the two
-forms that command takes are the variants of `LeakageBlock`: the walk that primes the cell into a rest
-state, and the condition the inputs alone settle it at.
+forms that command takes are the variants of `LeakageBlock`: the columns holding every pin and exposed
+node at the level the rest state carries, and the condition the inputs alone settle it at.
 
 Each arc class is emitted in two passes. The **general pass** always runs. It groups the class's derived
 arcs by **transition** — the output pin and the edge it makes, the related pin and the edge IT makes —

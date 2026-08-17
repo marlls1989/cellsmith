@@ -104,8 +104,7 @@ pub fn cell_arcs_tcl(cell: &AnalysedCell, opts: ArcsTclOptions) -> String {
 pub struct MaskedArc {
     /// The block on one line, written by the variant that rendered it: a [`DefineArc`]'s `-type` word
     /// and the pins it measures between, or `leakage` for a [`LeakageBlock`], which carries neither.
-    /// Text for the report on stderr — what kind of block it is is the variant, and nothing reads a kind
-    /// back out of this.
+    /// Text for the report on stderr; the variant that rendered the block is what classifies it.
     pub(crate) arc: String,
     /// The cell states the one emitted block conflates. None of them is the block's: which firing
     /// reached the emitter first decides nothing, since the block says the same of every one. Read

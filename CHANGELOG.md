@@ -86,8 +86,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A `define_leakage` block states its rest state through its own columns.** The `-pinlist` names the
   inputs, the cell's exposed internal nodes, and the outputs, and the `-vector` holds every one of those
   columns at the level the rest state carries. No leakage block emits a `-prevector`: Cadence Liberate
-  segfaults on one inside a `define_leakage` block. Rest states no column tells apart still render one
-  block, and are named by the existing conflation warning.
+  segfaults on one inside a `define_leakage` block. Rest states no column tells apart render one block
+  between them, which the conflation warning names; listing the node that separates them in the cell's
+  `expose` gives each its own block.
 
 ## [0.5.1] - 2026-08-08
 
