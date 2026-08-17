@@ -5115,7 +5115,11 @@ Q = "A*B + Q*(A+B)"
             );
         }
 
-        assert!(!tcl.contains("prevector"), "leakage no longer walks: {tcl}");
+        assert!(
+            !tcl.contains("prevector"),
+            "a leakage block states its rest state through its own columns, and Liberate faults on a \
+             `-prevector` inside one:\n{tcl}"
+        );
         for block in tcl.split("define_leakage").skip(1) {
             let block = block.split("\n\n").next().unwrap_or(block);
             assert!(
