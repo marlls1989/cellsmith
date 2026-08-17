@@ -353,6 +353,7 @@ mod tests {
 
     use crate::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
     use crate::emit::liberty::cell_liberty;
+    use crate::emit::tcl::VectorValue;
     use crate::emit::verilog::cell_verilog;
     use crate::logic::arcs::Edge;
     use crate::logic::constraint::{Constraint, ConstraintKind};
@@ -833,7 +834,7 @@ Q = "W + Q*(A+B)"
     /// the selections below must not depend on. The probed state is left out: these tests compare WHICH
     /// constraints a selection returns, and the selections of one cell answer over the same states.
     fn describe(c: &Constraint) -> String {
-        let end = |pin: &Symbol, edge: Edge| format!("{pin}/{}", edge.rf());
+        let end = |pin: &Symbol, edge: Edge| format!("{pin}/{}", VectorValue::from(edge));
         let head = match &c.kind {
             ConstraintKind::SetupHold { clock, clock_edge } => format!(
                 "setup_hold {} around {}",

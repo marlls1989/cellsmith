@@ -93,15 +93,15 @@ pub(super) fn node_levels_at(state: &Minterm<Symbol>, group: &[Symbol]) -> BTree
 /// assignment, so an input's value is always fixed there.
 ///
 /// Shared with [`super::width`], which reads a pulse's opening edge through it.
+///
+/// The level read here is the one the pin toggles AWAY from, and an edge is named by where the pin
+/// settles, so the complement is what [`Edge::from_settled_level`] is given: a pin standing high falls.
 pub(super) fn edge_from(node: &Minterm<Symbol>, name: &str) -> Edge {
-    if node
-        .value_of(name)
-        .expect("every input is fixed at an explored node")
-    {
-        Edge::Fall
-    } else {
-        Edge::Rise
-    }
+    Edge::from_settled_level(
+        !node
+            .value_of(name)
+            .expect("every input is fixed at an explored node"),
+    )
 }
 
 /// One racer of a detected race: the pin, and the edge it makes when toggled from `node`.

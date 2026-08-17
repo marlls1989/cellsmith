@@ -43,6 +43,7 @@
 //! observations dominating equally. See `hazard-detection.md` for the concept.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use espresso_logic::{Minterm, Symbol};
 
@@ -53,6 +54,13 @@ use crate::logic::arcs::{ArcLevels, Edge};
 pub struct Racer {
     pub pin: Symbol,
     pub edge: Edge,
+}
+
+/// The pin with the arrow of the edge it makes, written as one token: `A↓`.
+impl fmt::Display for Racer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}{}", self.pin, self.edge)
+    }
 }
 
 /// What the hazard's timing is between: inputs that don't converge when toggled (one or two), or one signal racing itself.

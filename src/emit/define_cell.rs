@@ -18,6 +18,7 @@ use espresso_logic::Symbol;
 use indexmap::IndexMap;
 
 use crate::emit::arcs_tcl::pinlist_str;
+use crate::emit::tcl::Words;
 use crate::model::AnalysedCell;
 
 /// A resolved template triple: the `(delay, power, constraint)` names an alias attaches, each `Some`
@@ -70,18 +71,21 @@ pub fn cell_define_cell(cell: &AnalysedCell) -> String {
         out.push_str("define_cell \\\n");
         // Data inputs only — an all-clock/all-async cell drops the flag entirely.
         if !data_inputs.is_empty() {
-            out.push_str(&format!("\t-input {} \\\n", brace(&data_inputs)));
+            out.push_str(&format!("\t-input {{ {} }} \\\n", Words(&data_inputs)));
         }
-        out.push_str(&format!("\t-output {} \\\n", brace(&outputs)));
+        out.push_str(&format!("\t-output {{ {} }} \\\n", Words(&outputs)));
         if !cell.clock_pins.is_empty() {
-            out.push_str(&format!("\t-clock {} \\\n", brace(&cell.clock_pins)));
+            out.push_str(&format!("\t-clock {{ {} }} \\\n", Words(&cell.clock_pins)));
         }
         if !cell.async_pins.is_empty() {
-            out.push_str(&format!("\t-async {} \\\n", brace(&cell.async_pins)));
+            out.push_str(&format!("\t-async {{ {} }} \\\n", Words(&cell.async_pins)));
         }
         // `-pinlist` is the arcs emitter's source of truth — all inputs (incl. clock + async) then
         // outputs — and is emitted unfiltered.
-        out.push_str(&format!("\t-pinlist {{ {} }} \\\n", pinlist_str(cell)));
+        out.push_str(&format!(
+            "\t-pinlist {{ {} }} \\\n",
+            Words(&pinlist_str(cell))
+        ));
         if let Some(d) = delay {
             out.push_str(&format!("\t-delay {d} \\\n"));
         }
@@ -91,17 +95,10 @@ pub fn cell_define_cell(cell: &AnalysedCell) -> String {
         if let Some(c) = constraint {
             out.push_str(&format!("\t-constraint {c} \\\n"));
         }
-        out.push_str(&format!("\t{}\n", brace(aliases)));
+        out.push_str(&format!("\t{{ {} }}\n", Words(aliases)));
         out.push('\n');
     }
     out
-}
-
-/// Brace a Tcl list in the `define_cell` layout: `{ A B Q }`, space-padded inside the braces. Unlike
-/// [`crate::emit::arcs_tcl`]'s `name_block`, which braces the whole name list, this braces a per-group
-/// subset.
-fn brace(items: &[Symbol]) -> String {
-    format!("{{ {} }}", items.join(" "))
 }
 
 #[cfg(test)]

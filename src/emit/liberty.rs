@@ -48,6 +48,7 @@ use espresso_logic::Symbol;
 use rayon::prelude::*;
 
 use crate::emit::statetable::{build_state_model, EdgeRow, EdgeTok, Next, StateModel};
+use crate::emit::tcl::Words;
 use crate::logic::constraint::constrains;
 use crate::logic::hazard::{Cause, Hazard, Outcome};
 use crate::logic::regions::{StateCube, StateRegions};
@@ -262,8 +263,8 @@ fn classify_output(name: &Symbol, sr: &StateRegions, model: &StateModel) -> PinL
 fn statetable_group(model: &StateModel) -> Group {
     let header = format!(
         "\"{}\", \"{}\"",
-        join_nodes(&model.input_nodes),
-        join_nodes(&model.internal_nodes),
+        Words(&model.input_nodes),
+        Words(&model.internal_nodes),
     );
     let mut st = Group::new("statetable", &header);
     set_attr(&mut st, "table", Value::String(table_string(model)));
@@ -341,15 +342,6 @@ fn next_pattern(next: &[Option<Next>]) -> String {
             Some(Next::Hold) => "N",
             None => "-",
         })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Space-join a node list into a single statetable-header field.
-fn join_nodes(nodes: &[Symbol]) -> String {
-    nodes
-        .iter()
-        .map(Symbol::as_str)
         .collect::<Vec<_>>()
         .join(" ")
 }

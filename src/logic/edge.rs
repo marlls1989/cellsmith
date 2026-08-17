@@ -573,11 +573,10 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
             continue;
         };
         if types_edge(&a.output, &a.related, is_rise, &sp) {
-            let edge = if is_rise { Edge::Rise } else { Edge::Fall };
             labels.insert(EdgeLabel {
                 output: a.output.clone(),
                 clock: a.related.clone(),
-                clock_edge: edge,
+                clock_edge: Edge::from_settled_level(is_rise),
                 start: a.start.clone(),
             });
         }
@@ -1878,7 +1877,7 @@ mod tests {
                 .iter()
                 .map(|(clock, edge, sr)| {
                     (
-                        (clock.clone(), *edge == Edge::Rise),
+                        (clock.clone(), edge.settled_level()),
                         builder.build_cover(&sr.on_cover),
                     )
                 })

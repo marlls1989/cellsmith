@@ -270,16 +270,16 @@ mod tests {
 
     /// The pulsed pin and its opening edge of a record [`pulses`] has already picked out, so any other
     /// cause reaching here is a filtering fault rather than a case to handle.
-    fn pulse(hz: &Hazard) -> (String, char) {
+    fn pulse(hz: &Hazard) -> (String, Edge) {
         match &hz.cause {
-            Cause::Pulse { pin, edge } => (pin.to_string(), edge.rf()),
+            Cause::Pulse { pin, edge } => (pin.to_string(), *edge),
             Cause::Race { pins } => panic!("a race over {pins:?} came through the pulse filter"),
         }
     }
 
     /// One detected hazard as what identifies it: the pulsed pin, the pulse's opening edge, the outcome
     /// and the nodes the record names.
-    fn keys(cell: &AnalysedCell) -> BTreeSet<(String, char, Outcome, String)> {
+    fn keys(cell: &AnalysedCell) -> BTreeSet<(String, Edge, Outcome, String)> {
         pulses(cell)
             .into_iter()
             .map(|hz| {
@@ -306,12 +306,11 @@ mod tests {
     fn on<'h>(cell: &'h AnalysedCell, pin: &str, edge: Edge, outcome: Outcome) -> Vec<&'h Hazard> {
         let found: Vec<&Hazard> = pulses(cell)
             .into_iter()
-            .filter(|hz| hz.outcome == outcome && pulse(hz) == (pin.to_string(), edge.rf()))
+            .filter(|hz| hz.outcome == outcome && pulse(hz) == (pin.to_string(), edge))
             .collect();
         assert!(
             !found.is_empty(),
-            "no {outcome:?} {pin}{} hazard in {:?}",
-            edge.rf(),
+            "no {outcome:?} {pin}{edge} hazard in {:?}",
             keys(cell)
         );
         found
@@ -332,8 +331,7 @@ mod tests {
             .collect();
         assert!(
             !found.is_empty(),
-            "no {outcome:?} {pin}{} hazard over {{{nodes}}} in {:?}",
-            edge.rf(),
+            "no {outcome:?} {pin}{edge} hazard over {{{nodes}}} in {:?}",
             keys(cell)
         );
         found
@@ -404,13 +402,13 @@ Q = "CLK*M + !CLK*Q"
             [
                 (
                     "CLK".to_string(),
-                    'R',
+                    Edge::Rise,
                     Outcome::Indeterminate,
                     "Q".to_string()
                 ),
                 (
                     "CLK".to_string(),
-                    'F',
+                    Edge::Fall,
                     Outcome::Indeterminate,
                     "Q,M".to_string()
                 ),
@@ -472,7 +470,7 @@ Q = "E*D + !E*Q"
             keys(&cell),
             [(
                 "E".to_string(),
-                'R',
+                Edge::Rise,
                 Outcome::Indeterminate,
                 "Q".to_string()
             )]
@@ -514,13 +512,13 @@ Qn = "!(S+Q)"
             [
                 (
                     pin.to_string(),
-                    'R',
+                    Edge::Rise,
                     Outcome::Indeterminate,
                     "Q,Qn".to_string(),
                 ),
                 (
                     pin.to_string(),
-                    'R',
+                    Edge::Rise,
                     Outcome::Oscillation,
                     "Q,Qn".to_string(),
                 ),
@@ -584,13 +582,13 @@ Qb = "!Qa * B"
             [
                 (
                     pin.to_string(),
-                    'F',
+                    Edge::Fall,
                     Outcome::Indeterminate,
                     "Qa,Qb".to_string(),
                 ),
                 (
                     pin.to_string(),
-                    'F',
+                    Edge::Fall,
                     Outcome::Oscillation,
                     "Qa,Qb".to_string(),
                 ),
@@ -620,7 +618,7 @@ Qb = "!Qa * B"
         // A rise pulse from idle is inert: the grant it takes is handed straight back when the request
         // drops again, so every candidate lands on the reference.
         assert!(
-            !pulses(&cell).iter().any(|hz| pulse(hz).1 == 'R'),
+            !pulses(&cell).iter().any(|hz| pulse(hz).1 == Edge::Rise),
             "a request pulse from idle settles back to idle, got {:?}",
             keys(&cell)
         );
@@ -671,31 +669,31 @@ Qn = "!(S+Q)"
             [
                 (
                     "S".to_string(),
-                    'R',
+                    Edge::Rise,
                     Outcome::Indeterminate,
                     "Q,Qn,L".to_string()
                 ),
                 (
                     "S".to_string(),
-                    'R',
+                    Edge::Rise,
                     Outcome::Indeterminate,
                     "L".to_string()
                 ),
                 (
                     "S".to_string(),
-                    'R',
+                    Edge::Rise,
                     Outcome::Oscillation,
                     "Q,Qn".to_string()
                 ),
                 (
                     "R".to_string(),
-                    'R',
+                    Edge::Rise,
                     Outcome::Indeterminate,
                     "Q,Qn".to_string()
                 ),
                 (
                     "R".to_string(),
-                    'R',
+                    Edge::Rise,
                     Outcome::Oscillation,
                     "Q,Qn".to_string()
                 ),
@@ -740,7 +738,7 @@ Q = "!CLK*M + CLK*Q"
             keys(&cell),
             [(
                 "CLK".to_string(),
-                'F',
+                Edge::Fall,
                 Outcome::Indeterminate,
                 "Q,M".to_string()
             )]
@@ -788,25 +786,25 @@ Q = "!CLK*(EN*M + !EN*Q) + CLK*Q"
             [
                 (
                     "CLK".to_string(),
-                    'F',
+                    Edge::Fall,
                     Outcome::Indeterminate,
                     "Q,M".to_string()
                 ),
                 (
                     "CLK".to_string(),
-                    'F',
+                    Edge::Fall,
                     Outcome::Indeterminate,
                     "Q".to_string()
                 ),
                 (
                     "CLK".to_string(),
-                    'F',
+                    Edge::Fall,
                     Outcome::Indeterminate,
                     "M".to_string()
                 ),
                 (
                     "EN".to_string(),
-                    'R',
+                    Edge::Rise,
                     Outcome::Indeterminate,
                     "Q".to_string()
                 ),
@@ -839,25 +837,25 @@ B = "!CLK*(!SEL*D + SEL*B) + CLK*B"
             [
                 (
                     "CLK".to_string(),
-                    'F',
+                    Edge::Fall,
                     Outcome::Indeterminate,
                     "A".to_string()
                 ),
                 (
                     "CLK".to_string(),
-                    'F',
+                    Edge::Fall,
                     Outcome::Indeterminate,
                     "B".to_string()
                 ),
                 (
                     "SEL".to_string(),
-                    'R',
+                    Edge::Rise,
                     Outcome::Indeterminate,
                     "A".to_string()
                 ),
                 (
                     "SEL".to_string(),
-                    'F',
+                    Edge::Fall,
                     Outcome::Indeterminate,
                     "B".to_string()
                 ),
@@ -879,12 +877,12 @@ B = "!CLK*(!SEL*D + SEL*B) + CLK*B"
     /// One generated constraint as the triple that identifies it: the constrained pin, the pulse's
     /// opening edge and the victim nodes it probes. The levels sampled beside those nodes name WHICH probed
     /// state the representative came from, which is a choice the exploration order makes.
-    fn constrained(cell: &AnalysedCell) -> BTreeSet<(String, char, String)> {
+    fn constrained(cell: &AnalysedCell) -> BTreeSet<(String, Edge, String)> {
         widths(cell)
             .into_iter()
             .map(|c| {
                 let nodes: Vec<&str> = c.nodes.iter().map(|p| p.node.as_str()).collect();
-                (c.pin.to_string(), c.pin_edge.rf(), nodes.join(","))
+                (c.pin.to_string(), c.pin_edge, nodes.join(","))
             })
             .collect()
     }
@@ -916,8 +914,8 @@ Q = "CLK*M + !CLK*Q"
         assert_eq!(
             constrained(&declared),
             [
-                ("CLK".to_string(), 'R', "Q".to_string()),
-                ("CLK".to_string(), 'F', "Q,M".to_string()),
+                ("CLK".to_string(), Edge::Rise, "Q".to_string()),
+                ("CLK".to_string(), Edge::Fall, "Q,M".to_string()),
             ]
             .into_iter()
             .collect(),
@@ -952,8 +950,8 @@ Qn = "!(S+Q)"
         assert_eq!(
             constrained(&cell),
             [
-                ("S".to_string(), 'R', "Q,Qn".to_string()),
-                ("R".to_string(), 'R', "Q,Qn".to_string()),
+                ("S".to_string(), Edge::Rise, "Q,Qn".to_string()),
+                ("R".to_string(), Edge::Rise, "Q,Qn".to_string()),
             ]
             .into_iter()
             .collect(),

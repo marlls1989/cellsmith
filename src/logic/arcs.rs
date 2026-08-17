@@ -25,6 +25,7 @@
 //!      columns — see [`super::leakage`].)
 
 use std::collections::HashSet;
+use std::fmt;
 use std::hash::Hash;
 
 use espresso_logic::bdd::{Brand, ManagerCell};
@@ -42,19 +43,32 @@ pub enum Edge {
 }
 
 impl Edge {
-    /// The `R`/`F` symbol for this edge (Liberate vector notation).
-    pub(crate) fn rf(self) -> char {
+    /// The level the pin holds AFTER the edge: a rise settles it high, a fall low.
+    pub fn settled_level(self) -> bool {
         match self {
-            Edge::Rise => 'R',
-            Edge::Fall => 'F',
+            Edge::Rise => true,
+            Edge::Fall => false,
         }
     }
-    /// The `↑`/`↓` arrow for this edge (human-readable condition notation).
-    pub fn arrow(self) -> char {
-        match self {
-            Edge::Rise => '↑',
-            Edge::Fall => '↓',
+
+    /// The edge that leaves the pin at `level` — the inverse of [`Self::settled_level`], and the one
+    /// correspondence between a level and a direction. An edge is named by where the pin ENDS, so a
+    /// caller holding the level a pin toggles AWAY from passes its complement.
+    pub fn from_settled_level(level: bool) -> Edge {
+        match level {
+            true => Edge::Rise,
+            false => Edge::Fall,
         }
+    }
+}
+
+/// The arrow notation an edge is reported in: `↑` for a rise, `↓` for a fall.
+impl fmt::Display for Edge {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Edge::Rise => "↑",
+            Edge::Fall => "↓",
+        })
     }
 }
 

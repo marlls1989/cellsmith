@@ -450,7 +450,7 @@ fn hazard_warning(cell: &AnalysedCell, occasion: &Occasion, records: &[&Hazard])
 /// the condition.
 fn cause_str(cause: &Cause) -> String {
     match cause {
-        Cause::Pulse { pin, edge } => format!("a short pulse on {pin}{}", edge.arrow()),
+        Cause::Pulse { pin, edge } => format!("a short pulse on {pin}{edge}"),
         Cause::Race { pins } => match toggles(pins).as_slice() {
             [one] => format!("toggling {one}"),
             many => format!("too little separation between {}", many.join(" and ")),
@@ -500,7 +500,7 @@ fn orders_str(pins: &[Racer]) -> String {
         .map(|order| {
             order
                 .into_iter()
-                .map(|i| format!("{}{}", pins[i].pin, pins[i].edge.arrow()))
+                .map(|i| pins[i].to_string())
                 .collect::<Vec<_>>()
                 .join(" then ")
         })
@@ -542,9 +542,7 @@ fn trigger_str(pins: &[Racer]) -> String {
 
 /// Each racing pin with the edge it makes (`A↓`), in the order the probe named them.
 fn toggles(pins: &[Racer]) -> Vec<String> {
-    pins.iter()
-        .map(|r| format!("{}{}", r.pin, r.edge.arrow()))
-        .collect()
+    pins.iter().map(Racer::to_string).collect()
 }
 
 /// The default output base name derived from the spec path (stem), or "cells" for stdin.

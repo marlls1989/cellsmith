@@ -49,13 +49,14 @@
 //! pins.
 
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::hash::Hash;
 
 use espresso_logic::{Minterm, Symbol};
 use indexmap::IndexMap;
 
+use crate::emit::tcl::{Braced, IcColumn, VectorValue, Words};
 use crate::logic::arcs::{Arc, ArcLevels, Edge, ExposedLevel, HiddenArc};
 use crate::logic::assignment;
 use crate::logic::constraint::{self, Constraint, ConstraintKind, VictimNode};
@@ -597,8 +598,8 @@ impl<'a> DefineArc<'a> {
             DefineArc::Hidden(h) => {
                 let mut s = String::from("define_arc \\\n\t-type hidden \\\n");
                 s.push_str(&format!(
-                    "\t-pinlist {{{}}} \\\n",
-                    arc_pinlist_str(cell, &group.exposed)
+                    "\t-pinlist {} \\\n",
+                    Braced(Words(&arc_pinlist_str(cell, &group.exposed)))
                 ));
                 s.push_str(&ic_line(
                     cell,
@@ -608,14 +609,14 @@ impl<'a> DefineArc<'a> {
                     &HashMap::new(),
                 ));
                 s.push_str(&format!(
-                    "\t-vector {{{}}} \\\n",
-                    hidden_vector_str(cell, h)
+                    "\t-vector {} \\\n",
+                    Braced(Words(&hidden_vector_str(cell, h)))
                 ));
                 if let Some(w) = when {
                     s.push_str(&format!("\t-when \"{w}\" \\\n"));
                 }
                 s.push_str(&format!("\t-pin {} \\\n", h.pin));
-                s.push_str(&format!("\t{}\n", name_block(&group.names)));
+                s.push_str(&format!("\t{{ {} }}\n", Words(&group.names)));
                 s.push('\n');
                 s
             }
@@ -670,9 +671,9 @@ impl<'a> DefineArc<'a> {
                 pins: Some(format!(
                     "{}{} -> {}{}",
                     arc.related,
-                    related_edge(arc).arrow(),
+                    related_edge(arc),
                     arc.output,
-                    arc.edge.arrow()
+                    arc.edge
                 )),
                 states: vec![arc.start.clone()],
             },
@@ -681,9 +682,9 @@ impl<'a> DefineArc<'a> {
                 pins: Some(format!(
                     "{}{} -> {}{}",
                     arc.related,
-                    related_edge(arc).arrow(),
+                    related_edge(arc),
                     arc.output,
-                    arc.edge.arrow()
+                    arc.edge
                 )),
                 states: vec![arc.start.clone()],
             },
@@ -692,73 +693,44 @@ impl<'a> DefineArc<'a> {
                 pins: Some(format!(
                     "{}{} -> {}{}",
                     arc.related,
-                    related_edge(arc).arrow(),
+                    related_edge(arc),
                     arc.output,
-                    arc.edge.arrow()
+                    arc.edge
                 )),
                 states: vec![arc.start.clone()],
             },
             DefineArc::Hidden(h) => MaskedArc {
                 kind: BlockKind::Hidden,
-                pins: Some(format!("{}{}", h.pin, h.edge.arrow())),
+                pins: Some(format!("{}{}", h.pin, h.edge)),
                 states: vec![h.start.clone()],
             },
             DefineArc::Setup(pins, arc) => MaskedArc {
                 kind: BlockKind::Setup,
-                pins: Some(format!(
-                    "{}{} & {}{}",
-                    pins.related.pin,
-                    pins.related.edge.arrow(),
-                    pins.pin.pin,
-                    pins.pin.edge.arrow()
-                )),
+                pins: Some(format!("{} & {}", pins.related, pins.pin)),
                 states: vec![arc.state.clone()],
             },
             DefineArc::Hold(pins, arc) => MaskedArc {
                 kind: BlockKind::Hold,
-                pins: Some(format!(
-                    "{}{} & {}{}",
-                    pins.related.pin,
-                    pins.related.edge.arrow(),
-                    pins.pin.pin,
-                    pins.pin.edge.arrow()
-                )),
+                pins: Some(format!("{} & {}", pins.related, pins.pin)),
                 states: vec![arc.state.clone()],
             },
             DefineArc::NonSeqSetup(pins, arc) => MaskedArc {
                 kind: BlockKind::NonSeqSetup,
-                pins: Some(format!(
-                    "{}{} & {}{}",
-                    pins.related.pin,
-                    pins.related.edge.arrow(),
-                    pins.pin.pin,
-                    pins.pin.edge.arrow()
-                )),
+                pins: Some(format!("{} & {}", pins.related, pins.pin)),
                 states: vec![arc.state.clone()],
             },
             DefineArc::NonSeqHold(pins, arc) => MaskedArc {
                 kind: BlockKind::NonSeqHold,
-                pins: Some(format!(
-                    "{}{} & {}{}",
-                    pins.related.pin,
-                    pins.related.edge.arrow(),
-                    pins.pin.pin,
-                    pins.pin.edge.arrow()
-                )),
+                pins: Some(format!("{} & {}", pins.related, pins.pin)),
                 states: vec![arc.state.clone()],
             },
             DefineArc::MinPulseWidth(pin, arc) => MaskedArc {
                 kind: BlockKind::MinPulseWidth,
-                pins: Some(format!("{}{}", pin.pin, pin.edge.arrow())),
+                pins: Some(pin.to_string()),
                 states: vec![arc.state.clone()],
             },
         }
     }
-}
-
-/// Cell names braced as a Tcl list: `{ C2 }` for a single name, `{ C2A C2B }` for several.
-fn name_block(names: &[Symbol]) -> String {
-    format!("{{ {} }}", names.join(" "))
 }
 
 /// The drive-strength aliases a block can name together, with the netlist nodes its exposed columns
@@ -1066,10 +1038,9 @@ struct ConstraintColumns {
     /// The level a victim node that earned a column holds at the probed state, read back as `-ic`
     /// renders that column.
     probed: HashMap<Symbol, bool>,
-    /// The `-probe` line's nodes, separated by spaces: every victim node of the constraint under the
-    /// group's netlist names, the ones that earned a column of their own and the ones that did not
-    /// alike.
-    probe_list: String,
+    /// The `-probe` line's nodes: every victim node of the constraint under the group's netlist names,
+    /// the ones that earned a column of their own and the ones that did not alike.
+    probe: Vec<Symbol>,
 }
 
 impl ConstraintColumns {
@@ -1094,16 +1065,12 @@ impl ConstraintColumns {
             listed.push(group.probed_name(&p.node));
             probed.insert(p.node.clone(), p.level);
         }
-        let probe_list = nodes
-            .iter()
-            .map(|p| group.probed_name(&p.node).to_string())
-            .collect::<Vec<_>>()
-            .join(" ");
+        let probe = nodes.iter().map(|p| group.probed_name(&p.node)).collect();
         Self {
             model,
             listed,
             probed,
-            probe_list,
+            probe,
         }
     }
 }
@@ -1124,30 +1091,30 @@ fn constraint_body(
     arc: &ConstraintArc<'_>,
     when: Option<&str>,
 ) -> String {
-    let columns = ConstraintColumns::of(cell, group, arc.nodes);
+    let cols = ConstraintColumns::of(cell, group, arc.nodes);
 
     let mut s = format!(
-        "\t-pinlist {{{}}} \\\n",
-        arc_pinlist_str(cell, &columns.listed)
+        "\t-pinlist {} \\\n",
+        Braced(Words(&arc_pinlist_str(cell, &cols.listed)))
     );
     s.push_str(&ic_line(
         cell,
-        &columns.model,
+        &cols.model,
         arc.prevector,
         arc.levels,
-        &columns.probed,
+        &cols.probed,
     ));
     s.push_str(&format!(
-        "\t-vector {{{}}} \\\n",
-        constraint_vector_str(cell, &columns.model, pins, arc)
+        "\t-vector {} \\\n",
+        Braced(Words(&constraint_vector_str(cell, &cols.model, pins, arc)))
     ));
     if let Some(w) = when {
         s.push_str(&format!("\t-when \"{w}\" \\\n"));
     }
     s.push_str(&format!("\t-related_pin {} \\\n", pins.related.pin));
     s.push_str(&format!("\t-pin {} \\\n", pins.pin.pin));
-    s.push_str(&format!("\t-probe {{{}}} \\\n", columns.probe_list));
-    s.push_str(&format!("\t{}\n", name_block(&group.names)));
+    s.push_str(&format!("\t-probe {} \\\n", Braced(Words(&cols.probe))));
+    s.push_str(&format!("\t{{ {} }}\n", Words(&group.names)));
     s.push('\n');
     s
 }
@@ -1165,29 +1132,25 @@ fn constraint_vector_str(
     exposed: &[Symbol],
     pins: &RacingPins,
     arc: &ConstraintArc<'_>,
-) -> String {
+) -> Vec<VectorValue> {
     let held = assignment(
         arc.prevector
             .last()
             .expect("path_to seeds its chain with the probed node itself"),
     );
-    vector(
+    columns(
         cell,
         exposed,
-        |input| match pins.edge_of(input) {
-            Some(edge) => edge.rf().to_string(),
-            None => if *held
-                .get(input)
-                .expect("every input has a held value in the constraint prevector")
-            {
-                "1"
-            } else {
-                "0"
-            }
-            .to_string(),
+        |input| match pins.edge_of(input.as_str()) {
+            Some(edge) => VectorValue::from(edge),
+            None => VectorValue::from(
+                *held
+                    .get(input)
+                    .expect("every input has a held value in the constraint prevector"),
+            ),
         },
-        |_| "X".to_string(),
-        |_| "X".to_string(),
+        |_| VectorValue::Unstated,
+        |_| VectorValue::Unstated,
     )
 }
 
@@ -1224,14 +1187,11 @@ fn oscillation_note(cell: &AnalysedCell, c: &Constraint) -> Option<String> {
 /// [`crate::logic::edge::EdgeArcs::labels`], the per-arc label map the classifier sourced from these
 /// same pipeline arcs.
 fn related_edge(arc: &Arc) -> Edge {
-    if *assignment(&arc.end)
-        .get(&arc.related)
-        .expect("the arc's related clock pin is assigned in its end state")
-    {
-        Edge::Rise
-    } else {
-        Edge::Fall
-    }
+    Edge::from_settled_level(
+        *assignment(&arc.end)
+            .get(&arc.related)
+            .expect("the arc's related clock pin is assigned in its end state"),
+    )
 }
 
 /// The `-ic` line, or nothing at all where the cell holds no state and has no start condition to state.
@@ -1253,7 +1213,7 @@ fn ic_line(
     }
     format!(
         "\t-ic \"{}\" \\\n",
-        ic_str(cell, model, prevector, levels, probed)
+        Words(&ic_str(cell, model, prevector, levels, probed))
     )
 }
 
@@ -1266,8 +1226,8 @@ fn ic_line(
 /// vector.
 fn transition_body(cell: &AnalysedCell, group: &Group, arc: &Arc, when: Option<&str>) -> String {
     let mut s = format!(
-        "\t-pinlist {{{}}} \\\n",
-        arc_pinlist_str(cell, &group.exposed)
+        "\t-pinlist {} \\\n",
+        Braced(Words(&arc_pinlist_str(cell, &group.exposed)))
     );
     s.push_str(&ic_line(
         cell,
@@ -1276,13 +1236,16 @@ fn transition_body(cell: &AnalysedCell, group: &Group, arc: &Arc, when: Option<&
         &arc.levels,
         &HashMap::new(),
     ));
-    s.push_str(&format!("\t-vector {{{}}} \\\n", vector_str(cell, arc)));
+    s.push_str(&format!(
+        "\t-vector {} \\\n",
+        Braced(Words(&vector_str(cell, arc)))
+    ));
     if let Some(w) = when {
         s.push_str(&format!("\t-when \"{w}\" \\\n"));
     }
     s.push_str(&format!("\t-related_pin {} \\\n", arc.related));
     s.push_str(&format!("\t-pin {} \\\n", arc.output));
-    s.push_str(&format!("\t{}\n", name_block(&group.names)));
+    s.push_str(&format!("\t{{ {} }}\n", Words(&group.names)));
     s.push('\n');
     s
 }
@@ -1293,7 +1256,7 @@ fn transition_body(cell: &AnalysedCell, group: &Group, arc: &Arc, when: Option<&
 /// for the measurement, and an internal node driven by the cell must be left to follow the cell. Its
 /// start level reaches Liberate through `-ic` instead. Mirrors [`vector_str`] for [`Arc`], and is the
 /// ONE source of the `-vector` line [`DefineArc::Hidden`] writes.
-fn hidden_vector_str(cell: &AnalysedCell, h: &HiddenArc) -> String {
+fn hidden_vector_str(cell: &AnalysedCell, h: &HiddenArc) -> Vec<VectorValue> {
     let held: BTreeMap<&str, bool> = h
         .levels
         .outputs
@@ -1302,42 +1265,36 @@ fn hidden_vector_str(cell: &AnalysedCell, h: &HiddenArc) -> String {
         .collect();
 
     let end = assignment(&h.end);
-    vector(
+    columns(
         cell,
         &cell.exposed,
         |input| {
-            if input == h.pin.as_str() {
-                h.edge.rf().to_string()
+            if *input == h.pin {
+                VectorValue::from(h.edge)
             } else {
-                if *end
-                    .get(input)
-                    .expect("every input is assigned in the hidden arc's end state")
-                {
-                    "1"
-                } else {
-                    "0"
-                }
-                .to_string()
+                VectorValue::from(
+                    *end.get(input)
+                        .expect("every input is assigned in the hidden arc's end state"),
+                )
             }
         },
-        |_| "X".to_string(),
+        |_| VectorValue::Unstated,
         |name| {
-            if *held.get(name).expect("hidden arc defines every output") {
-                "1"
-            } else {
-                "0"
-            }
-            .to_string()
+            VectorValue::from(
+                *held
+                    .get(name.as_str())
+                    .expect("hidden arc defines every output"),
+            )
         },
     )
 }
 
 /// The cell's pins: inputs then outputs, in declaration order. This is what `define_cell` declares the
 /// cell by, so it names PINS only — an exposed internal node has no pin and never appears here.
-pub(crate) fn pinlist_str(cell: &AnalysedCell) -> String {
+pub(crate) fn pinlist_str(cell: &AnalysedCell) -> Vec<Symbol> {
     let mut pins = cell.inputs.clone();
     pins.extend(cell.outputs.iter().map(|o| o.name.clone()));
-    pins.join(" ")
+    pins
 }
 
 /// The `-pinlist` of a measured block: the inputs, then the exposed internal nodes in declared order,
@@ -1348,39 +1305,41 @@ pub(crate) fn pinlist_str(cell: &AnalysedCell) -> String {
 /// An exposed node is listed under the name its netlist holds it on ([`Group::exposed`]), which is what
 /// Liberate has to be handed; the pins keep the cell's own names, which the netlist shares. Every other
 /// artifact reads the spec's names throughout.
-fn arc_pinlist_str(cell: &AnalysedCell, exposed: &[Symbol]) -> String {
+fn arc_pinlist_str(cell: &AnalysedCell, exposed: &[Symbol]) -> Vec<Symbol> {
     let mut pins = cell.inputs.clone();
     pins.extend(exposed.iter().cloned());
     pins.extend(cell.outputs.iter().map(|o| o.name.clone()));
-    pins.join(" ")
+    pins
 }
 
-/// One symbol per input (cell.inputs order), then one per exposed internal node (declared order), then
-/// one per output (cell.outputs order), joined by " ". This walk is [`arc_pinlist_str`]'s order, and
-/// every line whose columns Liberate reads against the pinlist — `-vector` and `-ic` — comes through it,
-/// so the three agree by construction rather than by three renderers happening to walk alike.
-fn vector(
+/// One column per input (cell.inputs order), then one per exposed internal node (declared order), then
+/// one per output (cell.outputs order). This walk is [`arc_pinlist_str`]'s order, and every line whose
+/// columns Liberate reads against the pinlist — `-vector` and `-ic` — comes through it, so the three
+/// agree by construction rather than by three renderers happening to walk alike. What a column holds is
+/// the caller's — a [`VectorValue`] for a `-vector`, an [`IcColumn`] for an `-ic` — and the walk is the
+/// same either way, which is what makes the positions line up.
+fn columns<C>(
     cell: &AnalysedCell,
     exposed: &[Symbol],
-    input_sym: impl Fn(&str) -> String,
-    exposed_sym: impl Fn(&str) -> String,
-    output_sym: impl Fn(&str) -> String,
-) -> String {
-    let mut parts = Vec::with_capacity(cell.inputs.len() + exposed.len() + cell.outputs.len());
-    for input in &cell.inputs {
-        parts.push(input_sym(input));
+    input: impl Fn(&Symbol) -> C,
+    exposed_col: impl Fn(&Symbol) -> C,
+    output: impl Fn(&Symbol) -> C,
+) -> Vec<C> {
+    let mut cols = Vec::with_capacity(cell.inputs.len() + exposed.len() + cell.outputs.len());
+    for pin in &cell.inputs {
+        cols.push(input(pin));
     }
     for node in exposed {
-        parts.push(exposed_sym(node));
+        cols.push(exposed_col(node));
     }
-    for output in &cell.outputs {
-        parts.push(output_sym(&output.name));
+    for pin in &cell.outputs {
+        cols.push(output(&pin.name));
     }
-    parts.join(" ")
+    cols
 }
 
 /// The exposed levels of one measured block, by node name — the lookup the `-vector` and `-ic`
-/// renderers index as [`vector`] walks `cell.exposed`.
+/// renderers index as [`columns`] walks `cell.exposed`.
 fn exposed_levels(levels: &ArcLevels) -> BTreeMap<&str, &ExposedLevel> {
     levels
         .exposed
@@ -1389,199 +1348,13 @@ fn exposed_levels(levels: &ArcLevels) -> BTreeMap<&str, &ExposedLevel> {
         .collect()
 }
 
-/// One rest state's levels by node name — the lookup [`leakage_vector_str`] indexes as [`vector`] walks
+/// One rest state's levels by node name — the lookup [`leakage_vector_str`] indexes as [`columns`] walks
 /// the exposures and then the outputs, each column reading the single level its node holds there.
 fn levels_by_name(levels: &[(Symbol, bool)]) -> BTreeMap<&str, bool> {
     levels
         .iter()
         .map(|(node, level)| (node.as_str(), *level))
         .collect()
-}
-
-/// One `-ic` column: a `logic_low`/`logic_high` expression rendered so Liberate reads it as a single
-/// list element.
-///
-/// The `-ic` values leave as one double-quoted Tcl word, so Tcl runs command, variable and backslash
-/// substitution over them and Liberate splits the SUBSTITUTED text into columns by the Tcl list rules:
-/// whitespace separates the elements, and an element opening with a brace runs to the matching close
-/// brace whatever lies between. An expression that is already one element is written as it stands — a
-/// bare word (`GND`), a number (`0.99`), a variable reference in either form (`$VDD`, `${VDD}`), or a
-/// value the spec itself wrote as one balanced brace group. Anything else is wrapped in a brace pair,
-/// which makes it one element whatever whitespace the substitution leaves in it: `$VDD * 0.9` reaches
-/// Liberate as the single column `1.08 * 0.9`, and `[expr $VDD*0.9]` as the one its command
-/// substitution resolves to. What that column then means to Liberate is the spec author's affair — the
-/// wrap is here to keep the columns aligned with the `-pinlist`.
-///
-/// The characters that would end the word or shift the split are escaped by [`escape_ic`], so every
-/// expression — whatever it holds — comes out as exactly one column of a parseable line.
-fn ic_column(value: &str) -> String {
-    // The form is recognised in the expression as written; the escaping is about the word it is
-    // emitted into, so it applies to a recognised expression and a wrapped one alike.
-    let escaped = escape_ic(value);
-    if is_one_list_element(value) {
-        escaped
-    } else {
-        format!("{{{escaped}}}")
-    }
-}
-
-/// One expression's own characters, escaped for the two stages its text crosses: Tcl's backslash
-/// substitution as the double-quoted `-ic` word is read, and then the list split Liberate applies to the
-/// substituted result. An escape meant for the second stage has to survive the first, so it goes out
-/// doubled — `\\{` leaves the word as `\{`, which the list parser reads as a quoted brace and does not
-/// count (Tcl(n), "Braces": a brace quoted with a backslash is not counted in locating the matching
-/// close brace).
-///
-/// - A double quote ends the `-ic` word wherever it sits — braces are ordinary characters to the word
-///   parser, so a wrap is no shield — and each one therefore goes out as `\"`. Substitution turns it
-///   back into a quote before the list is read.
-/// - A backslash goes out as `\\\\`, which the substitution halves into the `\\` the list then reads as
-///   one quoted backslash. Spending both stages on it is what makes it inert: to the list parser a lone
-///   backslash quotes whatever follows — the wrap's own closing brace where the expression ends in one,
-///   or a brace whose partner sits elsewhere — so doubling every backslash is what lets each brace be
-///   counted whatever precedes it. Left unescaped it would be spent on the first stage instead, either
-///   substituting (a `\n` becoming the newline that splits the column in two) or quoting the character
-///   after it (the `\` of `$V\"X` consuming the escape that was to tame the quote, and the live quote
-///   then ending the word). The consequence is that a backslash sequence in a `logic_low`/`logic_high`
-///   expression is literal text rather than the character it names.
-/// - A brace with no match — a close brace reached at depth zero, an open brace never closed — goes out
-///   as `\\}`/`\\{`, so the list parser passes over it and the wrap still closes on its own brace.
-///   `{$VDD` would otherwise leave a group with nothing to close it, and Liberate would reject the line
-///   (`unmatched open brace in list`) instead of reading a column count that has shifted. A matched
-///   pair is left as it stands: braces are how Tcl groups, and a group written inside a command
-///   substitution or a spaced variable reference (`${a b}`) has to reach the first stage intact.
-/// - An open bracket that no close bracket reaches goes out as `\[`, a single backslash and not a
-///   doubled one: a bracket means nothing to the list parser, so the escape is spent entirely on the
-///   first stage, where it stops the command substitution that would otherwise run past the end of the
-///   word (`missing close-bracket`). It reaches Liberate as the bracket alone, no backslash beside it. A
-///   bracket that does close is left as it stands, command substitution being how an expression such as
-///   `[expr $VDD*0.9]` names its level; and a close bracket standing on its own needs nothing, starting
-///   no substitution to run away with.
-///
-/// An escape made here reaches Liberate carrying its backslash, the list parser performing no
-/// substitution inside a braced element: the expression `a{b` arrives as the column `a\{b`, and a
-/// backslash as the pair it was doubled into. The columns stay aligned and the line parses, which is
-/// what the escaping is for; what the column then holds is the spec author's affair.
-fn escape_ic(value: &str) -> String {
-    // The braces and brackets are decided over the expression as written, before anything is emitted,
-    // so the one pass that builds the text reads only its input and never re-escapes its own output.
-    let unmatched = unmatched_braces(value);
-    let unclosed = unclosed_brackets(value);
-    let mut escaped = String::with_capacity(value.len());
-    for (i, c) in value.char_indices() {
-        match c {
-            '\\' => escaped.push_str("\\\\\\\\"),
-            '"' => escaped.push_str("\\\""),
-            '{' | '}' if unmatched.contains(&i) => {
-                escaped.push_str("\\\\");
-                escaped.push(c);
-            }
-            '[' if unclosed.contains(&i) => escaped.push_str("\\["),
-            _ => escaped.push(c),
-        }
-    }
-    escaped
-}
-
-/// The byte offsets of the braces in `value` that have no partner: a close brace reached at depth zero,
-/// and every open brace still standing at the end. Each brace counts whatever precedes it, because
-/// [`escape_ic`] escapes every backslash and so leaves none quoting the brace that follows.
-fn unmatched_braces(value: &str) -> HashSet<usize> {
-    // Each open brace waits on the stack for the close brace that takes it off again; a close brace
-    // arriving with the stack empty has none to take, and whatever is still waiting at the end never
-    // found one.
-    let mut open = Vec::new();
-    let mut unmatched = HashSet::new();
-    for (i, c) in value.char_indices() {
-        if c == '{' {
-            open.push(i);
-        } else if c == '}' && open.pop().is_none() {
-            unmatched.insert(i);
-        }
-    }
-    unmatched.extend(open);
-    unmatched
-}
-
-/// The byte offsets of the open brackets in `value` that no close bracket ever reaches. A close bracket
-/// standing on its own is not among them: it is only the opening one that starts a command
-/// substitution, and one left running off the end of the word is what the word parser refuses.
-fn unclosed_brackets(value: &str) -> HashSet<usize> {
-    let mut open = Vec::new();
-    for (i, c) in value.char_indices() {
-        if c == '[' {
-            open.push(i);
-        } else if c == ']' {
-            open.pop();
-        }
-    }
-    open.into_iter().collect()
-}
-
-/// Whether the expression already reaches Liberate as one list element: a bare word, a number, a
-/// variable reference (`$VDD` or `${VDD}`), or one balanced brace group. A reference whose name falls
-/// outside the ordinary character set — Tcl(n) allows the braced form any character but a close brace —
-/// is left to the wrap, which carries it just as well.
-fn is_one_list_element(value: &str) -> bool {
-    if let Some(reference) = value.strip_prefix('$') {
-        let name = reference
-            .strip_prefix('{')
-            .and_then(|n| n.strip_suffix('}'))
-            .unwrap_or(reference);
-        return is_bare_word(name);
-    }
-    is_bare_word(value) || value.parse::<f64>().is_ok() || is_one_brace_group(value)
-}
-
-/// Whether `s` is a run of Tcl's variable-name characters: ASCII letters, digits and underscore, plus
-/// namespace separators of two or more colons (Tcl(n), "Variable substitution"). Such a run names the
-/// variable of a `$` reference, and standing alone it is a literal holding nothing for Tcl to
-/// substitute, group or split.
-fn is_bare_word(s: &str) -> bool {
-    if s.is_empty() {
-        return false;
-    }
-    // A single colon separates nothing — it takes two to make a namespace separator.
-    let mut colons = 0usize;
-    for c in s.chars() {
-        match c {
-            ':' => colons += 1,
-            _ if c.is_ascii_alphanumeric() || c == '_' => {
-                if colons == 1 {
-                    return false;
-                }
-                colons = 0;
-            }
-            _ => return false,
-        }
-    }
-    colons != 1
-}
-
-/// Whether the whole value is one balanced brace group — it opens with a brace whose match is its last
-/// character. `{a} {b}` is not: its group closes early, leaving two elements. Every brace counts,
-/// backslash or no backslash, matching how [`escape_ic`] doubles each backslash and so leaves none
-/// quoting the brace that follows it.
-fn is_one_brace_group(value: &str) -> bool {
-    if !value.starts_with('{') {
-        return false;
-    }
-    let mut depth = 0usize;
-    for (i, c) in value.char_indices() {
-        match c {
-            '{' => depth += 1,
-            // The depth reaches zero at the opening brace's match and the scan returns there, so this
-            // never runs at depth zero.
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return i + 1 == value.len();
-                }
-            }
-            _ => {}
-        }
-    }
-    false
 }
 
 /// The `-ic` initial condition over [`arc_pinlist_str`] order: each column's starting voltage, written
@@ -1592,15 +1365,15 @@ fn is_one_brace_group(value: &str) -> bool {
 /// state-holding cell's start condition — and the exposed columns are the reason it can establish an
 /// internal one at all, an internal node having no pin to drive it through. Every block kind renders every column, the constraint block included,
 /// where `-vector` states no behaviour but the start level is real all the same. Rendered through the
-/// same [`vector`] helper as `-pinlist` and `-vector`, so the three lines' columns line up by
+/// same [`columns`] helper as `-pinlist` and `-vector`, so the three lines' columns line up by
 /// construction.
-fn ic_str(
-    cell: &AnalysedCell,
+fn ic_str<'c>(
+    cell: &'c AnalysedCell,
     exposed: &[Symbol],
     prevector: &[espresso_logic::Minterm<espresso_logic::Symbol>],
     levels: &ArcLevels,
     probed: &HashMap<Symbol, bool>,
-) -> String {
+) -> Vec<IcColumn<'c>> {
     let held = assignment(
         prevector
             .last()
@@ -1612,8 +1385,8 @@ fn ic_str(
         .map(|(s, b)| (s.as_str(), *b))
         .collect();
     let exposed_start = exposed_levels(levels);
-    let column = |level: bool| ic_column(cell.voltages.of(level));
-    vector(
+    let column = |level: bool| IcColumn(cell.voltages.of(level));
+    columns(
         cell,
         exposed,
         |input| {
@@ -1629,14 +1402,14 @@ fn ic_str(
                 return column(*level);
             }
             let level = exposed_start
-                .get(node)
+                .get(node.as_str())
                 .expect("the arc's levels define every exposed node")
                 .start;
             column(level)
         },
         |name| {
             let level = *start
-                .get(name)
+                .get(name.as_str())
                 .expect("the arc's levels define every output");
             column(level)
         },
@@ -1647,81 +1420,67 @@ fn ic_str(
 /// as their `1`/`0` value in the end state, and every exposed node and other output as `X`. A column
 /// here is a stimulus Liberate holds the node to, so an exposed internal — which the cell drives — is
 /// left unstated and starts from its `-ic` level.
-fn vector_str(cell: &AnalysedCell, arc: &Arc) -> String {
+fn vector_str(cell: &AnalysedCell, arc: &Arc) -> Vec<VectorValue> {
     let end = assignment(&arc.end);
 
-    vector(
+    columns(
         cell,
         &cell.exposed,
         |input| {
             let value = *end
                 .get(input)
                 .expect("every input is assigned in the arc's end state");
-            if input == arc.related {
-                (if value { Edge::Rise } else { Edge::Fall })
-                    .rf()
-                    .to_string()
+            if *input == arc.related {
+                VectorValue::from(Edge::from_settled_level(value))
             } else {
-                if value { "1" } else { "0" }.to_string()
+                VectorValue::from(value)
             }
         },
-        |_| "X".to_string(),
+        |_| VectorValue::Unstated,
         |name| {
-            if name == arc.output {
-                arc.edge.rf().to_string()
+            if *name == arc.output {
+                VectorValue::from(arc.edge)
             } else {
-                "X".to_string()
+                VectorValue::Unstated
             }
         },
     )
 }
 
-/// The leakage `-vector`, over the same [`vector`] walk as [`vector_str`], [`hidden_vector_str`] and
+/// The leakage `-vector`, over the same [`columns`] walk as [`vector_str`], [`hidden_vector_str`] and
 /// [`constraint_vector_str`]: the vector forces the block's own columns to the measured rest state, the
 /// exposed columns pinning internal nodes a `-when` cannot name because an internal node has no pin. A
 /// rest state is static — the block measures no transition — so no column is ever `X`, `R` or `F`; on a
 /// cell whose state variable is its own output the output column is the only one separating the two
 /// hold states.
-fn leakage_vector_str(cell: &AnalysedCell, l: &LeakageState) -> String {
+fn leakage_vector_str(cell: &AnalysedCell, l: &LeakageState) -> Vec<VectorValue> {
     let inputs = assignment(&l.inputs);
     let exposed = levels_by_name(&l.levels.exposed);
     let outputs = levels_by_name(&l.levels.outputs);
 
-    vector(
+    columns(
         cell,
         &cell.exposed,
         |input| {
-            if *inputs
-                .get(input)
-                .expect("every input is assigned in a leakage state")
-            {
-                "1"
-            } else {
-                "0"
-            }
-            .to_string()
+            VectorValue::from(
+                *inputs
+                    .get(input)
+                    .expect("every input is assigned in a leakage state"),
+            )
         },
         |name| {
-            if *exposed
-                .get(name)
-                .expect("every exposed node is defined at a fully-initialised leakage state")
-            {
-                "1"
-            } else {
-                "0"
-            }
-            .to_string()
+            VectorValue::from(
+                *exposed
+                    .get(name.as_str())
+                    .expect("every exposed node is defined at a fully-initialised leakage state"),
+            )
         },
         |name| {
-            if *outputs
-                .get(name)
-                .expect("every output is defined at a fully-initialised leakage state")
-            {
-                "1"
-            } else {
-                "0"
-            }
-            .to_string()
+            VectorValue::from(
+                *outputs
+                    .get(name.as_str())
+                    .expect("every output is defined at a fully-initialised leakage state"),
+            )
         },
     )
 }
@@ -1840,23 +1599,23 @@ impl<'a> LeakageBlock<'a> {
         };
         match self {
             LeakageBlock::Resting(_) => vec![format!(
-                "define_leakage -when \"{when}\" {}\n\n",
-                name_block(&cell.name)
+                "define_leakage -when \"{when}\" {{ {} }}\n\n",
+                Words(&cell.name)
             )],
             LeakageBlock::Held(l) => groups
                 .iter()
                 .map(|group| {
                     let mut s = String::from("define_leakage \\\n");
                     s.push_str(&format!(
-                        "\t-pinlist {{{}}} \\\n",
-                        arc_pinlist_str(cell, &group.exposed)
+                        "\t-pinlist {} \\\n",
+                        Braced(Words(&arc_pinlist_str(cell, &group.exposed)))
                     ));
                     s.push_str(&format!(
-                        "\t-vector {{{}}} \\\n",
-                        leakage_vector_str(cell, l)
+                        "\t-vector {} \\\n",
+                        Braced(Words(&leakage_vector_str(cell, l)))
                     ));
                     s.push_str(&format!("\t-when \"{when}\" \\\n"));
-                    s.push_str(&format!("\t{}\n", name_block(&group.names)));
+                    s.push_str(&format!("\t{{ {} }}\n", Words(&group.names)));
                     s.push('\n');
                     s
                 })
@@ -1884,6 +1643,8 @@ mod tests {
     use std::collections::{BTreeSet, HashSet};
 
     use super::*;
+    use crate::emit::tcl::ic_column;
+    use crate::emit::tcl::tests::AWKWARD_VOLTAGES;
     use crate::model::analyse_one as analyse;
 
     #[test]
@@ -2491,7 +2252,7 @@ Q = "E*D + !E*Q"
         };
         for (event, n) in &contexts {
             let HiddenIdentity { edge, .. } = event;
-            let rf = edge.rf().to_string();
+            let rf = VectorValue::from(*edge).to_string();
             let conditioned: Vec<String> = d_hidden(&selected)
                 .into_iter()
                 .filter(|b| has_when(b) && d_field(b) == rf)
@@ -3284,45 +3045,6 @@ Y = "!A"
     }
 
     #[test]
-    fn a_one_element_logic_voltage_is_written_as_it_stands() {
-        // The forms Liberate's list split already reads as one column: a bare word, a number in either
-        // notation, a variable reference either way round, a namespaced one, and a value the spec wrote
-        // as one balanced brace group. `0` and `$VDD` are the defaults, so this is also what keeps every
-        // emitted artifact free of braces it never had.
-        for value in [
-            "0",
-            "0.99",
-            "-0.5",
-            "1e-3",
-            "GND",
-            "VDD_H",
-            "$VDD",
-            "${VDD}",
-            "$::VDD",
-            "{$VDD * 0.9}",
-            "{}",
-        ] {
-            assert_eq!(ic_column(value), value, "{value:?} is already one column");
-        }
-    }
-
-    #[test]
-    fn any_other_logic_voltage_is_wrapped_into_one_element() {
-        // Whitespace splits the column, a bracket resolves to whatever the command returns, two groups
-        // are two elements and an empty value is none: the wrap makes each of them exactly one.
-        for (value, column) in [
-            ("$VDD * 0.9", "{$VDD * 0.9}"),
-            ("$VDD\t0.9", "{$VDD\t0.9}"),
-            ("[expr $VDD*0.9]", "{[expr $VDD*0.9]}"),
-            ("{a} {b}", "{{a} {b}}"),
-            ("${a b}", "{${a b}}"),
-            ("", "{}"),
-        ] {
-            assert_eq!(ic_column(value), column, "{value:?} is wrapped");
-        }
-    }
-
-    #[test]
     fn a_double_quote_in_a_logic_voltage_is_escaped() {
         // A quote would close the `-ic` word wherever it sat, so it goes out escaped — inside the wrap
         // where the expression's own text goes, and inside a group the spec braced itself.
@@ -3345,47 +3067,6 @@ Y = "!A"
                 2,
                 "the escaped quotes leave the word its own pair:\n{line}"
             );
-        }
-    }
-
-    /// The expressions that need more than the wrap to hold their column, each with the text the
-    /// emitter writes between the `-ic` quotes. Every one of them is read back through real Tcl by
-    /// [`tclsh_reads_an_awkward_logic_voltage_as_one_column_per_pin`], which is where the doubling was
-    /// established; the pairs here pin it without an interpreter to hand.
-    const AWKWARD_VOLTAGES: [(&str, &str); 17] = [
-        // The backslash the word's substitution would otherwise spend on the quote after it.
-        (r#"$V\"X"#, r#"{$V\\\\\"X}"#),
-        // A brace with nothing to close it, either way round, alone or amid text.
-        (r"{$VDD", r"{\\{$VDD}"),
-        (r"$VDD}", r"{$VDD\\}}"),
-        (r"{", r"{\\{}"),
-        (r"}", r"{\\}}"),
-        (r"{{{", r"{\\{\\{\\{}"),
-        (r"}{", r"{\\}\\{}"),
-        // A matched pair stands: only the stray close brace is escaped.
-        (r"{a}}", r"{{a}\\}}"),
-        // A backslash of the expression's own, before a brace and standing alone.
-        (r"a\{b", r"{a\\\\\\{b}"),
-        (r"\", r"{\\\\}"),
-        // The escape reaching the column as text: `\n` is a backslash and an `n`, not a newline.
-        (r"x\ny", r"{x\\\\ny}"),
-        // Braces and nothing else, balanced: one empty element, written as it stands.
-        (r"{}", r"{}"),
-        // A command substitution with nothing to close it, alone and amid text: one backslash, the
-        // bracket reaching the column on its own.
-        (r"[expr", r"{\[expr}"),
-        (r"a[b", r"{a\[b}"),
-        (r"[[", r"{\[\[}"),
-        // The close bracket starts nothing, so it stands as written.
-        (r"a]b", r"{a]b}"),
-        // A substitution that does close is how an expression names its level: left alone.
-        (r"[expr $VDD*0.9]", r"{[expr $VDD*0.9]}"),
-    ];
-
-    #[test]
-    fn an_awkward_logic_voltage_is_escaped_into_one_element() {
-        for (value, column) in AWKWARD_VOLTAGES {
-            assert_eq!(ic_column(value), column, "{value:?} holds its column");
         }
     }
 
@@ -5768,8 +5449,7 @@ Q = "CLKB*M + !CLKB*Q"
                     .iter()
                     .filter(|h| {
                         h.start == *s
-                            && m.pins.as_deref()
-                                == Some(format!("{}{}", h.pin, h.edge.arrow()).as_str())
+                            && m.pins.as_deref() == Some(format!("{}{}", h.pin, h.edge).as_str())
                     })
                     .count();
                 assert_eq!(
