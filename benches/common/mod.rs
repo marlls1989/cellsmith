@@ -17,6 +17,11 @@ pub const THREADS_VAR: &str = "CELLSMITH_BENCH_THREADS";
 /// measures the single-threaded point alone. A width is a point on one axis, not a mode — one thread
 /// is where the sweep starts, not a separate kind of run.
 ///
+/// `max` stands for the width the global pool was built with, so `1,2,4,max` reaches the top of the
+/// host without naming a number that holds on only one machine. It resolves as the list is read and
+/// is reported as the count it resolved to, that being what was measured. A width the list reaches
+/// twice once resolved — `4,max` on a four-core host — is measured once.
+///
 /// Unset is one measurement with nothing pinned: the work runs on the global pool at whatever width
 /// it was configured with, which is how the tool itself runs.
 ///
@@ -31,13 +36,21 @@ pub fn thread_counts() -> Vec<Option<usize>> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| {
-            let n: usize = s
-                .parse()
-                .unwrap_or_else(|_| panic!("{THREADS_VAR}: {s:?} is not a thread count"));
+            let n: usize = if s.eq_ignore_ascii_case("max") {
+                rayon::current_num_threads()
+            } else {
+                s.parse().unwrap_or_else(|_| {
+                    panic!("{THREADS_VAR}: {s:?} is not a thread count or `max`")
+                })
+            };
             assert!(n > 0, "{THREADS_VAR}: a thread count is at least 1");
             Some(n)
         })
         .collect();
+    // `max` resolves to a number and so can name a width the list already holds; criterion takes one
+    // registration per benchmark id.
+    let mut seen = std::collections::HashSet::new();
+    let counts: Vec<Option<usize>> = counts.into_iter().filter(|n| seen.insert(*n)).collect();
     if counts.is_empty() {
         vec![None]
     } else {

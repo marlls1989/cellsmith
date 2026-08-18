@@ -448,7 +448,7 @@ Two targets, each a profile of a different thing, both driven off the 9 cells in
   `whole_run` (the full 9-cell run: `analyse` plus all three emitters and `library_liberty`).
 
 Every target is measured at the thread counts `CELLSMITH_BENCH_THREADS` names, as a comma-separated
-list. A width is a point on one axis rather than a mode, so the single-threaded measurement is the
+list of widths, where `max` stands for the width the global pool was built with. A width is a point on one axis rather than a mode, so the single-threaded measurement is the
 `n=1` point of a sweep and is asked for the same way as any other. With the variable unset each target
 is measured once with nothing pinned, on the global pool at whatever width it was configured with —
 which is how the tool itself runs. The list reaches the benchmarks through the environment because
@@ -462,7 +462,8 @@ cargo bench --bench aggregate                   # whole-run only
 # Set CELLSMITH_BENCH_THREADS to choose the widths, as a comma-separated list:
 CELLSMITH_BENCH_THREADS=1 cargo bench           # the single-threaded point alone
 CELLSMITH_BENCH_THREADS=1,2,4,8 cargo bench     # a four-point sweep
-CELLSMITH_BENCH_THREADS=1,8 cargo bench --bench aggregate   # one target, two widths
+CELLSMITH_BENCH_THREADS=1,2,4,max cargo bench   # up to the host's width, whatever it is
+CELLSMITH_BENCH_THREADS=1,max cargo bench --bench aggregate   # one target, two widths
 ```
 
 Results (with HTML reports) land under `target/criterion`. To compare before/after a change:
