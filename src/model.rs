@@ -1564,10 +1564,10 @@ Q = "CLK*M + !CLK*Q"
         let sig_names: Vec<_> = cell.signals().map(|s| s.name.as_str()).collect();
         assert_eq!(sig_names, ["Q", "M"]);
         // No oscillation hazard (Q→M is a one-way dependency, no mutual cycle).
-        assert!(!cell
-            .hazards
-            .iter()
-            .any(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation));
+        assert!(!cell.hazards.iter().any(|h| {
+            matches!(h.cause, Cause::Toggle { .. } | Cause::Race { .. })
+                && h.outcome == Outcome::Oscillation
+        }));
     }
 
     #[test]

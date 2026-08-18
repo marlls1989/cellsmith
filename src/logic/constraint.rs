@@ -7,14 +7,15 @@
 //! [`Outcome`](super::hazard::Outcome) is what told detection there was a hazard at all, and the same
 //! timing removes a race whether it settles indeterminately or never settles.
 //!
-//! - [`Cause::Race`] naming two pins is a **separation** between them: a directed
+//! - [`Cause::Toggle`] yields no constraint: a separation states that two edges stay apart, and a lone
+//!   toggle names one edge, with nothing to be separated from.
+//! - [`Cause::Race`] is a **separation** between its two pins: a directed
 //!   [`ConstraintKind::SetupHold`] (clock ← data — the DFF's `D` around `CLK`) where exactly one of the
 //!   pair is a declared clock, else a symmetric [`ConstraintKind::NonSeq`] (a mutex's `A`/`B`, a
 //!   C-element's `A↓`/`B↑`, an SR latch's simultaneous release). Clocks are *declared* inputs; the race
 //!   geometry is left out of the decision because inferring a clock from race order would be
 //!   state-dependent — the same pins read one way from one held state and the other way from another —
-//!   so it would distinguish nothing real. A race naming ONE pin yields no constraint: a separation
-//!   states that two edges stay apart, and one edge has nothing to be separated from.
+//!   so it would distinguish nothing real.
 //! - [`Cause::Pulse`] is a [`ConstraintKind::MinPulseWidth`]: the width a pulse on that one pin must
 //!   have for the nodes the record names to reach the outcome the reference close settles to (see
 //!   [`super::width`] for the reference). Liberate measures that width off the emitted block, narrowing
@@ -162,15 +163,12 @@ pub(crate) fn constrain(hazards: &[Hazard], clock_pins: &[Symbol]) -> Vec<Constr
 }
 
 /// The constraint that removes `hazard`, or `None` where its cause states no timing to constrain — a
-/// race observed under a single pin, which names one edge and so no separation.
+/// lone toggle, which names one edge and so no separation.
 fn remedy(hazard: &Hazard, clock_pins: &[Symbol]) -> Option<Constraint> {
     let (kind, pin, pin_edge) = match &hazard.cause {
-        Cause::Race { pins } => {
-            let [x, y] = pins.as_slice() else {
-                return None; // fewer pins than a separation can relate
-            };
-            separation(x, y, clock_pins)
-        }
+        // A separation states that two edges stay apart, and one edge has nothing to be separated from.
+        Cause::Toggle { .. } => return None,
+        Cause::Race { pins: [x, y] } => separation(x, y, clock_pins),
         Cause::Pulse { pin, edge } => (ConstraintKind::MinPulseWidth, pin.clone(), *edge),
     };
     Some(Constraint {

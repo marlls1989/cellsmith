@@ -15,8 +15,9 @@
 //! narrowest of them the zero-width close, whose outcome is `s` itself. A hazard is a candidate that
 //! disagrees with the reference, or a candidate that does not converge.
 //!
-//! That is the [`Cause::Pulse`] half of the hazard taxonomy, the sibling of [`Cause::Race`] — two
-//! signals racing each other — which [`super::confluence`] detects. What the machine then does is the
+//! That is the [`Cause::Pulse`] half of the hazard taxonomy, the sibling of the input causes
+//! [`Cause::Toggle`] and [`Cause::Race`] — a signal racing the cell's own feedback, or two signals
+//! racing each other — which [`super::confluence`] detects. What the machine then does is the
 //! other, independent axis, and this pass files one [`Hazard`] per [`Outcome`] it observes:
 //!
 //! - [`Outcome::Indeterminate`] — a candidate converges somewhere the reference does not, so which state
@@ -273,6 +274,7 @@ mod tests {
     fn pulse(hz: &Hazard) -> (String, Edge) {
         match &hz.cause {
             Cause::Pulse { pin, edge } => (pin.to_string(), *edge),
+            Cause::Toggle { pin } => panic!("a toggle of {pin} came through the pulse filter"),
             Cause::Race { pins } => panic!("a race over {pins:?} came through the pulse filter"),
         }
     }
@@ -289,13 +291,15 @@ mod tests {
             .collect()
     }
 
-    /// The cell's race-cause oscillations — [`super::super::confluence`]'s records. The pulse tests read
-    /// them to check that a ringing candidate stays a pulse-cause record and files no race.
+    /// The cell's race-cause oscillations — [`super::super::confluence`]'s records, a lone toggle's as
+    /// much as a pair's. The pulse tests read them to check that a ringing candidate stays a pulse-cause
+    /// record and files no race.
     fn race_rings(cell: &AnalysedCell) -> Vec<&Hazard> {
         cell.hazards
             .iter()
             .filter(|hz| {
-                matches!(hz.cause, Cause::Race { .. }) && hz.outcome == Outcome::Oscillation
+                matches!(hz.cause, Cause::Toggle { .. } | Cause::Race { .. })
+                    && hz.outcome == Outcome::Oscillation
             })
             .collect()
     }

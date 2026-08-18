@@ -3420,13 +3420,14 @@ GCLK = "CLK*EL"
             // sampled at the probed state and name the same free representative the arcs do, and
             // `condition` is a FULL input assignment, so it carries the inputs outside the race at
             // whatever the probed state held them — the racing pins and their edges are what the
-            // hazard is. `settled` is a group-projected set the detector sorts, so it stays. Race-cause
-            // hazards only: this equivalence check has never compared pulse-cause ones.
+            // hazard is. `settled` is a group-projected set the detector sorts, so it stays. Input-cause
+            // hazards only, a lone toggle's as much as a pair's: this equivalence check has never
+            // compared pulse-cause ones.
             let hazard_shapes = |c: &crate::model::AnalysedCell| {
                 let mut v: Vec<String> = c
                     .hazards
                     .iter()
-                    .filter(|h| matches!(h.cause, Cause::Race { .. }))
+                    .filter(|h| matches!(h.cause, Cause::Toggle { .. } | Cause::Race { .. }))
                     .map(|h| {
                         format!(
                             "{:?} {:?} {:?} {:?}",

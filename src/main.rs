@@ -456,21 +456,29 @@ fn hazard_warning<'a>(
         effect.landings.dedup();
     }
     // The values every field is written from, held here so the field list can borrow them. `orders`
-    // and `triggered by` belong to a race, and each is present only where the outcome it reports was
-    // observed there.
-    let racing = match occasion.cause {
-        Cause::Race { pins } => Some(pins.as_slice()),
-        Cause::Pulse { .. } => None,
-    };
+    // and `triggered by` each report one outcome, so each is present only where that outcome was
+    // observed at this occasion.
     let when = first.condition();
     let path = report::Path(first.path());
-    let pre_state = State(first.pre_state());
-    let orders = racing
+    // A pulse returns its pin to the value it started from, so the pre-pulse input state IS the
+    // condition the hazard occurs under — `when` states it, and a separate pre-hazard field would only
+    // restate it. A toggle and a race leave their pins where they landed, so the state they started
+    // from is worth naming.
+    let pre_state = match occasion.cause {
+        Cause::Toggle { .. } | Cause::Race { .. } => Some(State(first.pre_state())),
+        Cause::Pulse { .. } => None,
+    };
+    // Which order the edges arrive in is what the settled state depends on, and ordering takes two of
+    // them: a lone toggle has no second edge to arrive after.
+    let pair = match occasion.cause {
+        Cause::Race { pins } => Some(pins),
+        Cause::Toggle { .. } | Cause::Pulse { .. } => None,
+    };
+    let orders = pair
         .filter(|_| effects.contains_key(&Outcome::Indeterminate))
         .map(orders_str);
-    let trigger = racing
-        .filter(|_| effects.contains_key(&Outcome::Oscillation))
-        .map(trigger_str);
+    let trigger =
+        trigger_str(occasion.cause).filter(|_| effects.contains_key(&Outcome::Oscillation));
     let landings: Vec<(&str, EffectField)> = effects
         .iter()
         .map(|(outcome, effect)| {
@@ -486,11 +494,8 @@ fn hazard_warning<'a>(
 
     let mut fields: Vec<(&str, &dyn fmt::Display)> =
         vec![("when", &when), ("reached along", &path)];
-    // A pulse returns its pin to the value it started from, so the pre-pulse input state IS the
-    // condition the hazard occurs under — `when` states it, and a separate pre-hazard field would only
-    // restate it. A race leaves its pins where they landed, so its own starting state is worth naming.
-    if racing.is_some() {
-        fields.push(("pre-hazard", &pre_state));
+    if let Some(pre_state) = &pre_state {
+        fields.push(("pre-hazard", pre_state));
     }
     if let Some(orders) = &orders {
         fields.push(("orders", orders));
@@ -522,11 +527,9 @@ fn hazard_warning<'a>(
 /// the condition.
 fn cause_str(cause: &Cause) -> String {
     match cause {
+        Cause::Toggle { pin } => format!("toggling {pin}"),
+        Cause::Race { pins: [a, b] } => format!("too little separation between {a} and {b}"),
         Cause::Pulse { pin, edge } => format!("a short pulse on {pin}{edge}"),
-        Cause::Race { pins } => match toggles(pins).as_slice() {
-            [one] => format!("toggling {one}"),
-            many => format!("too little separation between {}", many.join(" and ")),
-        },
     }
 }
 
@@ -543,11 +546,11 @@ fn outcome_str(outcome: Outcome) -> &'static str {
 /// the machine lands at once the timing IS honoured, which for a short pulse is where it would have gone
 /// had the pulse been wide enough.
 ///
-/// The landings are joined by what the cause makes them. A race's are ALTERNATIVES: either winner is a
-/// legitimate result of separating the edges, and nothing orders them among themselves, so they read as
-/// `or`. A pulse's are the two waypoints a wide enough one walks through — where the opening edge's own
-/// cascade comes to rest, and then where the closing edge leaves the machine — so they read with the
-/// same `→` the path field uses for a sequence.
+/// The landings are joined by what the cause makes them. An input cause's are ALTERNATIVES: either
+/// winner is a legitimate result of separating the edges, and nothing orders them among themselves, so
+/// they read as `or`. A pulse's are the two waypoints a wide enough one walks through — where the
+/// opening edge's own cascade comes to rest, and then where the closing edge leaves the machine — so
+/// they read with the same `→` the path field uses for a sequence.
 ///
 /// The clause is absent, rather than empty, where the records name no landing at all: a lone toggle has
 /// no second edge to be separated from, and a pair whose every order rings has no timing that brings the
@@ -564,7 +567,7 @@ impl fmt::Display for EffectField<'_> {
             return Ok(());
         }
         let separator = match self.cause {
-            Cause::Race { .. } => " or ",
+            Cause::Toggle { .. } | Cause::Race { .. } => " or ",
             Cause::Pulse { .. } => " → ",
         };
         f.write_str(" lands at ")?;
@@ -578,57 +581,22 @@ impl fmt::Display for EffectField<'_> {
     }
 }
 
-/// The triggering transitions of an indeterminate race: every order its edges can arrive in, since
+/// The triggering transitions of an indeterminate race: the two orders its edges can arrive in, since
 /// which lands first is what the settled state depends on (`A↓ then B↑ vs B↑ then A↓`).
-fn orders_str(pins: &[Racer]) -> String {
-    orderings(pins.len())
-        .into_iter()
-        .map(|order| {
-            order
-                .into_iter()
-                .map(|i| pins[i].to_string())
-                .collect::<Vec<_>>()
-                .join(" then ")
-        })
-        .collect::<Vec<_>>()
-        .join(" vs ")
+fn orders_str([a, b]: &[Racer; 2]) -> String {
+    format!("{a} then {b} vs {b} then {a}")
 }
 
-/// Every ordering of `n` positions, as sequences of indices: each position taken first in turn, each
-/// followed by every ordering of those left, so the identity order comes out first.
-fn orderings(n: usize) -> Vec<Vec<usize>> {
-    if n == 0 {
-        return vec![Vec::new()];
+/// The triggering transition of an oscillating cause, where the cause names one: a pair arrives
+/// together, which is what drives the cycle (`simultaneous toggle S↓ & R↓`), and a lone toggle arrives
+/// with nothing to coincide with (`toggling A↓`). A pulse is its own two edges, which the header
+/// already names in full.
+fn trigger_str(cause: &Cause) -> Option<String> {
+    match cause {
+        Cause::Toggle { pin } => Some(format!("toggling {pin}")),
+        Cause::Race { pins: [a, b] } => Some(format!("simultaneous toggle {a} & {b}")),
+        Cause::Pulse { .. } => None,
     }
-    let mut orders: Vec<Vec<usize>> = Vec::new();
-    for first in 0..n {
-        for mut rest in orderings(n - 1) {
-            // `rest` indexes the `n - 1` positions left once `first` is taken, so an index at or past
-            // it names the position one further along.
-            for i in &mut rest {
-                if *i >= first {
-                    *i += 1;
-                }
-            }
-            orders.push(std::iter::once(first).chain(rest).collect());
-        }
-    }
-    orders
-}
-
-/// The triggering transition of an oscillating race: the toggles it was observed under. Two or more
-/// arrive together, which is what drives the cycle (`simultaneous toggle S↓ & R↓`); one arrives with
-/// nothing to coincide with (`toggling A↓`).
-fn trigger_str(pins: &[Racer]) -> String {
-    match toggles(pins).as_slice() {
-        [one] => format!("toggling {one}"),
-        many => format!("simultaneous toggle {}", many.join(" & ")),
-    }
-}
-
-/// Each racing pin with the edge it makes (`A↓`), in the order the probe named them.
-fn toggles(pins: &[Racer]) -> Vec<String> {
-    pins.iter().map(Racer::to_string).collect()
 }
 
 /// The default output base name derived from the spec path (stem), or "cells" for stdin.

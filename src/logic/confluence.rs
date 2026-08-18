@@ -151,9 +151,9 @@ pub(super) fn oscillating_group(cycle: &[Minterm<Symbol>], state_vars: &[Symbol]
 /// no state to latch. The input count empties only the PAIR probes: a single toggle races the cell's own
 /// feedback and is probed however few inputs there are.
 ///
-/// Every record carries [`Cause::Race`], the cause this pass probes for, and the two outcomes share the
-/// one list: a reader tells them apart by the [`Outcome`] on the record rather than by which list it
-/// came out of.
+/// Every record carries [`Cause::Toggle`] or [`Cause::Race`], the causes this pass probes for, and the
+/// two outcomes share the one list: a reader tells them apart by the [`Outcome`] on the record rather
+/// than by which list it came out of.
 pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<Hazard> {
     let cell = m.cell;
     let inputs = &cell.inputs;
@@ -218,17 +218,17 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
             .collect();
 
         // Single-toggle capture: a lone input toggle that never settles is itself a non-settling
-        // observation. The observation was made under one pin's transition, and the cause names it —
-        // which is why a race's `pins` carries one member or two and is never empty. `settled` is empty:
-        // there is no competing order for the machine to land in, and no constraint follows from it
-        // either, a separation needing two edges to separate. Recorded once per input per state.
+        // observation. It was made under one pin's transition, which is the whole of [`Cause::Toggle`].
+        // `settled` is empty: there is no competing order for the machine to land in, and no constraint
+        // follows from it either, a separation needing two edges to separate. Recorded once per input
+        // per state.
         for (i, r) in single.iter().enumerate() {
             if let Err(cycle) = r {
                 let group = oscillating_group(cycle, state_vars);
                 let node_levels = node_levels_at(s, &group);
                 detected.push(Hazard {
-                    cause: Cause::Race {
-                        pins: vec![racer(s, &inputs[i])],
+                    cause: Cause::Toggle {
+                        pin: racer(s, &inputs[i]),
                     },
                     outcome: Outcome::Oscillation,
                     group,
@@ -291,7 +291,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
                     let node_levels = node_levels_at(s, &group);
                     detected.push(Hazard {
                         cause: Cause::Race {
-                            pins: vec![racer(s, x), racer(s, y)],
+                            pins: [racer(s, x), racer(s, y)],
                         },
                         outcome: Outcome::Oscillation,
                         group,
@@ -346,7 +346,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
                 settled_set.insert(s_yx.project_to(&group));
                 detected.push(Hazard {
                     cause: Cause::Race {
-                        pins: vec![racer(s, x), racer(s, y)],
+                        pins: [racer(s, x), racer(s, y)],
                     },
                     outcome: Outcome::Indeterminate,
                     group,
@@ -416,10 +416,12 @@ mod tests {
         pins
     }
 
-    /// The pins a detected race names. Every record this pass files is caused by a race — it probes
-    /// input pairs and single toggles, never a pulse — so the pulse arm cannot arise here.
+    /// The pins a detected record names. Every record this pass files is caused by inputs failing to
+    /// converge — it probes input pairs and single toggles, never a pulse — so the pulse arm cannot
+    /// arise here.
     fn racing_pins(hz: &Hazard) -> &[Racer] {
         match &hz.cause {
+            Cause::Toggle { pin } => std::slice::from_ref(pin),
             Cause::Race { pins } => pins,
             Cause::Pulse { .. } => unreachable!("confluence detects a race, never a pulse"),
         }
@@ -433,13 +435,16 @@ mod tests {
         pins
     }
 
-    /// The cell's detected races settling under `outcome`. A cell carries one hazard list spanning both
-    /// causes, so what this pass detected is read back off it by both axes: the racing cause it probes
-    /// for, and the outcome the test is about.
+    /// The cell's detected races settling under `outcome`, a lone toggle's as much as a pair's. A cell
+    /// carries one hazard list spanning every cause, so what this pass detected is read back off it by
+    /// both axes: the causes it probes for, and the outcome the test is about.
     fn races(cell: &AnalysedCell, outcome: Outcome) -> Vec<&Hazard> {
         cell.hazards
             .iter()
-            .filter(|hz| matches!(hz.cause, Cause::Race { .. }) && hz.outcome == outcome)
+            .filter(|hz| {
+                matches!(hz.cause, Cause::Toggle { .. } | Cause::Race { .. })
+                    && hz.outcome == outcome
+            })
             .collect()
     }
 

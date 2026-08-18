@@ -513,10 +513,10 @@ inputs = ["A"]
 Q = "A + Q"
 "#,
         );
-        assert!(!cell
-            .hazards
-            .iter()
-            .any(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation));
+        assert!(!cell.hazards.iter().any(|h| {
+            matches!(h.cause, Cause::Toggle { .. } | Cause::Race { .. })
+                && h.outcome == Outcome::Oscillation
+        }));
         assert_eq!(cell.regions.len(), 1);
         let q = &cell.regions[0];
         assert!(q.hysteretic, "a single-input keeper holds its own state");
@@ -602,13 +602,8 @@ Q = "!R*(CLK*M + !CLK*Q)"
                 .iter()
                 .map(|h| match &h.cause {
                     Cause::Pulse { pin, .. } => format!("pulse {pin}"),
-                    Cause::Race { pins } => format!(
-                        "race {}",
-                        pins.iter()
-                            .map(|r| r.pin.to_string())
-                            .collect::<Vec<_>>()
-                            .join("+")
-                    ),
+                    Cause::Toggle { pin } => format!("toggle {}", pin.pin),
+                    Cause::Race { pins: [x, y] } => format!("race {}+{}", x.pin, y.pin),
                 })
                 .collect();
             v.sort();

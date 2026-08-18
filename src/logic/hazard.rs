@@ -10,8 +10,10 @@
 //!
 //! [`Cause`] is what the timing is between:
 //!
-//! - [`Cause::Race`] — inputs that don't converge when toggled (one or two). The record names the pins observed racing, one
-//!   [`Racer`] per pin, each with the edge it makes.
+//! - [`Cause::Toggle`] — one input toggled alone, its cascade ringing around the cell's own feedback
+//!   instead of settling. The record names that pin and the edge it makes.
+//! - [`Cause::Race`] — two inputs toggled together that don't converge. The record names both pins, one
+//!   [`Racer`] each with the edge it makes, in the order the probe took them.
 //! - [`Cause::Pulse`] — one signal racing itself: the two edges of a single pin. A **pulse** on input
 //!   `p` from a stable state `s` is `p` toggled (the *opening* edge), the cascade that toggle opens left
 //!   to run some distance, and `p` toggled back (the *closing* edge) before settling; that distance is
@@ -26,14 +28,14 @@
 //!   stable state (a state `x` with `delta(x) == x`). Detected when
 //!   `super::machine::settle_or_cycle` returns the cycle instead of settling.
 //!
-//! The axes are independent, so there are four hazards — a race or a pulse, each settling
-//! indeterminately or not settling at all. One [`Hazard`] carries one (cause, outcome) pair, so a probe
-//! that observes both outcomes under one cause files two records carrying that same cause: a mutex's
-//! `A↓`, which both settles unpredictably and can fail to settle, is two records rather than one.
+//! The axes are independent, so a hazard is one of the three causes settling indeterminately or not
+//! settling at all. One [`Hazard`] carries one (cause, outcome) pair, so a probe that observes both
+//! outcomes under one cause files two records carrying that same cause: a mutex's `A↓`, which both
+//! settles unpredictably and can fail to settle, is two records rather than one.
 //!
 //! Detection runs over the state-space exploration in [`super::confluence`] and [`super::width`]. An
 //! uninitialised state variable is at an UNKNOWN state — not a value, and not a third one — so no
-//! detection runs from a state carrying one. Metastability is the shared physical risk all four create
+//! detection runs from a state carrying one. Metastability is the shared physical risk they all create
 //! — the reason a constraint is generated. This module carries only the resulting report record.
 //!
 //! **Implementation note:** a record is filed for every observation, and which of them a block is
@@ -63,15 +65,16 @@ impl fmt::Display for Racer {
     }
 }
 
-/// What the hazard's timing is between: inputs that don't converge when toggled (one or two), or one signal racing itself.
+/// What the hazard's timing is between: inputs that don't converge when toggled, one alone or two
+/// together, or one signal racing itself.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Cause {
-    /// Inputs that don't converge when toggled: one input alone, or two together.
-    Race {
-        /// The pins the probe observed racing: one member when a single toggle was observed not to
-        /// converge, two when a pair probe raced them together. Never empty.
-        pins: Vec<Racer>,
-    },
+    /// One input toggled alone, its cascade never settling: the pin the probe toggled, with the edge it
+    /// makes. It names one edge, so there is nothing for a separation to hold it apart from.
+    Toggle { pin: Racer },
+    /// Two inputs probed together that don't converge: the pair the probe toggled, one [`Racer`] each,
+    /// in the order it named them.
+    Race { pins: [Racer; 2] },
     /// One signal racing itself: the two edges of a single pin, bounding a pulse.
     Pulse {
         pin: Symbol,
@@ -157,13 +160,14 @@ impl Hazard {
             .expect("path_to seeds its chain with the probed node itself")
     }
 
-    /// A fixed total order over the four (cause, outcome) cells, so that two hazards can be ordered by
-    /// which cell they occupy. It is the second component of the representative tie-break, after
-    /// `discovered`: two records read from one probed state still pick a representative
-    /// deterministically.
+    /// A fixed rank over the (cause, outcome) cells, so that two hazards can be ordered by which cell
+    /// they occupy. A lone toggle and a pair race take the same rank: both are inputs failing to
+    /// converge, which is the distinction the rank draws. It is the second component of the
+    /// representative tie-break, after `discovered`: two records read from one probed state still pick
+    /// a representative deterministically.
     pub(crate) fn ordinal(&self) -> u8 {
         let cause = match self.cause {
-            Cause::Race { .. } => 0,
+            Cause::Toggle { .. } | Cause::Race { .. } => 0,
             Cause::Pulse { .. } => 2,
         };
         let outcome = match self.outcome {
@@ -196,7 +200,10 @@ Qb = "!Qa * B"
         let oscillating: Vec<&Hazard> = cell
             .hazards
             .iter()
-            .filter(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation)
+            .filter(|h| {
+                matches!(h.cause, Cause::Toggle { .. } | Cause::Race { .. })
+                    && h.outcome == Outcome::Oscillation
+            })
             .collect();
         assert_eq!(oscillating.len(), 1, "exactly one oscillation hazard");
         let a = oscillating[0];
@@ -207,15 +214,9 @@ Qb = "!Qa * B"
         assert_eq!(a.condition().to_string(), "!A & !B");
         // The A*B co-assertion is a pair-probe race, carrying the A/B pins the generated constraint
         // needs.
-        let pins = match &a.cause {
-            Cause::Race { pins } => pins,
-            Cause::Pulse { .. } => unreachable!("filtered on Cause::Race above"),
+        let Cause::Race { pins } = &a.cause else {
+            panic!("expected a pair-probe race, got {:?}", a.cause)
         };
-        assert_eq!(
-            pins.len(),
-            2,
-            "a pair-probe race names both racing pins, got {pins:?}"
-        );
         assert!(
             pins.iter()
                 .all(|r| r.pin.as_str() == "A" || r.pin.as_str() == "B"),
@@ -260,16 +261,16 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        assert!(!cell
-            .hazards
-            .iter()
-            .any(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation));
+        assert!(!cell.hazards.iter().any(|h| {
+            matches!(h.cause, Cause::Toggle { .. } | Cause::Race { .. })
+                && h.outcome == Outcome::Oscillation
+        }));
         // The C-element is order-dependent (A↓ racing B↑), so it detects an order-dependent hazard.
         assert!(
-            cell.hazards
-                .iter()
-                .any(|h| matches!(h.cause, Cause::Race { .. })
-                    && h.outcome == Outcome::Indeterminate),
+            cell.hazards.iter().any(|h| {
+                matches!(h.cause, Cause::Toggle { .. } | Cause::Race { .. })
+                    && h.outcome == Outcome::Indeterminate
+            }),
             "a C-element detects an order-dependent hazard"
         );
     }
@@ -287,10 +288,10 @@ Q = "S + Q*!R"
 Qn = "R + Qn*!S"
 "#,
         );
-        assert!(!cell
-            .hazards
-            .iter()
-            .any(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation));
+        assert!(!cell.hazards.iter().any(|h| {
+            matches!(h.cause, Cause::Toggle { .. } | Cause::Race { .. })
+                && h.outcome == Outcome::Oscillation
+        }));
     }
 
     #[test]
@@ -304,13 +305,13 @@ inputs = ["A", "B"]
 Y = "!(A*B)"
 "#,
         );
-        assert!(!cell
-            .hazards
-            .iter()
-            .any(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation));
-        assert!(!cell
-            .hazards
-            .iter()
-            .any(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Indeterminate));
+        assert!(!cell.hazards.iter().any(|h| {
+            matches!(h.cause, Cause::Toggle { .. } | Cause::Race { .. })
+                && h.outcome == Outcome::Oscillation
+        }));
+        assert!(!cell.hazards.iter().any(|h| {
+            matches!(h.cause, Cause::Toggle { .. } | Cause::Race { .. })
+                && h.outcome == Outcome::Indeterminate
+        }));
     }
 }
