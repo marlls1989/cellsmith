@@ -1,6 +1,6 @@
 //! Per-stage benchmarks: signal-BDD build, machine build/derive/detect/leakage, and emit. Every
 //! target is a pipeline stage keyed `BenchmarkId(stage, "{cell}/n{threads}")` and measured across the
-//! thread counts its [`common::Profile`] names. The per-`n` rayon pool is built once per registration
+//! thread counts its [`common::Sweep`] names. The per-`n` rayon pool is built once per registration
 //! (outside `b.iter`) and the timed routine runs inside `pool.install`, never a process-global pool.
 
 mod common;
@@ -21,8 +21,8 @@ use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criteri
 /// the `$profile` names, build the per-`n` rayon pool once per registration (outside `b.iter`), and run
 /// the timed `$routine` inside `pool.install`.
 macro_rules! sweep_bench {
-    ($group:expr, $stage:expr, $name:expr, $profile:expr, $routine:expr $(,)?) => {
-        for &n in &$profile.points() {
+    ($group:expr, $stage:expr, $name:expr, $sweep:expr, $routine:expr $(,)?) => {
+        for &n in &$sweep.points() {
             $group.bench_with_input(
                 BenchmarkId::new($stage, format!("{}/n{}", $name, n)),
                 &n,
@@ -38,7 +38,7 @@ macro_rules! sweep_bench {
 fn bench_signal_stages(c: &mut Criterion) {
     let mut g = c.benchmark_group("signal");
     for cell in common::raw_cells() {
-        let serial = common::Profile::serial(cell.name[0].as_str());
+        let serial = common::Sweep::of(cell.name[0].as_str(), false);
         // Pre-minimise fixture, plus the signal order and preserved set the minimise pass needs.
         let pre = cell.analyse_signals().unwrap();
         let order: Vec<Symbol> = pre.signals().map(|s| s.name.clone()).collect();
@@ -84,8 +84,8 @@ fn bench_signal_stages(c: &mut Criterion) {
 fn bench_machine_stages(c: &mut Criterion) {
     let mut g = c.benchmark_group("machine");
     for cell in common::raw_cells() {
-        let parallel = common::Profile::parallel(cell.name[0].as_str());
-        let serial = common::Profile::serial(cell.name[0].as_str());
+        let parallel = common::Sweep::of(cell.name[0].as_str(), true);
+        let serial = common::Sweep::of(cell.name[0].as_str(), false);
         // Fixture built once per cell: analyse folds the exprs post-minimise, so this map equals the
         // minimised map Machine::build consumes. The else-continue skips a cell whose exploration
         // passes an ExplorationBudget ceiling — there is no machine to time.
@@ -139,7 +139,7 @@ fn bench_machine_stages(c: &mut Criterion) {
 fn bench_emit_stages(c: &mut Criterion) {
     let mut g = c.benchmark_group("emit");
     for cell in common::raw_cells() {
-        let serial = common::Profile::serial(cell.name[0].as_str());
+        let serial = common::Sweep::of(cell.name[0].as_str(), false);
         let ac = cell.analyse().unwrap();
 
         sweep_bench!(g, "cell_arcs_tcl", cell.name[0], serial, || {

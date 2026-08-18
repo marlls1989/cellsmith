@@ -23,8 +23,8 @@ pub fn max_threads() -> usize {
     rayon::current_num_threads()
 }
 
-/// The full thread sweep for heavy, parallel-capable benchmarks: 1, 2, 4, 8 (each below the max) plus
-/// the max itself.
+/// The baseline and default plus the intermediate widths 1, 2, 4, 8 below the max, for a target whose
+/// scaling they can show.
 pub fn full_sweep() -> Vec<usize> {
     let m = max_threads();
     let mut v: Vec<usize> = [1, 2, 4, 8].into_iter().filter(|&n| n < m).collect();
@@ -32,7 +32,7 @@ pub fn full_sweep() -> Vec<usize> {
     v
 }
 
-/// A flat two-point sweep (baseline `n=1` and the max) for heavy but non-parallel benchmarks.
+/// The two informative points every target has: the `n=1` baseline and the default width.
 pub fn flat_sweep() -> Vec<usize> {
     let m = max_threads();
     if m == 1 {
@@ -42,59 +42,40 @@ pub fn flat_sweep() -> Vec<usize> {
     }
 }
 
-/// The thread-count profile one benchmark target is measured over. There are three: a cell outside
-/// [`HEAVY`] is cheap enough that only the default parallelism says anything, whatever the stage does,
-/// and a [`HEAVY`] one is swept across the range — the full sweep when the stage parallelises
-/// internally, the two-point baseline when it runs serially and the intermediate points would only
-/// re-measure the same single-threaded work.
+/// Which thread counts one benchmark target is measured at.
 ///
-/// `dead_code` wants every variant constructed somewhere. This module is compiled separately into each
-/// bench binary and neither reaches all of it: `aggregate` measures whole-pipeline targets, every one of
-/// them internally parallel, so it never builds [`Profile::HeavySerial`]. Deleting the variant is not
-/// available — `stages` needs it — and the form that would satisfy the lint is a shared bench-support
-/// crate the two binaries both depend on, which is more machinery than two bench files warrant. The
-/// attribute buys silence on that one per-binary asymmetry and nothing else; it is scoped to this enum,
-/// so an unused helper elsewhere in the module still gets reported.
-#[allow(dead_code)]
+/// Two independent flags decide it, and neither is a classification of the other: `heavy` is a property
+/// of the cell — its machine is wide enough for the intermediate widths to show scaling — and `parallel`
+/// is a property of the stage being measured. All four combinations are configurations a target can be
+/// in, including a light cell on a serial stage.
+///
+/// The rule over them: the `n=1` baseline and the default width are informative for every target, since
+/// one is the reference the other is read against. The intermediate widths say something only when the
+/// stage parallelises *and* the cell is wide enough to scale — on a serial stage they re-measure the
+/// same single-threaded work, and on a cheap cell they measure noise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Profile {
-    /// A cell outside [`HEAVY`]: the default parallelism alone.
-    Light,
-    /// A [`HEAVY`] cell on an internally parallel stage.
-    HeavyParallel,
-    /// A [`HEAVY`] cell on a serial stage.
-    HeavySerial,
+pub struct Sweep {
+    /// The cell is one of [`HEAVY`].
+    pub heavy: bool,
+    /// The stage parallelises internally.
+    pub parallel: bool,
 }
 
-impl Profile {
-    /// The profile of `cell` on an internally parallel stage. A light cell collapses to
-    /// [`Profile::Light`] whichever stage is being measured.
-    pub fn parallel(cell: &str) -> Profile {
-        if is_heavy(cell) {
-            Profile::HeavyParallel
-        } else {
-            Profile::Light
+impl Sweep {
+    /// The sweep for `cell` on a stage that does or does not parallelise internally.
+    pub fn of(cell: &str, parallel: bool) -> Sweep {
+        Sweep {
+            heavy: is_heavy(cell),
+            parallel,
         }
     }
 
-    /// The profile of `cell` on a stage that does its work serially, collapsing the same way.
-    ///
-    /// Unreached by the `aggregate` bench binary, which has no serial target — see [`Profile`].
-    #[allow(dead_code)]
-    pub fn serial(cell: &str) -> Profile {
-        if is_heavy(cell) {
-            Profile::HeavySerial
-        } else {
-            Profile::Light
-        }
-    }
-
-    /// The thread counts this profile is measured at.
+    /// The thread counts this sweep is measured at.
     pub fn points(self) -> Vec<usize> {
-        match self {
-            Profile::Light => vec![max_threads()],
-            Profile::HeavyParallel => full_sweep(),
-            Profile::HeavySerial => flat_sweep(),
+        if self.heavy && self.parallel {
+            full_sweep()
+        } else {
+            flat_sweep()
         }
     }
 }
