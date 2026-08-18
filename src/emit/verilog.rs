@@ -41,7 +41,6 @@ pub fn cell_verilog(cell: &AnalysedCell) -> String {
     // Read-gated outputs read a factored register combinationally: they emit a continuous `assign` in the
     // wrapper, no UDP of their own. Their factored register (minted, not a declared signal) emits an
     // edge-sensitive UDP like any register.
-    let read_of: BTreeMap<&str, &StateRegions> = read_functions(cell);
     let signal_names: BTreeSet<&str> = cell
         .signal_regions()
         .map(|(s, _)| s.name.as_str())
@@ -52,7 +51,7 @@ pub fn cell_verilog(cell: &AnalysedCell) -> String {
         if folded.contains(sig.name.as_str()) {
             continue; // pure master folded into its edge register
         }
-        if read_of.contains_key(sig.name.as_str()) {
+        if cell.edge.factored.contains(&sig.name) {
             continue; // a read-gated output is a continuous assign, not a UDP
         }
         match edge_by_node.get(sig.name.as_str()) {
@@ -426,7 +425,7 @@ fn wrapper_module(
     // Instantiate every surviving signal's UDP (outputs and internals); an internal drives its own
     // wire. A folded master has no instance; a read-gated output is a continuous assign, added below.
     for (sig, sr) in cell.signal_regions() {
-        if folded.contains(sig.name.as_str()) || read_of.contains_key(sig.name.as_str()) {
+        if folded.contains(sig.name.as_str()) || cell.edge.factored.contains(&sig.name) {
             continue;
         }
         let name = prim_name(cell, &sig.name);

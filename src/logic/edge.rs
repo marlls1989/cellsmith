@@ -154,6 +154,11 @@ pub(crate) struct EdgeArcs {
     /// the emitters render as a first-class internal node, and carries the combinational read function(s)
     /// of the output(s) that read it through a gate.
     pub(crate) derived: Vec<DerivedRegister>,
+    /// The outputs the read-gate factorisation took apart: each one's register moved to a node of its own
+    /// (`derived`) and the output itself became a combinational read over it, so it no longer carries an
+    /// `EdgeCaptures` entry of its own. Stated here by the pass that decides it, rather than recovered
+    /// downstream by asking which outputs `derived` names as readers.
+    pub(crate) factored: BTreeSet<Symbol>,
 }
 
 /// One EDGE-typed delay arc at full identity — the identity [`super::arcs::derive`] keys an
@@ -230,8 +235,8 @@ struct CandAgg {
     /// state is kept so a move can be replayed from where it started (the forcing classification needs
     /// the pre-toggle state, not just where it landed).
     moves: Vec<(Symbol, Minterm<Symbol>, Minterm<Symbol>, bool)>,
-    /// Per `(clock, is_rise)`: the clock-edge observations.
-    captures: BTreeMap<(Symbol, bool), CapAgg>,
+    /// Per candidate edge arc: the clock-edge observations.
+    captures: BTreeMap<ActiveEdge, CapAgg>,
     /// The `(stable state, value)` samples, for the off-edge synthesis.
     stable: Vec<(Minterm<Symbol>, bool)>,
 }
@@ -254,9 +259,17 @@ impl CandAgg {
 /// input-pin order with Rise first) and its off-edge.
 type Synthesised = (Vec<(Symbol, Edge, StateRegions)>, StateRegions);
 
-/// One candidate edge arc on a node: `(clock, is_rise)`. The decision core's whole currency — each arc on
-/// a node is typed independently, so edge and combinational arcs coexist freely on one output.
-type Arc = (Symbol, bool);
+/// One candidate edge arc on a node: a clock and the direction that clock moves in. The decision core's
+/// whole currency — each arc on a node is typed independently, so edge and combinational arcs coexist
+/// freely on one output. The two halves cannot disagree: the direction is an [`Edge`], never a level the
+/// caller has to keep in step with it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct ActiveEdge {
+    /// The keying clock — an input the cell declares as one.
+    clock: Symbol,
+    /// The direction the clock moves in.
+    edge: Edge,
+}
 
 /// A latch taken in one phase of one clock: what the opacity memo is keyed on. The two names carry
 /// different roles — `latch` is a state variable, `clock` an input the phase belongs to — and `level` is
@@ -325,7 +338,8 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                 continue;
             };
             let is_clock = scan.clock_set.contains(related.as_str());
-            let rose = np.value_of(related.as_str()) == Some(true);
+            let toggled_edge =
+                Edge::from_settled_level(np.value_of(related.as_str()) == Some(true));
             for (i, c) in candidates.iter().enumerate() {
                 let (Some(b0), Some(b1)) = (v0[i], value(c, &np)) else {
                     continue;
@@ -333,7 +347,13 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                 if is_clock {
                     // A clock toggle: record every sample for the cover synthesis, changed or not, and the
                     // firing itself — pre, destination and post — for the typing.
-                    let cap = out[i].captures.entry((related.clone(), rose)).or_default();
+                    let cap = out[i]
+                        .captures
+                        .entry(ActiveEdge {
+                            clock: related.clone(),
+                            edge: toggled_edge,
+                        })
+                        .or_default();
                     cap.samples.push((node.clone(), b1));
                     cap.firings.push((node.clone(), np.clone(), b1));
                     if b0 != b1 {
@@ -456,13 +476,13 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // A latch GENERATES on `(K, d)` iff it is opaque at the source level (`!d`) and transparent at the
     // delivered level (`d`). It is K-ASSOCIATED when its opacity differs across `K`'s two phases (a real latch
     // on `K` — the generator that opens on `d`, or the closer that shuts).
-    let generates = |w: &Symbol, clock: &Symbol, is_rise: bool| -> bool {
+    let generates = |w: &Symbol, clock: &Symbol, edge: Edge| -> bool {
         let source = LatchPhase {
             latch: w.clone(),
             clock: clock.clone(),
-            level: !is_rise,
+            level: !edge.settled_level(),
         };
-        opaque_of[&source] && transparent(w, clock, is_rise)
+        opaque_of[&source] && transparent(w, clock, edge.settled_level())
     };
     let k_assoc = |w: &Symbol, clock: &Symbol| -> bool {
         let phase = |level: bool| LatchPhase {
@@ -487,7 +507,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
             })
             .unwrap_or_default()
     };
-    // BIRTH: is an edge BORN at node `n` on `(clock, is_rise)` at the post-arc stable state `sp`? Two ways,
+    // BIRTH: is an edge BORN at node `n` on `(clock, edge)` at the post-arc stable state `sp`? Two ways,
     // both evaluated at ANY node — never only the output:
     //   (a) BY GENERATION — a latch at `n` goes opaque→transparent across the edge (`generates`).
     //   (b) BY CLOSER-EXPOSURE — the toggle switches `n` to expose a latch it closes on THIS edge: a closer
@@ -496,8 +516,8 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     //       `c` (the two-leg mux shape — `DET`'s `Q` exposing the donor it just closed). The direct-support
     //       condition is the mux event itself, not a depth bound; a closer-exposure edge can be born at an
     //       internal node and then propagate onward.
-    let born = |n: &Symbol, clock: &Symbol, is_rise: bool, sp: &Minterm<Symbol>| -> bool {
-        if m.state_set.contains(n.as_str()) && generates(n, clock, is_rise) {
+    let born = |n: &Symbol, clock: &Symbol, edge: Edge, sp: &Minterm<Symbol>| -> bool {
+        if m.state_set.contains(n.as_str()) && generates(n, clock, edge) {
             return true;
         }
         let Some(f) = fn_of.get(n.as_str()) else {
@@ -506,7 +526,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         let legs = cone(n.as_str(), clock);
         legs.iter().any(|g| {
             g != n
-                && generates(g, clock, is_rise)
+                && generates(g, clock, edge)
                 && legs
                     .iter()
                     .any(|c| c != g && c != n && residual_depends(f, sp, c.as_str()))
@@ -550,10 +570,10 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // pipe or a BURIED mux types identically to a shallow one — there is no one-step-cone gate. Per firing
     // — `sp` is that firing's own destination — so two firings of one `(output, clock, direction)` can
     // type differently.
-    let types_edge = |o: &Symbol, clock: &Symbol, is_rise: bool, sp: &Minterm<Symbol>| -> bool {
+    let types_edge = |o: &Symbol, clock: &Symbol, edge: Edge, sp: &Minterm<Symbol>| -> bool {
         candidates
             .iter()
-            .any(|b| born(b, clock, is_rise, sp) && propagates(o, sp, b))
+            .any(|b| born(b, clock, edge, sp) && propagates(o, sp, b))
     };
 
     // THE PER-ARC LABELS: each derived delay arc whose related pin is a declared clock is an edge arc iff it
@@ -567,16 +587,16 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         if !scan.clock_set.contains(a.related.as_str()) || !scan.is_eligible(&a.start) {
             continue;
         }
-        let is_rise = a.end.value_of(a.related.as_str()) == Some(true);
+        let clock_edge = Edge::from_settled_level(a.end.value_of(a.related.as_str()) == Some(true));
         let Some(sp) = machine::settle(stepped, &machine::toggle(&a.start, &[a.related.as_str()]))
         else {
             continue;
         };
-        if types_edge(&a.output, &a.related, is_rise, &sp) {
+        if types_edge(&a.output, &a.related, clock_edge, &sp) {
             labels.insert(EdgeLabel {
                 output: a.output.clone(),
                 clock: a.related.clone(),
-                clock_edge: Edge::from_settled_level(is_rise),
+                clock_edge,
                 start: a.start.clone(),
             });
         }
@@ -586,24 +606,24 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // eligible CHANGED firing (the initial set), tightened to the greatest fixed point by
     // `retain_active_edges` — the delivered value must hold through the phase. A node with a non-empty set
     // is an edge register; an empty one is a level node (a latch that merely tracks, or a clock gate).
-    let active_edges: Vec<BTreeSet<Arc>> = candidates
+    let active_edges: Vec<BTreeSet<ActiveEdge>> = candidates
         .iter()
         .zip(&aggs)
         .zip(&forcing_of)
         .map(|((name, agg), node_forcing)| {
-            let mut s: BTreeSet<Arc> = BTreeSet::new();
-            for ((clock, is_rise), cap) in &agg.captures {
+            let mut s: BTreeSet<ActiveEdge> = BTreeSet::new();
+            for (arc, cap) in &agg.captures {
                 if !cap.changed {
                     continue; // vacuity gate: some eligible firing must change the node
                 }
-                let edge = cap.firings.iter().any(|(pre, np, post)| {
+                let types = cap.firings.iter().any(|(pre, np, post)| {
                     scan.is_eligible(pre)
                         && scan.is_eligible(np)
                         && m.output_value(name.as_str(), pre) != Some(*post)
-                        && types_edge(name, clock, *is_rise, np)
+                        && types_edge(name, &arc.clock, arc.edge, np)
                 });
-                if edge {
-                    s.insert((clock.clone(), *is_rise));
+                if types {
+                    s.insert(arc.clone());
                 }
             }
             scan.retain_active_edges(name.as_str(), node_forcing, &mut s);
@@ -628,19 +648,21 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         }
         let name = &candidates[i];
         let agg = &aggs[i];
-        // The keying clocks in cell input-pin order, each with the `(is_rise, Edge)` directions kept
-        // (Rise before Fall). Every clock present carries at least one active-edge direction.
-        let clock_edges: Vec<(Symbol, Vec<(bool, Edge)>)> = inputs
+        // The keying clocks in cell input-pin order, each with its active directions kept (Rise before
+        // Fall). Every clock present carries at least one active-edge direction.
+        let clock_edges: Vec<(Symbol, Vec<Edge>)> = inputs
             .iter()
-            .filter(|p| s.iter().any(|(clock, _)| clock == *p))
+            .filter(|p| s.iter().any(|a| &a.clock == *p))
             .map(|clock| {
-                let mut edges: Vec<(bool, Edge)> = Vec::new();
-                if s.contains(&(clock.clone(), true)) {
-                    edges.push((true, Edge::Rise));
-                }
-                if s.contains(&(clock.clone(), false)) {
-                    edges.push((false, Edge::Fall));
-                }
+                let edges: Vec<Edge> = [Edge::Rise, Edge::Fall]
+                    .into_iter()
+                    .filter(|&edge| {
+                        s.contains(&ActiveEdge {
+                            clock: clock.clone(),
+                            edge,
+                        })
+                    })
+                    .collect();
                 (clock.clone(), edges)
             })
             .collect();
@@ -940,6 +962,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         folded,
         labels,
         derived,
+        factored,
     }
 }
 
@@ -1042,7 +1065,7 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
         &self,
         node: &str,
         node_forcing: &BTreeMap<Symbol, (bool, bool)>,
-        s: &mut BTreeSet<Arc>,
+        s: &mut BTreeSet<ActiveEdge>,
     ) {
         let is_forced = |st: &Minterm<Symbol>| {
             node_forcing
@@ -1050,11 +1073,12 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
                 .any(|(p, (a, _))| st.value_of(p.as_str()) == Some(*a))
         };
         loop {
-            let mut to_remove: Option<Arc> = None;
-            'search: for (k, is_rise) in s.iter() {
+            let mut to_remove: Option<ActiveEdge> = None;
+            'search: for arc in s.iter() {
+                let k = &arc.clock;
                 for (si, st) in self.order.iter().enumerate() {
                     if !self.eligible[si]
-                        || st.value_of(k.as_str()) != Some(*is_rise)
+                        || st.value_of(k.as_str()) != Some(arc.edge.settled_level())
                         || is_forced(st)
                     {
                         continue;
@@ -1086,11 +1110,15 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
                         }
                         // Is the toggle of `x` itself an active edge of the node's current set?
                         let x_is_active_edge = self.clock_set.contains(x.as_str()) && {
-                            let xdir = dest.value_of(x.as_str()) == Some(true);
-                            s.contains(&(x.clone(), xdir))
+                            s.contains(&ActiveEdge {
+                                clock: x.clone(),
+                                edge: Edge::from_settled_level(
+                                    dest.value_of(x.as_str()) == Some(true),
+                                ),
+                            })
                         };
                         if !x_is_active_edge {
-                            to_remove = Some((k.clone(), *is_rise));
+                            to_remove = Some(arc.clone());
                             break 'search;
                         }
                     }
@@ -1302,7 +1330,7 @@ fn synth_node_captures<B: Brand, C: ManagerCell>(
     fold_eligible: &BTreeSet<Symbol>,
     inputs_set: &BTreeSet<&str>,
     inputs: &[Symbol],
-    clock_edges: &[(Symbol, Vec<(bool, Edge)>)],
+    clock_edges: &[(Symbol, Vec<Edge>)],
     agg: &CandAgg,
 ) -> Synthesised {
     let clocks: Vec<Symbol> = clock_edges.iter().map(|(c, _)| c.clone()).collect();
@@ -1319,16 +1347,19 @@ fn synth_node_captures<B: Brand, C: ManagerCell>(
             .chain(candidates.iter().cloned())
             .collect();
 
-        for (is_rise, edge) in edges {
+        for &edge in edges {
             let samples = agg
                 .captures
-                .get(&(clock.clone(), *is_rise))
+                .get(&ActiveEdge {
+                    clock: clock.clone(),
+                    edge,
+                })
                 .map(|c| c.samples.as_slice())
                 .unwrap_or(&[]);
             let cols = drop_loop_columns(&header, samples, inputs_set, fold_eligible);
             let sr = synth_capture(builder, &cols, samples)
                 .expect("the uniform header is conflict-free, so no dropped subset conflicts");
-            captures.push((clock.clone(), *edge, sr));
+            captures.push((clock.clone(), edge, sr));
         }
     }
 
@@ -1398,6 +1429,14 @@ fn support_in_header<B: Brand, C: ManagerCell>(
 /// Assemble a [`StateRegions`] from an on/off region-BDD pair over `header`, reusing the `regions.rs`
 /// cover pipeline so the emitted cubes are byte-compatible. `hold_bdd` is the quiescent gap (empty for a
 /// total capture).
+///
+/// [`StateRegions::hysteretic`] is `true` by construction. Every region set assembled here is a capture
+/// or an off-edge of an edge register — a node whose active-edge set is non-empty, or a register the
+/// read-gate factorisation minted from one — and an edge register carries its delivered value across the
+/// whole phase between two active edges. Holding a value that no current input determines IS being a
+/// state variable, so the node emits a `statetable` rather than a combinational `function`. That stands
+/// whatever the hold region looks like: a total capture leaves `hold` empty and is hysteretic all the
+/// same, exactly as cross-coupled emergent memory is.
 fn regions_from<B: Brand, C: ManagerCell>(
     on_bdd: &Bdd<B, C>,
     off_bdd: &Bdd<B, C>,
@@ -1872,12 +1911,15 @@ mod tests {
             };
 
             // The emitted model: one capture cover per arc, plus the clock-inclusive forcing covers.
-            let covers: BTreeMap<Arc, Bdd<B, C>> = r
+            let covers: BTreeMap<ActiveEdge, Bdd<B, C>> = r
                 .captures
                 .iter()
                 .map(|(clock, edge, sr)| {
                     (
-                        (clock.clone(), edge.settled_level()),
+                        ActiveEdge {
+                            clock: clock.clone(),
+                            edge: *edge,
+                        },
                         builder.build_cover(&sr.on_cover),
                     )
                 })
@@ -1897,22 +1939,23 @@ mod tests {
             // Does some firing of this arc CHANGE the node? The behavioural half of the no-vacuous guard,
             // and the discriminator between a latch CLOSE (change-free: the node already tracks the
             // delivered value through the open phase) and an edge that moves the node.
-            let changes = |(clock, is_rise): &Arc| -> bool {
-                let xi = inputs.iter().position(|p| p == clock).unwrap();
+            let changes = |arc: &ActiveEdge| -> bool {
+                let xi = inputs.iter().position(|p| p == &arc.clock).unwrap();
                 scan.order.iter().enumerate().any(|(si, s)| {
-                    s.value_of(clock.as_str()) == Some(!*is_rise)
+                    s.value_of(arc.clock.as_str()) == Some(!arc.edge.settled_level())
                         && scan.next[si][xi].is_some_and(|ni| value(&scan.order[ni]) != value(s))
                 })
             };
-            let is_transparent =
-                |(clock, is_rise): &Arc| -> bool { phase_transparent(&r.node, clock, !*is_rise) };
+            let is_transparent = |arc: &ActiveEdge| -> bool {
+                phase_transparent(&r.node, &arc.clock, !arc.edge.settled_level())
+            };
 
             // The OPEN phases: a CHANGE-FREE arc whose pre-phase is genuinely transparent is a latch
             // close, and its pre-phase is where the node tracks that arc's cover.
             let open: Vec<(Symbol, bool, &Bdd<B, C>)> = covers
                 .keys()
                 .filter(|arc| !changes(arc) && is_transparent(arc))
-                .map(|arc| (arc.0.clone(), !arc.1, &covers[arc]))
+                .map(|arc| (arc.clock.clone(), !arc.edge.settled_level(), &covers[arc]))
                 .collect();
             let open_at = |s: &Minterm<Symbol>| {
                 open.iter()
@@ -1953,10 +1996,14 @@ mod tests {
                         continue; // an undetermined coordinate at either end: nothing to prove
                     };
                     let got = value(dest);
-                    let rising = s.value_of(x.as_str()) == Some(false);
+                    // The toggle leaves `x` at the complement of the level it started from.
+                    let toggled = ActiveEdge {
+                        clock: x.clone(),
+                        edge: Edge::from_settled_level(s.value_of(x.as_str()) == Some(false)),
+                    };
 
                     // (2) CAPTURE: this toggle is an emitted arc firing from its matching pre-phase.
-                    if let Some(cov) = covers.get(&(x.clone(), rising)) {
+                    if let Some(cov) = covers.get(&toggled) {
                         let want = forced(dest)
                             .map(Some)
                             .unwrap_or_else(|| cov.evaluate_fast(s));
@@ -1965,9 +2012,9 @@ mod tests {
                         }
                         assert_eq!(
                             got, want,
-                            "capture unfaithful: node {node}, clock {x} {} from pre {s:?} settled to \
-                             {dest:?}: observed {got:?} != synthesised capture {want:?}",
-                            if rising { "Rise" } else { "Fall" }
+                            "capture unfaithful: node {node}, clock {x} {:?} from pre {s:?} settled \
+                             to {dest:?}: observed {got:?} != synthesised capture {want:?}",
+                            toggled.edge
                         );
                         continue;
                     }
@@ -2012,10 +2059,10 @@ mod tests {
             for arc in covers.keys() {
                 assert!(
                     changes(arc) || is_transparent(arc),
-                    "vacuous edge arc: node {node}, clock {} {} never changes the node and its \
+                    "vacuous edge arc: node {node}, clock {} {:?} never changes the node and its \
                      opposite phase is not transparent",
-                    arc.0.as_str(),
-                    if arc.1 { "Rise" } else { "Fall" }
+                    arc.clock.as_str(),
+                    arc.edge
                 );
             }
         }
@@ -2051,11 +2098,7 @@ mod tests {
         // A read-gated output emits its READ FUNCTION (over the factored register and gate pins), not its
         // raw δ — that function must name no folded node, and the output is excluded from the raw-function
         // check (b) below, which would otherwise flag the masters it re-expresses.
-        let read_gated: BTreeSet<&str> = es
-            .derived
-            .iter()
-            .flat_map(|d| d.reads.iter().map(|r| r.output.as_str()))
-            .collect();
+        let read_gated: BTreeSet<&str> = es.factored.iter().map(Symbol::as_str).collect();
         for d in &es.derived {
             for r in &d.reads {
                 for col in &r.function.cols {

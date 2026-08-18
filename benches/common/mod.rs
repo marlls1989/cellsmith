@@ -42,14 +42,60 @@ pub fn flat_sweep() -> Vec<usize> {
     }
 }
 
-/// Pick the thread sweep for a stage given whether it is internally parallel and whether it is
-/// [`HEAVY`]: light stages only run at the max thread count, heavy stages sweep 1..max (fully if
-/// parallel, flat otherwise).
-pub fn sweep(parallel: bool, heavy: bool) -> Vec<usize> {
-    match (parallel, heavy) {
-        (_, false) => vec![max_threads()],
-        (true, true) => full_sweep(),
-        (false, true) => flat_sweep(),
+/// The thread-count profile one benchmark target is measured over. There are three: a cell outside
+/// [`HEAVY`] is cheap enough that only the default parallelism says anything, whatever the stage does,
+/// and a [`HEAVY`] one is swept across the range — the full sweep when the stage parallelises
+/// internally, the two-point baseline when it runs serially and the intermediate points would only
+/// re-measure the same single-threaded work.
+///
+/// `dead_code` wants every variant constructed somewhere. This module is compiled separately into each
+/// bench binary and neither reaches all of it: `aggregate` measures whole-pipeline targets, every one of
+/// them internally parallel, so it never builds [`Profile::HeavySerial`]. Deleting the variant is not
+/// available — `stages` needs it — and the form that would satisfy the lint is a shared bench-support
+/// crate the two binaries both depend on, which is more machinery than two bench files warrant. The
+/// attribute buys silence on that one per-binary asymmetry and nothing else; it is scoped to this enum,
+/// so an unused helper elsewhere in the module still gets reported.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Profile {
+    /// A cell outside [`HEAVY`]: the default parallelism alone.
+    Light,
+    /// A [`HEAVY`] cell on an internally parallel stage.
+    HeavyParallel,
+    /// A [`HEAVY`] cell on a serial stage.
+    HeavySerial,
+}
+
+impl Profile {
+    /// The profile of `cell` on an internally parallel stage. A light cell collapses to
+    /// [`Profile::Light`] whichever stage is being measured.
+    pub fn parallel(cell: &str) -> Profile {
+        if is_heavy(cell) {
+            Profile::HeavyParallel
+        } else {
+            Profile::Light
+        }
+    }
+
+    /// The profile of `cell` on a stage that does its work serially, collapsing the same way.
+    ///
+    /// Unreached by the `aggregate` bench binary, which has no serial target — see [`Profile`].
+    #[allow(dead_code)]
+    pub fn serial(cell: &str) -> Profile {
+        if is_heavy(cell) {
+            Profile::HeavySerial
+        } else {
+            Profile::Light
+        }
+    }
+
+    /// The thread counts this profile is measured at.
+    pub fn points(self) -> Vec<usize> {
+        match self {
+            Profile::Light => vec![max_threads()],
+            Profile::HeavyParallel => full_sweep(),
+            Profile::HeavySerial => flat_sweep(),
+        }
     }
 }
 

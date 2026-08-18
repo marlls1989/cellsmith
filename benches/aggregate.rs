@@ -19,7 +19,8 @@ fn bench_cell_analyse(c: &mut Criterion) {
     let mut g = c.benchmark_group("whole_cell");
     let cells = common::raw_cells();
     for cell in &cells {
-        for &n in &common::sweep(true, common::is_heavy(cell.name[0].as_str())) {
+        let profile = common::Profile::parallel(cell.name[0].as_str());
+        for &n in &profile.points() {
             g.bench_with_input(
                 BenchmarkId::new("cell_analyse", format!("{}/n{}", cell.name[0], n)),
                 &n,
