@@ -432,12 +432,13 @@ cargo test
 
 ## Benchmarks
 
-The [Criterion](https://crates.io/crates/criterion) suite times every pipeline stage across a rayon
-thread sweep, from a serial `n=1` baseline up to `max` threads (`rayon::current_num_threads()`).
-cellsmith runs multithreaded, and parallelism can regress a stage's cost — intra-cell BDD parallelism
-once slowed ~3.7x under write-lock contention — so each stage is reported across the full sweep.
+The [Criterion](https://crates.io/crates/criterion) suite measures two things: what a run costs
+overall, and what each pass of the pipeline costs on its own. cellsmith runs multithreaded, and
+parallelism can regress a cost rather than improve it — intra-cell BDD parallelism once slowed ~3.7x
+under write-lock contention — so the thread width a measurement is taken at is a parameter of the
+measurement, not a property of what is being measured.
 
-Two targets cover the pipeline at different granularities, both driven off the 9 cells in
+Two targets, each a profile of a different thing, both driven off the 9 cells in
 `examples/cells.toml`:
 
 - `benches/stages.rs` — per-stage timings, grouped by fixture: `signal` (`parse`, `build_signal_bdds`,
@@ -446,17 +447,22 @@ Two targets cover the pipeline at different granularities, both driven off the 9
 - `benches/aggregate.rs` — whole-pipeline timings: `whole_cell` (`Cell::analyse` per cell) and
   `whole_run` (the full 9-cell run: `analyse` plus all three emitters and `library_liberty`).
 
-Sweep width follows each stage's cost and parallelism, via `benches/common/mod.rs::sweep`: internally
-parallel stages (`machine_build`, `arcs_derive`, `confluence_detect`, `analyse_machine`, and both
-aggregate targets) sweep the full `{1, 2, 4, 8, max}` range on the two `HEAVY` cells (`ICM`,
-`RACELEM21`); serial stages sweep the flat `{1, max}` on those same cells as a flatness check; every
-stage on every cell is additionally measured at `n=max` so the cost gradient across cells is visible
-(`max` is `rayon::current_num_threads()`, e.g. `{1, 2, 4, 8}` on an 8-core host).
+Every target is measured at the thread counts `CELLSMITH_BENCH_THREADS` names, as a comma-separated
+list. A width is a point on one axis rather than a mode, so the single-threaded measurement is the
+`n=1` point of a sweep and is asked for the same way as any other. With the variable unset each target
+is measured once with nothing pinned, on the global pool at whatever width it was configured with —
+which is how the tool itself runs. The list reaches the benchmarks through the environment because
+`criterion_main!` owns `argv` and rejects arguments it does not recognise.
 
 ```sh
-cargo bench                    # both targets
-cargo bench --bench stages     # per-stage only
-cargo bench --bench aggregate  # whole-pipeline only
+cargo bench                                     # both targets, nothing pinned
+cargo bench --bench stages                      # per-pass only
+cargo bench --bench aggregate                   # whole-run only
+
+# Set CELLSMITH_BENCH_THREADS to choose the widths, as a comma-separated list:
+CELLSMITH_BENCH_THREADS=1 cargo bench           # the single-threaded point alone
+CELLSMITH_BENCH_THREADS=1,2,4,8 cargo bench     # a four-point sweep
+CELLSMITH_BENCH_THREADS=1,8 cargo bench --bench aggregate   # one target, two widths
 ```
 
 Results (with HTML reports) land under `target/criterion`. To compare before/after a change:

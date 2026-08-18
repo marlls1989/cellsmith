@@ -1,6 +1,6 @@
 //! Whole-pipeline benchmarks: a single cell's full `analyse()` and the whole-crate run across all
-//! example cells, each swept across the thread range with a scoped rayon pool built once per
-//! registration.
+//! example cells, each measured at every one of [`common::thread_counts`] with the pool built once
+//! per registration.
 
 mod common;
 
@@ -13,20 +13,21 @@ use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
-/// One target per example cell: the full `analyse()` pipeline. `analyse` is internally parallel, so
-/// every cell is measured at the max thread count and the [`common::HEAVY`] ones also sweep 1..max.
+/// One target per example cell: the full `analyse()` pipeline, which is internally parallel.
 fn bench_cell_analyse(c: &mut Criterion) {
     let mut g = c.benchmark_group("whole_cell");
     let cells = common::raw_cells();
     for cell in &cells {
-        let sweep = common::Sweep::of(cell.name[0].as_str(), true);
-        for &n in &sweep.points() {
+        for n in common::thread_counts() {
             g.bench_with_input(
-                BenchmarkId::new("cell_analyse", format!("{}/n{}", cell.name[0], n)),
+                BenchmarkId::new(
+                    "cell_analyse",
+                    format!("{}/{}", cell.name[0], common::label(n)),
+                ),
                 &n,
                 |b, &n| {
                     let p = common::pool(n);
-                    p.install(|| b.iter(|| black_box(cell.analyse().unwrap())));
+                    common::in_pool(&p, || b.iter(|| black_box(cell.analyse().unwrap())));
                 },
             );
         }
@@ -35,18 +36,18 @@ fn bench_cell_analyse(c: &mut Criterion) {
 }
 
 /// A single target mirroring `main.rs`'s compute path — cross-cell parallel `analyse`, the arc and
-/// Verilog emit maps, and the Liberty fragment — minus file-IO and hazard warnings, swept across the
-/// full thread range. Cross-cell and intra-cell parallelism share the one installed pool.
+/// Verilog emit maps, and the Liberty fragment — minus file-IO and hazard warnings. Cross-cell and
+/// intra-cell parallelism share the one installed pool.
 fn bench_whole_run(c: &mut Criterion) {
     let mut g = c.benchmark_group("whole_run");
     let cells = common::raw_cells();
-    for &n in &common::full_sweep() {
+    for n in common::thread_counts() {
         g.bench_with_input(
-            BenchmarkId::new("whole_run", format!("n{n}")),
+            BenchmarkId::new("whole_run", common::label(n)),
             &n,
             |b, &n| {
                 let p = common::pool(n);
-                p.install(|| {
+                common::in_pool(&p, || {
                     b.iter(|| {
                         let analysed: Vec<_> =
                             cells.par_iter().map(|c| c.analyse().unwrap()).collect();
