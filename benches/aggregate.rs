@@ -60,7 +60,7 @@ fn bench_whole_run(c: &mut Criterion) {
                             .map(cell_verilog)
                             .collect::<Vec<_>>()
                             .concat();
-                        let lib = library_liberty("cells", &analysed);
+                        let lib = library_liberty("cells", &analysed).to_string();
                         black_box((arcs, v, lib));
                     })
                 });

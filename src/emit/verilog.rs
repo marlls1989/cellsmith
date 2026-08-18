@@ -14,6 +14,7 @@
 //! into such a register contributes nothing — no primitive, no wire, no instance.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::{self, Write as _};
 
 use espresso_logic::Symbol;
 
@@ -132,28 +133,44 @@ fn constant_module(name: &str, pin: &str, value: bool) -> String {
 fn table_lines(sr: &StateRegions) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for cube in &sr.on {
-        lines.push(format!("{} : ? : 1;", pattern(cube)));
+        lines.push(format!("{} : ? : 1;", Pattern(cube)));
     }
     for cube in &sr.off {
-        lines.push(format!("{} : ? : 0;", pattern(cube)));
+        lines.push(format!("{} : ? : 0;", Pattern(cube)));
     }
     for cube in &sr.hold {
-        lines.push(format!("{} : ? : -;", pattern(cube)));
+        lines.push(format!("{} : ? : -;", Pattern(cube)));
     }
     lines.sort();
     lines
 }
 
-/// Render a cube as space-separated `1`/`0`/`?` symbols over the column header order.
-fn pattern(cube: &StateCube) -> String {
-    cube.iter()
-        .map(|c| match c {
+/// A cube as space-separated UDP table columns, one [`Level`] per column of the header order.
+struct Pattern<'a>(&'a StateCube);
+
+impl fmt::Display for Pattern<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, val) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(" ")?;
+            }
+            write!(f, "{}", Level(*val))?;
+        }
+        Ok(())
+    }
+}
+
+/// One column value as a Verilog UDP table symbol: `1` high, `0` low, `?` any.
+struct Level(Option<bool>);
+
+impl fmt::Display for Level {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self.0 {
             Some(true) => "1",
             Some(false) => "0",
             None => "?",
         })
-        .collect::<Vec<_>>()
-        .join(" ")
+    }
 }
 
 /// The register's DATA columns: `er.cols` with the register's own symbol and every keying clock removed.
@@ -329,38 +346,45 @@ fn region_row(
     cube: &StateCube,
     next: &str,
 ) -> String {
-    let mut cells: Vec<&str> = cols
-        .iter()
-        .map(|&c| level_at(c, region_cols, cube))
-        .collect();
+    let mut row = String::new();
+    for &c in cols {
+        column(&mut row, level_at(c, region_cols, cube));
+    }
     // Clock columns LAST, in clocks() order: the capturing clock carries its edge indicator, every other
     // clock its conditioning level from the cube.
     for &clock in clocks {
         match active {
-            Some((active_clock, indicator)) if clock == active_clock => cells.push(indicator),
-            _ => cells.push(level_at(clock, region_cols, cube)),
+            Some((active_clock, indicator)) if clock == active_clock => column(&mut row, indicator),
+            _ => column(&mut row, level_at(clock, region_cols, cube)),
         }
     }
     let reg = if er.cols.contains(&er.node) {
         level_at(&er.node, region_cols, cube)
     } else {
-        "?"
+        Level(None)
     };
-    format!("{} : {reg} : {next};", cells.join(" "))
+    write!(row, " : {reg} : {next};").expect("writing into a String cannot fail");
+    row
 }
 
-/// The `1`/`0`/`?` level of column `col` in `cube`, looked up by name against `region_cols` (a subset
-/// of the register's columns). Absent — the region does not constrain this column — reads `?`.
-fn level_at(col: &Symbol, region_cols: &[Symbol], cube: &StateCube) -> &'static str {
-    match region_cols
-        .iter()
-        .position(|c| c == col)
-        .and_then(|i| cube[i])
-    {
-        Some(true) => "1",
-        Some(false) => "0",
-        None => "?",
+/// Append one column to a row under construction, space-separated from the column before it. The rows are
+/// sorted before they are emitted, so each is assembled as the string that sort orders.
+fn column(row: &mut String, cell: impl fmt::Display) {
+    if !row.is_empty() {
+        row.push(' ');
     }
+    write!(row, "{cell}").expect("writing into a String cannot fail");
+}
+
+/// The level of column `col` in `cube`, looked up by name against `region_cols` (a subset of the
+/// register's columns). Absent — the region does not constrain this column — is the any-value `?`.
+fn level_at(col: &Symbol, region_cols: &[Symbol], cube: &StateCube) -> Level {
+    Level(
+        region_cols
+            .iter()
+            .position(|c| c == col)
+            .and_then(|i| cube[i]),
+    )
 }
 
 /// The `celldefine`d wrapper module: declares the cell's ports, a `specify` path delay from every

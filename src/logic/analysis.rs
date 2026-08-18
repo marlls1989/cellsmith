@@ -541,7 +541,9 @@ Q = "A + Q"
             "a single-input keeper's pulses all settle back to where they started"
         );
         // Emission is well-formed: a statetable for the hysteretic output, and no panic on the arcs.
-        assert!(cell_liberty(&cell).contains("statetable"));
+        assert!(liberty_parse::liberty::Liberty(cell_liberty(&cell))
+            .to_string()
+            .contains("statetable"));
         let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());
     }
 

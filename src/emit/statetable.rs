@@ -1469,7 +1469,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
 
     /// Parse the `statetable ("<inputs>", "<nodes>") { table : "..."; }` block out of a rendered cell: the
     /// two header node lists and the rows, each field split into its emitted tokens. Reads the RENDERED
-    /// output (not the model), so it is the one place `edge_input_pattern`'s clock-column rendering is
+    /// output (not the model), so it is the one place `EdgeInputs`'s clock-column rendering is
     /// exercised behaviourally — a dropped clock literal reaches the replay through here.
     fn parse_rendered_statetable(liberty: &str) -> (Vec<String>, Vec<String>, Vec<RenderedRow>) {
         let start = liberty
@@ -1615,11 +1615,12 @@ Q = "!R*(CLK*M + !CLK*Q)"
     /// transition, settle the rendered rows (level and edge, jointly, under Liberty first-match) and check
     /// the settled node values against the machine's own settled state. This is the joint edge+level
     /// coverage `emitted_rows_reconstruct_per_node_regions` lacks — the only test that fails when
-    /// `edge_input_pattern` drops a clock literal (the MOR/MORA `~R - H` clear-on-any-non-rising bug).
+    /// `EdgeInputs` drops a clock literal (the MOR/MORA `~R - H` clear-on-any-non-rising bug).
     fn replay_rendered_statetable(src: &str) {
         let cell = analyse(src);
-        // The rendered rows are the device under test — the sole path through `edge_input_pattern`.
-        let liberty = crate::emit::liberty::cell_liberty(&cell);
+        // The rendered rows are the device under test — the sole path through `EdgeInputs`.
+        let liberty =
+            liberty_parse::liberty::Liberty(crate::emit::liberty::cell_liberty(&cell)).to_string();
         let (input_names, state_names, rows) = parse_rendered_statetable(&liberty);
         let model = build_state_model(&cell).expect("fixture is sequential");
         assert_eq!(
@@ -1740,7 +1741,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
     /// The rendered-row replay over the joint level+edge first-match semantics, for the fixtures that
     /// carry the phase-conditioned clear (MOR/MORA), a multi-step two-node level model (SR), a dual-edge
     /// register (DET), a toggle register decomposing into two edge registers (TFF), the canonical DFF,
-    /// and a full-async clear DFF (RDFF). Fails against an `edge_input_pattern` that drops the `CLK*R`
+    /// and a full-async clear DFF (RDFF). Fails against an `EdgeInputs` that drops the `CLK*R`
     /// clock literal (which would make MOR/MORA clear on any non-rising event with R high, including
     /// CLK=0 where the cell holds).
     #[test]

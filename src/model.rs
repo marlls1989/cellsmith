@@ -2072,7 +2072,7 @@ M = "CLK"
 
         for other in [
             crate::emit::verilog::cell_verilog(&cell),
-            crate::emit::liberty::library_liberty("lib", std::slice::from_ref(&cell)),
+            crate::emit::liberty::library_liberty("lib", std::slice::from_ref(&cell)).to_string(),
             crate::emit::define_cell::cell_define_cell(&cell),
         ] {
             assert!(
