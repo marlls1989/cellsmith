@@ -15,6 +15,7 @@ use espresso_logic::{Minterm, Symbol};
 use rayon::prelude::*;
 
 use cellsmith::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, CellArcs};
+use cellsmith::emit::block::Description;
 use cellsmith::emit::define_cell::cell_define_cell;
 use cellsmith::emit::liberty::library_liberty;
 use cellsmith::emit::verilog::cell_verilog;
@@ -266,7 +267,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     // internal node with no column renders a block already emitted. Exposing those nodes is the remedy,
     // which is why the warning names the state as well as the block.
     for (c, r) in cells.iter().zip(&rendered) {
-        if r.masked.is_empty() {
+        if r.conflations.is_empty() {
             continue;
         }
         if std::mem::replace(&mut warned, true) {
@@ -276,13 +277,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             err,
             "cellsmith: warning: cell {:?}: {} block(s) conflate {} measurements: too few nodes exposed to express the cell state",
             c.repr_name(),
-            r.masked.len(),
-            r.masked.iter().map(|m| m.states.len()).sum::<usize>(),
+            r.conflations.len(),
+            r.conflations.iter().map(|m| m.states.len()).sum::<usize>(),
         )?;
-        for m in &r.masked {
+        for m in &r.conflations {
             // Every state the block covers, as equals — it expresses none of them, and which firing
             // reached the emitter first is nothing to report. What differs across them wants exposing.
-            let block = m.arc_str();
+            let block = Description(&m.block);
             let states: Vec<State> = m.states.iter().map(State).collect();
             let mut fields: Vec<(&str, &dyn fmt::Display)> = vec![("block", &block)];
             fields.extend(
@@ -301,19 +302,22 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     // emitted (below, gated by the per-cell opt-in) without a separate diagnostic.
 
     let base = cli.name.unwrap_or_else(|| base_name(&cli.spec));
-    let arcs: String = rendered.iter().map(|r| r.tcl.as_str()).collect();
+    let arcs = Deck(&rendered);
     let verilog = render(&cells, cell_verilog);
     let liberty = library_liberty(&base, &cells);
     let cells_tcl = render(&cells, cell_define_cell);
 
     if cli.stdout {
-        let mut out = io::stdout().lock();
-        write!(out, "{}", banner("arcs.tcl", &arcs))?;
-        write!(out, "{}", banner("verilog", &verilog))?;
-        write!(out, "{}", banner("liberty", &liberty))?;
+        // Buffered, because an artifact reaches the handle as the many small writes its own `Display`
+        // makes rather than as one string.
+        let mut out = io::BufWriter::new(io::stdout().lock());
+        banner(&mut out, "arcs.tcl", &arcs)?;
+        banner(&mut out, "verilog", &verilog)?;
+        banner(&mut out, "liberty", &liberty)?;
         if !cli.no_cells {
-            write!(out, "{}", banner("cells.tcl", &cells_tcl))?;
+            banner(&mut out, "cells.tcl", &cells_tcl)?;
         }
+        out.flush()?;
         return Ok(());
     }
 
@@ -325,6 +329,22 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         write_file(&cli.outdir, &format!("{base}_cells.tcl"), &cells_tcl)?;
     }
     Ok(())
+}
+
+/// Every cell's Liberate blocks, in the order the cells were analysed and each cell's in the order its
+/// emitter stated them. The blocks travel as values and become text here, at the sink they are written
+/// to.
+struct Deck<'a>(&'a [CellArcs]);
+
+impl fmt::Display for Deck<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for cell in self.0 {
+            for block in &cell.blocks {
+                write!(f, "{block}")?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Read the spec source from a path, or from stdin when the path is `-`.
@@ -345,9 +365,10 @@ fn render(cells: &[AnalysedCell], one: impl (Fn(&AnalysedCell) -> String) + Sync
     cells.par_iter().map(&one).collect::<Vec<String>>().concat()
 }
 
-/// A stdout section banner for one artifact.
-fn banner(kind: &str, body: &str) -> String {
-    format!("// ===== cellsmith {kind} =====\n{body}\n")
+/// One artifact under its stdout section header, written into `out` as the artifact renders itself.
+fn banner(out: &mut impl io::Write, kind: &str, body: &impl fmt::Display) -> io::Result<()> {
+    writeln!(out, "// ===== cellsmith {kind} =====")?;
+    writeln!(out, "{body}")
 }
 
 /// Write one warning detail block: colon-labelled fields, indented under the header with their values
@@ -621,10 +642,13 @@ fn base_name(spec: &str) -> String {
         .unwrap_or_else(|| "cells".to_owned())
 }
 
-/// Write one artifact file into `dir`, reporting the path.
-fn write_file(dir: &Path, name: &str, body: &str) -> io::Result<()> {
+/// Write one artifact file into `dir`, reporting the path. The artifact renders itself into the file's
+/// own writer, buffered because it arrives as the many small writes its `Display` makes.
+fn write_file(dir: &Path, name: &str, body: &impl fmt::Display) -> io::Result<()> {
     let path = dir.join(name);
-    fs::write(&path, body)?;
+    let mut out = io::BufWriter::new(fs::File::create(&path)?);
+    write!(out, "{body}")?;
+    out.flush()?;
     eprintln!("wrote {}", path.display());
     Ok(())
 }
@@ -773,8 +797,10 @@ Y = "A"
 
     #[test]
     fn banner_wraps_body_with_a_labelled_header() {
+        let mut out = Vec::new();
+        banner(&mut out, "arcs.tcl", &"BODY").unwrap();
         assert_eq!(
-            banner("arcs.tcl", "BODY"),
+            String::from_utf8(out).unwrap(),
             "// ===== cellsmith arcs.tcl =====\nBODY\n",
         );
     }

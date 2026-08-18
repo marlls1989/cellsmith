@@ -88,13 +88,16 @@ impl<T: fmt::Display> fmt::Display for Braced<T> {
 }
 
 /// One `-ic` column as the spec wrote it: the `logic_low`/`logic_high` expression for the level that
-/// column starts at. Displaying it is [`ic_column`] — the wrap and the escaping that keep an arbitrary
-/// expression to exactly one column of the line.
-pub(crate) struct IcColumn<'a>(pub(crate) &'a str);
+/// column starts at. It is a Tcl VALUE fragment rather than a name, so it is carried as a `String`, and
+/// carried rather than borrowed because the block holding it is an owned value the emitter hashes.
+/// Displaying it is [`ic_column`] — the wrap and the escaping that keep an arbitrary expression to
+/// exactly one column of the line.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct IcColumn(pub(crate) String);
 
-impl fmt::Display for IcColumn<'_> {
+impl fmt::Display for IcColumn {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&ic_column(self.0))
+        f.write_str(&ic_column(&self.0))
     }
 }
 
