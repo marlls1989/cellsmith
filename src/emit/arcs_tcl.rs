@@ -907,7 +907,7 @@ impl ConstraintColumns {
 /// The ONE source of an `-ic` column: every column of every block a state-holding cell renders comes
 /// through here, so the line is present on all of them or on none.
 fn start_voltage(cell: &AnalysedCell, level: bool) -> Option<IcColumn> {
-    cell.state_holding
+    cell.state_holding()
         .then(|| IcColumn(cell.voltages.of(level).to_owned()))
 }
 
@@ -2626,7 +2626,7 @@ Q = "CLK*M + !CLK*Q"
         // column's level outright, a switching one's the level its edge starts from — which is what pins
         // the alignment rather than merely the count.
         let cell = analyse(IC_DFF);
-        assert!(cell.state_holding);
+        assert!(cell.state_holding());
         let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
         let voltage = |level: bool| cell.voltages.of(level);
@@ -2689,7 +2689,7 @@ Y = "!A"
 "#,
         ] {
             let cell = analyse(src);
-            assert!(!cell.state_holding);
+            assert!(!cell.state_holding());
             let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
             assert!(
                 !tcl.contains("-ic"),
@@ -2704,7 +2704,11 @@ Y = "!A"
         // exactly what the same cell renders with the gate clear, line for line.
         let mut cell = analyse(IC_DFF);
         let gated = cell_arcs_tcl(&cell, ArcsTclOptions::default());
-        cell.state_holding = false;
+        // The gate reads the cached regions, so clearing every signal's `hysteretic` is how the cell is
+        // presented to the emitter as holding no state.
+        for region in &mut cell.regions {
+            region.hysteretic = false;
+        }
         let ungated = cell_arcs_tcl(&cell, ArcsTclOptions::default());
         assert!(gated.contains("-ic \""));
         assert!(!ungated.contains("-ic"));
@@ -2963,7 +2967,7 @@ Y = "!W"
         // A=1, B rising drives the AND term up with it and the inverted output down; the AND term's own
         // column is `X` all the same, the cell being what drives it.
         let cell = analyse(AN2_EXPOSED);
-        assert!(!cell.state_holding, "AN2 is plain combinational logic");
+        assert!(!cell.state_holding(), "AN2 is plain combinational logic");
         let tcl = cell_arcs_tcl(&cell, NO_LEAKAGE);
         eprintln!("{tcl}");
         let block = blocks(&tcl)
@@ -3095,7 +3099,7 @@ Y = "!W"
         for src in [C2_EXPOSED, DFF_EXPOSED_MASTER] {
             let cell = analyse(src);
             assert!(
-                cell.state_holding,
+                cell.state_holding(),
                 "the fixture holds state, so it emits -ic"
             );
             let exposed: Vec<&str> = cell.exposed.iter().map(Symbol::as_str).collect();

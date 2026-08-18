@@ -4,6 +4,7 @@
 //! for hysteretic outputs, plain `function` for combinational ones).
 
 use std::collections::{BTreeMap, HashMap};
+use std::convert::Infallible;
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -30,7 +31,8 @@ use cellsmith::report::{self, Commas, State};
 #[command(name = "cellsmith", version, about, long_about = None)]
 struct Cli {
     /// TOML cell spec ("-" reads stdin).
-    spec: String,
+    #[arg(value_parser = spec_source)]
+    spec: SpecSource,
 
     /// Output directory.
     #[arg(short, long, default_value = ".")]
@@ -84,6 +86,31 @@ struct Cli {
     /// Ceiling on recorded stable states.
     #[arg(long, value_name = "N", default_value_t = ExplorationBudget::default().states)]
     max_states: usize,
+}
+
+/// Where the spec is read from. The command line names standard input with `-`; every other argument is
+/// a path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SpecSource {
+    Stdin,
+    File(PathBuf),
+}
+
+/// The `<SPEC>` argument's value parser. No argument is rejected — a path is whatever is not `-` — so
+/// the result is infallible, and it is a `Result` only because that is what clap parses through.
+fn spec_source(arg: &str) -> Result<SpecSource, Infallible> {
+    Ok(if arg == "-" {
+        SpecSource::Stdin
+    } else {
+        SpecSource::File(PathBuf::from(arg))
+    })
+}
+
+/// Where the artifacts go: one file per artifact under a directory, or all of them to standard output
+/// behind banners.
+enum Destination {
+    Stdout,
+    Dir(PathBuf),
 }
 
 /// The `--when` flag, resolved to the set of arc classes it selects. Every occurrence of the flag is
@@ -307,26 +334,34 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     let liberty = library_liberty(&base, &cells);
     let cells_tcl = render(&cells, cell_define_cell);
 
-    if cli.stdout {
-        // Buffered, because an artifact reaches the handle as the many small writes its own `Display`
-        // makes rather than as one string.
-        let mut out = io::BufWriter::new(io::stdout().lock());
-        banner(&mut out, "arcs.tcl", &arcs)?;
-        banner(&mut out, "verilog", &verilog)?;
-        banner(&mut out, "liberty", &liberty)?;
-        if !cli.no_cells {
-            banner(&mut out, "cells.tcl", &cells_tcl)?;
+    // `--stdout` names the destination outright, so a directory given beside it has nothing left to say.
+    let destination = if cli.stdout {
+        Destination::Stdout
+    } else {
+        Destination::Dir(cli.outdir)
+    };
+    match destination {
+        Destination::Stdout => {
+            // Buffered, because an artifact reaches the handle as the many small writes its own
+            // `Display` makes rather than as one string.
+            let mut out = io::BufWriter::new(io::stdout().lock());
+            banner(&mut out, "arcs.tcl", &arcs)?;
+            banner(&mut out, "verilog", &verilog)?;
+            banner(&mut out, "liberty", &liberty)?;
+            if !cli.no_cells {
+                banner(&mut out, "cells.tcl", &cells_tcl)?;
+            }
+            out.flush()?;
         }
-        out.flush()?;
-        return Ok(());
-    }
-
-    fs::create_dir_all(&cli.outdir)?;
-    write_file(&cli.outdir, &format!("{base}_arcs.tcl"), &arcs)?;
-    write_file(&cli.outdir, &format!("{base}.v"), &verilog)?;
-    write_file(&cli.outdir, &format!("{base}.lib"), &liberty)?;
-    if !cli.no_cells {
-        write_file(&cli.outdir, &format!("{base}_cells.tcl"), &cells_tcl)?;
+        Destination::Dir(dir) => {
+            fs::create_dir_all(&dir)?;
+            write_file(&dir, &format!("{base}_arcs.tcl"), &arcs)?;
+            write_file(&dir, &format!("{base}.v"), &verilog)?;
+            write_file(&dir, &format!("{base}.lib"), &liberty)?;
+            if !cli.no_cells {
+                write_file(&dir, &format!("{base}_cells.tcl"), &cells_tcl)?;
+            }
+        }
     }
     Ok(())
 }
@@ -347,14 +382,15 @@ impl fmt::Display for Deck<'_> {
     }
 }
 
-/// Read the spec source from a path, or from stdin when the path is `-`.
-fn read_spec(spec: &str) -> io::Result<String> {
-    if spec == "-" {
-        let mut buf = String::new();
-        io::stdin().read_to_string(&mut buf)?;
-        Ok(buf)
-    } else {
-        fs::read_to_string(spec)
+/// Read the spec's source text from wherever the argument named.
+fn read_spec(spec: &SpecSource) -> io::Result<String> {
+    match spec {
+        SpecSource::Stdin => {
+            let mut buf = String::new();
+            io::stdin().read_to_string(&mut buf)?;
+            Ok(buf)
+        }
+        SpecSource::File(path) => fs::read_to_string(path),
     }
 }
 
@@ -599,15 +635,16 @@ fn trigger_str(cause: &Cause) -> Option<String> {
     }
 }
 
-/// The default output base name derived from the spec path (stem), or "cells" for stdin.
-fn base_name(spec: &str) -> String {
-    if spec == "-" {
-        return "cells".to_owned();
+/// The default output base name: the spec path's stem, or "cells" where the spec came from stdin and
+/// there is no path to take a stem from.
+fn base_name(spec: &SpecSource) -> String {
+    match spec {
+        SpecSource::Stdin => "cells".to_owned(),
+        SpecSource::File(path) => path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "cells".to_owned()),
     }
-    Path::new(spec)
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "cells".to_owned())
 }
 
 /// Write one artifact file into `dir`, reporting the path. The artifact renders itself into the file's
@@ -639,7 +676,7 @@ mod tests {
         let cli = Cli::try_parse_from(["cellsmith", "--when", "s.toml"]).unwrap();
         assert_eq!(cli.when.classes, ArcClasses::ALL);
         // `require_equals` keeps the positional `<SPEC>` from being swallowed as the class value.
-        assert_eq!(cli.spec, "s.toml");
+        assert_eq!(cli.spec, SpecSource::File("s.toml".into()));
     }
 
     #[test]
@@ -690,7 +727,7 @@ mod tests {
     fn constraints_is_a_bare_flag_and_keeps_the_positional() {
         let cli = Cli::try_parse_from(["cellsmith", "--constraints", "s.toml"]).unwrap();
         assert!(cli.constraints);
-        assert_eq!(cli.spec, "s.toml");
+        assert_eq!(cli.spec, SpecSource::File("s.toml".into()));
     }
 
     #[test]
@@ -757,10 +794,11 @@ Y = "A"
 
     #[test]
     fn base_name_strips_dir_and_extension() {
-        assert_eq!(base_name("/some/dir/cells.toml"), "cells");
-        assert_eq!(base_name("cells.toml"), "cells");
-        assert_eq!(base_name("plain"), "plain"); // no extension: the whole stem
-        assert_eq!(base_name("-"), "cells"); // stdin sentinel
+        let file = |p: &str| base_name(&SpecSource::File(p.into()));
+        assert_eq!(file("/some/dir/cells.toml"), "cells");
+        assert_eq!(file("cells.toml"), "cells");
+        assert_eq!(file("plain"), "plain"); // no extension: the whole stem
+        assert_eq!(base_name(&SpecSource::Stdin), "cells"); // no path to take a stem from
     }
 
     #[test]
@@ -778,13 +816,13 @@ Y = "A"
         let path =
             std::env::temp_dir().join(format!("cellsmith_read_spec_{}.toml", std::process::id()));
         fs::write(&path, "hello = 1\n").unwrap();
-        let got = read_spec(path.to_str().unwrap()).unwrap();
+        let got = read_spec(&SpecSource::File(path.clone())).unwrap();
         assert_eq!(got, "hello = 1\n");
         fs::remove_file(&path).ok();
     }
 
     #[test]
     fn read_spec_errors_on_a_missing_path() {
-        assert!(read_spec("/no/such/cellsmith/spec.toml").is_err());
+        assert!(read_spec(&SpecSource::File("/no/such/cellsmith/spec.toml".into())).is_err());
     }
 }

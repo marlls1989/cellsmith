@@ -11,7 +11,7 @@ use rayon::prelude::*;
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::logic::analysis::Exploration;
+use crate::logic::analysis::{Derivations, Exploration, MachineAnalysis};
 use crate::logic::arcs::{Arc, HiddenArc};
 use crate::logic::constraint::Constraint;
 use crate::logic::hazard::Hazard;
@@ -642,12 +642,6 @@ pub struct AnalysedCell {
     /// Each signal's state-table regions, precomputed once and cached in `signals()` order (outputs
     /// then internals), so emitters don't rebuild the BDDs per call site.
     pub(crate) regions: Vec<crate::logic::regions::StateRegions>,
-    /// Whether the cell holds state: at least one of its minimised signals is a state variable — a
-    /// signal on a dependency cycle ([`crate::logic::resolve::state_variables`]). The Liberate arc
-    /// emitter gates the `-ic` initial condition on it: no block renders a walk, so `-ic` is the whole
-    /// of how a cell with memory is told what state its measured vector begins in. A combinational cell
-    /// has no state to establish and gets no `-ic`.
-    pub(crate) state_holding: bool,
     /// The cell's behavioural edge classification ([`crate::logic::edge::EdgeArcs`]): the per-node
     /// active-edge sets (`captures`), the per-arc `-type edge` labels (`labels`) — the field the Liberate
     /// arc emitter reads to type each arc — the cell-level set of internal level master nodes folded away
@@ -657,9 +651,13 @@ pub struct AnalysedCell {
     /// the already-explored machine — it never alters the exploration.
     pub(crate) edge: crate::logic::edge::EdgeArcs,
     /// The exploration budget counter that stopped the machine pass, or `None` when the machine was
-    /// explored in full. Set ⇒ nothing was derived from the machine: `arcs`, `hidden_arcs`, `leakage`,
-    /// `hazards` and `constraints` are all empty and `edge`
-    /// is the default, so the CLI reports the cell instead of emitting arc-free artifacts for it.
+    /// explored in full. It RECORDS which outcome the pass returned rather than asserting anything of
+    /// its own: the single write site is the match on
+    /// [`MachineAnalysis`](crate::logic::analysis::MachineAnalysis) in `Cell::analyse`, and only the
+    /// `Stopped` arm — the one carrying no derivations — sets it, leaving `arcs`, `hidden_arcs`,
+    /// `leakage`, `hazards` and `constraints` at the empty values `Cell::analyse_signals` gave them and
+    /// `edge` at its default. The CLI reads it to report the cell instead of emitting arc-free
+    /// artifacts for it.
     pub unexplored: Option<crate::logic::machine::ExplorationLimit>,
     /// The cell-wide characterisation-template references (delay/power/constraint) carried verbatim from
     /// the spec for the `define_cell` emitter. `None` when the cell declares no `template`. Raw carry —
@@ -680,8 +678,11 @@ pub struct AnalysedCell {
     /// carry — analysis never reads it, like `template`.
     pub(crate) voltages: LogicVoltages,
     /// The arc view of this cell: the same cell analysed with its exposed nodes preserved as model
-    /// coordinates, so an arc can drive one (`-ic`) and observe it (`-vector`). Present only when the
-    /// cell exposes something, and itself never carrying a further view.
+    /// coordinates, so an arc can drive one (`-ic`) and observe it (`-vector`). `None` means the model
+    /// view IS the arc view, which is how [`AnalysedCell::arc_view`] reads it. Presence follows
+    /// exposure: the single write site is the branch of `Cell::analyse` a cell reaches only by exposing
+    /// something, and that branch analyses the view with the exposure already applied, so the view set
+    /// here never carries a further view of its own.
     ///
     /// Exposure is arcs-only. The cell holding this field is the MODEL view — minimised to the outputs
     /// alone, exactly as a cell that exposes nothing — and it is the one the Liberty, Verilog,
@@ -712,6 +713,19 @@ impl AnalysedCell {
     /// Every state-bearing signal: outputs first, then internals, in declaration order.
     pub fn signals(&self) -> impl Iterator<Item = &AnalysedOutput> {
         self.outputs.iter().chain(self.internals.iter())
+    }
+
+    /// Whether the cell holds state: one of its signals is a state variable, a signal on a dependency
+    /// cycle. That classification is already in the `regions` cache — [`crate::logic::regions`] marks a
+    /// signal's region view `hysteretic` exactly when
+    /// [`crate::logic::resolve::state_variables`] names it — and the cache holds one entry per signal,
+    /// so a hysteretic entry exists exactly when that set is non-empty.
+    ///
+    /// The Liberate arc emitter gates the `-ic` initial condition on this: no block renders a walk, so
+    /// `-ic` is the whole of how a cell with memory is told what state its measured vector begins in. A
+    /// combinational cell has no state to establish and gets no `-ic`.
+    pub(crate) fn state_holding(&self) -> bool {
+        self.regions.iter().any(|r| r.hysteretic)
     }
 
     /// The view the Liberate arcs are emitted from: [`AnalysedCell::exposed_view`] where the cell
@@ -852,8 +866,7 @@ impl Cell {
 
     /// Complete one view of the cell over `bdds` — the minimised map `min` reports the rewrite of, back
     /// to `view`'s parse-time functions. Recomputes each surviving signal's metadata, builds the machine
-    /// over `exploration` and copies its derivations in, then caches the region view and the
-    /// state-holding verdict.
+    /// over `exploration` and copies its derivations in, then caches the region view.
     ///
     /// This is everything downstream of the minimisation, and it runs once PER VIEW over that view's own
     /// signals: a cell that exposes internal nodes carries two of them (see
@@ -876,26 +889,43 @@ impl Cell {
         // avoid them. Clock suppression and emission gating are applied downstream.
         // The opt-out (`no_edge_collapse`, also set for every cell by the global `--no-edge-collapse`)
         // gates the classify() call itself, not just its result — no wasted work when collapse is off.
-        let analysis = crate::logic::analysis::analyse_machine(
+        let explored = match crate::logic::analysis::analyse_machine(
             &view,
             bdds,
             !self.no_edge_collapse,
             exploration,
-        );
-        view.arcs = analysis.arcs;
-        view.hidden_arcs = analysis.hidden_arcs;
-        view.leakage = analysis.leakage;
-        view.constraints = analysis.constraints;
-        view.hazards = analysis.hazards;
-        view.edge = analysis.edge;
-        view.unexplored = analysis.unexplored;
-        let explored = analysis.explored;
+        ) {
+            MachineAnalysis::Derived(derived) => {
+                let Derivations {
+                    arcs,
+                    hidden_arcs,
+                    constraints,
+                    hazards,
+                    leakage,
+                    edge,
+                    explored,
+                } = *derived;
+                view.arcs = arcs;
+                view.hidden_arcs = hidden_arcs;
+                view.leakage = leakage;
+                view.constraints = constraints;
+                view.hazards = hazards;
+                view.edge = edge;
+                explored
+            }
+            // A stopped exploration derived nothing, so every field above keeps the empty value
+            // `analyse_signals` left it at, and recording the counter is all this view carries away.
+            MachineAnalysis::Stopped(limit) => {
+                view.unexplored = Some(limit);
+                None
+            }
+        };
 
         // Cache each signal's state-table regions once, in `signals()` order, from the shared folded
-        // BDDs, so downstream emitters don't rebuild the BDDs per call site, and record whether the
-        // minimised model holds any state at all — both read the same cyclic classifier.
+        // BDDs, so downstream emitters don't rebuild the BDDs per call site. Whether the minimised model
+        // holds any state at all is read back off this cache by `AnalysedCell::state_holding`, the
+        // regions carrying the same cyclic classifier's verdict per signal.
         view.regions = derive_regions(&view, bdds);
-        view.state_holding = holds_state(&view);
 
         (view, explored)
     }
@@ -1127,7 +1157,6 @@ impl Cell {
             constraint_arcs_declared: self.constraint_arcs.clone(),
             when: self.when,
             regions: Vec::new(),
-            state_holding: false,
             edge: Default::default(),
             unexplored: None,
             template: self.template.clone(),
@@ -1205,14 +1234,6 @@ pub fn derive_regions<B: Brand, C: ManagerCell>(
             )
         })
         .collect()
-}
-
-/// Whether the minimised model holds state: at least one signal is a state variable — one on a
-/// dependency cycle, as classified by [`crate::logic::resolve::state_variables`] over the recomputed
-/// feedback — the same pure-graph classifier [`derive_regions`] reads to mark a region hysteretic.
-fn holds_state(cell: &AnalysedCell) -> bool {
-    let signals: Vec<&AnalysedOutput> = cell.signals().collect();
-    !crate::logic::resolve::state_variables(&signals).is_empty()
 }
 
 /// Parse a TOML spec into a [`Spec`].
@@ -2317,7 +2338,8 @@ Q = "!QN"
                 );
             }
             assert_eq!(
-                exposed.state_holding, plain.state_holding,
+                exposed.state_holding(),
+                plain.state_holding(),
                 "cell {cell}: state_holding"
             );
             assert_same_cell_records(&exposed, &plain);
@@ -2655,12 +2677,12 @@ Y = "!W"
         ] {
             let cell = analyse_one(&src);
             assert_eq!(
-                cell.state_holding,
-                cell.arc_view().state_holding,
+                cell.state_holding(),
+                cell.arc_view().state_holding(),
                 "cell {}: the two views disagree on state_holding",
                 cell.repr_name(),
             );
-            holding += usize::from(cell.state_holding);
+            holding += usize::from(cell.state_holding());
         }
         assert_eq!(holding, 2, "the fixtures cover both verdicts");
     }

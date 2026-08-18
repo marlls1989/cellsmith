@@ -36,33 +36,43 @@ use crate::logic::leakage::{self, LeakageState};
 use crate::logic::{machine, resolve, width};
 use crate::model::{AnalysedCell, ConstraintPins};
 
-/// The plain-data outcome of the shared machine pass: the transition arcs, the detected hazards — one
-/// [`Hazard`] per (cause, outcome) pair the two detection passes observe — and the constraints generated
-/// to avoid them. Everything is empty when the exploration passed a budget ceiling, and `unexplored`
-/// then names the counter that stopped it
-/// (see [`machine::ExplorationBudget`]).
+/// The outcome of the shared machine pass: either the plain data it derived, or the budget counter that
+/// stopped the exploration. The derivations are fields of [`Derived`](Self::Derived) alone, so a stopped
+/// pass carries the counter and nothing besides.
 ///
-/// `MachineAnalysis` itself never escapes this module: [`analyse_machine`]'s result is copied field-for-
-/// field into the matching [`crate::model::AnalysedCell`] fields by `Cell::analyse` (see `model.rs`).
-#[derive(Debug, Default)]
-pub struct MachineAnalysis {
+/// `MachineAnalysis` itself never escapes this module: [`analyse_machine`]'s result is matched by
+/// `Cell::analyse` into the corresponding [`crate::model::AnalysedCell`] fields (see `model.rs`).
+#[derive(Debug)]
+pub enum MachineAnalysis {
+    /// The machine was explored in full and everything downstream of it derived. The payload is boxed:
+    /// it is far wider than the counter the other variant carries, and one allocation per view is
+    /// nothing beside the exploration that filled it.
+    Derived(Box<Derivations>),
+    /// The budget counter that passed its ceiling (see [`machine::ExplorationBudget`]).
+    ///
+    /// A [`Exploration::Reused`] view cannot itself be stopped — the exploration it reads already ran
+    /// to completion in the view that performed it — so this is reached only by a view that explored
+    /// ([`Exploration::Fresh`]) or by one mirroring the ceiling that stopped the exploration it would
+    /// have reused.
+    Stopped(machine::ExplorationLimit),
+}
+
+/// What one fully explored machine yields: the transition arcs, the detected hazards — one [`Hazard`]
+/// per (cause, outcome) pair the two detection passes observe — and the constraints generated to avoid
+/// them.
+///
+/// These are the fields of [`MachineAnalysis::Derived`]. They live in a struct so each can keep the
+/// crate-private visibility the types it holds have — an enum variant's fields take the enum's.
+#[derive(Debug)]
+pub struct Derivations {
     pub(crate) arcs: Vec<Arc>,
     pub(crate) hidden_arcs: Vec<HiddenArc>,
     pub(crate) constraints: Vec<Constraint>,
     pub(crate) hazards: Vec<Hazard>,
     pub(crate) leakage: Vec<LeakageState>,
     pub(crate) edge: crate::logic::edge::EdgeArcs,
-    /// The budget counter that stopped the exploration, or `None` when the machine was explored in
-    /// full. Set ⇒ every field above is empty, because nothing was derived.
-    ///
-    /// A [`Exploration::Reused`] view cannot itself be stopped — the exploration it reads already ran
-    /// to completion in the view that performed it — so this is set only for a view that explored
-    /// ([`Exploration::Fresh`]) or for one mirroring the ceiling that stopped the exploration it would
-    /// have reused.
-    pub(crate) unexplored: Option<machine::ExplorationLimit>,
     /// The exploration this pass performed, handed back so a second view of the same cell projects it
-    /// onto its own coordinates instead of repeating it. `None` when the pass reused an exploration, and
-    /// when a budget ceiling stopped one.
+    /// onto its own coordinates instead of repeating it. `None` when the pass reused an exploration.
     pub(crate) explored: Option<machine::Explored>,
 }
 
@@ -271,8 +281,8 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
 /// Build the cell's state machine from the minimised `bdds` map and derive its arcs and hazards from the
 /// shared exploration, which `exploration` either budgets or supplies. The builder was minted once in
 /// [`crate::model::Cell::analyse`]; this pass only reads the shared map. An exploration stopped by one of
-/// the budget's counters yields an otherwise-empty [`MachineAnalysis`] carrying that counter in
-/// `unexplored`: nothing was derived, and the caller reports it.
+/// the budget's counters yields [`MachineAnalysis::Stopped`] carrying that counter: nothing was derived,
+/// and the caller reports it.
 pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     cell: &AnalysedCell,
     bdds: &BTreeMap<Symbol, Bdd<B, C>>,
@@ -282,12 +292,7 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     let reused = matches!(exploration, Exploration::Reused(_));
     let m = match Machine::build(cell, bdds, exploration) {
         Ok(m) => m,
-        Err(limit) => {
-            return MachineAnalysis {
-                unexplored: Some(limit),
-                ..Default::default()
-            }
-        }
+        Err(limit) => return MachineAnalysis::Stopped(limit),
     };
     let (arcs, hidden_arcs) = arcs::derive(&m);
     // Detect the hazards, then generate the constraints that avoid them — two separate stages. Every
@@ -326,18 +331,17 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
         crate::logic::edge::EdgeArcs::default()
     };
     let leakage = leakage::derive(&m);
-    MachineAnalysis {
+    MachineAnalysis::Derived(Box::new(Derivations {
         arcs,
         hidden_arcs,
         constraints,
         hazards,
         leakage,
         edge,
-        unexplored: None,
         // Handed back only by the view that performed the exploration: the derivations above are the
         // whole of what a reusing view owes its caller.
         explored: (!reused).then_some(m.explored),
-    }
+    }))
 }
 
 #[cfg(test)]
