@@ -2271,8 +2271,8 @@ Q = "!QN"
         // Every arc, hidden arc and constraint of BOTH views must carry a real prevector: non-empty,
         // and ending at the record's own start state projected onto the inputs (the pattern at
         // arcs.rs:618). A rebuilt `prev` that breaks `path_to` either empties the prevector — panicking
-        // the `.expect` the constraint vector reads its held levels through
-        // (`arcs_tcl::constraint_vector_str`) — or misaligns the chain, corrupting the `prevector.len()`
+        // the `.expect` the constraint columns read their held levels through
+        // (`arcs_tcl::constraint_columns`) — or misaligns the chain, corrupting the `prevector.len()`
         // constraint-dedup tie-break in `constraint::record`.
         let cell = analyse_one(&c_element_src(r#"expose = ["QN"]"#));
         for view in [cell.arc_view(), &cell] {

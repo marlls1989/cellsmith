@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use espresso_logic::Symbol;
 use indexmap::IndexMap;
 
-use crate::emit::arcs_tcl::pinlist_str;
+use crate::emit::arcs_tcl::pinlist;
 use crate::emit::tcl::Words;
 use crate::model::AnalysedCell;
 
@@ -82,10 +82,7 @@ pub fn cell_define_cell(cell: &AnalysedCell) -> String {
         }
         // `-pinlist` is the arcs emitter's source of truth — all inputs (incl. clock + async) then
         // outputs — and is emitted unfiltered.
-        out.push_str(&format!(
-            "\t-pinlist {{ {} }} \\\n",
-            Words(&pinlist_str(cell))
-        ));
+        out.push_str(&format!("\t-pinlist {{ {} }} \\\n", Words(&pinlist(cell))));
         if let Some(d) = delay {
             out.push_str(&format!("\t-delay {d} \\\n"));
         }

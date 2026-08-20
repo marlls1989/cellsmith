@@ -107,10 +107,12 @@ pub(crate) struct Constraint {
     /// Index of the probed state in the sequential BFS exploration order — the tie-break key the
     /// situation collapse and emission's general-block choice both land on one representative by.
     pub(crate) discovered: usize,
-    /// Which of the four (cause, outcome) cells the observations this constraint was generated from
-    /// occupy, as [`Hazard::ordinal`] numbers them — the lowest, where a cause showed more than one
-    /// outcome. The constraint follows the cause alone, so nothing here decides what is constrained; it
-    /// is the last component of the total order emission picks a representative by.
+    /// Which rank the observations this constraint was generated from occupy, as [`Hazard::ordinal`]
+    /// numbers them: three causes crossed with two outcomes give six (cause, outcome) pairs, which
+    /// `Hazard::ordinal` collapses into four ranks by giving a toggle and a race at the same outcome the
+    /// same number — the lowest rank among them, where a cause showed more than one outcome. The
+    /// constraint follows the cause alone, so nothing here decides what is constrained; it is the last
+    /// component of the total order emission picks a representative by.
     pub(crate) ordinal: u8,
 }
 
@@ -307,8 +309,9 @@ impl Situation {
 /// genuinely differ in is the victims they name and which (cause, outcome) cell they were read from: the
 /// victims merge, so the block probes every node any outcome of the cause attacks, and the ordinal keeps
 /// the lower, which lands emission's representative choice on one answer. Neither states a preference —
-/// the merge is a union and the ordinal a fixed numbering of the four cells — and the order the surviving
-/// constraints come out in states nothing.
+/// the merge is a union and the ordinal a fixed numbering of the four ranks the six (cause, outcome)
+/// pairs collapse into, a toggle and a race sharing a rank at the same outcome — and the order the
+/// surviving constraints come out in states nothing.
 fn record(found: &mut HashMap<Situation, Constraint>, c: Constraint) {
     match found.entry(Situation::of(&c)) {
         Entry::Occupied(mut e) => {

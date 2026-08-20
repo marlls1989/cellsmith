@@ -45,7 +45,7 @@
 //! overriding the behaviour being measured — `-ic` carries its start level instead. A `define_leakage`
 //! measures no transition, so its vector states the rest state itself and the column carries the level
 //! the node holds there (see `leakage_columns`). Only the arc emitter reads that view — the
-//! `define_cell` pinlist (`pinlist_str`) and every other artifact keep to the cell's actual pins.
+//! `define_cell` pinlist (`pinlist`) and every other artifact keep to the cell's actual pins.
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -185,7 +185,7 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
             for (i, arc) in cell.arcs.iter().enumerate() {
                 // The condition is read once and both used and tested, so the skip rule and the emitted
                 // line cannot come apart.
-                let when = when_str(&arc.end, &arc.related);
+                let when = when(&arc.end, &arc.related);
                 let redundant = general
                     .get(&i)
                     .is_some_and(|&cases| cases == 1 || when.is_none());
@@ -209,7 +209,7 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
                 // toggles from a single context, or which renders no `-when`, is fully characterised by
                 // its general block.
                 for (i, h) in cell.hidden_arcs.iter().enumerate() {
-                    let when = hidden_when_str(h);
+                    let when = hidden_when(h);
                     let redundant = general_hidden
                         .get(&i)
                         .is_some_and(|&cases| cases == 1 || when.is_none());
@@ -448,7 +448,7 @@ impl TransitionIdentity {
 }
 
 /// A hidden arc's identity: the toggled pin and the edge it makes. That pair IS the event; the other
-/// inputs' held levels and the held outputs are its condition and ride in [`hidden_when_str`], so they
+/// inputs' held levels and the held outputs are its condition and ride in [`hidden_when`], so they
 /// are absent here for the same reason as in [`Transition`]. A hidden arc is one kind of block, so
 /// nothing here classifies — a toggle no output follows structurally holds no related pin either.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -721,10 +721,11 @@ impl ConstraintIdentity {
 /// What decides which observations supply a general block is containment between their victim node
 /// sets ([`dominates`]); this settles the choice between the ones that come out equally dominant. Neither
 /// component states a preference — `discovered` is a breadth-first exploration index, not stable between
-/// runs, and the ordinal is a fixed numbering of the four (cause, outcome) cells — so this is no quality
-/// judgement. What the pair buys is a TOTAL order, two observations of one probed state tying on the
-/// first and differing only in which of the four cells they were read from: a parallel fold lands on one
-/// answer within a run, and choosing among equally-good representatives is free.
+/// runs, and the ordinal is a fixed numbering of the four ranks the six (cause, outcome) cells collapse
+/// into, a toggle and a race sharing a rank at the same outcome — so this is no quality judgement. What
+/// the pair buys is a TOTAL order, two observations of one probed state tying on the first and differing
+/// only in which of the four ranks they were read from: a parallel fold lands on one answer within a
+/// run, and choosing among equally-good representatives is free.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct ConstraintRank {
     discovered: usize,
@@ -1139,7 +1140,7 @@ fn leakage_columns(cell: &AnalysedCell, group: &Group, l: &LeakageState) -> Vec<
 
 /// The cell's pins: inputs then outputs, in declaration order. This is what `define_cell` declares the
 /// cell by, so it names PINS only — an exposed internal node has no pin and never appears here.
-pub(crate) fn pinlist_str(cell: &AnalysedCell) -> Vec<Symbol> {
+pub(crate) fn pinlist(cell: &AnalysedCell) -> Vec<Symbol> {
     let mut pins = cell.inputs.clone();
     pins.extend(cell.outputs.iter().map(|o| o.name.clone()));
     pins
@@ -1159,7 +1160,7 @@ pub(crate) fn pinlist_str(cell: &AnalysedCell) -> Vec<Symbol> {
 /// Liberate has to be handed; the pins keep the cell's own names, which the netlist shares. Every other
 /// artifact reads the spec's names throughout. A `-vector` cannot address a node with no column and an
 /// `-ic` cannot initialise one, which is what an exposed internal needs a column FOR; it is still no pin
-/// of the cell, so it stays out of [`pinlist_str`] and hence out of `define_cell`.
+/// of the cell, so it stays out of [`pinlist`] and hence out of `define_cell`.
 fn columns<C>(
     cell: &AnalysedCell,
     exposed: &[ExposedColumn],
@@ -1219,10 +1220,7 @@ fn related_edge(arc: &Arc) -> Edge {
 /// expression's equality is structural over its token stream, so sorting is what makes two conditions
 /// naming the same literals one condition — and the block a firing renders is what tells two firings
 /// apart ([`Blocks::state`]).
-fn when_str(
-    end: &espresso_logic::Minterm<espresso_logic::Symbol>,
-    exclude: &str,
-) -> Option<BoolExpr> {
+fn when(end: &espresso_logic::Minterm<espresso_logic::Symbol>, exclude: &str) -> Option<BoolExpr> {
     let mut lits: Vec<(Symbol, bool)> = assignment(end)
         .into_iter()
         .filter(|(k, _)| *k != exclude)
@@ -1238,7 +1236,7 @@ fn when_str(
 /// toggled pin) plus every held output value, as a product of literals. The held outputs disambiguate
 /// the distinct stored-value contexts of a state-holding cell that share one input vector. `None` when
 /// no literal is fixed.
-fn hidden_when_str(h: &HiddenArc) -> Option<BoolExpr> {
+fn hidden_when(h: &HiddenArc) -> Option<BoolExpr> {
     let mut lits: Vec<(Symbol, bool)> = assignment(&h.end)
         .into_iter()
         .filter(|(k, _)| *k != h.pin.as_str())
@@ -1259,7 +1257,7 @@ fn hidden_when_str(h: &HiddenArc) -> Option<BoolExpr> {
 /// ([`switching_pins`]) at the same observation, so they exclude the same inputs and name the same held
 /// outputs.
 ///
-/// Built like [`hidden_when_str`] rather than like [`when_str`], and the held outputs are the whole
+/// Built like [`hidden_when`] rather than like [`when`], and the held outputs are the whole
 /// reason: a constraint `-vector` marks EVERY output `X` — the block states when the switching edges may
 /// land and measures nothing the cell does in response — so the outputs are exactly what tells two
 /// contexts of a state-holding cell apart, one input assignment reaching each over a different stored
@@ -1542,7 +1540,7 @@ Q = "A*B + Q*(A+B)"
 
         // Every discovered firing is emitted with its own condition once the class is selected.
         for a in &selected.arcs {
-            let conditioned = transition_text(&selected, a, when_str(&a.end, &a.related));
+            let conditioned = transition_text(&selected, a, when(&a.end, &a.related));
             assert!(
                 has_when(&conditioned) && on.contains(&conditioned),
                 "a discovered firing is missing under `when`:\n{conditioned}"
@@ -1758,12 +1756,12 @@ Y = "A*B"
             cell.arcs
                 .iter()
                 .enumerate()
-                .filter(|(i, a)| !redundant(&general, *i, when_str(&a.end, &a.related).is_none()))
+                .filter(|(i, a)| !redundant(&general, *i, when(&a.end, &a.related).is_none()))
                 .count(),
             cell.hidden_arcs
                 .iter()
                 .enumerate()
-                .filter(|(i, h)| !redundant(&general_hidden, *i, hidden_when_str(h).is_none()))
+                .filter(|(i, h)| !redundant(&general_hidden, *i, hidden_when(h).is_none()))
                 .count(),
         )
     }
@@ -1893,7 +1891,7 @@ Q = "E*D + !E*Q"
         let mut contexts: HashMap<HiddenIdentity, usize> = HashMap::new();
         for h in cell.hidden_arcs.iter().filter(|h| h.pin == "D") {
             assert!(
-                hidden_when_str(h).is_some(),
+                hidden_when(h).is_some(),
                 "premise: every D hidden arc renders a condition"
             );
             *contexts.entry(HiddenIdentity::of(h)).or_default() += 1;
@@ -2191,14 +2189,12 @@ Q = "E*D + !E*Q"
         let mut whens: HashSet<BoolExpr> = HashSet::new();
         for i in a_rise_y_rise(&selected) {
             let arc = &selected.arcs[i];
-            let block = transition_text(&selected, arc, when_str(&arc.end, &arc.related));
+            let block = transition_text(&selected, arc, when(&arc.end, &arc.related));
             assert!(
                 on.contains(&block),
                 "a discovered A-rise→Y-rise firing is missing under `when`:\n{block}"
             );
-            whens.insert(
-                when_str(&arc.end, &arc.related).expect("each firing fixes the other inputs"),
-            );
+            whens.insert(when(&arc.end, &arc.related).expect("each firing fixes the other inputs"));
         }
         assert_eq!(
             whens.len(),
@@ -2300,7 +2296,7 @@ Q = "E*D + !E*Q"
             |a| a.prevector.len(),
         );
         for (i, a) in cell.arcs.iter().enumerate() {
-            let conditioned = transition_text(&cell, a, when_str(&a.end, &a.related));
+            let conditioned = transition_text(&cell, a, when(&a.end, &a.related));
             if !has_when(&conditioned) {
                 continue;
             }
@@ -2461,7 +2457,7 @@ Q = "E*D + !E*Q"
     }
 
     /// SINGLE INPUT: an arc whose related pin is the cell's only input renders NO condition
-    /// (`when_str` is `None`), so where it is also the general pass's representative the conditioned
+    /// (`when` is `None`), so where it is also the general pass's representative the conditioned
     /// pass skips it — the block it would add is the one already emitted. Every INV arc is its own
     /// transition's representative, so selecting every class changes nothing.
     #[test]
@@ -3163,7 +3159,7 @@ Y = "!W"
                 |node| node.listed.clone(),
                 Clone::clone,
             );
-            assert_eq!(listed, pinlist_str(&cell));
+            assert_eq!(listed, pinlist(&cell));
             let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
             for block in blocks(&tcl) {
                 let pins = cell.inputs.len() + cell.outputs.len();
