@@ -130,16 +130,10 @@ impl<W: fmt::Write> fmt::Write for Indented<'_, W> {
 /// One `-ic` column as the spec wrote it: the `logic_low`/`logic_high` expression for the level that
 /// column starts at. It is a Tcl VALUE fragment rather than a name, so it is carried as a `String`, and
 /// carried rather than borrowed because the block holding it is an owned value the emitter hashes.
-/// Displaying it is [`ic_column`] — the wrap and the escaping that keep an arbitrary expression to
-/// exactly one column of the line.
+/// Displaying it applies the wrap and the escaping that keep an arbitrary expression to exactly one
+/// column of the line.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct IcColumn(pub(crate) String);
-
-impl fmt::Display for IcColumn {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&ic_column(&self.0))
-    }
-}
 
 /// One `-ic` column: a `logic_low`/`logic_high` expression rendered so Liberate reads it as a single
 /// list element.
@@ -157,23 +151,28 @@ impl fmt::Display for IcColumn {
 ///
 /// The characters that would end the word or shift the split are escaped by [`escape_ic`], so every
 /// expression — whatever it holds — comes out as exactly one column of a parseable line.
-pub(crate) fn ic_column(value: &str) -> String {
-    // The form is recognised in the expression as written; the escaping is about the word it is
-    // emitted into, so it applies to a recognised expression and a wrapped one alike.
-    let escaped = escape_ic(value);
-    if is_one_list_element(value) {
-        escaped
-    } else {
-        format!("{{{escaped}}}")
+impl fmt::Display for IcColumn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The form is recognised in the expression as written; the escaping is about the word it is
+        // emitted into, so it applies to a recognised expression and a wrapped one alike.
+        let wrapped = !is_one_list_element(&self.0);
+        if wrapped {
+            f.write_str("{")?;
+        }
+        escape_ic(&self.0, f)?;
+        if wrapped {
+            f.write_str("}")?;
+        }
+        Ok(())
     }
 }
 
-/// One expression's own characters, escaped for the two stages its text crosses: Tcl's backslash
-/// substitution as the double-quoted `-ic` word is read, and then the list split Liberate applies to the
-/// substituted result. An escape meant for the second stage has to survive the first, so it goes out
-/// doubled — `\\{` leaves the word as `\{`, which the list parser reads as a quoted brace and does not
-/// count (Tcl(n), "Braces": a brace quoted with a backslash is not counted in locating the matching
-/// close brace).
+/// One expression's own characters, written on to `out` escaped for the two stages its text crosses:
+/// Tcl's backslash substitution as the double-quoted `-ic` word is read, and then the list split
+/// Liberate applies to the substituted result. An escape meant for the second stage has to survive the
+/// first, so it goes out doubled — `\\{` leaves the word as `\{`, which the list parser reads as a
+/// quoted brace and does not count (Tcl(n), "Braces": a brace quoted with a backslash is not counted in
+/// locating the matching close brace).
 ///
 /// - A double quote ends the `-ic` word wherever it sits — braces are ordinary characters to the word
 ///   parser, so a wrap is no shield — and each one therefore goes out as `\"`. Substitution turns it
@@ -205,25 +204,24 @@ pub(crate) fn ic_column(value: &str) -> String {
 /// substitution inside a braced element: the expression `a{b` arrives as the column `a\{b`, and a
 /// backslash as the pair it was doubled into. The columns stay aligned and the line parses, which is
 /// what the escaping is for; what the column then holds is the spec author's affair.
-fn escape_ic(value: &str) -> String {
+fn escape_ic<W: fmt::Write>(value: &str, out: &mut W) -> fmt::Result {
     // The braces and brackets are decided over the expression as written, before anything is emitted,
-    // so the one pass that builds the text reads only its input and never re-escapes its own output.
+    // so the one pass that writes the text reads only its input and never re-escapes its own output.
     let unmatched = unmatched_braces(value);
     let unclosed = unclosed_brackets(value);
-    let mut escaped = String::with_capacity(value.len());
     for (i, c) in value.char_indices() {
         match c {
-            '\\' => escaped.push_str("\\\\\\\\"),
-            '"' => escaped.push_str("\\\""),
+            '\\' => out.write_str("\\\\\\\\")?,
+            '"' => out.write_str("\\\"")?,
             '{' | '}' if unmatched.contains(&i) => {
-                escaped.push_str("\\\\");
-                escaped.push(c);
+                out.write_str("\\\\")?;
+                out.write_char(c)?;
             }
-            '[' if unclosed.contains(&i) => escaped.push_str("\\["),
-            _ => escaped.push(c),
+            '[' if unclosed.contains(&i) => out.write_str("\\[")?,
+            _ => out.write_char(c)?,
         }
     }
-    escaped
+    Ok(())
 }
 
 /// The byte offsets of the braces in `value` that have no partner: a close brace reached at depth zero,
@@ -391,7 +389,11 @@ pub(crate) mod tests {
             "{$VDD * 0.9}",
             "{}",
         ] {
-            assert_eq!(ic_column(value), value, "{value:?} is already one column");
+            assert_eq!(
+                IcColumn(value.into()).to_string(),
+                value,
+                "{value:?} is already one column"
+            );
         }
     }
 
@@ -407,7 +409,11 @@ pub(crate) mod tests {
             ("${a b}", "{${a b}}"),
             ("", "{}"),
         ] {
-            assert_eq!(ic_column(value), column, "{value:?} is wrapped");
+            assert_eq!(
+                IcColumn(value.into()).to_string(),
+                column,
+                "{value:?} is wrapped"
+            );
         }
     }
     /// The expressions that need more than the wrap to hold their column, each with the text the
@@ -447,7 +453,11 @@ pub(crate) mod tests {
     #[test]
     fn an_awkward_logic_voltage_is_escaped_into_one_element() {
         for (value, column) in AWKWARD_VOLTAGES {
-            assert_eq!(ic_column(value), column, "{value:?} holds its column");
+            assert_eq!(
+                IcColumn(value.into()).to_string(),
+                column,
+                "{value:?} holds its column"
+            );
         }
     }
 }

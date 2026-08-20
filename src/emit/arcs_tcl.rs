@@ -1300,7 +1300,6 @@ mod tests {
 
     use super::*;
     use crate::emit::block::Description;
-    use crate::emit::tcl::ic_column;
     use crate::emit::tcl::tests::AWKWARD_VOLTAGES;
     use crate::model::analyse_one as analyse;
 
@@ -2745,8 +2744,8 @@ Y = "!A"
     fn a_double_quote_in_a_logic_voltage_is_escaped() {
         // A quote would close the `-ic` word wherever it sat, so it goes out escaped — inside the wrap
         // where the expression's own text goes, and inside a group the spec braced itself.
-        assert_eq!(ic_column("a\"b"), "{a\\\"b}");
-        assert_eq!(ic_column("{a\"b}"), "{a\\\"b}");
+        assert_eq!(IcColumn("a\"b".into()).to_string(), "{a\\\"b}");
+        assert_eq!(IcColumn("{a\"b}".into()).to_string(), "{a\\\"b}");
         let cell = analyse(&IC_DFF.replace(
             "constraint_arcs = true",
             "constraint_arcs = true\nlogic_high = \"a\\\"b\"",
