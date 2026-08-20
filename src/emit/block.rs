@@ -15,20 +15,7 @@ use std::fmt;
 use espresso_logic::{BoolExpr, Symbol};
 
 use crate::emit::tcl::{Braced, IcColumn, VectorValue, Words};
-use crate::logic::arcs::Edge;
-
-/// One pin with the edge it makes, written as one token: `A↓`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct PinEdge {
-    pub(crate) pin: Symbol,
-    pub(crate) edge: Edge,
-}
-
-impl fmt::Display for PinEdge {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}{}", self.pin, self.edge)
-    }
-}
+use crate::logic::arcs::{Edge, PinEdge};
 
 /// The two pins one constraint block switches, and the edge each makes: the pin it names on
 /// `-related_pin` and the pin it names on `-pin`, in that order. A separation carries the pair it holds

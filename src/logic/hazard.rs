@@ -13,7 +13,8 @@
 //! - [`Cause::Toggle`] — one input toggled alone, its cascade ringing around the cell's own feedback
 //!   instead of settling. The record names that pin and the edge it makes.
 //! - [`Cause::Race`] — two inputs toggled together that don't converge. The record names both pins, one
-//!   [`Racer`] each with the edge it makes, in the order the probe took them.
+//!   [`PinEdge`](crate::logic::arcs::PinEdge) each with the edge it makes, in the order the probe took
+//!   them.
 //! - [`Cause::Pulse`] — one signal racing itself: the two edges of a single pin. A **pulse** on input
 //!   `p` from a stable state `s` is `p` toggled (the *opening* edge), the cascade that toggle opens left
 //!   to run some distance, and `p` toggled back (the *closing* edge) before settling; that distance is
@@ -45,25 +46,10 @@
 //! observations dominating equally. See `hazard-detection.md` for the concept.
 
 use std::collections::BTreeMap;
-use std::fmt;
 
 use espresso_logic::{BoolExpr, Minterm, Symbol};
 
-use crate::logic::arcs::{ArcLevels, Edge};
-
-/// One pin observed racing, and the edge it makes.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Racer {
-    pub pin: Symbol,
-    pub edge: Edge,
-}
-
-/// The pin with the arrow of the edge it makes, written as one token: `A↓`.
-impl fmt::Display for Racer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}{}", self.pin, self.edge)
-    }
-}
+use crate::logic::arcs::{ArcLevels, Edge, PinEdge};
 
 /// What the hazard's timing is between: inputs that don't converge when toggled, one alone or two
 /// together, or one signal racing itself.
@@ -71,10 +57,10 @@ impl fmt::Display for Racer {
 pub enum Cause {
     /// One input toggled alone, its cascade never settling: the pin the probe toggled, with the edge it
     /// makes. It names one edge, so there is nothing for a separation to hold it apart from.
-    Toggle { pin: Racer },
-    /// Two inputs probed together that don't converge: the pair the probe toggled, one [`Racer`] each,
-    /// in the order it named them.
-    Race { pins: [Racer; 2] },
+    Toggle { pin: PinEdge },
+    /// Two inputs probed together that don't converge: the pair the probe toggled, one [`PinEdge`]
+    /// each, in the order it named them.
+    Race { pins: [PinEdge; 2] },
     /// One signal racing itself: the two edges of a single pin, bounding a pulse.
     Pulse {
         pin: Symbol,

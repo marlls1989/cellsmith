@@ -68,8 +68,8 @@ use espresso_logic::bdd::{Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::analysis::Machine;
-use crate::logic::arcs::{ArcLevels, Edge};
-use crate::logic::hazard::{Cause, Hazard, Outcome, Racer};
+use crate::logic::arcs::{ArcLevels, Edge, PinEdge};
+use crate::logic::hazard::{Cause, Hazard, Outcome};
 use crate::logic::machine;
 
 /// The level each of `group`'s nodes holds at the probed state — what a constraint block states as the
@@ -105,8 +105,8 @@ pub(super) fn edge_from(node: &Minterm<Symbol>, name: &str) -> Edge {
 }
 
 /// One racer of a detected race: the pin, and the edge it makes when toggled from `node`.
-fn racer(node: &Minterm<Symbol>, pin: &Symbol) -> Racer {
-    Racer {
+fn racer(node: &Minterm<Symbol>, pin: &Symbol) -> PinEdge {
+    PinEdge {
         pin: pin.clone(),
         edge: edge_from(node, pin.as_str()),
     }
@@ -419,7 +419,7 @@ mod tests {
     /// The pins a detected record names. Every record this pass files is caused by inputs failing to
     /// converge — it probes input pairs and single toggles, never a pulse — so the pulse arm cannot
     /// arise here.
-    fn racing_pins(hz: &Hazard) -> &[Racer] {
+    fn racing_pins(hz: &Hazard) -> &[PinEdge] {
         match &hz.cause {
             Cause::Toggle { pin } => std::slice::from_ref(pin),
             Cause::Race { pins } => pins,

@@ -72,6 +72,21 @@ impl fmt::Display for Edge {
     }
 }
 
+/// One pin with the edge it makes, written as one token: `A↓`. It is the pin a detected hazard names
+/// as racing ([`super::hazard::Cause`]) and the pin an emitted block switches
+/// ([`crate::emit::block`]).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PinEdge {
+    pub pin: Symbol,
+    pub edge: Edge,
+}
+
+impl fmt::Display for PinEdge {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}{}", self.pin, self.edge)
+    }
+}
+
 /// One exposed internal node across a measured arc: the level it holds before the measured edge and the
 /// level it holds after. Equal levels render the held `0`/`1`; a change renders `R`/`F`.
 #[derive(Debug, Clone, PartialEq, Eq)]

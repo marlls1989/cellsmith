@@ -20,7 +20,8 @@ use cellsmith::emit::block::Description;
 use cellsmith::emit::define_cell::cell_define_cell;
 use cellsmith::emit::liberty::library_liberty;
 use cellsmith::emit::verilog::cell_verilog;
-use cellsmith::logic::hazard::{Cause, Hazard, Outcome, Racer};
+use cellsmith::logic::arcs::PinEdge;
+use cellsmith::logic::hazard::{Cause, Hazard, Outcome};
 use cellsmith::logic::machine::{ExplorationBudget, ExplorationLimit};
 use cellsmith::model::{parse_spec, AnalysedCell, ArcClass, ArcClasses, ConstraintPins};
 use cellsmith::report::{self, Commas, State};
@@ -261,8 +262,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
 
     // Each warning is one contiguous block of lines (a header plus its indented detail fields), written
     // as it is composed into the one locked handle; a blank line before every warning but the first
-    // keeps the blocks reading as units.
-    let mut err = io::stderr().lock();
+    // keeps the blocks reading as units. Buffered, because a warning reaches the handle as the many
+    // small writes composing it makes rather than as one string, and stderr itself is unbuffered.
+    let mut err = io::BufWriter::new(io::stderr().lock());
     let mut warned = false;
 
     // Diagnose the cell's detected hazards, one warning per OCCASION — one cause, which is a transition
@@ -316,8 +318,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             subblock(&mut err, "  - ", &fields)?;
         }
     }
-    // The report is complete: release the handle before the artifacts are written, each of which
-    // reports its path on this same stream.
+    // The report is complete: flush it and release the handle before the artifacts are written, each of
+    // which reports its path on this same stream.
+    err.flush()?;
     drop(err);
 
     // Constraints avoid a hazard already reported by the warnings above, so the constraint arcs are
@@ -509,9 +512,9 @@ fn hazard_warning<'a>(
     };
     let orders = pair
         .filter(|_| effects.contains_key(&Outcome::Indeterminate))
-        .map(orders_str);
+        .map(Orders);
     let trigger =
-        trigger_str(occasion.cause).filter(|_| effects.contains_key(&Outcome::Oscillation));
+        Trigger::of(occasion.cause).filter(|_| effects.contains_key(&Outcome::Oscillation));
     let landings: Vec<(&str, EffectField)> = effects
         .iter()
         .map(|(outcome, effect)| {
@@ -546,7 +549,7 @@ fn hazard_warning<'a>(
         w,
         "cellsmith: warning: cell {:?}: {} causes a hazard at {}",
         cell.repr_name(),
-        cause_str(occasion.cause),
+        CauseHeader(occasion.cause),
         State(occasion.state),
     )?;
     subblock(w, "    ", &fields)
@@ -558,11 +561,15 @@ fn hazard_warning<'a>(
 /// the generated setup/hold separation forbids. A lone toggle observed not to converge has no second
 /// edge to be separated from, and no constraint follows from it, so there the transition is the whole of
 /// the condition.
-fn cause_str(cause: &Cause) -> String {
-    match cause {
-        Cause::Toggle { pin } => format!("toggling {pin}"),
-        Cause::Race { pins: [a, b] } => format!("too little separation between {a} and {b}"),
-        Cause::Pulse { pin, edge } => format!("a short pulse on {pin}{edge}"),
+struct CauseHeader<'a>(&'a Cause);
+
+impl fmt::Display for CauseHeader<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Cause::Toggle { pin } => write!(f, "toggling {pin}"),
+            Cause::Race { pins: [a, b] } => write!(f, "too little separation between {a} and {b}"),
+            Cause::Pulse { pin, edge } => write!(f, "a short pulse on {pin}{edge}"),
+        }
     }
 }
 
@@ -616,19 +623,42 @@ impl fmt::Display for EffectField<'_> {
 
 /// The triggering transitions of an indeterminate race: the two orders its edges can arrive in, since
 /// which lands first is what the settled state depends on (`A↓ then B↑ vs B↑ then A↓`).
-fn orders_str([a, b]: &[Racer; 2]) -> String {
-    format!("{a} then {b} vs {b} then {a}")
+struct Orders<'a>(&'a [PinEdge; 2]);
+
+impl fmt::Display for Orders<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let [a, b] = self.0;
+        write!(f, "{a} then {b} vs {b} then {a}")
+    }
 }
 
-/// The triggering transition of an oscillating cause, where the cause names one: a pair arrives
-/// together, which is what drives the cycle (`simultaneous toggle S↓ & R↓`), and a lone toggle arrives
-/// with nothing to coincide with (`toggling A↓`). A pulse is its own two edges, which the header
-/// already names in full.
-fn trigger_str(cause: &Cause) -> Option<String> {
-    match cause {
-        Cause::Toggle { pin } => Some(format!("toggling {pin}")),
-        Cause::Race { pins: [a, b] } => Some(format!("simultaneous toggle {a} & {b}")),
-        Cause::Pulse { .. } => None,
+/// The triggering transition of an oscillating cause: a pair arrives together, which is what drives the
+/// cycle (`simultaneous toggle S↓ & R↓`), and a lone toggle arrives with nothing to coincide with
+/// (`toggling A↓`). The variant is which of the two it is, so each carries the edges its own wording
+/// names and no other.
+enum Trigger<'a> {
+    Toggle(&'a PinEdge),
+    Simultaneous(&'a [PinEdge; 2]),
+}
+
+impl<'a> Trigger<'a> {
+    /// The trigger `cause` names, or `None` where it names none: a pulse is its own two edges, which the
+    /// header already states in full, so the warning carries no field for it.
+    fn of(cause: &'a Cause) -> Option<Self> {
+        match cause {
+            Cause::Toggle { pin } => Some(Trigger::Toggle(pin)),
+            Cause::Race { pins } => Some(Trigger::Simultaneous(pins)),
+            Cause::Pulse { .. } => None,
+        }
+    }
+}
+
+impl fmt::Display for Trigger<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Trigger::Toggle(pin) => write!(f, "toggling {pin}"),
+            Trigger::Simultaneous([a, b]) => write!(f, "simultaneous toggle {a} & {b}"),
+        }
     }
 }
 

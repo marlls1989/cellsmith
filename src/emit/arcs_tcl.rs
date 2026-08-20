@@ -56,10 +56,10 @@ use espresso_logic::{BoolExpr, Minterm, Symbol};
 use indexmap::IndexMap;
 
 use crate::emit::block::{
-    self, Block, Column, Held, LevelColumn, PinEdge, Pulse, RacingPins, Resting, Separation, Toggle,
+    self, Block, Column, Held, LevelColumn, Pulse, RacingPins, Resting, Separation, Toggle,
 };
 use crate::emit::tcl::{IcColumn, VectorValue};
-use crate::logic::arcs::{Arc, ArcLevels, Edge, ExposedLevel, HiddenArc};
+use crate::logic::arcs::{Arc, ArcLevels, Edge, ExposedLevel, HiddenArc, PinEdge};
 use crate::logic::assignment;
 use crate::logic::constraint::{Constraint, ConstraintKind, VictimNode};
 use crate::logic::edge::EdgeLabel;

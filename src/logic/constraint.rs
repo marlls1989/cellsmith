@@ -48,8 +48,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use espresso_logic::{Minterm, Symbol};
 
-use crate::logic::arcs::{ArcLevels, Edge};
-use crate::logic::hazard::{Cause, Hazard, Racer};
+use crate::logic::arcs::{ArcLevels, Edge, PinEdge};
+use crate::logic::hazard::{Cause, Hazard};
 use crate::model::ConstraintPins;
 
 /// What a constraint relates its pin to: the other pin of a separation, or the pin itself.
@@ -187,8 +187,8 @@ fn remedy(hazard: &Hazard, clock_pins: &[Symbol]) -> Option<Constraint> {
 /// The separation that holds two racing pins apart, as the kind and the pin it constrains: a directed
 /// setup/hold when exactly one of the pair is a declared clock — the other pin being the data the clock
 /// is constrained against — else a symmetric non_seq of the two as they were probed.
-fn separation(x: &Racer, y: &Racer, clock_pins: &[Symbol]) -> (ConstraintKind, Symbol, Edge) {
-    let is_clock = |r: &Racer| clock_pins.contains(&r.pin);
+fn separation(x: &PinEdge, y: &PinEdge, clock_pins: &[Symbol]) -> (ConstraintKind, Symbol, Edge) {
+    let is_clock = |r: &PinEdge| clock_pins.contains(&r.pin);
     if is_clock(x) ^ is_clock(y) {
         let (clk, data) = if is_clock(x) { (x, y) } else { (y, x) };
         (
@@ -236,23 +236,23 @@ fn victims(group: &[Symbol], levels: &BTreeMap<Symbol, bool>) -> Vec<VictimNode>
 enum SituationKind {
     /// A directed separation. Its two ends have different roles — data held around a declared clock — so
     /// each keeps a field of its own.
-    SetupHold { data: Racer, clock: Racer },
+    SetupHold { data: PinEdge, clock: PinEdge },
     /// A symmetric separation, as the unordered pair of the two edges it holds apart.
-    NonSeq { pair: [Racer; 2] },
+    NonSeq { pair: [PinEdge; 2] },
     /// A minimum pulse width, on the one pin it holds against that pin's own second edge.
-    MinPulseWidth { pin: Racer },
+    MinPulseWidth { pin: PinEdge },
 }
 
 impl SituationKind {
     fn of(c: &Constraint) -> Self {
-        let constrained = Racer {
+        let constrained = PinEdge {
             pin: c.pin.clone(),
             edge: c.pin_edge,
         };
         match &c.kind {
             ConstraintKind::SetupHold { clock, clock_edge } => SituationKind::SetupHold {
                 data: constrained,
-                clock: Racer {
+                clock: PinEdge {
                     pin: clock.clone(),
                     edge: *clock_edge,
                 },
@@ -260,7 +260,7 @@ impl SituationKind {
             ConstraintKind::NonSeq { other, other_edge } => {
                 let mut pair = [
                     constrained,
-                    Racer {
+                    PinEdge {
                         pin: other.clone(),
                         edge: *other_edge,
                     },
