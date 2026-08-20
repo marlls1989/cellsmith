@@ -32,7 +32,7 @@ use cellsmith::report::{self, Commas, State};
 struct Cli {
     /// TOML cell spec ("-" reads stdin).
     #[arg(value_parser = spec_source)]
-    spec: SpecSource,
+    spec: PathArg,
 
     /// Output directory.
     #[arg(short, long, default_value = ".")]
@@ -88,29 +88,24 @@ struct Cli {
     max_states: usize,
 }
 
-/// Where the spec is read from. The command line names standard input with `-`; every other argument is
-/// a path.
+/// A path argument that may instead name the standard stream: [`PathArg::StdStream`] is standard input
+/// where the argument is read and standard output where it is written. Which of the two it means comes
+/// from the site that consumes it, and that is what an `Option<PathBuf>` would leave unsaid.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum SpecSource {
-    Stdin,
+enum PathArg {
     File(PathBuf),
+    StdStream,
 }
 
-/// The `<SPEC>` argument's value parser. No argument is rejected — a path is whatever is not `-` — so
-/// the result is infallible, and it is a `Result` only because that is what clap parses through.
-fn spec_source(arg: &str) -> Result<SpecSource, Infallible> {
+/// The `<SPEC>` argument's value parser: `-` names standard input and every other argument is a path.
+/// No argument is rejected, so the result is infallible, and it is a `Result` only because that is what
+/// clap parses through.
+fn spec_source(arg: &str) -> Result<PathArg, Infallible> {
     Ok(if arg == "-" {
-        SpecSource::Stdin
+        PathArg::StdStream
     } else {
-        SpecSource::File(PathBuf::from(arg))
+        PathArg::File(PathBuf::from(arg))
     })
-}
-
-/// Where the artifacts go: one file per artifact under a directory, or all of them to standard output
-/// behind banners.
-enum Destination {
-    Stdout,
-    Dir(PathBuf),
 }
 
 /// The `--when` flag, resolved to the set of arc classes it selects. Every occurrence of the flag is
@@ -334,14 +329,16 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     let liberty = library_liberty(&base, &cells);
     let cells_tcl = render(&cells, cell_define_cell);
 
-    // `--stdout` names the destination outright, so a directory given beside it has nothing left to say.
+    // Where the artifacts go: one file per artifact under a directory, or all of them to standard
+    // output behind banners. `--stdout` names the destination outright, so a directory given beside it
+    // has nothing left to say.
     let destination = if cli.stdout {
-        Destination::Stdout
+        PathArg::StdStream
     } else {
-        Destination::Dir(cli.outdir)
+        PathArg::File(cli.outdir)
     };
     match destination {
-        Destination::Stdout => {
+        PathArg::StdStream => {
             // Buffered, because an artifact reaches the handle as the many small writes its own
             // `Display` makes rather than as one string.
             let mut out = io::BufWriter::new(io::stdout().lock());
@@ -353,7 +350,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             }
             out.flush()?;
         }
-        Destination::Dir(dir) => {
+        PathArg::File(dir) => {
             fs::create_dir_all(&dir)?;
             write_file(&dir, &format!("{base}_arcs.tcl"), &arcs)?;
             write_file(&dir, &format!("{base}.v"), &verilog)?;
@@ -383,14 +380,14 @@ impl fmt::Display for Deck<'_> {
 }
 
 /// Read the spec's source text from wherever the argument named.
-fn read_spec(spec: &SpecSource) -> io::Result<String> {
+fn read_spec(spec: &PathArg) -> io::Result<String> {
     match spec {
-        SpecSource::Stdin => {
+        PathArg::StdStream => {
             let mut buf = String::new();
             io::stdin().read_to_string(&mut buf)?;
             Ok(buf)
         }
-        SpecSource::File(path) => fs::read_to_string(path),
+        PathArg::File(path) => fs::read_to_string(path),
     }
 }
 
@@ -637,10 +634,10 @@ fn trigger_str(cause: &Cause) -> Option<String> {
 
 /// The default output base name: the spec path's stem, or "cells" where the spec came from stdin and
 /// there is no path to take a stem from.
-fn base_name(spec: &SpecSource) -> String {
+fn base_name(spec: &PathArg) -> String {
     match spec {
-        SpecSource::Stdin => "cells".to_owned(),
-        SpecSource::File(path) => path
+        PathArg::StdStream => "cells".to_owned(),
+        PathArg::File(path) => path
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "cells".to_owned()),
@@ -676,7 +673,7 @@ mod tests {
         let cli = Cli::try_parse_from(["cellsmith", "--when", "s.toml"]).unwrap();
         assert_eq!(cli.when.classes, ArcClasses::ALL);
         // `require_equals` keeps the positional `<SPEC>` from being swallowed as the class value.
-        assert_eq!(cli.spec, SpecSource::File("s.toml".into()));
+        assert_eq!(cli.spec, PathArg::File("s.toml".into()));
     }
 
     #[test]
@@ -727,7 +724,7 @@ mod tests {
     fn constraints_is_a_bare_flag_and_keeps_the_positional() {
         let cli = Cli::try_parse_from(["cellsmith", "--constraints", "s.toml"]).unwrap();
         assert!(cli.constraints);
-        assert_eq!(cli.spec, SpecSource::File("s.toml".into()));
+        assert_eq!(cli.spec, PathArg::File("s.toml".into()));
     }
 
     #[test]
@@ -794,11 +791,11 @@ Y = "A"
 
     #[test]
     fn base_name_strips_dir_and_extension() {
-        let file = |p: &str| base_name(&SpecSource::File(p.into()));
+        let file = |p: &str| base_name(&PathArg::File(p.into()));
         assert_eq!(file("/some/dir/cells.toml"), "cells");
         assert_eq!(file("cells.toml"), "cells");
         assert_eq!(file("plain"), "plain"); // no extension: the whole stem
-        assert_eq!(base_name(&SpecSource::Stdin), "cells"); // no path to take a stem from
+        assert_eq!(base_name(&PathArg::StdStream), "cells"); // no path to take a stem from
     }
 
     #[test]
@@ -816,13 +813,13 @@ Y = "A"
         let path =
             std::env::temp_dir().join(format!("cellsmith_read_spec_{}.toml", std::process::id()));
         fs::write(&path, "hello = 1\n").unwrap();
-        let got = read_spec(&SpecSource::File(path.clone())).unwrap();
+        let got = read_spec(&PathArg::File(path.clone())).unwrap();
         assert_eq!(got, "hello = 1\n");
         fs::remove_file(&path).ok();
     }
 
     #[test]
     fn read_spec_errors_on_a_missing_path() {
-        assert!(read_spec(&SpecSource::File("/no/such/cellsmith/spec.toml".into())).is_err());
+        assert!(read_spec(&PathArg::File("/no/such/cellsmith/spec.toml".into())).is_err());
     }
 }
