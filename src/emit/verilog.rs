@@ -12,6 +12,9 @@
 //! async set/clear level rows, a no-change row for each clock's inactive edge and no-change rows for
 //! steady-clock data transitions. The keying clocks are the primitive's LAST ports. A pure master folded
 //! into such a register contributes nothing — no primitive, no wire, no instance.
+//!
+//! A cell's declarations travel as the values [`cell_verilog`] states — one [`Item`] apiece — and become
+//! text once, in [`Display`](fmt::Display), written into the writer the model is going out on.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write as _};
@@ -27,10 +30,47 @@ use crate::model::AnalysedCell;
 /// Fixed rise/fall path delay stamped on every `specify` arc.
 const PATH_DELAY: &str = "(0.1, 0.1)";
 
+/// One top-level declaration of a cell's Verilog model, the variant being what that declaration is: a
+/// signal's UDP, a constant pin's module, or a wrapper module instantiating them.
+pub enum Item<'a> {
+    /// One signal's sequential UDP, its table the signal's on/off/hold regions.
+    Primitive(Primitive<'a>),
+    /// One edge register's edge-sensitive UDP, its table that register's captures.
+    EdgeRegister(EdgePrimitive<'a>),
+    /// A constant output pin, which is a `module` with a continuous assignment rather than a UDP.
+    Constant(Constant<'a>),
+    /// The `celldefine`d wrapper for one of the cell's declared names.
+    Wrapper(Wrapper<'a>),
+}
+
+impl fmt::Display for Item<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Item::Primitive(p) => p.fmt(f),
+            Item::EdgeRegister(p) => p.fmt(f),
+            Item::Constant(c) => c.fmt(f),
+            Item::Wrapper(w) => w.fmt(f),
+        }
+    }
+}
+
+/// A run's Verilog declarations as the text they write: each item in turn, written into the writer the
+/// `.v` is going out on. Every cell's declarations make up the one model file, so this holds them all.
+pub struct Verilog<'a>(pub &'a [Item<'a>]);
+
+impl fmt::Display for Verilog<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for item in self.0 {
+            write!(f, "{item}")?;
+        }
+        Ok(())
+    }
+}
+
 /// The full Verilog model for a cell: a UDP primitive per signal (outputs **and** internal state
 /// nodes) followed by the wrapper module. Internal nodes are modelled exactly like outputs, but appear
 /// as internal `wire`s in the wrapper rather than as module ports.
-pub fn cell_verilog(cell: &AnalysedCell) -> String {
+pub fn cell_verilog(cell: &AnalysedCell) -> Vec<Item<'_>> {
     // Recognised edge registers, keyed by their output node, and the pure masters folded into them —
     // a folded master emits no primitive, no wire and no instance.
     let edge_by_node: BTreeMap<&str, &EdgeCaptures> = cell
@@ -48,7 +88,7 @@ pub fn cell_verilog(cell: &AnalysedCell) -> String {
         .map(|(s, _)| s.name.as_str())
         .collect();
 
-    let mut out = String::new();
+    let mut items: Vec<Item> = Vec::new();
     for (sig, sr) in cell.signal_regions() {
         if folded.contains(sig.name.as_str()) {
             continue; // pure master folded into its edge register
@@ -56,10 +96,11 @@ pub fn cell_verilog(cell: &AnalysedCell) -> String {
         if cell.edge.factored.contains(&sig.name) {
             continue; // a read-gated output is a continuous assign, not a UDP
         }
-        match edge_by_node.get(sig.name.as_str()) {
-            Some(er) => out.push_str(&edge_primitive(&prim_name(cell, &sig.name), &sig.name, er)),
-            None => out.push_str(&primitive(&prim_name(cell, &sig.name), &sig.name, sr)),
-        }
+        let name = PrimName::new(cell, &sig.name);
+        items.push(match edge_by_node.get(sig.name.as_str()) {
+            Some(er) => Item::EdgeRegister(EdgePrimitive { name, captures: er }),
+            None => signal_item(name, sr),
+        });
     }
     // The minted derived registers: an edge-sensitive UDP from their EdgeCaptures.
     for d in &cell.edge.derived {
@@ -67,14 +108,17 @@ pub fn cell_verilog(cell: &AnalysedCell) -> String {
             continue; // a reused declared register already emitted its UDP above
         }
         if let Some(er) = edge_by_node.get(d.name.as_str()) {
-            out.push_str(&edge_primitive(&prim_name(cell, &d.name), &d.name, er));
+            items.push(Item::EdgeRegister(EdgePrimitive {
+                name: PrimName::new(cell, &d.name),
+                captures: er,
+            }));
         }
     }
     // One `celldefine`d wrapper per name; all wrappers instantiate the same shared primitives.
     for name in &cell.name {
-        out.push_str(&wrapper_module(cell, name, &edge_by_node, &folded));
+        items.push(Item::Wrapper(wrapper(cell, name, &edge_by_node, &folded)));
     }
-    out
+    items
 }
 
 /// The cell's read-gated outputs mapped to their combinational read function over the factored register
@@ -87,50 +131,94 @@ fn read_functions(cell: &AnalysedCell) -> BTreeMap<&str, &StateRegions> {
         .collect()
 }
 
-/// `<cell>_<pin>` — the UDP primitive name for one output pin.
-fn prim_name(cell: &AnalysedCell, pin: &str) -> String {
-    format!("{}_{}", cell.repr_name(), pin)
+/// `<cell>_<pin>` — one signal's UDP primitive name, held as the two names it is made of: the cell's
+/// representative name and the pin the UDP models. That pin is the primitive's own port, so a
+/// declaration reads it from here rather than carrying a second copy that could disagree.
+#[derive(Clone, Copy)]
+struct PrimName<'a> {
+    cell: &'a Symbol,
+    pin: &'a Symbol,
 }
 
-/// One output pin's UDP. A constant function lowers to a plain `module` with a continuous `assign`;
-/// otherwise to a sequential `primitive` whose `table` encodes on (`1`), off (`0`) and hold (`-`).
-fn primitive(name: &str, pin: &str, sr: &StateRegions) -> String {
+impl<'a> PrimName<'a> {
+    fn new(cell: &'a AnalysedCell, pin: &'a Symbol) -> Self {
+        PrimName {
+            cell: cell.repr_name(),
+            pin,
+        }
+    }
+}
+
+impl fmt::Display for PrimName<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}_{}", self.cell, self.pin)
+    }
+}
+
+/// One level-sensitive signal's declaration: a constant function is a plain `module` with a continuous
+/// assignment, anything else the sequential UDP whose table encodes on (`1`), off (`0`) and hold (`-`).
+fn signal_item<'a>(name: PrimName<'a>, sr: &'a StateRegions) -> Item<'a> {
     // Constant pin: no hold and one region empty ⇒ a tautology / contradiction.
     if sr.hold.is_empty() && sr.off.is_empty() {
-        return constant_module(name, pin, true);
+        return Item::Constant(Constant { name, value: true });
     }
     if sr.hold.is_empty() && sr.on.is_empty() {
-        return constant_module(name, pin, false);
+        return Item::Constant(Constant { name, value: false });
     }
+    Item::Primitive(Primitive { name, regions: sr })
+}
 
-    let ports = std::iter::once(pin)
-        .chain(sr.cols.iter().map(|s| s.as_str()))
-        .collect::<Vec<_>>()
-        .join(", ");
+/// One output pin's sequential UDP: the pin is the `reg`/current-state column and the regions' columns
+/// are its input ports.
+pub struct Primitive<'a> {
+    name: PrimName<'a>,
+    regions: &'a StateRegions,
+}
 
-    let mut s = format!("primitive {name}({ports});\n");
-    s.push_str(&format!("output {pin};\n"));
-    if !sr.cols.is_empty() {
-        s.push_str(&format!("input  {};\n", sr.cols.join(", ")));
+impl fmt::Display for Primitive<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (name, pin, sr) = (self.name, self.name.pin, self.regions);
+        let ports = Joined::new(
+            std::iter::once(pin).chain(sr.cols.iter()),
+            ", ",
+            std::convert::identity,
+        );
+        writeln!(f, "primitive {name}({ports});")?;
+        writeln!(f, "output {pin};")?;
+        if !sr.cols.is_empty() {
+            let cols = Joined::new(sr.cols.iter(), ", ", std::convert::identity);
+            writeln!(f, "input  {cols};")?;
+        }
+        writeln!(f, "reg    {pin};")?;
+        writeln!(f, "table")?;
+        for line in table_lines(sr) {
+            writeln!(f, "\t{line}")?;
+        }
+        writeln!(f, "endtable")?;
+        writeln!(f, "endprimitive")
     }
-    s.push_str(&format!("reg    {pin};\n"));
-    s.push_str("table\n");
-    for line in table_lines(sr) {
-        s.push_str(&format!("\t{line}\n"));
-    }
-    s.push_str("endtable\n");
-    s.push_str("endprimitive\n");
-    s
 }
 
 /// A constant output pin as a `module` with a continuous assignment (`1'b1` / `1'b0`).
-fn constant_module(name: &str, pin: &str, value: bool) -> String {
-    let bit = if value { "1'b1" } else { "1'b0" };
-    format!("module {name}({pin});\noutput {pin};\nassign {pin} = {bit};\nendmodule\n")
+pub struct Constant<'a> {
+    name: PrimName<'a>,
+    value: bool,
+}
+
+impl fmt::Display for Constant<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (name, pin) = (self.name, self.name.pin);
+        let bit = if self.value { "1'b1" } else { "1'b0" };
+        write!(
+            f,
+            "module {name}({pin});\noutput {pin};\nassign {pin} = {bit};\nendmodule\n"
+        )
+    }
 }
 
 /// The UDP table rows, one per region cube, in a deterministic (sorted) order. Each row is
-/// `<input pattern> : ? : <next>` where `next` is `1` (on), `0` (off) or `-` (hold).
+/// `<input pattern> : ? : <next>` where `next` is `1` (on), `0` (off) or `-` (hold). A row is held as
+/// the line it is written as: the order the rows come out in is that line's own sort order.
 fn table_lines(sr: &StateRegions) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for cube in &sr.on {
@@ -183,53 +271,72 @@ fn data_cols(er: &EdgeCaptures) -> Vec<&Symbol> {
 }
 
 /// One edge-register signal's UDP: an edge-sensitive sequential `primitive` whose ports are
-/// `(pin, data cols…, clocks…)` with the keying clocks LAST in [`EdgeCaptures::clocks`] order. The `reg`
+/// `(pin, data cols…, clocks…)` with the keying clocks LAST in `EdgeCaptures::clocks` order. The `reg`
 /// captures on each active clock edge (`(01)` for `Rise`, `(10)` for `Fall`) and honours async set/clear
 /// as clock-independent level rows. The register's own symbol (a toggle flop's self-feedback) and the
 /// clocks are excluded from the data columns — the self column is the `reg` current-state and the clocks
 /// are the dedicated trailing clock columns, not input ports.
-fn edge_primitive(name: &str, pin: &Symbol, er: &EdgeCaptures) -> String {
-    let clocks = er.clocks();
-    let clock_strs: Vec<&str> = clocks.iter().map(|c| c.as_str()).collect();
-    let cols = data_cols(er);
-    // Ports: the pin, its data columns (self and clocks excluded), then the clocks last in clocks() order.
-    let ports = std::iter::once(pin.as_str())
-        .chain(cols.iter().map(|c| c.as_str()))
-        .chain(clock_strs.iter().copied())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let inputs = cols
-        .iter()
-        .map(|c| c.as_str())
-        .chain(clock_strs.iter().copied())
-        .collect::<Vec<_>>()
-        .join(", ");
-    // Trailing comment naming the clock column(s); reduces to the single-clock wording for one clock.
-    let clock_comment = if clock_strs.len() == 1 {
-        format!("clock {} is the last port", clock_strs[0])
-    } else {
-        format!("clocks {} are the last ports", clock_strs.join(", "))
-    };
-
-    let mut s = format!("primitive {name}({ports}); // {clock_comment}\n");
-    s.push_str(&format!("output {pin};\n"));
-    s.push_str(&format!("input  {inputs};\n"));
-    s.push_str(&format!("reg    {pin};\n"));
-    s.push_str("table\n");
-    for line in edge_table_lines(er) {
-        s.push_str(&format!("\t{line}\n"));
-    }
-    s.push_str("endtable\n");
-    s.push_str("endprimitive\n");
-    s
+pub struct EdgePrimitive<'a> {
+    name: PrimName<'a>,
+    captures: &'a EdgeCaptures,
 }
 
-/// The edge-register UDP table rows, sorted for determinism. Column order is the data cols (`er.cols`
-/// minus the register's own symbol and the clocks) then the clocks in [`EdgeCaptures::clocks`] order; the
-/// current-state (`reg`) field is `?` except on a self-referencing register's capture rows, where it
-/// carries that register's own literal. Each capture row carries exactly ONE edge indicator (IEEE 1364);
-/// the capturing clock's column holds it while every other clock column carries the conditioning level.
-/// For a single clock every rule reduces exactly to the single-clock rows.
+impl fmt::Display for EdgePrimitive<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (name, pin, er) = (self.name, self.name.pin, self.captures);
+        let clocks = er.clocks();
+        let cols = data_cols(er);
+        // Ports: the pin, its data columns (self and clocks excluded), then the clocks last in clocks() order.
+        let ports = Joined::new(
+            std::iter::once(pin)
+                .chain(cols.iter().copied())
+                .chain(clocks.iter().copied()),
+            ", ",
+            std::convert::identity,
+        );
+        let inputs = Joined::new(
+            cols.iter().copied().chain(clocks.iter().copied()),
+            ", ",
+            std::convert::identity,
+        );
+        let comment = ClockComment(&clocks);
+        writeln!(f, "primitive {name}({ports}); // {comment}")?;
+        writeln!(f, "output {pin};")?;
+        writeln!(f, "input  {inputs};")?;
+        writeln!(f, "reg    {pin};")?;
+        writeln!(f, "table")?;
+        for line in edge_table_lines(er) {
+            writeln!(f, "\t{line}")?;
+        }
+        writeln!(f, "endtable")?;
+        writeln!(f, "endprimitive")
+    }
+}
+
+/// The trailing comment naming an edge UDP's clock column(s), which reduces to the single-clock wording
+/// for a register keyed off one clock.
+struct ClockComment<'a>(&'a [&'a Symbol]);
+
+impl fmt::Display for ClockComment<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            [one] => write!(f, "clock {one} is the last port"),
+            many => {
+                let list = Joined::new(many.iter(), ", ", std::convert::identity);
+                write!(f, "clocks {list} are the last ports")
+            }
+        }
+    }
+}
+
+/// The edge-register UDP table rows, sorted for determinism (a row being held as the line it is written
+/// as, since the order they come out in is that line's own sort order). Column order is the data cols
+/// (`er.cols` minus the register's own symbol and the clocks) then the clocks in
+/// [`EdgeCaptures::clocks`] order; the current-state (`reg`) field is `?` except on a self-referencing
+/// register's capture rows, where it carries that register's own literal. Each capture row carries
+/// exactly ONE edge indicator (IEEE 1364); the capturing clock's column holds it while every other clock
+/// column carries the conditioning level. For a single clock every rule reduces exactly to the
+/// single-clock rows.
 fn edge_table_lines(er: &EdgeCaptures) -> Vec<String> {
     let cols = data_cols(er);
     let clocks = er.clocks();
@@ -382,15 +489,31 @@ fn level_at(col: &Symbol, region_cols: &[Symbol], cube: &StateCube) -> Level {
     )
 }
 
-/// The `celldefine`d wrapper module: declares the cell's ports, a `specify` path delay from every
-/// input to every output, and instantiates each output pin's UDP with that pin's own column set.
-fn wrapper_module(
-    cell: &AnalysedCell,
-    name: &Symbol,
-    edge_by_node: &BTreeMap<&str, &EdgeCaptures>,
+/// The `celldefine`d wrapper module: the cell's ports, an internal `wire` per surviving state node, a
+/// `specify` path delay from every input to every output, an instance of each signal's UDP and a
+/// continuous assignment for each read-gated output.
+pub struct Wrapper<'a> {
+    /// The declared name this wrapper carries. A cell with several names emits one wrapper per name,
+    /// all instantiating the same shared primitives.
+    name: &'a Symbol,
+    outputs: Vec<&'a Symbol>,
+    inputs: &'a [Symbol],
+    /// The internal wires: the surviving internal state nodes then the minted factored registers.
+    internals: Vec<&'a Symbol>,
+    instances: Vec<Instance<'a>>,
+    assigns: Vec<Assign<'a>>,
+}
+
+/// Build one declared name's wrapper. Ports are the external face only — outputs and primary inputs — so
+/// an internal state node is a wire driven by its own instance, and a folded master vanishes: it is
+/// neither a wire nor an instance.
+fn wrapper<'a>(
+    cell: &'a AnalysedCell,
+    name: &'a Symbol,
+    edge_by_node: &BTreeMap<&str, &'a EdgeCaptures>,
     folded: &BTreeSet<&str>,
-) -> String {
-    let outputs: Vec<Symbol> = cell.outputs.iter().map(|o| o.name.clone()).collect();
+) -> Wrapper<'a> {
+    let outputs: Vec<&Symbol> = cell.outputs.iter().map(|o| &o.name).collect();
     // Read-gated outputs (continuous assigns) and their minted factored registers (internal wires driven
     // by an edge UDP).
     let read_of: BTreeMap<&str, &StateRegions> = read_functions(cell);
@@ -405,128 +528,195 @@ fn wrapper_module(
         .map(|d| &d.name)
         .filter(|n| !signal_names.contains(n.as_str()))
         .collect();
-    // Folded masters vanish: they are neither a wire nor an instance. A minted factored register is an
-    // internal wire like a surviving internal state node.
-    let internals: Vec<Symbol> = cell
+    // A minted factored register is an internal wire like a surviving internal state node.
+    let internals: Vec<&Symbol> = cell
         .internals
         .iter()
         .filter(|o| !folded.contains(o.name.as_str()))
-        .map(|o| o.name.clone())
-        .chain(derived_minted.iter().map(|n| (*n).clone()))
+        .map(|o| &o.name)
+        .chain(derived_minted.iter().copied())
         .collect();
-    // Ports are the external face only: outputs and primary inputs. Internal state nodes are not ports.
-    let ports = outputs
-        .iter()
-        .cloned()
-        .chain(cell.inputs.iter().cloned())
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let mut s = String::from("`celldefine\n");
-    s.push_str(&format!("module {name}({ports});\n"));
-    s.push_str(&format!("output {};\n", outputs.join(", ")));
-    if !cell.inputs.is_empty() {
-        s.push_str(&format!("input  {};\n", cell.inputs.join(", ")));
-    }
-    // Internal state nodes are internal wires driven by their own UDP instance.
-    if !internals.is_empty() {
-        s.push_str(&format!("wire   {};\n", internals.join(", ")));
-    }
-
-    s.push_str("specify\n");
-    for input in &cell.inputs {
-        for output in &outputs {
-            s.push_str(&format!("\t({input} => {output}) = {PATH_DELAY};\n"));
-        }
-    }
-    s.push_str("endspecify\n");
 
     // Instantiate every surviving signal's UDP (outputs and internals); an internal drives its own
     // wire. A folded master has no instance; a read-gated output is a continuous assign, added below.
+    let mut instances: Vec<Instance> = Vec::new();
     for (sig, sr) in cell.signal_regions() {
         if folded.contains(sig.name.as_str()) || cell.edge.factored.contains(&sig.name) {
             continue;
         }
-        let name = prim_name(cell, &sig.name);
         // Edge registers connect in port order `(pin, cols…, clocks…)` with the clocks last in
         // clocks() order; constant pins take just their own port; other sequential pins add their columns.
-        let args = if let Some(er) = edge_by_node.get(sig.name.as_str()) {
-            let clocks = er.clocks();
-            std::iter::once(sig.name.as_str())
-                .chain(data_cols(er).iter().map(|c| c.as_str()))
-                .chain(clocks.iter().map(|c| c.as_str()))
-                .collect::<Vec<_>>()
-                .join(", ")
+        let args: Vec<&Symbol> = if let Some(er) = edge_by_node.get(sig.name.as_str()) {
+            std::iter::once(&sig.name)
+                .chain(data_cols(er))
+                .chain(er.clocks())
+                .collect()
         } else if sr.hold.is_empty() && (sr.on.is_empty() || sr.off.is_empty()) {
-            sig.name.to_string()
+            vec![&sig.name]
         } else {
-            std::iter::once(sig.name.as_str())
-                .chain(sr.cols.iter().map(|s| s.as_str()))
-                .collect::<Vec<_>>()
-                .join(", ")
+            std::iter::once(&sig.name).chain(sr.cols.iter()).collect()
         };
-        s.push_str(&format!("{name} u_{name} ({args});\n"));
+        instances.push(Instance {
+            name: PrimName::new(cell, &sig.name),
+            args,
+        });
     }
-
     // The minted factored registers: an edge UDP instance driving the register's own wire, in port order
     // `(pin, data cols…, clocks…)` — the same layout as any edge register.
     for d in &derived_minted {
         let Some(er) = edge_by_node.get(d.as_str()) else {
             continue;
         };
-        let pname = prim_name(cell, d);
-        let clocks = er.clocks();
-        let args = std::iter::once(d.as_str())
-            .chain(data_cols(er).iter().map(|c| c.as_str()))
-            .chain(clocks.iter().map(|c| c.as_str()))
-            .collect::<Vec<_>>()
-            .join(", ");
-        s.push_str(&format!("{pname} u_{pname} ({args});\n"));
+        instances.push(Instance {
+            name: PrimName::new(cell, d),
+            args: std::iter::once(*d)
+                .chain(data_cols(er))
+                .chain(er.clocks())
+                .collect(),
+        });
     }
     // The read-gated outputs: a continuous assign of the read function over the factored register and gate
     // pins.
-    for (sig, _) in cell.signal_regions() {
-        if let Some(reads) = read_of.get(sig.name.as_str()) {
-            s.push_str(&format!("assign {} = {};\n", sig.name, verilog_expr(reads)));
-        }
-    }
-
-    s.push_str("endmodule\n");
-    s.push_str("`endcelldefine\n");
-    s
-}
-
-/// A read function's on-region as a Verilog sum-of-products expression over its columns: literals joined by
-/// `&`, product terms by `|`, negation `~`. An empty on-set is `1'b0`, a tautology `1'b1`.
-fn verilog_expr(sr: &StateRegions) -> String {
-    if sr.on.is_empty() {
-        return "1'b0".to_owned();
-    }
-    let terms: Vec<String> = sr
-        .on
-        .iter()
-        .map(|cube| {
-            let lits: Vec<String> = sr
-                .cols
-                .iter()
-                .zip(cube.iter())
-                .filter_map(|(c, v)| match v {
-                    Some(true) => Some(c.to_string()),
-                    Some(false) => Some(format!("~{c}")),
-                    None => None,
-                })
-                .collect();
-            if lits.is_empty() {
-                "1'b1".to_owned()
-            } else {
-                format!("({})", lits.join(" & "))
-            }
+    let assigns: Vec<Assign> = cell
+        .signal_regions()
+        .filter_map(|(sig, _)| {
+            read_of.get(sig.name.as_str()).map(|&function| Assign {
+                pin: &sig.name,
+                function,
+            })
         })
         .collect();
-    if terms.iter().any(|t| t == "1'b1") {
-        "1'b1".to_owned()
-    } else {
-        terms.join(" | ")
+
+    Wrapper {
+        name,
+        outputs,
+        inputs: &cell.inputs,
+        internals,
+        instances,
+        assigns,
+    }
+}
+
+impl fmt::Display for Wrapper<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = self.name;
+        let ports = Joined::new(
+            self.outputs.iter().copied().chain(self.inputs.iter()),
+            ", ",
+            std::convert::identity,
+        );
+        let outputs = Joined::new(self.outputs.iter(), ", ", std::convert::identity);
+        writeln!(f, "`celldefine")?;
+        writeln!(f, "module {name}({ports});")?;
+        writeln!(f, "output {outputs};")?;
+        if !self.inputs.is_empty() {
+            let inputs = Joined::new(self.inputs.iter(), ", ", std::convert::identity);
+            writeln!(f, "input  {inputs};")?;
+        }
+        if !self.internals.is_empty() {
+            let internals = Joined::new(self.internals.iter(), ", ", std::convert::identity);
+            writeln!(f, "wire   {internals};")?;
+        }
+
+        writeln!(f, "specify")?;
+        for input in self.inputs {
+            for output in &self.outputs {
+                writeln!(f, "\t({input} => {output}) = {PATH_DELAY};")?;
+            }
+        }
+        writeln!(f, "endspecify")?;
+
+        for instance in &self.instances {
+            writeln!(f, "{instance}")?;
+        }
+        for assign in &self.assigns {
+            writeln!(f, "{assign}")?;
+        }
+        writeln!(f, "endmodule")?;
+        writeln!(f, "`endcelldefine")
+    }
+}
+
+/// One UDP instance inside a wrapper: the primitive it instantiates and the signals its ports connect
+/// to, in that primitive's own port order.
+struct Instance<'a> {
+    name: PrimName<'a>,
+    args: Vec<&'a Symbol>,
+}
+
+impl fmt::Display for Instance<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = self.name;
+        let args = Joined::new(self.args.iter(), ", ", std::convert::identity);
+        write!(f, "{name} u_{name} ({args});")
+    }
+}
+
+/// One read-gated output's continuous assignment: the output pin and the read function it takes over the
+/// factored register and its gate pins.
+struct Assign<'a> {
+    pin: &'a Symbol,
+    function: &'a StateRegions,
+}
+
+impl fmt::Display for Assign<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "assign {} = {};", self.pin, Sop(self.function))
+    }
+}
+
+/// A read function's on-region as a Verilog sum-of-products expression over its columns: literals joined
+/// by `&`, product terms by `|`, negation `~`. An empty on-set is `1'b0`; an on-set holding a cube that
+/// constrains no column is a tautology, so the whole expression is `1'b1`.
+struct Sop<'a>(&'a StateRegions);
+
+impl fmt::Display for Sop<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let sr = self.0;
+        if sr.on.is_empty() {
+            return f.write_str("1'b0");
+        }
+        if sr.on.iter().any(|cube| literals(sr, cube).next().is_none()) {
+            return f.write_str("1'b1");
+        }
+        Joined::new(sr.on.iter(), " | ", |cube| Product(sr, cube)).fmt(f)
+    }
+}
+
+/// One product term of a [`Sop`]: the cube's literals, `&`-joined inside parentheses.
+struct Product<'a>(&'a StateRegions, &'a StateCube);
+
+impl fmt::Display for Product<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let literals = Joined::new(literals(self.0, self.1), " & ", std::convert::identity);
+        write!(f, "({literals})")
+    }
+}
+
+/// The literals `cube` states over `sr`'s columns, in column order. A column the cube leaves
+/// unconstrained states none.
+fn literals<'a>(
+    sr: &'a StateRegions,
+    cube: &'a StateCube,
+) -> impl Iterator<Item = Literal<'a>> + Clone {
+    sr.cols
+        .iter()
+        .zip(cube.iter())
+        .filter_map(|(col, &value)| value.map(|level| Literal { col, level }))
+}
+
+/// One literal of a Verilog expression: the column, negated (`~`) where the cube holds it low.
+struct Literal<'a> {
+    col: &'a Symbol,
+    level: bool,
+}
+
+impl fmt::Display for Literal<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if !self.level {
+            f.write_str("~")?;
+        }
+        write!(f, "{}", self.col)
     }
 }
 
@@ -534,6 +724,11 @@ fn verilog_expr(sr: &StateRegions) -> String {
 mod tests {
     use super::*;
     use crate::model::analyse_one as analyse;
+
+    /// A cell's model as the text the sink writes: its declarations, each written in turn.
+    fn emit(cell: &AnalysedCell) -> String {
+        Verilog(&cell_verilog(cell)).to_string()
+    }
 
     #[test]
     fn c_element_emits_sequential_udp() {
@@ -546,7 +741,7 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        let v = cell_verilog(&cell);
+        let v = emit(&cell);
         eprintln!("{v}");
         assert!(v.contains("primitive C2_Q(Q, A, B);"));
         assert!(v.contains("reg    Q;"));
@@ -574,7 +769,7 @@ Q = "S + Q*!R"
 Qn = "R + Qn*!S"
 "#,
         );
-        let v = cell_verilog(&cell);
+        let v = emit(&cell);
         // Two primitives, one wrapper declaring both outputs.
         assert!(v.contains("primitive SR_Q("));
         assert!(v.contains("primitive SR_Qn("));
@@ -598,7 +793,7 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 "#,
         );
-        let v = cell_verilog(&cell);
+        let v = emit(&cell);
         eprintln!("{v}");
         // A UDP for the internal master and for the slave; the slave takes M as an input column. Q's
         // function (CLK*M + !CLK*Q) does not depend on D, so D is not one of DFF_Q's columns.
@@ -630,7 +825,7 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 "#,
         );
-        let v = cell_verilog(&cell);
+        let v = emit(&cell);
         eprintln!("{v}");
         // One edge-sensitive UDP with the clock last; captures on the rising edge.
         assert!(v.contains("primitive DFF_Q(Q, D, CLK);"));
@@ -662,7 +857,7 @@ L2 = "CLK*D + !CLK*L2"
 Y = "!((CLK*L1 + !CLK*L2)*A)"
 "#,
         );
-        let v = cell_verilog(&cell);
+        let v = emit(&cell);
         eprintln!("{v}");
         // The factored register is a dual-edge UDP capturing !D (D=0 -> 1, D=1 -> 0 on both edges).
         assert!(v.contains("primitive BDET_Y_st(Y_st, D, CLK);"));
@@ -700,7 +895,7 @@ Qn = "!( !(!M*CLK) * Q )"
 Q = "!( !(M*CLK) * Qn )"
 "#,
         );
-        let v = cell_verilog(&cell);
+        let v = emit(&cell);
         eprintln!("{v}");
         // The folded master pair leaves no trace: no primitive, no wire, no instance.
         assert!(!v.contains("NDFF_M"));
@@ -731,7 +926,7 @@ enB   = "!RB*(!CLKB*selb2+CLKB*enB)"
 GCLK = "enA*CLKA+enB*CLKB"
 "#,
         );
-        let v = cell_verilog(&cell);
+        let v = emit(&cell);
         eprintln!("{v}");
 
         // Folded masters vanish entirely — no primitive, no wire, no instance.
@@ -780,7 +975,7 @@ MB = "!CLKB*DB + CLKB*MB"
 Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
 "#,
         );
-        let v = cell_verilog(&cell);
+        let v = emit(&cell);
         eprintln!("{v}");
         assert!(v.contains("primitive DCMUX_Q("), "Q UDP present");
         let q = prim_block(&v, "primitive DCMUX_Q(");
@@ -815,7 +1010,7 @@ M2 = "CLKA*M1 + !CLKA*M2"
 Q = "!CLKB*M2 + CLKB*Q"
 "#,
         );
-        let v = cell_verilog(&cell);
+        let v = emit(&cell);
         eprintln!("{v}");
         let q = prim_block(&v, "primitive HPIPE_Q(");
         let clka_i = q_port_index(&v, "HPIPE_Q", "CLKA");
@@ -891,7 +1086,7 @@ inputs = ["A"]
 Y = "!A"
 "#,
         );
-        let v = cell_verilog(&cell);
+        let v = emit(&cell);
         eprintln!("{v}");
         // The primitive keys off the representative name and is emitted exactly once.
         assert_eq!(v.matches("primitive INVX1_Y(").count(), 1);
@@ -913,7 +1108,7 @@ inputs = ["A", "B"]
 Y = "!(A*B)"
 "#,
         );
-        let v = cell_verilog(&cell);
+        let v = emit(&cell);
         assert!(v.contains("primitive ND2_Y(Y, A, B);"));
         assert!(!v.contains(": ? : -;")); // no hysteresis
     }
@@ -988,8 +1183,8 @@ Q = "CLK*M + !CLK*Q"
         // Verilog.
         for src in NON_COLLAPSIBLE {
             let (default, forced) = analyse_both(src);
-            let v_default = cell_verilog(&default);
-            let v_forced = cell_verilog(&forced);
+            let v_default = emit(&default);
+            let v_forced = emit(&forced);
             for v in [&v_default, &v_forced] {
                 assert!(!v.contains("(01)"), "unexpected rising-edge token");
                 assert!(!v.contains("(10)"), "unexpected falling-edge token");
@@ -1027,8 +1222,8 @@ Q = "CLK*M + !CLK*Q"
             spec.cells.remove(0).analyse().unwrap()
         };
 
-        let v_direct = cell_verilog(&direct);
-        let v_via_flag = cell_verilog(&via_flag);
+        let v_direct = emit(&direct);
+        let v_via_flag = emit(&via_flag);
         for v in [&v_direct, &v_via_flag] {
             assert!(v.contains("primitive DFF_M("));
             assert!(v.contains("wire   M;"));
@@ -1051,7 +1246,7 @@ Q = "CLK*M + !CLK*Q"
 M = "!CLK*D + CLK*M"
 "#,
         );
-        let v = cell_verilog(&cell);
+        let v = emit(&cell);
         eprintln!("{v}");
         // Q is a rising-edge register; its capture cover PREFERS the input D over the internal M (D and M
         // coincide over the CLK=0 capture domain), so Q's UDP keys off D. The master M keeps its own level
@@ -1083,7 +1278,7 @@ L2 = "CLK*D + !CLK*L2"
 Q = "CLK*L1 + !CLK*L2"
 "#,
         );
-        let v = cell_verilog(&cell);
+        let v = emit(&cell);
         eprintln!("{v}");
         let q = prim_block(&v, "primitive DET_Q(");
         // Both edges capture D; each row carries exactly one edge indicator.
@@ -1119,7 +1314,7 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*!M + !CLK*Q"
 "#,
         );
-        let v = cell_verilog(&cell);
+        let v = emit(&cell);
         eprintln!("{v}");
         let q = prim_block(&v, "primitive IDFF_Q(");
         assert!(v.contains("primitive IDFF_Q(Q, D, CLK);"));
@@ -1150,7 +1345,7 @@ M = "!R*(!CLK*!Q + CLK*M)"
 Q = "!R*(CLK*M + !CLK*Q)"
 "#,
         );
-        let v = cell_verilog(&cell);
+        let v = emit(&cell);
         eprintln!("{v}");
         // Q is the self-referencing rising-edge register: its own symbol is the reg field, not an input.
         assert!(v.contains("primitive TFF_Q(Q, R, CLK);"));

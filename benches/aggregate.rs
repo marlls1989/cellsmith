@@ -8,7 +8,7 @@ use rayon::prelude::*;
 
 use cellsmith::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
 use cellsmith::emit::liberty::library_liberty;
-use cellsmith::emit::verilog::cell_verilog;
+use cellsmith::emit::verilog::{cell_verilog, Verilog};
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
@@ -56,11 +56,9 @@ fn bench_whole_run(c: &mut Criterion) {
                             .map(|c| cell_arcs_tcl(c, ArcsTclOptions::default()))
                             .collect::<Vec<_>>()
                             .concat();
-                        let v = analysed
-                            .par_iter()
-                            .map(cell_verilog)
-                            .collect::<Vec<_>>()
-                            .concat();
+                        let declarations: Vec<_> =
+                            analysed.par_iter().flat_map_iter(cell_verilog).collect();
+                        let v = Verilog(&declarations).to_string();
                         let lib = library_liberty("cells", &analysed).to_string();
                         black_box((arcs, v, lib));
                     })

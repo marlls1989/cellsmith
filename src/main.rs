@@ -16,9 +16,9 @@ use rayon::prelude::*;
 
 use cellsmith::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, CellArcs};
 use cellsmith::emit::block::Description;
-use cellsmith::emit::define_cell::cell_define_cell;
+use cellsmith::emit::define_cell::{cell_define_cell, Declarations, DefineCell};
 use cellsmith::emit::liberty::library_liberty;
-use cellsmith::emit::verilog::cell_verilog;
+use cellsmith::emit::verilog::{cell_verilog, Item, Verilog};
 use cellsmith::logic::arcs::PinEdge;
 use cellsmith::logic::hazard::{Cause, Hazard, Outcome};
 use cellsmith::logic::machine::ExplorationBudget;
@@ -293,10 +293,14 @@ fn run(cli: Cli) -> io::Result<()> {
     // emitted (below, gated by the per-cell opt-in) without a separate diagnostic.
 
     let base = cli.name.unwrap_or_else(|| base_name(&cli.spec));
+    // Each artifact's values are stated for all the cells at once and flattened in cell order; the text
+    // is made of them below, at the writer each artifact goes out on.
     let arcs = Deck(&rendered);
-    let verilog = render(&cells, cell_verilog);
+    let model: Vec<Item> = cells.par_iter().flat_map_iter(cell_verilog).collect();
+    let verilog = Verilog(&model);
     let liberty = library_liberty(&base, &cells);
-    let cells_tcl = render(&cells, cell_define_cell);
+    let blocks: Vec<DefineCell> = cells.par_iter().flat_map_iter(cell_define_cell).collect();
+    let cells_tcl = Declarations(&blocks);
 
     // Where the artifacts go: one file per artifact under a directory, or all of them to standard
     // output behind banners. `--stdout` names the destination outright, so a directory given beside it
@@ -358,13 +362,6 @@ fn read_spec(spec: &PathArg) -> io::Result<String> {
         }
         PathArg::File(path) => fs::read_to_string(path),
     }
-}
-
-/// Concatenate one artifact across every cell.
-// `one` has trait bound `Sync` (not `Send`). Rayon's `par_iter().map()` requires `F: Send`,
-// but a reference `&F` is `Fn` with `&F: Send` whenever `F: Sync`. Pass `&one` to satisfy this.
-fn render(cells: &[AnalysedCell], one: impl (Fn(&AnalysedCell) -> String) + Sync) -> String {
-    cells.par_iter().map(&one).collect::<Vec<String>>().concat()
 }
 
 /// One artifact under its stdout section header, written into `out` as the artifact renders itself.

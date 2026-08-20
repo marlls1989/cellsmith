@@ -7,7 +7,7 @@ mod common;
 
 use cellsmith::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
 use cellsmith::emit::liberty::cell_liberty;
-use cellsmith::emit::verilog::cell_verilog;
+use cellsmith::emit::verilog::{cell_verilog, Verilog};
 use cellsmith::logic::analysis::{analyse_machine, Machine};
 use cellsmith::logic::machine::ExplorationBudget;
 use cellsmith::logic::minimise::{minimise_state_space, Preserved};
@@ -140,7 +140,9 @@ fn bench_emit_stages(c: &mut Criterion) {
         sweep_bench!(g, "cell_arcs_tcl", cell.name[0], || {
             cell_arcs_tcl(&ac, ArcsTclOptions::default())
         });
-        sweep_bench!(g, "cell_verilog", cell.name[0], || { cell_verilog(&ac) });
+        sweep_bench!(g, "cell_verilog", cell.name[0], || {
+            Verilog(&cell_verilog(&ac)).to_string()
+        });
         sweep_bench!(g, "cell_liberty", cell.name[0], || {
             Liberty(cell_liberty(&ac)).to_string()
         });

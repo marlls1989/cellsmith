@@ -2262,9 +2262,12 @@ M = "CLK"
         );
 
         for other in [
-            crate::emit::verilog::cell_verilog(&cell),
+            crate::emit::verilog::Verilog(&crate::emit::verilog::cell_verilog(&cell)).to_string(),
             crate::emit::liberty::library_liberty("lib", std::slice::from_ref(&cell)).to_string(),
-            crate::emit::define_cell::cell_define_cell(&cell),
+            crate::emit::define_cell::Declarations(&crate::emit::define_cell::cell_define_cell(
+                &cell,
+            ))
+            .to_string(),
         ] {
             assert!(
                 !other.contains("XI7/m") && !other.contains("XI4/m"),
@@ -2837,7 +2840,10 @@ Q = "CLK*M + !CLK*Q"
         // columns it earns — including the DFF's master, which survives the model view as a signal.
         for (with, _, node) in exposure_pairs() {
             let cell = analyse_one(&with);
-            let tcl = crate::emit::define_cell::cell_define_cell(&cell);
+            let tcl = crate::emit::define_cell::Declarations(
+                &crate::emit::define_cell::cell_define_cell(&cell),
+            )
+            .to_string();
             assert!(
                 !tcl.split_whitespace().any(|t| t == node),
                 "define_cell declared the exposed {node}:\n{tcl}"

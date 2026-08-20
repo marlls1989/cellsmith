@@ -11,8 +11,12 @@
 //!
 //! Unlike the arcs emitter these blocks carry no `-type`/`-when`/`-related_pin`/`-function`: they are
 //! purely the cell's structural declaration.
+//!
+//! A block travels as the value [`DefineCell`] holds and becomes text once, in
+//! [`Display`](fmt::Display), written into the writer the `cells.tcl` is going out on.
 
 use std::collections::BTreeSet;
+use std::fmt;
 
 use espresso_logic::Symbol;
 use indexmap::IndexMap;
@@ -25,9 +29,70 @@ use crate::model::AnalysedCell;
 /// only when the alias override or the cell-wide template supplies it.
 type Triple = (Option<Symbol>, Option<Symbol>, Option<Symbol>);
 
+/// One `define_cell` block: the pins the cell declares, split into the flags Liberate reads them under,
+/// the characterisation templates the block's aliases resolve to, and the aliases it speaks for.
+pub struct DefineCell {
+    /// The data inputs — the cell's inputs less its clock and async pins, which carry their own flags.
+    inputs: Vec<Symbol>,
+    outputs: Vec<Symbol>,
+    clocks: Vec<Symbol>,
+    async_pins: Vec<Symbol>,
+    /// Every pin the arcs address by position: all inputs (clock and async included) then the outputs.
+    pinlist: Vec<Symbol>,
+    delay: Option<Symbol>,
+    power: Option<Symbol>,
+    constraint: Option<Symbol>,
+    /// The drive-strength aliases this one block speaks for.
+    names: Vec<Symbol>,
+}
+
+impl fmt::Display for DefineCell {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "define_cell \\")?;
+        // Data inputs only — an all-clock/all-async cell drops the flag entirely.
+        if !self.inputs.is_empty() {
+            writeln!(f, "\t-input {{ {} }} \\", Words(&self.inputs))?;
+        }
+        writeln!(f, "\t-output {{ {} }} \\", Words(&self.outputs))?;
+        if !self.clocks.is_empty() {
+            writeln!(f, "\t-clock {{ {} }} \\", Words(&self.clocks))?;
+        }
+        if !self.async_pins.is_empty() {
+            writeln!(f, "\t-async {{ {} }} \\", Words(&self.async_pins))?;
+        }
+        // `-pinlist` is the arcs emitter's source of truth — all inputs (incl. clock + async) then
+        // outputs — and is emitted unfiltered.
+        writeln!(f, "\t-pinlist {{ {} }} \\", Words(&self.pinlist))?;
+        if let Some(d) = &self.delay {
+            writeln!(f, "\t-delay {d} \\")?;
+        }
+        if let Some(p) = &self.power {
+            writeln!(f, "\t-power {p} \\")?;
+        }
+        if let Some(c) = &self.constraint {
+            writeln!(f, "\t-constraint {c} \\")?;
+        }
+        writeln!(f, "\t{{ {} }}", Words(&self.names))?;
+        writeln!(f)
+    }
+}
+
+/// A run's `define_cell` blocks as the text they write: each block in turn, written into the writer the
+/// `cells.tcl` is going out on. Every cell's blocks make up the one file, so this holds them all.
+pub struct Declarations<'a>(pub &'a [DefineCell]);
+
+impl fmt::Display for Declarations<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for block in self.0 {
+            write!(f, "{block}")?;
+        }
+        Ok(())
+    }
+}
+
 /// All `define_cell` blocks for a cell, one per resolved template triple. Aliases sharing a triple are
 /// bundled into a single block; the blocks follow the first-appearance order of their aliases.
-pub fn cell_define_cell(cell: &AnalysedCell) -> String {
+pub fn cell_define_cell(cell: &AnalysedCell) -> Vec<DefineCell> {
     // Pin flags are group-independent, so compute them once. Clock and async pins are lifted out of
     // `-input` into their own flags (they still appear in `-pinlist`, which is untouched).
     let excluded: BTreeSet<&Symbol> = cell.async_pins.iter().chain(&cell.clock_pins).collect();
@@ -66,36 +131,23 @@ pub fn cell_define_cell(cell: &AnalysedCell) -> String {
             .push(alias.clone());
     }
 
-    let mut out = String::new();
-    for ((delay, power, constraint), aliases) in &groups {
-        out.push_str("define_cell \\\n");
-        // Data inputs only — an all-clock/all-async cell drops the flag entirely.
-        if !data_inputs.is_empty() {
-            out.push_str(&format!("\t-input {{ {} }} \\\n", Words(&data_inputs)));
-        }
-        out.push_str(&format!("\t-output {{ {} }} \\\n", Words(&outputs)));
-        if !cell.clock_pins.is_empty() {
-            out.push_str(&format!("\t-clock {{ {} }} \\\n", Words(&cell.clock_pins)));
-        }
-        if !cell.async_pins.is_empty() {
-            out.push_str(&format!("\t-async {{ {} }} \\\n", Words(&cell.async_pins)));
-        }
-        // `-pinlist` is the arcs emitter's source of truth — all inputs (incl. clock + async) then
-        // outputs — and is emitted unfiltered.
-        out.push_str(&format!("\t-pinlist {{ {} }} \\\n", Words(&pinlist(cell))));
-        if let Some(d) = delay {
-            out.push_str(&format!("\t-delay {d} \\\n"));
-        }
-        if let Some(p) = power {
-            out.push_str(&format!("\t-power {p} \\\n"));
-        }
-        if let Some(c) = constraint {
-            out.push_str(&format!("\t-constraint {c} \\\n"));
-        }
-        out.push_str(&format!("\t{{ {} }}\n", Words(aliases)));
-        out.push('\n');
-    }
-    out
+    // The pin flags and the `-pinlist` are the cell's own, so every block states the same ones; what a
+    // block adds of its own is its template triple and the aliases that resolved to it.
+    let pinlist = pinlist(cell);
+    groups
+        .into_iter()
+        .map(|((delay, power, constraint), names)| DefineCell {
+            inputs: data_inputs.clone(),
+            outputs: outputs.clone(),
+            clocks: cell.clock_pins.clone(),
+            async_pins: cell.async_pins.clone(),
+            pinlist: pinlist.clone(),
+            delay,
+            power,
+            constraint,
+            names,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -103,9 +155,9 @@ mod tests {
     use super::*;
     use crate::model::analyse_one as analyse;
 
-    /// Emit the `define_cell` blocks for a single-cell TOML spec.
+    /// Emit the `define_cell` blocks for a single-cell TOML spec, as the text the sink writes.
     fn emit(src: &str) -> String {
-        cell_define_cell(&analyse(src))
+        Declarations(&cell_define_cell(&analyse(src))).to_string()
     }
 
     /// The first `define_cell` block fragment containing `needle` (split on the block keyword).
