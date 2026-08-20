@@ -11,7 +11,7 @@ use rayon::prelude::*;
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::logic::analysis::{Derivations, Exploration, MachineAnalysis};
+use crate::logic::analysis::{Derivations, Exploration};
 use crate::logic::arcs::{Arc, HiddenArc};
 use crate::logic::constraint::Constraint;
 use crate::logic::hazard::Hazard;
@@ -653,8 +653,8 @@ pub struct AnalysedCell {
     /// The exploration budget counter that stopped the machine pass, or `None` when the machine was
     /// explored in full. It RECORDS which outcome the pass returned rather than asserting anything of
     /// its own: the single write site is the match on
-    /// [`MachineAnalysis`](crate::logic::analysis::MachineAnalysis) in `Cell::analyse`, and only the
-    /// `Stopped` arm — the one carrying no derivations — sets it, leaving `arcs`, `hidden_arcs`,
+    /// [`analyse_machine`](crate::logic::analysis::analyse_machine)'s result in `Cell::analyse`, and only
+    /// the `Err` arm — the one carrying no derivations — sets it, leaving `arcs`, `hidden_arcs`,
     /// `leakage`, `hazards` and `constraints` at the empty values `Cell::analyse_signals` gave them and
     /// `edge` at its default. The CLI reads it to report the cell instead of emitting arc-free
     /// artifacts for it.
@@ -895,7 +895,7 @@ impl Cell {
             !self.no_edge_collapse,
             exploration,
         ) {
-            MachineAnalysis::Derived(derived) => {
+            Ok(derived) => {
                 let Derivations {
                     arcs,
                     hidden_arcs,
@@ -904,7 +904,7 @@ impl Cell {
                     leakage,
                     edge,
                     explored,
-                } = *derived;
+                } = derived;
                 view.arcs = arcs;
                 view.hidden_arcs = hidden_arcs;
                 view.leakage = leakage;
@@ -915,7 +915,7 @@ impl Cell {
             }
             // A stopped exploration derived nothing, so every field above keeps the empty value
             // `analyse_signals` left it at, and recording the counter is all this view carries away.
-            MachineAnalysis::Stopped(limit) => {
+            Err(limit) => {
                 view.unexplored = Some(limit);
                 None
             }
