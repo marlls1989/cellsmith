@@ -18,6 +18,7 @@ use std::fmt::{self, Write as _};
 
 use espresso_logic::Symbol;
 
+use crate::emit::tcl::Joined;
 use crate::logic::arcs::Edge;
 use crate::logic::edge::EdgeCaptures;
 use crate::logic::regions::{StateCube, StateRegions};
@@ -150,13 +151,7 @@ struct Pattern<'a>(&'a StateCube);
 
 impl fmt::Display for Pattern<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, val) in self.0.iter().enumerate() {
-            if i > 0 {
-                f.write_str(" ")?;
-            }
-            write!(f, "{}", Level(*val))?;
-        }
-        Ok(())
+        Joined::new(self.0.iter(), " ", |val: &Option<bool>| Level(*val)).fmt(f)
     }
 }
 

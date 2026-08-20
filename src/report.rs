@@ -9,6 +9,8 @@ use std::fmt;
 
 use espresso_logic::{Minterm, Symbol};
 
+use crate::emit::tcl::Joined;
+
 /// One state as the values it fixes, in the minterm's variable order: `{A=1, B=0}`. A column the
 /// minterm leaves free is no part of the state and is left out.
 pub struct State<'a>(pub &'a Minterm<Symbol>);
@@ -53,12 +55,6 @@ pub struct Commas<'a, T: fmt::Display>(pub &'a [T]);
 
 impl<T: fmt::Display> fmt::Display for Commas<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, item) in self.0.iter().enumerate() {
-            if i > 0 {
-                f.write_str(", ")?;
-            }
-            write!(f, "{item}")?;
-        }
-        Ok(())
+        Joined::new(self.0.iter(), ", ", std::convert::identity).fmt(f)
     }
 }

@@ -61,6 +61,46 @@ impl From<bool> for VectorValue {
     }
 }
 
+/// A sequence of items written one after another with `sep` between consecutive ones and nothing
+/// else — the one separator loop the artifacts' display vocabulary needs, shared by every fixed list
+/// this crate writes (a Tcl word list, a diagnostic's comma list, a state-table row's node columns).
+/// `project` reads the value actually displayed out of what `source` yields: the identity where the
+/// source already iterates the displayed values themselves, and a genuine projection where it iterates
+/// something a displayed value has to be read out of or picked from — a struct field, a header-aligned
+/// pair, an either-or of two renderings.
+pub(crate) struct Joined<S, F> {
+    source: S,
+    sep: &'static str,
+    project: F,
+}
+
+impl<S, F> Joined<S, F> {
+    pub(crate) fn new(source: S, sep: &'static str, project: F) -> Self {
+        Joined {
+            source,
+            sep,
+            project,
+        }
+    }
+}
+
+impl<S, F, Item, T> fmt::Display for Joined<S, F>
+where
+    S: Iterator<Item = Item> + Clone,
+    F: Fn(Item) -> T,
+    T: fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, item) in self.source.clone().enumerate() {
+            if i > 0 {
+                f.write_str(self.sep)?;
+            }
+            write!(f, "{}", (self.project)(item))?;
+        }
+        Ok(())
+    }
+}
+
 /// Several values as one Tcl list body: each written in turn, separated by a single space. The
 /// separator is all this adds — the braces a `-pinlist`, `-vector` or `-probe` puts around the list are
 /// [`Braced`]'s, and the `-ic` word's quotes are the line's own.
@@ -68,13 +108,7 @@ pub(crate) struct Words<'a, T: fmt::Display>(pub(crate) &'a [T]);
 
 impl<T: fmt::Display> fmt::Display for Words<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, word) in self.0.iter().enumerate() {
-            if i > 0 {
-                f.write_str(" ")?;
-            }
-            write!(f, "{word}")?;
-        }
-        Ok(())
+        Joined::new(self.0.iter(), " ", std::convert::identity).fmt(f)
     }
 }
 

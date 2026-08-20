@@ -14,6 +14,7 @@ use cellsmith::logic::minimise::{minimise_state_space, Preserved};
 use cellsmith::logic::{arcs, confluence, leakage, width};
 use cellsmith::model::{build_signal_bdds, derive_regions};
 use espresso_logic::{sync_bdd_builder, Symbol};
+use liberty_parse::liberty::Liberty;
 
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 
@@ -135,7 +136,9 @@ fn bench_emit_stages(c: &mut Criterion) {
             cell_arcs_tcl(&ac, ArcsTclOptions::default())
         });
         sweep_bench!(g, "cell_verilog", cell.name[0], || { cell_verilog(&ac) });
-        sweep_bench!(g, "cell_liberty", cell.name[0], || { cell_liberty(&ac) });
+        sweep_bench!(g, "cell_liberty", cell.name[0], || {
+            Liberty(cell_liberty(&ac)).to_string()
+        });
     }
     g.finish();
 }

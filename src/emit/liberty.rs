@@ -49,7 +49,7 @@ use espresso_logic::Symbol;
 use rayon::prelude::*;
 
 use crate::emit::statetable::{build_state_model, EdgeRow, EdgeTok, Next, StateModel};
-use crate::emit::tcl::{Indented, Words};
+use crate::emit::tcl::{Indented, Joined, Words};
 use crate::logic::regions::StateRegions;
 use crate::model::AnalysedCell;
 
@@ -308,22 +308,31 @@ struct EdgeInputs<'a> {
 
 impl fmt::Display for EdgeInputs<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, (node, val)) in self
-            .input_nodes
-            .iter()
-            .zip(self.row.inputs.iter())
-            .enumerate()
-        {
-            if i > 0 {
-                f.write_str(" ")?;
-            }
+        let cols = self.input_nodes.iter().zip(self.row.inputs.iter());
+        Joined::new(cols, " ", |(node, val): (&Symbol, &Option<bool>)| {
             if *node == self.row.clock && val.is_none() {
-                write!(f, "{}", Token(self.row.token))?;
+                EdgeInputColumn::Token(Token(self.row.token))
             } else {
-                write!(f, "{}", Level(*val))?;
+                EdgeInputColumn::Level(Level(*val))
             }
+        })
+        .fmt(f)
+    }
+}
+
+/// One column of [`EdgeInputs`]: the ordinary [`Level`], or — only on the register's clock column when
+/// the row leaves it free — the edge [`Token`] in its place.
+enum EdgeInputColumn {
+    Level(Level),
+    Token(Token),
+}
+
+impl fmt::Display for EdgeInputColumn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EdgeInputColumn::Level(level) => write!(f, "{level}"),
+            EdgeInputColumn::Token(token) => write!(f, "{token}"),
         }
-        Ok(())
     }
 }
 
@@ -351,18 +360,13 @@ struct NextPattern<'a>(&'a [Option<Next>]);
 
 impl fmt::Display for NextPattern<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, next) in self.0.iter().enumerate() {
-            if i > 0 {
-                f.write_str(" ")?;
-            }
-            f.write_str(match next {
-                Some(Next::High) => "H",
-                Some(Next::Low) => "L",
-                Some(Next::Hold) => "N",
-                None => "-",
-            })?;
-        }
-        Ok(())
+        Joined::new(self.0.iter(), " ", |next: &Option<Next>| match next {
+            Some(Next::High) => "H",
+            Some(Next::Low) => "L",
+            Some(Next::Hold) => "N",
+            None => "-",
+        })
+        .fmt(f)
     }
 }
 
@@ -372,13 +376,7 @@ struct Levels<'a>(&'a [Option<bool>]);
 
 impl fmt::Display for Levels<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, val) in self.0.iter().enumerate() {
-            if i > 0 {
-                f.write_str(" ")?;
-            }
-            write!(f, "{}", Level(*val))?;
-        }
-        Ok(())
+        Joined::new(self.0.iter(), " ", |val: &Option<bool>| Level(*val)).fmt(f)
     }
 }
 

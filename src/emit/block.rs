@@ -14,7 +14,7 @@ use std::fmt;
 
 use espresso_logic::{BoolExpr, Symbol};
 
-use crate::emit::tcl::{Braced, IcColumn, VectorValue, Words};
+use crate::emit::tcl::{Braced, IcColumn, Joined, VectorValue, Words};
 use crate::logic::arcs::{Edge, PinEdge};
 
 /// The two pins one constraint block switches, and the edge each makes: the pin it names on
@@ -330,13 +330,7 @@ struct Projected<'a, C, T, F: Fn(&'a C) -> T>(&'a [C], F);
 
 impl<'a, C, T: fmt::Display, F: Fn(&'a C) -> T> fmt::Display for Projected<'a, C, T, F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, column) in self.0.iter().enumerate() {
-            if i > 0 {
-                f.write_str(" ")?;
-            }
-            write!(f, "{}", (self.1)(column))?;
-        }
-        Ok(())
+        Joined::new(self.0.iter(), " ", &self.1).fmt(f)
     }
 }
 
