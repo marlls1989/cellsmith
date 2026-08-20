@@ -470,9 +470,9 @@ constraint — it decides how each one renders, generally or in its own context.
 - Two budgets bound the machine pass, each charged against work the exploration actually performs rather
   than against the cell's declared shape: the seed minterms pooled as initialisation candidates (a forced
   cover cube contributes `2^d` of them for its `d` unconstrained input columns) and the reachable stable
-  states the exploration records. A cell that passes either ceiling is left unexplored — it yields neither
-  arcs nor hazards — and the run stops with an error naming the cell and the flag that raises that
-  ceiling (`--max-candidates`, `--max-states`).
+  states the exploration records. A cell that passes either ceiling yields neither arcs nor hazards, so
+  the analysis fails there rather than handing an empty cell on: the run stops with an error naming the
+  cell and the flag that raises that ceiling (`--max-candidates`, `--max-states`).
 - The set of reported hazards and constraints is determined by the machine analysis; the order in which
   entries are emitted is not.
 - The probes never mutate the exploration: they settle *copies* with inputs toggled, so the reachable

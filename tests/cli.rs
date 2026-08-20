@@ -1014,8 +1014,7 @@ fn candidate_budget_overrun_errors_and_writes_nothing() {
     assert!(
         stderr.contains(
             "cellsmith: cell \"WIDE\": exploration stopped at the candidate budget \
-             (512 seed minterms); no arcs, hazards, leakage states or constraints are derived — \
-             raise it with --max-candidates"
+             (512 seed minterms) — raise it with --max-candidates"
         ),
         "missing the budget diagnostic:\n{stderr}"
     );

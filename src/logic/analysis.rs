@@ -59,13 +59,14 @@ pub struct Derivations {
 /// Where a view's explored states come from.
 ///
 /// A cell explores once. The view that owns the exploration is `Fresh` and performs it under the
-/// budget; a second view of the same cell is `Reused` and carries that exploration's outcome — the
-/// explored states themselves, or the ceiling that stopped them.
+/// budget; a second view of the same cell is `Reused` and carries the states that view reached. A
+/// ceiling that stops the exploration ends the analysis there, so a `Reused` view is only ever reached
+/// once the exploration succeeded.
 pub enum Exploration<'e> {
     /// This view performs the exploration, bounded by this budget.
     Fresh(&'e machine::ExplorationBudget),
-    /// This view reuses the outcome the cell's other view already reached.
-    Reused(Result<&'e machine::Explored, machine::ExplorationLimit>),
+    /// This view reuses the states the cell's other view already explored.
+    Reused(&'e machine::Explored),
 }
 
 /// A cell's asynchronous state machine, built once and shared by the arc and confluence derivations. The
@@ -100,9 +101,9 @@ pub struct Machine<'c, B: Brand, C: ManagerCell> {
 impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
     /// Build the shared machine for `cell` from the minimised `bdds` map (built once in
     /// [`crate::model::Cell::analyse`]), taking its explored states from `exploration` — discovered here
-    /// under a budget, or carried over from the cell's other view. That is the only fallible step: the
-    /// exploration stops, leaving the cell unexplored, when one of the budget's two counters passes its
-    /// ceiling, and that counter comes back as the error whichever view it stopped.
+    /// under a budget, or carried over from the cell's other view. That is the only fallible step: a
+    /// fresh exploration stops when one of the budget's two counters passes its ceiling, and that
+    /// counter comes back as the error.
     pub fn build(
         cell: &'c AnalysedCell,
         bdds: &BTreeMap<Symbol, Bdd<B, C>>,
@@ -177,19 +178,17 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
                     )
                     .map(|(_, d)| d.clone())
                     .collect();
-                machine::explore(cell.repr_name(), coords, &seed_funcs, inputs, budget)?
+                machine::explore(coords, &seed_funcs, inputs, budget)?
             }
             // The cell's other view already explored these states, so they are carried onto THIS view's
             // node columns — the inputs followed by this view's coordinates, in `machine::explore`'s own
             // column order. The target names are computed here and never passed in, so a projection onto
             // the wrong view's coordinates cannot be written.
-            Exploration::Reused(Ok(e)) => {
+            Exploration::Reused(e) => {
                 let full_names: Vec<Symbol> =
                     inputs.iter().cloned().chain(coords.names()).collect();
                 e.project_to(&full_names)
             }
-            // One exploration, one verdict: the ceiling that stopped it stops this view too.
-            Exploration::Reused(Err(limit)) => return Err(limit),
         };
 
         Ok(Machine {
@@ -335,59 +334,62 @@ mod tests {
     use crate::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
     use crate::emit::liberty::cell_liberty;
     use crate::emit::tcl::VectorValue;
-    use crate::emit::verilog::cell_verilog;
     use crate::logic::arcs::Edge;
     use crate::logic::constraint::{Constraint, ConstraintKind};
     use crate::logic::hazard::{Cause, Outcome};
-    use crate::logic::machine::ExplorationLimit;
+    use crate::logic::machine::{ExplorationBudget, ExplorationLimit};
     use crate::logic::resolve;
-    use crate::model::{analyse_one, AnalysedCell};
+    use crate::model::{analyse_one, parse_spec, AnalysedCell, ModelError};
+
+    /// Analyse the one cell `src` declares under the default budget, expecting the exploration to be
+    /// stopped: the [`ModelError`] the failure comes back as.
+    fn budget_verdict(src: &str) -> ModelError {
+        parse_spec(src)
+            .expect("the spec parses")
+            .cells
+            .remove(0)
+            .analyse()
+            .expect_err("the exploration passes a ceiling, so the analysis fails")
+    }
 
     #[test]
     fn oversized_cell_trips_the_candidate_budget() {
         // 24 inputs, so each forced cover cube of Y carries 23 don't-care input columns and expands to
-        // 2^23 seed minterms — past the default candidate ceiling. The exploration stops there, so arcs,
-        // constraints and both detected hazards all come back empty (the unexplored path) — yet the
-        // emitters must still run without panicking.
+        // 2^23 seed minterms — past the default candidate ceiling. The exploration stops there and the
+        // analysis fails with it: a cell derives no arcs, hazards, leakage states or constraints
+        // without an exploration, so there is nothing to hand back.
         let n = 24;
         let list = (0..n)
             .map(|i| format!("\"I{i}\""))
             .collect::<Vec<_>>()
             .join(", ");
-        // Opt in to constraints so the empty result below is the stopped exploration suppressing
-        // generation, not merely the per-cell gate leaving `constraints` untouched.
         let src = format!(
             "[[cell]]\nname = \"WIDE\"\nconstraint_arcs = true\ninputs = [{list}]\n[cell.outputs]\nY = \"I0\"\n"
         );
-        let cell = analyse_one(&src);
-        assert!(
-            matches!(cell.unexplored, Some(ExplorationLimit::Candidates { .. })),
-            "the candidate counter is the one that stopped it, got {:?}",
-            cell.unexplored,
+        let err = budget_verdict(&src);
+        assert_eq!(
+            err,
+            ModelError::Exploration {
+                cell: Symbol::from("WIDE"),
+                source: ExplorationLimit::Candidates(ExplorationBudget::default().candidates),
+            },
+            "the candidate counter is the one that stopped it, and the failure names the cell",
         );
-        assert!(cell.arcs.is_empty(), "an unexplored cell has no arcs");
+        // The counter and its ceiling read off the leaf; the cell and the flag are the wrapper's.
+        let msg = err.to_string();
         assert!(
-            cell.constraints.is_empty(),
-            "an unexplored cell has no constraints"
+            msg.contains("cell \"WIDE\"")
+                && msg.contains("candidate budget")
+                && msg.contains("--max-candidates"),
+            "the diagnostic names the cell, the budget and the flag: {msg}"
         );
-        assert!(cell.hazards.is_empty(), "an unexplored cell has no hazards");
-        assert!(
-            cell.leakage.is_empty(),
-            "an unexplored cell has no leakage states"
-        );
-        // Emission still succeeds (no panic); the artifacts are arc-free.
-        let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());
-        let _ = cell_verilog(&cell);
-        let _ = cell_liberty(&cell);
     }
 
     #[test]
-    fn an_exposing_cell_over_budget_reports_one_verdict_on_both_views() {
-        // The same over-budget shape, exposing an internal node so the cell carries two views. The cell
-        // explores once, in the arc view, and the ceiling that stopped it reaches the model view too:
-        // both views carry the verdict and neither derives anything. That is what lets `main`'s
-        // `c.unexplored.or(c.arc_view().unexplored)` name an offending cell exactly once, whichever view
-        // the exploration belonged to.
+    fn an_exposing_cell_over_budget_reports_the_same_verdict() {
+        // The same over-budget shape, exposing an internal node so the cell would carry two views. The
+        // cell explores once, in the arc view, and the ceiling that stopped it ends the analysis there:
+        // the model view is never built, and the one verdict names the cell exactly once.
         let n = 24;
         let list = (0..n)
             .map(|i| format!("\"I{i}\""))
@@ -400,46 +402,14 @@ mod tests {
         let src = format!(
             "[[cell]]\nname = \"WIDEX\"\nconstraint_arcs = true\nexpose = [\"M\"]\ninputs = [{list}]\n[cell.internal]\nM = \"I0\"\n[cell.outputs]\nY = \"M\"\n"
         );
-        let cell = analyse_one(&src);
-        assert!(
-            cell.exposed_view.is_some(),
-            "the exposure gives the cell an arc view beside the model view",
+        assert_eq!(
+            budget_verdict(&src),
+            ModelError::Exploration {
+                cell: Symbol::from("WIDEX"),
+                source: ExplorationLimit::Candidates(ExplorationBudget::default().candidates),
+            },
+            "an exposing cell reaches the same single verdict as one with no view of its own",
         );
-        for (which, view) in [("model view", &cell), ("arc view", cell.arc_view())] {
-            assert!(
-                matches!(view.unexplored, Some(ExplorationLimit::Candidates { .. })),
-                "the {which} carries the candidate counter that stopped the cell, got {:?}",
-                view.unexplored,
-            );
-            assert!(view.arcs.is_empty(), "the unexplored {which} has no arcs");
-            assert!(
-                view.hidden_arcs.is_empty(),
-                "the unexplored {which} has no hidden arcs"
-            );
-            assert!(
-                view.constraints.is_empty(),
-                "the unexplored {which} has no constraints"
-            );
-            assert!(
-                view.hazards.is_empty(),
-                "the unexplored {which} has no hazards"
-            );
-            assert!(
-                view.leakage.is_empty(),
-                "the unexplored {which} has no leakage states"
-            );
-            assert!(
-                view.edge.labels.is_empty()
-                    && view.edge.captures.is_empty()
-                    && view.edge.folded.is_empty()
-                    && view.edge.derived.is_empty(),
-                "the unexplored {which} carries the default edge classification"
-            );
-        }
-        // Emission still succeeds (no panic); the artifacts are arc-free.
-        let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());
-        let _ = cell_verilog(&cell);
-        let _ = cell_liberty(&cell);
     }
 
     #[test]
@@ -477,7 +447,8 @@ mod tests {
         let state_vars = resolve::state_variables(&signals);
         assert_eq!(state_vars.len(), k, "every output is a state variable");
         assert_eq!(cell.inputs.len() + state_vars.len(), 24, "machine width");
-        assert_eq!(cell.unexplored, None, "the exploration ran to completion");
+        // A stopped exploration fails the analysis, so `analyse_one` returning at all is the exploration
+        // having run to completion.
         assert!(
             !cell.arcs.is_empty(),
             "a fully explored machine yields arcs"

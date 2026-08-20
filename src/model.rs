@@ -3,20 +3,21 @@
 //! function is the delayed/feedback value of that output).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+use std::io;
 
 use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
 use espresso_logic::{sync_bdd_builder, BoolExpr, Symbol};
 use indexmap::IndexMap;
 use rayon::prelude::*;
 use serde::Deserialize;
-use thiserror::Error;
 
 use crate::logic::analysis::{Derivations, Exploration};
 use crate::logic::arcs::{Arc, HiddenArc};
 use crate::logic::constraint::Constraint;
 use crate::logic::hazard::Hazard;
 use crate::logic::leakage::LeakageState;
-use crate::logic::machine::{ExplorationBudget, Explored};
+use crate::logic::machine::{ExplorationBudget, ExplorationLimit, Explored};
 
 /// The whole input file: a list of `[[cell]]` tables.
 #[derive(Debug, Deserialize)]
@@ -525,54 +526,242 @@ fn de_constraint_pins<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Constrai
     })
 }
 
-#[derive(Debug, Error)]
+/// Why a spec could not be turned into analysed cells.
+///
+/// Every variant but [`Spec`](Self::Spec) reports a rule the cell model imposes on top of what TOML
+/// can express — a name used twice, a pin referenced that was never declared — and names the cell it
+/// was checking, so a spec holding many cells says which one is at fault.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ModelError {
-    #[error("cannot parse spec: {0}")]
-    Spec(#[from] toml::de::Error),
-    #[error("cell name list must be non-empty")]
+    /// The source text is not well-formed TOML, or does not deserialise into the spec's shape.
+    Spec(toml::de::Error),
+    /// A cell's `name` list is empty, so the cell has no name to be reported or emitted under.
     EmptyName,
-    #[error("duplicate cell name {name:?} used by more than one cell")]
-    DuplicateCellName { name: Symbol },
-    #[error("cell {cell:?}: duplicate input pin {pin:?}")]
-    DuplicateInput { cell: Symbol, pin: Symbol },
-    #[error("cell {cell:?}: pin {pin:?} is both an input and an output")]
-    InputOutputClash { cell: Symbol, pin: Symbol },
-    #[error("cell {cell:?}: internal signal {pin:?} clashes with a declared input or output name")]
-    InternalClash { cell: Symbol, pin: Symbol },
-    #[error("cell {cell:?}, output {output:?}: variable {var:?} is neither a declared input nor an output of this cell")]
-    UnknownVar {
+    /// One name is claimed by two cells. Names — the drive-strength aliases beyond the first included
+    /// — are unique across the whole spec, each standing for one cell in the emitted artifacts.
+    DuplicateCellName {
+        /// The name claimed twice.
+        name: Symbol,
+    },
+    /// A cell lists the same input pin twice.
+    DuplicateInput {
+        /// The cell being validated.
         cell: Symbol,
+        /// The pin repeated in the input list.
+        pin: Symbol,
+    },
+    /// A name is declared as both an input pin and an output, leaving a reference to it ambiguous.
+    InputOutputClash {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The name declared on both sides.
+        pin: Symbol,
+    },
+    /// An internal signal reuses a declared input or output name. Internals share the one namespace
+    /// with the pins, a function referencing all three alike.
+    InternalClash {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The internal signal whose name is already taken.
+        pin: Symbol,
+    },
+    /// A function references a name the cell does not declare. A variable is an input pin, an output
+    /// or an internal signal; anything else has no value to read.
+    UnknownVar {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The signal whose function holds the reference.
         output: Symbol,
+        /// The undeclared variable that was referenced.
         var: Symbol,
     },
-    #[error("cell {cell:?}: async pin {pin:?} is not a declared input")]
-    AsyncNotInput { cell: Symbol, pin: Symbol },
-    #[error("cell {cell:?}: clock pin {pin:?} is not a declared input")]
-    ClockNotInput { cell: Symbol, pin: Symbol },
-    #[error("cell {cell:?}: constraint pin {pin:?} is not a declared input")]
-    ConstraintNotInput { cell: Symbol, pin: Symbol },
-    #[error("cell {cell:?}: template override alias {alias:?} is not a declared cell name")]
-    UnknownTemplateOverride { cell: Symbol, alias: Symbol },
-    #[error("cell {cell:?}: node mapping for {signal:?} is not a declared internal signal")]
-    NodeNotInternal { cell: Symbol, signal: Symbol },
-    #[error("cell {cell:?}: node mapping alias {alias:?} is not a declared cell name")]
-    UnknownNodeAlias { cell: Symbol, alias: Symbol },
-    #[error("cell {cell:?}: two nodes resolve to {node:?} under {alias:?}")]
+    /// The `async` list names a pin that is not a declared input. Asynchronous control arrives on an
+    /// input pin.
+    AsyncNotInput {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The name listed as asynchronous.
+        pin: Symbol,
+    },
+    /// The `clock` list names a pin that is not a declared input.
+    ClockNotInput {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The name listed as a clock.
+        pin: Symbol,
+    },
+    /// `constraint_arcs` selects a pin that is not a declared input. A constraint holds input pins
+    /// apart, so a selection names one.
+    ConstraintNotInput {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The name selected for constraint arcs.
+        pin: Symbol,
+    },
+    /// A per-alias `template` override is keyed on a name the cell does not carry in its `name` list.
+    UnknownTemplateOverride {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The key matching none of the cell's names.
+        alias: Symbol,
+    },
+    /// A `nodes` mapping renames a signal that is not a declared internal. Only an internal stands for
+    /// a netlist node; a pin is addressed by its own name.
+    NodeNotInternal {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The signal the mapping tried to rename.
+        signal: Symbol,
+    },
+    /// A per-alias `nodes` mapping is keyed on a name the cell does not carry in its `name` list.
+    UnknownNodeAlias {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The key matching none of the cell's names.
+        alias: Symbol,
+    },
+    /// Two internal signals map onto one netlist node under an alias, leaving a block that names the
+    /// node unable to say which signal it measures.
     DuplicateNode {
+        /// The cell being validated.
         cell: Symbol,
+        /// The drive-strength alias the mapping belongs to.
         alias: Symbol,
+        /// The netlist node reached from two signals.
         node: Symbol,
     },
-    #[error("cell {cell:?}: a node resolves to the pin {node:?} under {alias:?}")]
+    /// An internal signal maps onto a netlist node bearing a pin's name, which already addresses the
+    /// pin.
     NodeClashesWithPin {
+        /// The cell being validated.
         cell: Symbol,
+        /// The drive-strength alias the mapping belongs to.
         alias: Symbol,
+        /// The netlist node colliding with a pin.
         node: Symbol,
     },
-    #[error("cell {cell:?}: exposed node {node:?} is not a declared internal signal")]
-    ExposeNotInternal { cell: Symbol, node: Symbol },
-    #[error("cell {cell:?}: duplicate exposed node {node:?}")]
-    DuplicateExpose { cell: Symbol, node: Symbol },
+    /// The `expose` list names a signal that is not a declared internal. Exposure preserves an internal
+    /// node as a machine coordinate; an output is already one.
+    ExposeNotInternal {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The name listed for exposure.
+        node: Symbol,
+    },
+    /// The `expose` list names the same internal signal twice.
+    DuplicateExpose {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The node repeated in the expose list.
+        node: Symbol,
+    },
+    /// An exploration budget stopped the cell's machine pass, so the cell has no arcs, hazards,
+    /// leakage states or constraints to emit and the run ends here. The counter and its ceiling are
+    /// the inner error's to state; this layer walks the cells, so it adds the cell's name and the flag
+    /// that raises that ceiling.
+    Exploration {
+        /// The cell whose exploration was stopped.
+        cell: Symbol,
+        /// Which budget stopped it, and at what ceiling.
+        source: ExplorationLimit,
+    },
+}
+
+impl fmt::Display for ModelError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ModelError::Spec(e) => write!(f, "cannot parse spec: {e}"),
+            ModelError::EmptyName => write!(f, "cell name list must be non-empty"),
+            ModelError::DuplicateCellName { name } => {
+                write!(f, "duplicate cell name {name:?} used by more than one cell")
+            }
+            ModelError::DuplicateInput { cell, pin } => {
+                write!(f, "cell {cell:?}: duplicate input pin {pin:?}")
+            }
+            ModelError::InputOutputClash { cell, pin } => {
+                write!(f, "cell {cell:?}: pin {pin:?} is both an input and an output")
+            }
+            ModelError::InternalClash { cell, pin } => write!(
+                f,
+                "cell {cell:?}: internal signal {pin:?} clashes with a declared input or output name"
+            ),
+            ModelError::UnknownVar { cell, output, var } => write!(
+                f,
+                "cell {cell:?}, output {output:?}: variable {var:?} is neither a declared input nor an output of this cell"
+            ),
+            ModelError::AsyncNotInput { cell, pin } => {
+                write!(f, "cell {cell:?}: async pin {pin:?} is not a declared input")
+            }
+            ModelError::ClockNotInput { cell, pin } => {
+                write!(f, "cell {cell:?}: clock pin {pin:?} is not a declared input")
+            }
+            ModelError::ConstraintNotInput { cell, pin } => write!(
+                f,
+                "cell {cell:?}: constraint pin {pin:?} is not a declared input"
+            ),
+            ModelError::UnknownTemplateOverride { cell, alias } => write!(
+                f,
+                "cell {cell:?}: template override alias {alias:?} is not a declared cell name"
+            ),
+            ModelError::NodeNotInternal { cell, signal } => write!(
+                f,
+                "cell {cell:?}: node mapping for {signal:?} is not a declared internal signal"
+            ),
+            ModelError::UnknownNodeAlias { cell, alias } => write!(
+                f,
+                "cell {cell:?}: node mapping alias {alias:?} is not a declared cell name"
+            ),
+            ModelError::DuplicateNode { cell, alias, node } => write!(
+                f,
+                "cell {cell:?}: two nodes resolve to {node:?} under {alias:?}"
+            ),
+            ModelError::NodeClashesWithPin { cell, alias, node } => write!(
+                f,
+                "cell {cell:?}: a node resolves to the pin {node:?} under {alias:?}"
+            ),
+            ModelError::ExposeNotInternal { cell, node } => write!(
+                f,
+                "cell {cell:?}: exposed node {node:?} is not a declared internal signal"
+            ),
+            ModelError::DuplicateExpose { cell, node } => {
+                write!(f, "cell {cell:?}: duplicate exposed node {node:?}")
+            }
+            // Which command-line flag raises the ceiling belongs beside the counter that passed it, and
+            // this is the outermost layer that still knows which counter that was: `main` prints the
+            // error and nothing else. The match is over the crate's own enum, so a third budget cannot
+            // be added without a flag being named for it here.
+            ModelError::Exploration { cell, source } => {
+                let flag = match source {
+                    ExplorationLimit::Candidates(_) => "--max-candidates",
+                    ExplorationLimit::States(_) => "--max-states",
+                };
+                write!(f, "cell {cell:?}: {source} — raise it with {flag}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ModelError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ModelError::Spec(e) => Some(e),
+            ModelError::Exploration { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
+
+impl From<toml::de::Error> for ModelError {
+    fn from(err: toml::de::Error) -> Self {
+        ModelError::Spec(err)
+    }
+}
+
+impl From<ModelError> for io::Error {
+    fn from(err: ModelError) -> Self {
+        io::Error::new(io::ErrorKind::InvalidData, err)
+    }
 }
 
 /// A signal (output **or** internal) after analysis: its function, the variables it references, and
@@ -650,15 +839,6 @@ pub struct AnalysedCell {
     /// internal node. Default (empty) when the cell opted out (`no_edge_collapse`). Computed purely from
     /// the already-explored machine — it never alters the exploration.
     pub(crate) edge: crate::logic::edge::EdgeArcs,
-    /// The exploration budget counter that stopped the machine pass, or `None` when the machine was
-    /// explored in full. It RECORDS which outcome the pass returned rather than asserting anything of
-    /// its own: the single write site is the match on
-    /// [`analyse_machine`](crate::logic::analysis::analyse_machine)'s result in `Cell::analyse`, and only
-    /// the `Err` arm — the one carrying no derivations — sets it, leaving `arcs`, `hidden_arcs`,
-    /// `leakage`, `hazards` and `constraints` at the empty values `Cell::analyse_signals` gave them and
-    /// `edge` at its default. The CLI reads it to report the cell instead of emitting arc-free
-    /// artifacts for it.
-    pub unexplored: Option<crate::logic::machine::ExplorationLimit>,
     /// The cell-wide characterisation-template references (delay/power/constraint) carried verbatim from
     /// the spec for the `define_cell` emitter. `None` when the cell declares no `template`. Raw carry —
     /// analysis never reads or synthesises it.
@@ -789,13 +969,18 @@ impl Cell {
     }
 
     /// [`Cell::analyse`] with an explicit exploration budget: the ceilings bound the machine pass, and
-    /// an exploration stopped by one of them leaves every machine-derived field empty with the counter
-    /// recorded in [`AnalysedCell::unexplored`].
+    /// an exploration stopped by one of them fails the analysis with [`ModelError::Exploration`].
     pub(crate) fn analyse_with(
         &self,
         budget: &ExplorationBudget,
     ) -> Result<AnalysedCell, ModelError> {
         let analysed = self.analyse_signals()?;
+        // `machine::explore` reports which ceiling stopped it and nothing about whose exploration it
+        // was; this is the layer holding the cell, so it names it.
+        let stopped = |source| ModelError::Exploration {
+            cell: self.name[0].clone(),
+            source,
+        };
 
         // One-shot state-space rewrite: mint the cell's single builder, build every signal's BDD once,
         // and run the minimisation (identical-δ dedup + guarded relay/alias fold, alternated until
@@ -822,6 +1007,7 @@ impl Cell {
         if self.expose.is_empty() {
             return Ok(self
                 .finish_view(analysed, &bdds, &min, Exploration::Fresh(budget))
+                .map_err(stopped)?
                 .0);
         }
 
@@ -829,8 +1015,9 @@ impl Cell {
         // the arc view (see `AnalysedCell::exposed_view`). Only plain data — arcs, hazards, regions,
         // the explored states — comes back out of the map, so the map is free to be minimised further
         // beneath it. This is the cell's one exploration; the model view below reads it.
-        let (arc_view, explored) =
-            self.finish_view(analysed, &bdds, &min, Exploration::Fresh(budget));
+        let (arc_view, explored) = self
+            .finish_view(analysed, &bdds, &min, Exploration::Fresh(budget))
+            .map_err(stopped)?;
 
         // Release the exposure and carry the SAME map on to the outputs-only minimised model. The
         // composition reaches the reduced system a single outputs-only run reaches, save for which
@@ -846,16 +1033,16 @@ impl Cell {
             &crate::logic::minimise::Preserved::outputs(outputs),
         );
         // The model view reads the arc view's exploration, carried onto its own coordinates rather than
-        // discovered again. A ceiling that stopped that one exploration is mirrored here, so the stopped
-        // verdict reaches both views.
-        let reused = Exploration::Reused(match &explored {
-            Some(e) => Ok(e),
-            None => Err(arc_view.unexplored.clone().expect(
-                "a view that explored and handed nothing back was stopped by a budget ceiling",
-            )),
-        });
-        let (mut model, _) =
-            self.finish_view(self.analyse_signals()?, &bdds, &min.then(released), reused);
+        // discovered again. A ceiling that stopped that one exploration already returned above, so the
+        // states are here to be reused.
+        let reused = Exploration::Reused(
+            explored
+                .as_ref()
+                .expect("a fresh exploration that returned hands its states back"),
+        );
+        let (mut model, _) = self
+            .finish_view(self.analyse_signals()?, &bdds, &min.then(released), reused)
+            .map_err(stopped)?;
         debug_assert!(
             arc_view.exposed_view.is_none(),
             "the arc view is analysed with the exposure already applied and never carries a view of its own"
@@ -873,14 +1060,15 @@ impl Cell {
     /// [`AnalysedCell::exposed_view`]), whose machines differ in their coordinates. The exploration
     /// itself is per CELL — the second element of the result is the states this view explored, for the
     /// other view to project onto its own coordinates, and is `None` when this view reused an
-    /// exploration or a budget ceiling stopped one.
+    /// exploration. A budget ceiling that stops the exploration is the error, cell-free: the caller
+    /// names the cell.
     fn finish_view<B: Brand, C: ManagerCell + Send + Sync>(
         &self,
         mut view: AnalysedCell,
         bdds: &BTreeMap<Symbol, Bdd<B, C>>,
         min: &crate::logic::minimise::Minimised,
         exploration: Exploration<'_>,
-    ) -> (AnalysedCell, Option<Explored>) {
+    ) -> Result<(AnalysedCell, Option<Explored>), ExplorationLimit> {
         recompute_signal_metadata(&mut view, bdds, min);
 
         // Build the cell's state machine once and derive both its transition arcs and its hazards from
@@ -889,37 +1077,26 @@ impl Cell {
         // avoid them. Clock suppression and emission gating are applied downstream.
         // The opt-out (`no_edge_collapse`, also set for every cell by the global `--no-edge-collapse`)
         // gates the classify() call itself, not just its result — no wasted work when collapse is off.
-        let explored = match crate::logic::analysis::analyse_machine(
+        let Derivations {
+            arcs,
+            hidden_arcs,
+            constraints,
+            hazards,
+            leakage,
+            edge,
+            explored,
+        } = crate::logic::analysis::analyse_machine(
             &view,
             bdds,
             !self.no_edge_collapse,
             exploration,
-        ) {
-            Ok(derived) => {
-                let Derivations {
-                    arcs,
-                    hidden_arcs,
-                    constraints,
-                    hazards,
-                    leakage,
-                    edge,
-                    explored,
-                } = derived;
-                view.arcs = arcs;
-                view.hidden_arcs = hidden_arcs;
-                view.leakage = leakage;
-                view.constraints = constraints;
-                view.hazards = hazards;
-                view.edge = edge;
-                explored
-            }
-            // A stopped exploration derived nothing, so every field above keeps the empty value
-            // `analyse_signals` left it at, and recording the counter is all this view carries away.
-            Err(limit) => {
-                view.unexplored = Some(limit);
-                None
-            }
-        };
+        )?;
+        view.arcs = arcs;
+        view.hidden_arcs = hidden_arcs;
+        view.leakage = leakage;
+        view.constraints = constraints;
+        view.hazards = hazards;
+        view.edge = edge;
 
         // Cache each signal's state-table regions once, in `signals()` order, from the shared folded
         // BDDs, so downstream emitters don't rebuild the BDDs per call site. Whether the minimised model
@@ -927,7 +1104,7 @@ impl Cell {
         // regions carrying the same cyclic classifier's verdict per signal.
         view.regions = derive_regions(&view, bdds);
 
-        (view, explored)
+        Ok((view, explored))
     }
 
     /// Validate the cell and parse its functions into the pre-minimise [`AnalysedCell`]: every signal's
@@ -1158,7 +1335,6 @@ impl Cell {
             when: self.when,
             regions: Vec::new(),
             edge: Default::default(),
-            unexplored: None,
             template: self.template.clone(),
             template_overrides: self.template_overrides.clone(),
             nodes: self.nodes.clone(),

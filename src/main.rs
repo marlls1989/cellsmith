@@ -5,7 +5,6 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
-use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::io::{self, Read, Write};
@@ -22,7 +21,7 @@ use cellsmith::emit::liberty::library_liberty;
 use cellsmith::emit::verilog::cell_verilog;
 use cellsmith::logic::arcs::PinEdge;
 use cellsmith::logic::hazard::{Cause, Hazard, Outcome};
-use cellsmith::logic::machine::{ExplorationBudget, ExplorationLimit};
+use cellsmith::logic::machine::ExplorationBudget;
 use cellsmith::model::{parse_spec, AnalysedCell, ArcClass, ArcClasses, ConstraintPins};
 use cellsmith::report::{self, Commas, State};
 
@@ -173,7 +172,7 @@ fn main() {
     }
 }
 
-fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
+fn run(cli: Cli) -> io::Result<()> {
     let src = read_spec(&cli.spec)?;
     let mut spec = parse_spec(&src)?;
     // `--constraints` is a blanket opt-in: it asks every cell for constraint arcs on every input pin,
@@ -214,37 +213,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         candidates: cli.max_candidates,
         states: cli.max_states,
     };
-    let cells: Vec<AnalysedCell> = spec.analyse_with(&budget)?;
-
     // A cell whose exploration stopped at a budget ceiling has no arcs, hazards, leakage states or
-    // constraints — emitting its artifacts anyway would present that silence as the cell's behaviour, so
-    // this is an error and nothing is written. Every offending cell is named, not just the first. A cell
-    // explores once, however many views it carries (`AnalysedCell::arc_view`), and a ceiling that stopped
-    // that exploration is carried by every view of the cell, so consulting both fields names each
-    // offending cell exactly once.
-    let unexplored: Vec<ExplorationLimit> = cells
-        .iter()
-        .filter_map(|c| {
-            c.unexplored
-                .clone()
-                .or_else(|| c.arc_view().unexplored.clone())
-        })
-        .collect();
-    if !unexplored.is_empty() {
-        for limit in unexplored {
-            // The error names the cell and the budget that stopped it; which flag raises that
-            // ceiling is knowledge of this command line, so it is appended here rather than carried
-            // in the error.
-            let flag = match limit {
-                ExplorationLimit::Candidates { .. } => "--max-candidates",
-                ExplorationLimit::States { .. } => "--max-states",
-            };
-            eprintln!("cellsmith: {limit} — raise it with {flag}");
-        }
-        // Each cell's diagnostic is already complete on stderr, so there is no error value left for
-        // `main` to print: leave with the failing status before any artifact is rendered.
-        std::process::exit(1);
-    }
+    // constraints — emitting its artifacts anyway would present that silence as the cell's behaviour —
+    // so the analysis fails on the first such cell and nothing is written.
+    let cells: Vec<AnalysedCell> = spec.analyse_with(&budget)?;
 
     // Rendered before the diagnostics, because one of them reports what the rendering could not say.
     let arc_opts = ArcsTclOptions {

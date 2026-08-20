@@ -319,9 +319,9 @@ self-referential set that reaches no output may be collapsed even though minimis
 - **Never-changing ⇒ no arc.** A direction that never changes the node presents no arc to type.
 - **Surviving non-state internals** are not candidates.
 - **Explored machine required.** Classification needs an explored machine, so a cell whose exploration
-  passes one of the two budget ceilings — the pooled seed minterms or the recorded stable states — gets no
-  annotation. Both ceilings are raised from the command line (`--max-candidates`, `--max-states`), and a
-  cell that passes one is reported as an error rather than annotated.
+  passes one of the two budget ceilings — the pooled seed minterms or the recorded stable states — is
+  never classified: the analysis fails at that cell rather than annotating it. Both ceilings are raised
+  from the command line (`--max-candidates`, `--max-states`).
 
 ## 10. The exploration is unchanged
 

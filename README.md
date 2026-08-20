@@ -363,10 +363,11 @@ Options:
   -V, --version               Print version
 ```
 
-Exceeding either exploration ceiling is a hard error: cellsmith names every cell whose exploration
-stopped there and exits without writing any artifacts, rather than presenting an unexplored cell's
-absent arcs and hazards as if that were its behaviour. Raise a ceiling for a run with
-`--max-candidates`/`--max-states`.
+Exceeding either exploration ceiling is a hard error: the analysis stops at a cell whose exploration
+was stopped there, naming it, and cellsmith exits without writing any artifacts, rather than
+presenting an unexplored cell's absent arcs and hazards as if that were its behaviour. Cells are
+analysed in parallel, so where several pass a ceiling the one reported is whichever failed first.
+Raise a ceiling for a run with `--max-candidates`/`--max-states`.
 
 Examples:
 
