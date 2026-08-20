@@ -222,31 +222,24 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     // explores once, however many views it carries (`AnalysedCell::arc_view`), and a ceiling that stopped
     // that exploration is carried by every view of the cell, so consulting both fields names each
     // offending cell exactly once.
-    let unexplored: Vec<(&AnalysedCell, ExplorationLimit)> = cells
+    let unexplored: Vec<ExplorationLimit> = cells
         .iter()
         .filter_map(|c| {
             c.unexplored
-                .or(c.arc_view().unexplored)
-                .map(|limit| (c, limit))
+                .clone()
+                .or_else(|| c.arc_view().unexplored.clone())
         })
         .collect();
     if !unexplored.is_empty() {
-        for (c, limit) in unexplored {
-            let (stopped_at, flag) = match limit {
-                ExplorationLimit::Candidates(n) => (
-                    format!("the candidate budget ({n} seed minterms)"),
-                    "--max-candidates",
-                ),
-                ExplorationLimit::States(n) => (
-                    format!("the state budget ({n} explored states)"),
-                    "--max-states",
-                ),
+        for limit in unexplored {
+            // The error names the cell and the budget that stopped it; which flag raises that
+            // ceiling is knowledge of this command line, so it is appended here rather than carried
+            // in the error.
+            let flag = match limit {
+                ExplorationLimit::Candidates { .. } => "--max-candidates",
+                ExplorationLimit::States { .. } => "--max-states",
             };
-            eprintln!(
-                "cellsmith: error: cell {:?}: exploration stopped at {stopped_at}; no arcs, hazards, \
-                 leakage states or constraints are derived — raise it with {flag}",
-                c.repr_name(),
-            );
+            eprintln!("cellsmith: {limit} — raise it with {flag}");
         }
         // Each cell's diagnostic is already complete on stderr, so there is no error value left for
         // `main` to print: leave with the failing status before any artifact is rendered.

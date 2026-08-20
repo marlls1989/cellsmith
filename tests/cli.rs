@@ -1013,7 +1013,7 @@ fn candidate_budget_overrun_errors_and_writes_nothing() {
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(
         stderr.contains(
-            "cellsmith: error: cell \"WIDE\": exploration stopped at the candidate budget \
+            "cellsmith: cell \"WIDE\": exploration stopped at the candidate budget \
              (512 seed minterms); no arcs, hazards, leakage states or constraints are derived — \
              raise it with --max-candidates"
         ),

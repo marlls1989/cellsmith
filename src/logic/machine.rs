@@ -28,7 +28,7 @@
 //! `explore` is bounded by two counters, carried together in [`ExplorationBudget`] and charged against
 //! the work the call actually performs — never against the cell's declared shape (a cell is not turned
 //! away for having many inputs or many state variables). Whichever counter trips is the returned
-//! [`ExplorationLimit`] variant, carrying the ceiling it passed.
+//! [`ExplorationLimit`] error, naming the cell it stopped and carrying the ceiling it passed.
 //!
 //! * **`candidates`** counts the **seed minterms** of the candidate pool. The pool expands every seed
 //!   function's forced FR cover into complete input assignments, so one cube carrying `d` don't-care
@@ -49,6 +49,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
 use rayon::prelude::*;
+use thiserror::Error;
 
 /// A coordinate paired with its next-state function δ (over inputs + state variables).
 pub(crate) type Delta<B, C> = (Symbol, Bdd<B, C>);
@@ -116,13 +117,19 @@ impl Default for ExplorationBudget {
     }
 }
 
-/// The counter that stopped an `explore` call, carrying the ceiling it passed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The counter that stopped an `explore` call, naming the cell it stopped and the ceiling it passed.
+///
+/// Each message says which budget stopped the cell, at what ceiling, and what the cell therefore
+/// carries none of. Which command-line flag raises a ceiling is the CLI's own knowledge, appended
+/// where the error is printed.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ExplorationLimit {
     /// The candidate pool passed this many seed minterms.
-    Candidates(usize),
+    #[error("cell {cell:?}: exploration stopped at the candidate budget ({n} seed minterms); no arcs, hazards, leakage states or constraints are derived")]
+    Candidates { cell: Symbol, n: usize },
     /// The BFS passed this many reachable stable states.
-    States(usize),
+    #[error("cell {cell:?}: exploration stopped at the state budget ({n} explored states); no arcs, hazards, leakage states or constraints are derived")]
+    States { cell: Symbol, n: usize },
 }
 
 /// Build a fully-fixed node over `names` from a `name -> value` lookup (called once per variable).
@@ -336,8 +343,10 @@ impl Explored {
 ///
 /// `budget` bounds the two costs the exploration incurs — the pooled seed minterms and the recorded
 /// stable states (see the module documentation) — and the counter that passes its ceiling comes back as
-/// the [`ExplorationLimit`] error.
+/// the [`ExplorationLimit`] error. `cell` is the name that error reports the stop against: one call is
+/// one cell's exploration, so the error is complete where it is built.
 pub(crate) fn explore<B: Brand, C: ManagerCell + Send + Sync>(
+    cell: &Symbol,
     coords: Coordinates<'_, B, C>,
     seed_funcs: &[Bdd<B, C>],
     input_names: &[Symbol],
@@ -396,7 +405,10 @@ pub(crate) fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     let pool: BTreeSet<Minterm<Symbol>> =
         seed_funcs.par_iter().flat_map_iter(cover_inputs).collect();
     if charged.load(Ordering::Relaxed) > budget.candidates {
-        return Err(ExplorationLimit::Candidates(budget.candidates));
+        return Err(ExplorationLimit::Candidates {
+            cell: cell.clone(),
+            n: budget.candidates,
+        });
     }
 
     // Depth of each state variable from the inputs (shallowest dependency chain), for the ranking
@@ -506,7 +518,10 @@ pub(crate) fn explore<B: Brand, C: ManagerCell + Send + Sync>(
         // state counter — charged a level at a time.
         order.extend(frontier.iter().cloned());
         if order.len() > budget.states {
-            return Err(ExplorationLimit::States(budget.states));
+            return Err(ExplorationLimit::States {
+                cell: cell.clone(),
+                n: budget.states,
+            });
         }
         // Settle every toggle of the level and claim the states it reaches, in one pipeline. Settling
         // is the whole cost; `prev` — the visited set of every level before this one — is only read
@@ -574,6 +589,7 @@ mod tests {
         let deltas = vec![(Symbol::from("Q"), dq.clone())];
         let inputs = [Symbol::from("A"), Symbol::from("B")];
         let explored = explore(
+            &Symbol::from("C2"),
             Coordinates {
                 state: &deltas,
                 combinational: &[],
@@ -614,6 +630,7 @@ mod tests {
             .map(|i| Symbol::from(format!("I{i}").as_str()))
             .collect();
         let budget = ExplorationBudget::default();
+        let cell = Symbol::from("WIDE");
         let verdict = |threads: usize| {
             let explored = rayon::ThreadPoolBuilder::new()
                 .num_threads(threads)
@@ -621,6 +638,7 @@ mod tests {
                 .expect("thread pool")
                 .install(|| {
                     explore(
+                        &cell,
                         Coordinates {
                             state: &[],
                             combinational: &[],
@@ -635,7 +653,13 @@ mod tests {
             };
             limit
         };
-        assert_eq!(verdict(1), ExplorationLimit::Candidates(budget.candidates));
+        assert_eq!(
+            verdict(1),
+            ExplorationLimit::Candidates {
+                cell: cell.clone(),
+                n: budget.candidates,
+            }
+        );
         // Every cube is charged whatever the interleaving and the early stop only fires once the
         // ceiling is already passed, so the verdict is the same however many threads expand the seeds.
         assert_eq!(verdict(1), verdict(8));

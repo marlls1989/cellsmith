@@ -177,7 +177,7 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
                     )
                     .map(|(_, d)| d.clone())
                     .collect();
-                machine::explore(coords, &seed_funcs, inputs, budget)?
+                machine::explore(cell.repr_name(), coords, &seed_funcs, inputs, budget)?
             }
             // The cell's other view already explored these states, so they are carried onto THIS view's
             // node columns — the inputs followed by this view's coordinates, in `machine::explore`'s own
@@ -361,7 +361,7 @@ mod tests {
         );
         let cell = analyse_one(&src);
         assert!(
-            matches!(cell.unexplored, Some(ExplorationLimit::Candidates(_))),
+            matches!(cell.unexplored, Some(ExplorationLimit::Candidates { .. })),
             "the candidate counter is the one that stopped it, got {:?}",
             cell.unexplored,
         );
@@ -407,7 +407,7 @@ mod tests {
         );
         for (which, view) in [("model view", &cell), ("arc view", cell.arc_view())] {
             assert!(
-                matches!(view.unexplored, Some(ExplorationLimit::Candidates(_))),
+                matches!(view.unexplored, Some(ExplorationLimit::Candidates { .. })),
                 "the {which} carries the candidate counter that stopped the cell, got {:?}",
                 view.unexplored,
             );

@@ -850,7 +850,7 @@ impl Cell {
         // verdict reaches both views.
         let reused = Exploration::Reused(match &explored {
             Some(e) => Ok(e),
-            None => Err(arc_view.unexplored.expect(
+            None => Err(arc_view.unexplored.clone().expect(
                 "a view that explored and handed nothing back was stopped by a budget ceiling",
             )),
         });
