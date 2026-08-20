@@ -23,8 +23,10 @@ mechanism — a constraint block gets a column for every victim node whether or 
 it, and its `-when` states fixed literals of the measured state — but that argument does not cover
 combinational and hidden.
 
-`Description`'s five constraint arms (src/emit/block.rs:368-372) and the constraint arm of the
-conflation report (src/emit/block.rs:599-669) are reached only by unit tests, never by an
-end-to-end run on real cells. Whether that is a missing fixture or evidence that those arms are
-unreachable is the open question; if they are unreachable, that deserves to be stated at
+`Description`'s five constraint arms (src/emit/block.rs:351-355) are reached only by the unit test
+`a_block_describes_itself_on_one_line` (src/emit/block.rs:582-652), never by an end-to-end run on
+real cells: the conflation report renders every block through the same `Description` adapter
+(src/main.rs:277) rather than through a constraint-specific arm, so those five arms are exercised
+only if a constraint block ever conflates. Whether that is a missing fixture or evidence that those
+arms are unreachable is the open question; if they are unreachable, that deserves to be stated at
 `Description` rather than left to look merely untested.

@@ -215,7 +215,8 @@ fn run(cli: Cli) -> io::Result<()> {
     };
     // A cell whose exploration stopped at a budget ceiling has no arcs, hazards, leakage states or
     // constraints — emitting its artifacts anyway would present that silence as the cell's behaviour —
-    // so the analysis fails on the first such cell and nothing is written.
+    // so the analysis fails at an over-budget cell, whichever the parallel analysis reaches, and
+    // nothing is written.
     let cells: Vec<AnalysedCell> = spec.analyse_with(&budget)?;
 
     // Rendered before the diagnostics, because one of them reports what the rendering could not say.

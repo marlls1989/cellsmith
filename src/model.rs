@@ -746,8 +746,23 @@ impl std::error::Error for ModelError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             ModelError::Spec(e) => Some(e),
+            ModelError::EmptyName => None,
+            ModelError::DuplicateCellName { .. } => None,
+            ModelError::DuplicateInput { .. } => None,
+            ModelError::InputOutputClash { .. } => None,
+            ModelError::InternalClash { .. } => None,
+            ModelError::UnknownVar { .. } => None,
+            ModelError::AsyncNotInput { .. } => None,
+            ModelError::ClockNotInput { .. } => None,
+            ModelError::ConstraintNotInput { .. } => None,
+            ModelError::UnknownTemplateOverride { .. } => None,
+            ModelError::NodeNotInternal { .. } => None,
+            ModelError::UnknownNodeAlias { .. } => None,
+            ModelError::DuplicateNode { .. } => None,
+            ModelError::NodeClashesWithPin { .. } => None,
+            ModelError::ExposeNotInternal { .. } => None,
+            ModelError::DuplicateExpose { .. } => None,
             ModelError::Exploration { source, .. } => Some(source),
-            _ => None,
         }
     }
 }

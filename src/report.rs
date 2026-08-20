@@ -18,19 +18,26 @@ pub struct State<'a>(pub &'a Minterm<Symbol>);
 impl fmt::Display for State<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("{")?;
-        let fixed = self
+        // Collected because `Joined::fmt` takes `&self` and clones its stored iterator to walk
+        // it, and `Minterm::iter`'s `MintermIter` carries no `Clone`.
+        let fixed: Vec<_> = self
             .0
             .vars()
             .iter()
             .zip(self.0.iter())
-            .filter_map(|(name, value)| value.map(|v| (name, v)));
-        for (i, (name, value)) in fixed.enumerate() {
-            if i > 0 {
-                f.write_str(", ")?;
-            }
-            write!(f, "{name}={}", u8::from(value))?;
-        }
+            .filter_map(|(name, value)| value.map(|v| (name, v)))
+            .collect();
+        Joined::new(fixed.iter(), ", ", |&(name, value)| Assignment(name, value)).fmt(f)?;
         f.write_str("}")
+    }
+}
+
+/// One `name=value` pair inside a [`State`]: the variable and the value the minterm fixes it to.
+struct Assignment<'a>(&'a Symbol, bool);
+
+impl fmt::Display for Assignment<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}={}", self.0, u8::from(self.1))
     }
 }
 
@@ -40,13 +47,7 @@ pub struct Path<'a>(pub &'a [Minterm<Symbol>]);
 
 impl fmt::Display for Path<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, state) in self.0.iter().enumerate() {
-            if i > 0 {
-                f.write_str(" → ")?;
-            }
-            write!(f, "{}", State(state))?;
-        }
-        Ok(())
+        Joined::new(self.0.iter(), " → ", State).fmt(f)
     }
 }
 

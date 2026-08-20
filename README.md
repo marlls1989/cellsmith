@@ -366,7 +366,8 @@ Options:
 Exceeding either exploration ceiling is a hard error: the analysis stops at a cell whose exploration
 was stopped there, naming it, and cellsmith exits without writing any artifacts, rather than
 presenting an unexplored cell's absent arcs and hazards as if that were its behaviour. Cells are
-analysed in parallel, so where several pass a ceiling the one reported is whichever failed first.
+analysed in parallel, so where several pass a ceiling the one reported is whichever the parallel
+analysis reached, not whichever failed first.
 Raise a ceiling for a run with `--max-candidates`/`--max-states`.
 
 Examples:
@@ -486,8 +487,8 @@ cargo resolves these Rust crates automatically — the only *external* requireme
 - [`liberty-parser`](https://crates.io/crates/liberty-parser) `0.3` — the published Liberty parser
   crate (used as `liberty_parse`); its generic Liberty `Group` trees back the `.lib` emitter.
 
-Plus the standard ecosystem crates: `serde`/`toml` (spec parsing), `clap` (CLI), `indexmap`,
-`thiserror`, and `rayon` (parallelism).
+Plus the standard ecosystem crates: `serde`/`toml` (spec parsing), `clap` (CLI), `indexmap`, and
+`rayon` (parallelism).
 
 ## Status and scope
 

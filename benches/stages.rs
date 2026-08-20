@@ -35,6 +35,12 @@ macro_rules! sweep_bench {
     };
 }
 
+/// Why a failed `analyse` is a panic and not a skip: the cells come from the checked-in
+/// `examples/cells.toml`, and every one of them analyses under the default budget. A failure means
+/// the fixture is broken, which a silently shorter benchmark run would hide.
+const FIXTURE: &str = "examples/cells.toml is a checked-in fixture: every cell analyses under the \
+                       default budget";
+
 fn bench_signal_stages(c: &mut Criterion) {
     let mut g = c.benchmark_group("signal");
     for cell in common::raw_cells() {
@@ -82,19 +88,18 @@ fn bench_machine_stages(c: &mut Criterion) {
     let mut g = c.benchmark_group("machine");
     for cell in common::raw_cells() {
         // Fixture built once per cell: analyse folds the exprs post-minimise, so this map equals the
-        // minimised map Machine::build consumes. The else-continue skips a cell whose exploration
-        // passes an ExplorationBudget ceiling — there is no machine to time.
-        let ac = cell.analyse().unwrap();
+        // minimised map Machine::build consumes. Every cell in the spec analyses under the default
+        // budget, so a failure here is a broken fixture rather than a cell with nothing to time.
+        let ac = cell.analyse().expect(FIXTURE);
         let builder = sync_bdd_builder!();
         let bdds = build_signal_bdds(&ac, &builder);
         let budget = ExplorationBudget::default();
-        let Ok(m) = Machine::build(
+        let m = Machine::build(
             &ac,
             &bdds,
             cellsmith::logic::analysis::Exploration::Fresh(&budget),
-        ) else {
-            continue;
-        };
+        )
+        .expect("analyse() explored this cell under the same default budget");
 
         sweep_bench!(g, "machine_build", cell.name[0], || {
             Machine::build(
@@ -130,7 +135,7 @@ fn bench_machine_stages(c: &mut Criterion) {
 fn bench_emit_stages(c: &mut Criterion) {
     let mut g = c.benchmark_group("emit");
     for cell in common::raw_cells() {
-        let ac = cell.analyse().unwrap();
+        let ac = cell.analyse().expect(FIXTURE);
 
         sweep_bench!(g, "cell_arcs_tcl", cell.name[0], || {
             cell_arcs_tcl(&ac, ArcsTclOptions::default())

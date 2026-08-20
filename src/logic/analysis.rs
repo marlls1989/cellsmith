@@ -264,9 +264,8 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
 /// [`machine::ExplorationBudget`]): nothing was derived, and the caller reports it.
 ///
 /// A [`Exploration::Reused`] view cannot itself be stopped — the exploration it reads already ran to
-/// completion in the view that performed it — so the error is reached only by a view that explored
-/// ([`Exploration::Fresh`]) or by one mirroring the ceiling that stopped the exploration it would have
-/// reused.
+/// completion in the view that performed it — so the error is reached only by a [`Exploration::Fresh`]
+/// view.
 pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     cell: &AnalysedCell,
     bdds: &BTreeMap<Symbol, Bdd<B, C>>,
