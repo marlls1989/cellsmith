@@ -59,6 +59,8 @@ use crate::emit::block::{
     self, Block, Column, Held, LevelColumn, Pulse, RacingPins, Resting, Separation, Toggle,
 };
 use crate::emit::tcl::{IcColumn, VectorValue};
+// `Edge` and `PinEdge` come from their own module, not through `block`: block.rs keeps its `use`
+// of them private, so `crate::logic::arcs` stays the one path every consumer reaches them by.
 use crate::logic::arcs::{Arc, ArcLevels, Edge, ExposedLevel, HiddenArc, PinEdge};
 use crate::logic::assignment;
 use crate::logic::constraint::{Constraint, ConstraintKind, VictimNode};
