@@ -319,43 +319,101 @@ pub(crate) mod tests {
             );
         }
     }
+    /// One entry of [`AWKWARD_VOLTAGES`]: an awkward `-ic` voltage expression and the text the emitter
+    /// writes for it between the quotes.
+    pub(crate) struct AwkwardVoltage {
+        pub(crate) value: &'static str,
+        pub(crate) column: &'static str,
+    }
+
     /// The expressions that need more than the wrap to hold their column, each with the text the
     /// emitter writes between the `-ic` quotes. Every one of them is read back through real Tcl by
     /// [`tclsh_reads_an_awkward_logic_voltage_as_one_column_per_pin`], which is where the doubling was
     /// established; the pairs here pin it without an interpreter to hand.
-    pub(crate) const AWKWARD_VOLTAGES: [(&str, &str); 17] = [
+    pub(crate) const AWKWARD_VOLTAGES: [AwkwardVoltage; 17] = [
         // The backslash the word's substitution would otherwise spend on the quote after it.
-        (r#"$V\"X"#, r#"{$V\\\\\"X}"#),
+        AwkwardVoltage {
+            value: r#"$V\"X"#,
+            column: r#"{$V\\\\\"X}"#,
+        },
         // A brace with nothing to close it, either way round, alone or amid text.
-        (r"{$VDD", r"{\\{$VDD}"),
-        (r"$VDD}", r"{$VDD\\}}"),
-        (r"{", r"{\\{}"),
-        (r"}", r"{\\}}"),
-        (r"{{{", r"{\\{\\{\\{}"),
-        (r"}{", r"{\\}\\{}"),
+        AwkwardVoltage {
+            value: r"{$VDD",
+            column: r"{\\{$VDD}",
+        },
+        AwkwardVoltage {
+            value: r"$VDD}",
+            column: r"{$VDD\\}}",
+        },
+        AwkwardVoltage {
+            value: r"{",
+            column: r"{\\{}",
+        },
+        AwkwardVoltage {
+            value: r"}",
+            column: r"{\\}}",
+        },
+        AwkwardVoltage {
+            value: r"{{{",
+            column: r"{\\{\\{\\{}",
+        },
+        AwkwardVoltage {
+            value: r"}{",
+            column: r"{\\}\\{}",
+        },
         // A matched pair stands: only the stray close brace is escaped.
-        (r"{a}}", r"{{a}\\}}"),
+        AwkwardVoltage {
+            value: r"{a}}",
+            column: r"{{a}\\}}",
+        },
         // A backslash of the expression's own, before a brace and standing alone.
-        (r"a\{b", r"{a\\\\\\{b}"),
-        (r"\", r"{\\\\}"),
+        AwkwardVoltage {
+            value: r"a\{b",
+            column: r"{a\\\\\\{b}",
+        },
+        AwkwardVoltage {
+            value: r"\",
+            column: r"{\\\\}",
+        },
         // The escape reaching the column as text: `\n` is a backslash and an `n`, not a newline.
-        (r"x\ny", r"{x\\\\ny}"),
+        AwkwardVoltage {
+            value: r"x\ny",
+            column: r"{x\\\\ny}",
+        },
         // Braces and nothing else, balanced: one empty element, written as it stands.
-        (r"{}", r"{}"),
+        AwkwardVoltage {
+            value: r"{}",
+            column: r"{}",
+        },
         // A command substitution with nothing to close it, alone and amid text: one backslash, the
         // bracket reaching the column on its own.
-        (r"[expr", r"{\[expr}"),
-        (r"a[b", r"{a\[b}"),
-        (r"[[", r"{\[\[}"),
+        AwkwardVoltage {
+            value: r"[expr",
+            column: r"{\[expr}",
+        },
+        AwkwardVoltage {
+            value: r"a[b",
+            column: r"{a\[b}",
+        },
+        AwkwardVoltage {
+            value: r"[[",
+            column: r"{\[\[}",
+        },
         // The close bracket starts nothing, so it stands as written.
-        (r"a]b", r"{a]b}"),
+        AwkwardVoltage {
+            value: r"a]b",
+            column: r"{a]b}",
+        },
         // A substitution that does close is how an expression names its level: left alone.
-        (r"[expr $VDD*0.9]", r"{[expr $VDD*0.9]}"),
+        AwkwardVoltage {
+            value: r"[expr $VDD*0.9]",
+            column: r"{[expr $VDD*0.9]}",
+        },
     ];
 
     #[test]
     fn an_awkward_logic_voltage_is_escaped_into_one_element() {
-        for (value, column) in AWKWARD_VOLTAGES {
+        for AwkwardVoltage { value, column } in AWKWARD_VOLTAGES {
             assert_eq!(
                 IcColumn(value.into()).to_string(),
                 column,

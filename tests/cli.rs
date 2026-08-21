@@ -5,6 +5,8 @@ use std::collections::BTreeSet;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+use espresso_logic::Symbol;
+
 /// The binary under test, provided by Cargo for integration tests.
 const BIN: &str = env!("CARGO_BIN_EXE_cellsmith");
 
@@ -634,6 +636,17 @@ fn ic_column(block: &str, pin: &str) -> String {
         .to_string()
 }
 
+/// The identity of one transition arc: the related pin's edge driving the measured pin's edge, at a
+/// given `-type`. Two blocks sharing all five fields are the same transition emitted twice.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct TransitionKey {
+    related: Symbol,
+    pin: Symbol,
+    ty: String,
+    related_vector: String,
+    pin_vector: String,
+}
+
 /// The default run emits ONE unconditioned block per transition — a related pin's edge driving an output
 /// pin's edge at one `-type` — however many side-input contexts the transition was measured from. `OA22`
 /// fires its `A`-rise → `Y`-rise transition from three of them; one block comes out.
@@ -647,26 +660,33 @@ fn default_run_emits_one_general_block_per_transition() {
         .collect();
     assert!(!transitions.is_empty(), "OA22 emits transition arcs");
 
-    let mut seen: BTreeSet<(String, String, String, String, String)> = BTreeSet::new();
+    let mut seen: BTreeSet<TransitionKey> = BTreeSet::new();
     for b in &transitions {
-        let related = tag_of(b, "-related_pin").expect("a transition block names its related pin");
-        let pin = tag_of(b, "-pin").expect("a transition block names its measured pin");
-        let ty = tag_of(b, "-type").expect("a transition block declares a -type");
-        let key = (
-            related.clone(),
-            pin.clone(),
-            ty,
-            vector_column(b, &related),
-            vector_column(b, &pin),
+        let related = Symbol::from(
+            tag_of(b, "-related_pin").expect("a transition block names its related pin"),
         );
+        let pin =
+            Symbol::from(tag_of(b, "-pin").expect("a transition block names its measured pin"));
+        let ty = tag_of(b, "-type").expect("a transition block declares a -type");
+        let related_vector = vector_column(b, related.as_str());
+        let pin_vector = vector_column(b, pin.as_str());
+        let key = TransitionKey {
+            related,
+            pin,
+            ty,
+            related_vector,
+            pin_vector,
+        };
         assert!(
             seen.insert(key.clone()),
             "a transition is emitted twice: {key:?}"
         );
     }
     assert!(
-        seen.iter()
-            .any(|(related, pin, _, r, p)| related == "A" && pin == "Y" && r == "R" && p == "R"),
+        seen.iter().any(|k| k.related.as_str() == "A"
+            && k.pin.as_str() == "Y"
+            && k.related_vector == "R"
+            && k.pin_vector == "R"),
         "the A-rise → Y-rise transition is emitted"
     );
     assert!(

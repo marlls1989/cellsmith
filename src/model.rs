@@ -1454,6 +1454,29 @@ pub(crate) fn analyse_one(src: &str) -> AnalysedCell {
     parse_spec(src).unwrap().cells.remove(0).analyse().unwrap()
 }
 
+/// The two-cell result of [`analyse_both`]: the same cell analysed once as written and once with
+/// `no_edge_collapse` forced on.
+#[cfg(test)]
+pub(crate) struct AnalysedPair {
+    pub(crate) default: AnalysedCell,
+    pub(crate) forced: AnalysedCell,
+}
+
+/// Parse the single-cell `src` and analyse it twice: once as written, once with
+/// `no_edge_collapse` forced true on every cell -- the same blanket mutation the
+/// `--no-edge-collapse` CLI flag applies (main.rs:82-88). Proves the per-cell TOML switch and
+/// the CLI flag are the identical code path, not two independently-tested mechanisms.
+#[cfg(test)]
+pub(crate) fn analyse_both(src: &str) -> AnalysedPair {
+    let default = parse_spec(src).unwrap().cells.remove(0).analyse().unwrap();
+    let mut spec = parse_spec(src).unwrap();
+    for c in &mut spec.cells {
+        c.no_edge_collapse = true;
+    }
+    let forced = spec.cells.remove(0).analyse().unwrap();
+    AnalysedPair { default, forced }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2519,9 +2542,9 @@ Q = "!QN"
         // exploring for itself, so this also holds that projection to what a plain analysis discovers —
         // across the C-element, where releasing the exposure moves the coordinate from `QN` to `Q`, and
         // the DFF, where the exposed master survives both views.
-        for (with, without, _) in exposure_pairs() {
-            let exposed = analyse_one(&with);
-            let plain = analyse_one(&without);
+        for fixture in exposure_pairs() {
+            let exposed = analyse_one(&fixture.exposing);
+            let plain = analyse_one(&fixture.exposure_free);
             let cell = exposed.repr_name();
 
             let names = |c: &AnalysedCell| c.signals().map(|s| s.name.clone()).collect::<Vec<_>>();
@@ -2568,11 +2591,29 @@ Q = "CLK*M + !CLK*Q"
         )
     }
 
+    /// One fixture for the exposure comparison: a TOML source that exposes an internal node, the same
+    /// cell's exposure-free spelling, and the name of the node exposure names. The two sources are
+    /// value fragments of the fixture text, so they stay `String`; the node is a signal name and
+    /// carries `Symbol`.
+    struct ExposureFixture {
+        exposing: String,
+        exposure_free: String,
+        node: Symbol,
+    }
+
     /// The two exposing fixtures paired with their exposure-free spelling, and the node each exposes.
-    fn exposure_pairs() -> Vec<(String, String, &'static str)> {
+    fn exposure_pairs() -> Vec<ExposureFixture> {
         vec![
-            (c_element_src(r#"expose = ["QN"]"#), c_element_src(""), "QN"),
-            (dff_src(r#"expose = ["M"]"#), dff_src(""), "M"),
+            ExposureFixture {
+                exposing: c_element_src(r#"expose = ["QN"]"#),
+                exposure_free: c_element_src(""),
+                node: Symbol::from("QN"),
+            },
+            ExposureFixture {
+                exposing: dff_src(r#"expose = ["M"]"#),
+                exposure_free: dff_src(""),
+                node: Symbol::from("M"),
+            },
         ]
     }
 
@@ -2756,10 +2797,11 @@ Q = "CLK*M + !CLK*Q"
         // analyse each fixture twice, once exposing and once not, and the model view every emitter but
         // the arcs one reads emits the same records either way. The arcs are where the difference lands,
         // as the exposed node's own column.
-        for (with, without, node) in exposure_pairs() {
-            let exposed = analyse_one(&with);
-            let plain = analyse_one(&without);
-            assert_eq!(exposed.exposed, [Symbol::from(node)]);
+        for fixture in exposure_pairs() {
+            let exposed = analyse_one(&fixture.exposing);
+            let plain = analyse_one(&fixture.exposure_free);
+            let node = fixture.node;
+            assert_eq!(exposed.exposed, *std::slice::from_ref(&node));
             assert!(plain.exposed.is_empty());
 
             let cell = exposed.repr_name();
@@ -2841,8 +2883,9 @@ Q = "CLK*M + !CLK*Q"
     fn define_cell_never_declares_an_exposed_node() {
         // `define_cell` declares the cell's PINS, and an exposed internal is not one however many arc
         // columns it earns — including the DFF's master, which survives the model view as a signal.
-        for (with, _, node) in exposure_pairs() {
-            let cell = analyse_one(&with);
+        for fixture in exposure_pairs() {
+            let node = fixture.node;
+            let cell = analyse_one(&fixture.exposing);
             let tcl = crate::emit::define_cell::Declarations(
                 &crate::emit::define_cell::cell_define_cell(&cell),
             )

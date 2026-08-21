@@ -1855,27 +1855,46 @@ mod tests {
         es.folded.iter().map(Symbol::as_str).collect()
     }
 
-    /// The DISTINCT edge arcs as `(output, clock, clock direction)` tuples, in sorted order. The label
-    /// set keys on the full start context, so several firings of one `(output, clock, direction)` collapse
-    /// to a single tuple here — the test cares which directions are edge, not how many contexts present
-    /// them.
-    fn label_list(es: &EdgeArcs) -> Vec<(&str, &str, Edge)> {
-        let mut v: Vec<(&str, &str, Edge)> = es
+    /// A `PinEdge` built from a plain pin name, for constructing expected labels and captures in
+    /// assertions without spelling out `Symbol::from` at every call site.
+    fn pin(name: &str, edge: Edge) -> PinEdge {
+        PinEdge {
+            pin: Symbol::from(name),
+            edge,
+        }
+    }
+
+    /// One entry of [`label_list`]: the output an edge arc lands on and the clock (with direction) that
+    /// fires it. Drops [`EdgeLabel`]'s start context, so several firings of one `(output, clock)` pair
+    /// collapse to a single `LabelSite` here — the test cares which directions are edge, not how many
+    /// contexts present them.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+    struct LabelSite<'a> {
+        output: &'a str,
+        clock: PinEdge,
+    }
+
+    /// The DISTINCT edge arcs as `LabelSite`s, in sorted order.
+    fn label_list(es: &EdgeArcs) -> Vec<LabelSite<'_>> {
+        let mut v: Vec<LabelSite<'_>> = es
             .labels
             .iter()
-            .map(|l| (l.output.as_str(), l.clock.pin.as_str(), l.clock.edge))
+            .map(|l| LabelSite {
+                output: l.output.as_str(),
+                clock: l.clock.clone(),
+            })
             .collect();
         v.sort();
         v.dedup();
         v
     }
 
-    /// The edge arcs carried by one output, as `(clock, clock direction)`.
-    fn labels_of<'a>(es: &'a EdgeArcs, node: &str) -> Vec<(&'a str, Edge)> {
+    /// The edge arcs carried by one output, as `PinEdge`s (clock with direction).
+    fn labels_of(es: &EdgeArcs, node: &str) -> Vec<PinEdge> {
         label_list(es)
             .into_iter()
-            .filter(|(n, _, _)| *n == node)
-            .map(|(_, c, e)| (c, e))
+            .filter(|l| l.output == node)
+            .map(|l| l.clock)
             .collect()
     }
 
@@ -1966,6 +1985,24 @@ mod tests {
             values.insert(d.name.clone(), dy.restrict_to(&released));
         }
         values
+    }
+
+    /// One open phase a node's latch tracks: the clock, the level at which it leaves the node
+    /// transparent, and the cover the node equals while that phase holds. `open_at` addresses a
+    /// destination state by `(clock, level)` to find the phase it falls in, if any.
+    struct OpenPhase<'a, B: Brand, C: ManagerCell + Send + Sync> {
+        clock: Symbol,
+        level: bool,
+        cover: &'a Bdd<B, C>,
+    }
+
+    /// The `releases` map's key: the forcing pin being released, and the destination state it settles
+    /// into projected onto the machine's inputs — the address a release's outcome is checked to agree at
+    /// (see clause 4 of [`assert_captures_faithful`]'s replay).
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+    struct ReleaseKey {
+        pin: Symbol,
+        dest: Minterm<Symbol>,
     }
 
     /// Replay-faithfulness harness: prove the emitted edge arcs against the machine's own
@@ -2091,21 +2128,19 @@ mod tests {
 
             // The OPEN phases: a CHANGE-FREE arc whose pre-phase is genuinely transparent is a latch
             // close, and its pre-phase is where the node tracks that arc's cover.
-            let open: Vec<(Symbol, bool, &Bdd<B, C>)> = covers
+            let open: Vec<OpenPhase<'_, B, C>> = covers
                 .keys()
                 .filter(|arc| !changes(arc) && is_transparent(arc))
-                .map(|arc| {
-                    (
-                        arc.clock.pin.clone(),
-                        !arc.clock.edge.settled_level(),
-                        &covers[arc],
-                    )
+                .map(|arc| OpenPhase {
+                    clock: arc.clock.pin.clone(),
+                    level: !arc.clock.edge.settled_level(),
+                    cover: &covers[arc],
                 })
                 .collect();
             let open_at = |s: &Minterm<Symbol>| {
                 open.iter()
-                    .find(|(clock, level, _)| s.value_of(clock.as_str()) == Some(*level))
-                    .map(|(_, _, cov)| *cov)
+                    .find(|o| s.value_of(o.clock.as_str()) == Some(o.level))
+                    .map(|o| o.cover)
             };
 
             // (1) TRANSPARENCY.
@@ -2130,7 +2165,7 @@ mod tests {
 
             // (2)-(4) the replay. Release outcomes are collected and checked for agreement, never
             // exempted by a declared pin class.
-            let mut releases: BTreeMap<(Symbol, Minterm<Symbol>), Option<bool>> = BTreeMap::new();
+            let mut releases: BTreeMap<ReleaseKey, Option<bool>> = BTreeMap::new();
             for (si, s) in scan.order.iter().enumerate() {
                 for (xi, x) in inputs.iter().enumerate() {
                     let Some(ni) = scan.next[si][xi] else {
@@ -2175,16 +2210,16 @@ mod tests {
                     } else if forced(s).is_some() {
                         // A RELEASE from a forcing region: the node re-acquires, which the covers do not
                         // model. Its outcomes must at least AGREE per (pin, destination projection).
-                        let key = (
-                            x.clone(),
-                            dest.project_to(inputs.iter().map(Symbol::as_str)),
-                        );
+                        let key = ReleaseKey {
+                            pin: x.clone(),
+                            dest: dest.project_to(inputs.iter().map(Symbol::as_str)),
+                        };
                         if let Some(prev) = releases.insert(key.clone(), got) {
                             assert_eq!(
                                 prev, got,
                                 "release unfaithful: node {node}, pin {x} into {:?}: {prev:?} != \
                                  {got:?}",
-                                key.1
+                                key.dest
                             );
                         }
                         continue;
@@ -2857,7 +2892,10 @@ L3 = "!K3*L2 + K3*L3"
             // The two-birth gate types the `K1->L3` arc EDGE (the generator two hops away, through the open
             // cross-clock latches).
             assert!(
-                label_list(&es).contains(&("L3", "K1", Edge::Fall)),
+                label_list(&es).contains(&LabelSite {
+                    output: "L3",
+                    clock: pin("K1", Edge::Fall)
+                }),
                 "K1->L3 must type edge under the two-birth gate: {:?}",
                 label_list(&es)
             );
@@ -2959,7 +2997,7 @@ Y = "!(T*A)"
             // arcs render `-type combinational`.
             assert_eq!(
                 labels_of(&es, "Y"),
-                [("CLK", Edge::Rise), ("CLK", Edge::Fall)]
+                [pin("CLK", Edge::Rise), pin("CLK", Edge::Fall)]
             );
         });
     }
@@ -3046,7 +3084,7 @@ Y = "!((CLK*L1 + !CLK*L2)*A) + B"
 
             assert_eq!(
                 labels_of(&es, "Y"),
-                [("CLK", Edge::Rise), ("CLK", Edge::Fall)]
+                [pin("CLK", Edge::Rise), pin("CLK", Edge::Fall)]
             );
         });
     }
@@ -3068,8 +3106,14 @@ Y = "!((CLK*L1 + !CLK*L2)*A) + B"
 
             // The two CLK->Y arcs type EDGE under the two-birth gate (the internal-node birth propagates
             // onward to Y). This is the teeth arc.
-            assert!(label_list(&es).contains(&("Y", "CLK", Edge::Rise)));
-            assert!(label_list(&es).contains(&("Y", "CLK", Edge::Fall)));
+            assert!(label_list(&es).contains(&LabelSite {
+                output: "Y",
+                clock: pin("CLK", Edge::Rise)
+            }));
+            assert!(label_list(&es).contains(&LabelSite {
+                output: "Y",
+                clock: pin("CLK", Edge::Fall)
+            }));
 
             // `T` keeps its native edge register; `Y` is factored to a read over it; nothing minted.
             assert!(
@@ -3410,7 +3454,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
             // when R is not declared a clock (SYNCR). Only CLK's rise is an edge arc on Q.
             assert_eq!(
                 labels_of(&es, "Q"),
-                [("CLK", Edge::Rise)],
+                [pin("CLK", Edge::Rise)],
                 "declaring R a clock must not label its level arcs"
             );
         });
@@ -3708,7 +3752,16 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
             // label. Q carries exactly the two rising edge labels.
             assert_eq!(
                 label_list(&es),
-                [("Q", "CLKA", Edge::Rise), ("Q", "CLKB", Edge::Rise)],
+                [
+                    LabelSite {
+                        output: "Q",
+                        clock: pin("CLKA", Edge::Rise)
+                    },
+                    LabelSite {
+                        output: "Q",
+                        clock: pin("CLKB", Edge::Rise)
+                    }
+                ],
                 "rises edge-labelled, falls combinational"
             );
         });
@@ -3854,14 +3907,10 @@ Q = "!CLKB*M2 + CLKB*Q"
             let es = classify(&m);
             assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
-            let arcs: Vec<(&str, Edge)> = q
-                .captures
-                .iter()
-                .map(|c| (c.clock.pin.as_str(), c.clock.edge))
-                .collect();
+            let arcs: Vec<PinEdge> = q.captures.iter().map(|c| c.clock.clone()).collect();
             assert_eq!(
                 arcs,
-                [("CLKA", Edge::Rise), ("CLKB", Edge::Fall)],
+                [pin("CLKA", Edge::Rise), pin("CLKB", Edge::Fall)],
                 "Q carries the conditioned CLKA capture and its own CLKB-fall opening"
             );
             // The CLKA capture characterises the condition: Q captures D when CLKB is transparent
@@ -4090,14 +4139,10 @@ Q = "!( !(M2*!CLKB) * Qn )"
             let es = classify(&m);
             assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
-            let arcs: Vec<(&str, Edge)> = q
-                .captures
-                .iter()
-                .map(|c| (c.clock.pin.as_str(), c.clock.edge))
-                .collect();
+            let arcs: Vec<PinEdge> = q.captures.iter().map(|c| c.clock.clone()).collect();
             assert_eq!(
                 arcs,
-                [("CLKA", Edge::Rise), ("CLKB", Edge::Fall)],
+                [pin("CLKA", Edge::Rise), pin("CLKB", Edge::Fall)],
                 "Q matches the pass-gate HPIPE: conditioned CLKA capture and its own CLKB-fall opening"
             );
 
@@ -4172,7 +4217,13 @@ Q = "!( !(M2*!CLKB) * Qn )"
         // arc at all: the label set is exactly the one rising edge arc.
         with_machine!(DFF_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
-            assert_eq!(label_list(&es), [("Q", "CLK", Edge::Rise)]);
+            assert_eq!(
+                label_list(&es),
+                [LabelSite {
+                    output: "Q",
+                    clock: pin("CLK", Edge::Rise)
+                }]
+            );
         });
 
         // A plain latch has no capture anywhere, but its enable's OPENING edge (opaque→transparent) is a
@@ -4182,7 +4233,13 @@ Q = "!( !(M2*!CLKB) * Qn )"
         with_machine!(DLAT_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert!(es.captures.is_empty(), "a latch has no capture");
-            assert_eq!(label_list(&es), [("Q", "CLK", Edge::Rise)]);
+            assert_eq!(
+                label_list(&es),
+                [LabelSite {
+                    output: "Q",
+                    clock: pin("CLK", Edge::Rise)
+                }]
+            );
         });
 
         // A transparent-LOW cascade is the fall-mirror of `DLAT`: `Q` is opaque across the high phase and
@@ -4198,7 +4255,10 @@ Q = "!( !(M2*!CLKB) * Qn )"
             );
             assert_eq!(
                 label_list(&es),
-                [("Q", "CLK", Edge::Fall)],
+                [LabelSite {
+                    output: "Q",
+                    clock: pin("CLK", Edge::Fall)
+                }],
                 "the transparent-low cascade opens on the fall — a generation on the output"
             );
         });
@@ -4209,7 +4269,16 @@ Q = "!( !(M2*!CLKB) * Qn )"
             let es = classify(&m);
             assert_eq!(
                 label_list(&es),
-                [("Q", "CLK", Edge::Rise), ("Q", "CLK", Edge::Fall)]
+                [
+                    LabelSite {
+                        output: "Q",
+                        clock: pin("CLK", Edge::Rise)
+                    },
+                    LabelSite {
+                        output: "Q",
+                        clock: pin("CLK", Edge::Fall)
+                    }
+                ]
             );
         });
     }
@@ -4225,7 +4294,16 @@ Q = "!( !(M2*!CLKB) * Qn )"
             let es = classify(&m);
             assert_eq!(
                 label_list(&es),
-                [("Q", "CLKA", Edge::Rise), ("Q", "CLKB", Edge::Rise)]
+                [
+                    LabelSite {
+                        output: "Q",
+                        clock: pin("CLKA", Edge::Rise)
+                    },
+                    LabelSite {
+                        output: "Q",
+                        clock: pin("CLKB", Edge::Rise)
+                    }
+                ]
             );
         });
 
@@ -4235,7 +4313,16 @@ Q = "!( !(M2*!CLKB) * Qn )"
             let es = classify(&m);
             assert_eq!(
                 label_list(&es),
-                [("Q", "CLKA", Edge::Rise), ("Q", "CLKB", Edge::Fall)]
+                [
+                    LabelSite {
+                        output: "Q",
+                        clock: pin("CLKA", Edge::Rise)
+                    },
+                    LabelSite {
+                        output: "Q",
+                        clock: pin("CLKB", Edge::Fall)
+                    }
+                ]
             );
             assert_eq!(
                 reg(&es, "Q")
@@ -4261,7 +4348,16 @@ Q = "!( !(M2*!CLKB) * Qn )"
             );
             assert_eq!(
                 label_list(&es),
-                [("Q", "CLKA", Edge::Fall), ("Q", "CLKB", Edge::Rise)]
+                [
+                    LabelSite {
+                        output: "Q",
+                        clock: pin("CLKA", Edge::Fall)
+                    },
+                    LabelSite {
+                        output: "Q",
+                        clock: pin("CLKB", Edge::Rise)
+                    }
+                ]
             );
         });
     }
@@ -4303,19 +4399,49 @@ Q = "!( !(M2*!CLKB) * Qn )"
         for (toml, want) in [
             (
                 NDLAT_TOML,
-                vec![("Q", "CLK", Edge::Rise), ("Qn", "CLK", Edge::Rise)],
+                vec![
+                    LabelSite {
+                        output: "Q",
+                        clock: pin("CLK", Edge::Rise),
+                    },
+                    LabelSite {
+                        output: "Qn",
+                        clock: pin("CLK", Edge::Rise),
+                    },
+                ],
             ),
             (
                 NDFF_TOML,
-                vec![("Q", "CLK", Edge::Rise), ("Qn", "CLK", Edge::Rise)],
+                vec![
+                    LabelSite {
+                        output: "Q",
+                        clock: pin("CLK", Edge::Rise),
+                    },
+                    LabelSite {
+                        output: "Qn",
+                        clock: pin("CLK", Edge::Rise),
+                    },
+                ],
             ),
             (
                 NHPIPE_TOML,
                 vec![
-                    ("Q", "CLKA", Edge::Rise),
-                    ("Q", "CLKB", Edge::Fall),
-                    ("Qn", "CLKA", Edge::Rise),
-                    ("Qn", "CLKB", Edge::Fall),
+                    LabelSite {
+                        output: "Q",
+                        clock: pin("CLKA", Edge::Rise),
+                    },
+                    LabelSite {
+                        output: "Q",
+                        clock: pin("CLKB", Edge::Fall),
+                    },
+                    LabelSite {
+                        output: "Qn",
+                        clock: pin("CLKA", Edge::Rise),
+                    },
+                    LabelSite {
+                        output: "Qn",
+                        clock: pin("CLKB", Edge::Fall),
+                    },
                 ],
             ),
         ] {
@@ -4394,7 +4520,7 @@ Y = "CLK + !CLK*!R*Y"
             );
             assert_eq!(
                 labels_of(&es, "Y"),
-                [("CLK", Edge::Rise)],
+                [pin("CLK", Edge::Rise)],
                 "the rise types edge — a live delivered phase"
             );
             let off = builder.build_cover(&y.off_edge.off_cover);
@@ -4559,9 +4685,13 @@ Y = "!CLK*R + L"
             assert_captures_faithful(&m, &es);
             let labs = label_list(&es);
             assert!(
-                labs.contains(&("Q", "CLK", Edge::Rise))
-                    && labs.contains(&("Q", "CLK", Edge::Fall))
-                    && labs.len() == 2,
+                labs.contains(&LabelSite {
+                    output: "Q",
+                    clock: pin("CLK", Edge::Rise)
+                }) && labs.contains(&LabelSite {
+                    output: "Q",
+                    clock: pin("CLK", Edge::Fall)
+                }) && labs.len() == 2,
                 "DET exposes D on both edges: {labs:?}"
             );
         });
@@ -4625,21 +4755,18 @@ Y = "K2*T + !K2*Y"
         // The reveal types EDGE at any pipe depth: propagation is a single transitive restriction-survival
         // chain with no cutoff, so the shallow pipe (PIPE2) and the one-deeper pipe (PIPE3) carry the SAME
         // `Y@K2:Rise` edge label. Each is proven against the machine by the replay harness.
-        let y_labels = |src: &str| -> Vec<(String, Edge)> {
+        let y_labels = |src: &str| -> Vec<PinEdge> {
             with_machine!(src, |_b, _a, _m2, m| {
                 let es = classify(&m);
                 assert_captures_faithful(&m, &es);
                 labels_of(&es, "Y")
-                    .into_iter()
-                    .map(|(c, e)| (c.to_string(), e))
-                    .collect()
             })
         };
         let pipe2 = y_labels(PIPE2_TOML);
         let pipe3 = y_labels(PIPE3_TOML);
         assert_eq!(
             pipe2,
-            [("K2".to_string(), Edge::Rise)],
+            [pin("K2", Edge::Rise)],
             "shallow pipe reveals on the rise"
         );
         assert_eq!(

@@ -633,18 +633,32 @@ mod tests {
     use espresso_logic::bdd::BddBuilder;
     use espresso_logic::bdd_builder;
 
-    /// Parse `(name, expr)` definitions into a signal map plus the scan order, all in one builder so
-    /// the handles share a manager.
+    /// One signal's definition in a fixture table: its name paired with its expression. Both fields are
+    /// `&str`, and a transposed literal would define a signal named after its own expression, so the
+    /// pairing is a named struct rather than a tuple.
+    struct SignalDef {
+        name: &'static str,
+        expr: &'static str,
+    }
+
+    /// A parsed fixture: the signal map `parse_system` built plus the scan order it built it in.
+    struct ParsedSystem<B: Brand, C: ManagerCell> {
+        signals: BTreeMap<Symbol, Bdd<B, C>>,
+        order: Vec<Symbol>,
+    }
+
+    /// Parse [`SignalDef`] definitions into a signal map plus the scan order, all in one builder so the
+    /// handles share a manager.
     fn parse_system<B: Brand, C: ManagerCell>(
         b: &BddBuilder<B, C>,
-        defs: &[(&str, &str)],
-    ) -> (BTreeMap<Symbol, Bdd<B, C>>, Vec<Symbol>) {
-        let bdds = defs
+        defs: &[SignalDef],
+    ) -> ParsedSystem<B, C> {
+        let signals = defs
             .iter()
-            .map(|(n, e)| (Symbol::from(*n), b.parse(e).unwrap()))
+            .map(|d| (Symbol::from(d.name), b.parse(d.expr).unwrap()))
             .collect();
-        let order = defs.iter().map(|(n, _)| Symbol::from(*n)).collect();
-        (bdds, order)
+        let order = defs.iter().map(|d| Symbol::from(d.name)).collect();
+        ParsedSystem { signals, order }
     }
 
     /// Build a signal map from `(name, expr)` pairs in a fresh builder, plus the scan order and the
@@ -656,14 +670,16 @@ mod tests {
             $($name:literal = $expr:literal),* $(,)?
         ) => {{
             let b = bdd_builder!();
-            let (bdds, order) = parse_system(&b, &[$(($name, $expr)),*]);
+            let ParsedSystem { signals: bdds, order } =
+                parse_system(&b, &[$(SignalDef { name: $name, expr: $expr }),*]);
             let outputs: BTreeSet<Symbol> = [$(Symbol::from($out)),*].into_iter().collect();
             let exposed: BTreeSet<Symbol> = [$(Symbol::from($exp)),*].into_iter().collect();
             (b, bdds, order, Preserved::with_exposed(outputs, exposed))
         }};
         (outputs: [$($out:literal),* $(,)?], $($name:literal = $expr:literal),* $(,)?) => {{
             let b = bdd_builder!();
-            let (bdds, order) = parse_system(&b, &[$(($name, $expr)),*]);
+            let ParsedSystem { signals: bdds, order } =
+                parse_system(&b, &[$(SignalDef { name: $name, expr: $expr }),*]);
             let outputs: BTreeSet<Symbol> = [$(Symbol::from($out)),*].into_iter().collect();
             (b, bdds, order, Preserved::outputs(outputs))
         }};
@@ -1333,90 +1349,253 @@ mod tests {
     struct Fixture {
         label: &'static str,
         outputs: &'static [&'static str],
-        defs: &'static [(&'static str, &'static str)],
+        defs: &'static [SignalDef],
     }
 
     const DIFFERENTIAL_FIXTURES: &[Fixture] = &[
         Fixture {
             label: "c_element_chain",
             outputs: &["Q"],
-            defs: &[("Q", "IQ"), ("IQ", "!QN"), ("QN", "!(A*B + IQ*(A+B))")],
+            defs: &[
+                SignalDef {
+                    name: "Q",
+                    expr: "IQ",
+                },
+                SignalDef {
+                    name: "IQ",
+                    expr: "!QN",
+                },
+                SignalDef {
+                    name: "QN",
+                    expr: "!(A*B + IQ*(A+B))",
+                },
+            ],
         },
         Fixture {
             label: "buffered_c_element",
             outputs: &["Q"],
-            defs: &[("Q", "!QN"), ("IQ", "!QN"), ("QN", "!(A*B + IQ*(A+B))")],
+            defs: &[
+                SignalDef {
+                    name: "Q",
+                    expr: "!QN",
+                },
+                SignalDef {
+                    name: "IQ",
+                    expr: "!QN",
+                },
+                SignalDef {
+                    name: "QN",
+                    expr: "!(A*B + IQ*(A+B))",
+                },
+            ],
         },
         // `examples/cells.toml`'s C2GATE, in the outputs-then-internals order `signals()` yields.
         Fixture {
             label: "C2GATE",
             outputs: &["Q"],
-            defs: &[("Q", "!QN"), ("IQ", "!QN"), ("QN", "!(A*B + IQ*(A+B))")],
+            defs: &[
+                SignalDef {
+                    name: "Q",
+                    expr: "!QN",
+                },
+                SignalDef {
+                    name: "IQ",
+                    expr: "!QN",
+                },
+                SignalDef {
+                    name: "QN",
+                    expr: "!(A*B + IQ*(A+B))",
+                },
+            ],
         },
         Fixture {
             label: "complement_output_pair",
             outputs: &["Q", "QN"],
-            defs: &[("Q", "!QN"), ("QN", "!(A*B + Q*(A+B))")],
+            defs: &[
+                SignalDef {
+                    name: "Q",
+                    expr: "!QN",
+                },
+                SignalDef {
+                    name: "QN",
+                    expr: "!(A*B + Q*(A+B))",
+                },
+            ],
         },
         Fixture {
             label: "mutex",
             outputs: &["Qa", "Qb"],
-            defs: &[("Qa", "!Qb * A"), ("Qb", "!Qa * B")],
+            defs: &[
+                SignalDef {
+                    name: "Qa",
+                    expr: "!Qb * A",
+                },
+                SignalDef {
+                    name: "Qb",
+                    expr: "!Qa * B",
+                },
+            ],
         },
         Fixture {
             label: "sr_nor_latch",
             outputs: &["Q", "Qn"],
-            defs: &[("Q", "!(R+Qn)"), ("Qn", "!(S+Q)")],
+            defs: &[
+                SignalDef {
+                    name: "Q",
+                    expr: "!(R+Qn)",
+                },
+                SignalDef {
+                    name: "Qn",
+                    expr: "!(S+Q)",
+                },
+            ],
         },
         Fixture {
             label: "dff_master_slave",
             outputs: &["Q"],
-            defs: &[("M", "!CLK*D + CLK*M"), ("Q", "CLK*M + !CLK*Q")],
+            defs: &[
+                SignalDef {
+                    name: "M",
+                    expr: "!CLK*D + CLK*M",
+                },
+                SignalDef {
+                    name: "Q",
+                    expr: "CLK*M + !CLK*Q",
+                },
+            ],
         },
         Fixture {
             label: "icm",
             outputs: &["GCLK"],
             defs: &[
-                ("sela", "!enB*!S"),
-                ("selb", "!enA*S"),
-                ("sela1", "!RA*(!CLKA*sela+CLKA*sela1)"),
-                ("sela2", "!RA*(CLKA*sela1+!CLKA*sela2)"),
-                ("enA", "!RA*(!CLKA*sela2+CLKA*enA)"),
-                ("selb1", "!RB*(!CLKB*selb+CLKB*selb1)"),
-                ("selb2", "!RB*(CLKB*selb1+!CLKB*selb2)"),
-                ("enB", "!RB*(!CLKB*selb2+CLKB*enB)"),
-                ("GCLK", "enA*CLKA+enB*CLKB"),
+                SignalDef {
+                    name: "sela",
+                    expr: "!enB*!S",
+                },
+                SignalDef {
+                    name: "selb",
+                    expr: "!enA*S",
+                },
+                SignalDef {
+                    name: "sela1",
+                    expr: "!RA*(!CLKA*sela+CLKA*sela1)",
+                },
+                SignalDef {
+                    name: "sela2",
+                    expr: "!RA*(CLKA*sela1+!CLKA*sela2)",
+                },
+                SignalDef {
+                    name: "enA",
+                    expr: "!RA*(!CLKA*sela2+CLKA*enA)",
+                },
+                SignalDef {
+                    name: "selb1",
+                    expr: "!RB*(!CLKB*selb+CLKB*selb1)",
+                },
+                SignalDef {
+                    name: "selb2",
+                    expr: "!RB*(CLKB*selb1+!CLKB*selb2)",
+                },
+                SignalDef {
+                    name: "enB",
+                    expr: "!RB*(!CLKB*selb2+CLKB*enB)",
+                },
+                SignalDef {
+                    name: "GCLK",
+                    expr: "enA*CLKA+enB*CLKB",
+                },
             ],
         },
         Fixture {
             label: "relay_chain",
             outputs: &["L"],
-            defs: &[("W1", "W2*A"), ("W2", "B"), ("L", "!R*(W1+L)")],
+            defs: &[
+                SignalDef {
+                    name: "W1",
+                    expr: "W2*A",
+                },
+                SignalDef {
+                    name: "W2",
+                    expr: "B",
+                },
+                SignalDef {
+                    name: "L",
+                    expr: "!R*(W1+L)",
+                },
+            ],
         },
         Fixture {
             label: "rosc",
             outputs: &["Q"],
-            defs: &[("X", "!Q*A"), ("Q", "Q*B + X")],
+            defs: &[
+                SignalDef {
+                    name: "X",
+                    expr: "!Q*A",
+                },
+                SignalDef {
+                    name: "Q",
+                    expr: "Q*B + X",
+                },
+            ],
         },
         // `arcs.rs`'s MASKPAIR: two latches, one masked out of the output by S.
         Fixture {
             label: "maskpair",
             outputs: &["Y"],
-            defs: &[("L", "E*D + !E*L"), ("K", "C*D + !C*K"), ("Y", "K + S*L")],
+            defs: &[
+                SignalDef {
+                    name: "L",
+                    expr: "E*D + !E*L",
+                },
+                SignalDef {
+                    name: "K",
+                    expr: "C*D + !C*K",
+                },
+                SignalDef {
+                    name: "Y",
+                    expr: "K + S*L",
+                },
+            ],
         },
         // A gated latch behind a relay: the enable is combinational, the internal latch self-holds
         // and the output is a bare alias of it, so the coordinate travels two hops to reach the pin.
         Fixture {
             label: "latch_behind_enable_relay",
             outputs: &["Q"],
-            defs: &[("EN", "G*!CLR"), ("IL", "EN*D + !EN*IL"), ("Q", "IL")],
+            defs: &[
+                SignalDef {
+                    name: "EN",
+                    expr: "G*!CLR",
+                },
+                SignalDef {
+                    name: "IL",
+                    expr: "EN*D + !EN*IL",
+                },
+                SignalDef {
+                    name: "Q",
+                    expr: "IL",
+                },
+            ],
         },
         // One internal register tapped by two output pins of opposite parity — the coordinate lands
         // on the first pin and the second becomes a bare alias of it.
         Fixture {
             label: "register_with_true_and_complement_taps",
             outputs: &["Q", "QB"],
-            defs: &[("IL", "!R*(S+IL)"), ("Q", "IL"), ("QB", "!IL")],
+            defs: &[
+                SignalDef {
+                    name: "IL",
+                    expr: "!R*(S+IL)",
+                },
+                SignalDef {
+                    name: "Q",
+                    expr: "IL",
+                },
+                SignalDef {
+                    name: "QB",
+                    expr: "!IL",
+                },
+            ],
         },
     ];
 
@@ -1440,17 +1619,24 @@ mod tests {
         {
             let outputs: BTreeSet<Symbol> = pins.iter().copied().map(Symbol::from).collect();
             let plain = Preserved::outputs(outputs.clone());
-            for (name, _) in defs.iter() {
+            for def in defs.iter() {
+                let name = def.name;
                 let exposed = Preserved::with_exposed(
                     outputs.clone(),
-                    [Symbol::from(*name)].into_iter().collect(),
+                    [Symbol::from(name)].into_iter().collect(),
                 );
                 // Both runs share one builder, so their BDDs are directly comparable.
                 let b = bdd_builder!();
-                let (mut direct, order) = parse_system(&b, defs);
+                let ParsedSystem {
+                    signals: mut direct,
+                    order,
+                } = parse_system(&b, defs);
                 minimise_state_space(&mut direct, &order, &plain);
 
-                let (mut released, _) = parse_system(&b, defs);
+                let ParsedSystem {
+                    signals: mut released,
+                    ..
+                } = parse_system(&b, defs);
                 minimise_state_space(&mut released, &order, &exposed);
                 minimise_state_space(&mut released, &order, &plain);
 

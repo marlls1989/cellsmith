@@ -555,7 +555,7 @@ impl<'a> ColumnLayout<'a> {
 mod tests {
     use super::*;
     use crate::logic::regions::StateRegions;
-    use crate::model::{analyse_one as analyse, AnalysedOutput};
+    use crate::model::{analyse_both, analyse_one as analyse, AnalysedOutput, AnalysedPair};
     use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
     use espresso_logic::{bdd_builder, sync_bdd_builder};
 
@@ -1035,25 +1035,6 @@ Y = "C*L"
         }
     }
 
-    /// Parse the single-cell `src` and analyse it twice: once as written, once with
-    /// `no_edge_collapse` forced true on every cell -- the same blanket mutation the
-    /// `--no-edge-collapse` CLI flag applies (main.rs:82-88). Proves the per-cell TOML switch and
-    /// the CLI flag are the identical code path, not two independently-tested mechanisms.
-    fn analyse_both(src: &str) -> (crate::model::AnalysedCell, crate::model::AnalysedCell) {
-        let default = crate::model::parse_spec(src)
-            .unwrap()
-            .cells
-            .remove(0)
-            .analyse()
-            .unwrap();
-        let mut spec = crate::model::parse_spec(src).unwrap();
-        for c in &mut spec.cells {
-            c.no_edge_collapse = true;
-        }
-        let forced = spec.cells.remove(0).analyse().unwrap();
-        (default, forced)
-    }
-
     /// Three shapes the behavioural classifier leaves fully level (no register, no fold) even under
     /// default (on) collapse: a single latch (no active edge to sample), a gated latch (self-referencing
     /// transparent cofactor), and a two-latch DFF whose clock is never declared. MCDFF and EMDFF have
@@ -1094,7 +1075,7 @@ Q = "CLK*M + !CLK*Q"
     #[test]
     fn non_collapsible_suite_edge_rows_empty_with_and_without_the_flag() {
         for src in NON_COLLAPSIBLE {
-            let (default, forced) = analyse_both(src);
+            let AnalysedPair { default, forced } = analyse_both(src);
             assert!(
                 default.edge.captures.is_empty(),
                 "unexpected edge register recognised in {}",
@@ -1523,11 +1504,18 @@ Q = "!R*(CLK*M + !CLK*Q)"
         next: Vec<String>,
     }
 
+    /// The `statetable` block parsed out of a rendered cell: the two header node lists and the rows.
+    struct RenderedStatetable {
+        input_names: Vec<String>,
+        state_names: Vec<String>,
+        rows: Vec<RenderedRow>,
+    }
+
     /// Parse the `statetable ("<inputs>", "<nodes>") { table : "..."; }` block out of a rendered cell: the
     /// two header node lists and the rows, each field split into its emitted tokens. Reads the RENDERED
     /// output (not the model), so it is the one place `EdgeInputs`'s clock-column rendering is
     /// exercised behaviourally — a dropped clock literal reaches the replay through here.
-    fn parse_rendered_statetable(liberty: &str) -> (Vec<String>, Vec<String>, Vec<RenderedRow>) {
+    fn parse_rendered_statetable(liberty: &str) -> RenderedStatetable {
         let start = liberty
             .find("statetable (")
             .expect("fixture renders a statetable");
@@ -1562,7 +1550,11 @@ Q = "!R*(CLK*M + !CLK*Q)"
                 }
             })
             .collect();
-        (input_names, state_names, rows)
+        RenderedStatetable {
+            input_names,
+            state_names,
+            rows,
+        }
     }
 
     /// Does a rendered row match one machine event `(cur, toggled input, destination)`? Input columns
@@ -1677,7 +1669,11 @@ Q = "!R*(CLK*M + !CLK*Q)"
         // The rendered rows are the device under test — the sole path through `EdgeInputs`.
         let liberty =
             liberty_parser::liberty::Liberty(crate::emit::liberty::cell_liberty(&cell)).to_string();
-        let (input_names, state_names, rows) = parse_rendered_statetable(&liberty);
+        let RenderedStatetable {
+            input_names,
+            state_names,
+            rows,
+        } = parse_rendered_statetable(&liberty);
         let model = build_state_model(&cell).expect("fixture is sequential");
         assert_eq!(
             input_names.iter().map(String::as_str).collect::<Vec<_>>(),

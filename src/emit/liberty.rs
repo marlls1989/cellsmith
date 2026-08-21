@@ -422,7 +422,7 @@ fn function_sop(sr: &StateRegions, node_of: Option<&BTreeMap<Symbol, Symbol>>) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::analyse_one as analyse;
+    use crate::model::{analyse_both, analyse_one as analyse, AnalysedPair};
 
     /// The text one cell renders as inside the library: the groups [`cell_liberty`] builds of it,
     /// newline-terminated so [`parse_frag`]'s closing brace lands on a line of its own.
@@ -971,19 +971,24 @@ Y = "!A"
             .iter()
             .find(|g| g.name == "INVX2")
             .expect("INVX2 cell present");
+        // One pin's identity in the comparison below: its name and the rendered `direction` attribute.
+        #[derive(Debug, PartialEq, Eq)]
+        struct PinSignature {
+            name: Symbol,
+            direction: String,
+        }
         // Identical pin sets: same pin names and directions, differing only in the group name.
-        let pins = |g: &&Group| -> Vec<(String, String)> {
+        let pins = |g: &&Group| -> Vec<PinSignature> {
             g.subgroups
                 .iter()
                 .filter(|p| p.type_ == "pin")
-                .map(|p| {
-                    (
-                        p.name.clone(),
-                        p.attributes
-                            .get("direction")
-                            .map(|v| format!("{v:?}"))
-                            .unwrap_or_default(),
-                    )
+                .map(|p| PinSignature {
+                    name: Symbol::from(p.name.as_str()),
+                    direction: p
+                        .attributes
+                        .get("direction")
+                        .map(|v| format!("{v:?}"))
+                        .unwrap_or_default(),
                 })
                 .collect()
         };
@@ -1108,25 +1113,6 @@ Qn = "!Q"
         assert!(!qn.attributes.contains_key("internal_node"));
     }
 
-    /// Parse the single-cell `src` and analyse it twice: once as written, once with
-    /// `no_edge_collapse` forced true on every cell -- the same blanket mutation the
-    /// `--no-edge-collapse` CLI flag applies (main.rs:82-88). Proves the per-cell TOML switch and
-    /// the CLI flag are the identical code path, not two independently-tested mechanisms.
-    fn analyse_both(src: &str) -> (crate::model::AnalysedCell, crate::model::AnalysedCell) {
-        let default = crate::model::parse_spec(src)
-            .unwrap()
-            .cells
-            .remove(0)
-            .analyse()
-            .unwrap();
-        let mut spec = crate::model::parse_spec(src).unwrap();
-        for c in &mut spec.cells {
-            c.no_edge_collapse = true;
-        }
-        let forced = spec.cells.remove(0).analyse().unwrap();
-        (default, forced)
-    }
-
     /// Three shapes the behavioural classifier leaves fully level (no edge token) even under default (on)
     /// collapse: a single latch, a gated (self-referencing) latch, and a two-latch DFF whose clock is
     /// never declared. Mirrors `statetable.rs`'s shrunk fixtures. EMDFF and MCDFF each have their own
@@ -1170,7 +1156,7 @@ Q = "CLK*M + !CLK*Q"
                 .any(|tok| matches!(tok, "R" | "F" | "~R" | "~F"))
         }
         for src in NON_COLLAPSIBLE {
-            let (default, forced) = analyse_both(src);
+            let AnalysedPair { default, forced } = analyse_both(src);
             let frag_default = fragment(&default);
             let frag_forced = fragment(&forced);
             assert!(

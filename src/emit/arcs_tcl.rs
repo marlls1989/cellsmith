@@ -1298,8 +1298,8 @@ mod tests {
 
     use super::*;
     use crate::emit::block::Description;
-    use crate::emit::tcl::tests::AWKWARD_VOLTAGES;
-    use crate::model::analyse_one as analyse;
+    use crate::emit::tcl::tests::{AwkwardVoltage, AWKWARD_VOLTAGES};
+    use crate::model::{analyse_both, analyse_one as analyse, AnalysedPair};
 
     /// A cell's deck as the text the sink writes: the cell is rendered, then its blocks written in
     /// turn.
@@ -1738,10 +1738,17 @@ Y = "A*B"
             .collect()
     }
 
+    /// The number of arcs [`conditioned_counts`] finds a conditioned block for, per class.
+    #[derive(Debug, PartialEq, Eq)]
+    struct ConditionedCounts {
+        transition: usize,
+        hidden: usize,
+    }
+
     /// The number of arcs the conditioned pass renders a block for, per class: every arc except one the
     /// general pass already emitted in the identical form — its transition's representative, which
     /// renders no `-when` to tell the two blocks apart.
-    fn conditioned_counts(cell: &AnalysedCell) -> (usize, usize) {
+    fn conditioned_counts(cell: &AnalysedCell) -> ConditionedCounts {
         let general = generalised(
             &cell.arcs,
             |a| TransitionIdentity::of(cell, a),
@@ -1754,18 +1761,20 @@ Y = "A*B"
         let redundant = |map: &HashMap<usize, usize>, i: usize, no_when: bool| {
             map.get(&i).is_some_and(|&cases| cases == 1 || no_when)
         };
-        (
-            cell.arcs
+        ConditionedCounts {
+            transition: cell
+                .arcs
                 .iter()
                 .enumerate()
                 .filter(|(i, a)| !redundant(&general, *i, when(&a.end, &a.related).is_none()))
                 .count(),
-            cell.hidden_arcs
+            hidden: cell
+                .hidden_arcs
                 .iter()
                 .enumerate()
                 .filter(|(i, h)| !redundant(&general_hidden, *i, hidden_when(h).is_none()))
                 .count(),
-        )
+        }
     }
 
     /// The A→Y arcs of `cell`, grouped by [`TransitionIdentity`] — the source the general pass groups, so a
@@ -2204,6 +2213,14 @@ Q = "E*D + !E*Q"
         );
     }
 
+    /// The group two firings collapse into for [`general_arc_collapses_internal_state_contexts`]: the
+    /// transition and the rendered vector they must share to be redundant with one another.
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    struct ContextKey {
+        transition: TransitionIdentity,
+        vector: Vec<VectorValue>,
+    }
+
     /// GENERALISES OVER INTERNAL STATE: two `A`→`Y` firings of `TWO` agree on every input — the
     /// C-element `Z` renders as `X` in `Y`'s vector — and differ only in `Z`'s held state. They are one
     /// transition and collapse to one general block.
@@ -2212,21 +2229,26 @@ Q = "E*D + !E*Q"
         let cell = analyse(TWO);
         // PREMISE: two A→Y firings share a transition AND a rendered vector — every input agrees and `Z`
         // is `X` — and differ only in the internal state they were measured from.
-        let mut contexts: HashMap<_, Vec<&Arc>> = HashMap::new();
+        let mut contexts: HashMap<ContextKey, Vec<&Arc>> = HashMap::new();
         for a in cell
             .arcs
             .iter()
             .filter(|a| a.output.pin == "Y" && a.related == "A")
         {
             contexts
-                .entry((
-                    TransitionIdentity::of(&cell, a),
-                    transition_vector(&cell, a),
-                ))
+                .entry(ContextKey {
+                    transition: TransitionIdentity::of(&cell, a),
+                    vector: transition_vector(&cell, a),
+                })
                 .or_default()
                 .push(a);
         }
-        let ((key, _), pair) = contexts
+        let (
+            ContextKey {
+                transition: key, ..
+            },
+            pair,
+        ) = contexts
             .iter()
             .find(|(_, g)| g.len() >= 2)
             .expect("premise: two A→Y firings share a transition and a rendered vector");
@@ -2255,9 +2277,9 @@ Q = "E*D + !E*Q"
     #[test]
     fn when_all_adds_conditioned_blocks_on_top_of_the_general_arcs() {
         let cell = analyse(&when_variant(TWO, "true"));
-        let (cond_t, cond_h) = conditioned_counts(&cell);
+        let counts = conditioned_counts(&cell);
         assert!(
-            cond_t >= 1 && cond_h >= 1,
+            counts.transition >= 1 && counts.hidden >= 1,
             "premise: TWO conditions arcs of both classes"
         );
         let default = emit(&analyse(TWO), NO_LEAKAGE);
@@ -2267,7 +2289,7 @@ Q = "E*D + !E*Q"
         let default_blocks = blocks(&default);
         assert_eq!(
             blocks(&enabled).len(),
-            default_blocks.len() + cond_t + cond_h,
+            default_blocks.len() + counts.transition + counts.hidden,
             "one added block per conditioned arc"
         );
 
@@ -2282,7 +2304,7 @@ Q = "E*D + !E*Q"
                 .unwrap_or_else(|| panic!("a default block is missing under `when`:\n{b}"));
             remaining.remove(i);
         }
-        assert_eq!(remaining.len(), cond_t + cond_h);
+        assert_eq!(remaining.len(), counts.transition + counts.hidden);
         for b in &remaining {
             assert!(has_when(b), "every added block carries a -when:\n{b}");
         }
@@ -2328,9 +2350,9 @@ Q = "E*D + !E*Q"
     #[test]
     fn when_one_class_adds_only_that_class() {
         let cell = analyse(TWO);
-        let (cond_t, cond_h) = conditioned_counts(&cell);
+        let counts = conditioned_counts(&cell);
         assert!(
-            cond_t >= 1 && cond_h >= 1,
+            counts.transition >= 1 && counts.hidden >= 1,
             "premise: TWO conditions arcs of both classes"
         );
 
@@ -2367,10 +2389,10 @@ Q = "E*D + !E*Q"
         let t_on = emit(&analyse(&when_variant(TWO, "\"transition\"")), NO_LEAKAGE);
         assert_eq!(
             non_hidden(&t_on),
-            non_hidden(&default) + cond_t,
+            non_hidden(&default) + counts.transition,
             "one added transition block per conditioned transition arc"
         );
-        assert_eq!(non_hidden_when(&t_on), cond_t);
+        assert_eq!(non_hidden_when(&t_on), counts.transition);
         assert_eq!(
             hidden(&t_on),
             hidden(&default),
@@ -2382,10 +2404,10 @@ Q = "E*D + !E*Q"
         let h_on = emit(&analyse(&when_variant(TWO, "\"hidden\"")), NO_LEAKAGE);
         assert_eq!(
             hidden(&h_on),
-            hidden(&default) + cond_h,
+            hidden(&default) + counts.hidden,
             "one added hidden block per conditioned hidden arc"
         );
-        assert_eq!(hidden_when(&h_on), cond_h);
+        assert_eq!(hidden_when(&h_on), counts.hidden);
         assert_eq!(
             non_hidden(&h_on),
             non_hidden(&default),
@@ -2471,10 +2493,13 @@ inputs = ["A"]
 Y = "!A"
 "#;
         let cell = analyse(&when_variant(INV, "true"));
-        let (cond_t, cond_h) = conditioned_counts(&cell);
+        let counts = conditioned_counts(&cell);
         assert_eq!(
-            (cond_t, cond_h),
-            (0, 0),
+            counts,
+            ConditionedCounts {
+                transition: 0,
+                hidden: 0
+            },
             "premise: no INV arc renders a condition"
         );
         // PREMISE: nothing collides, so every arc IS its transition's representative — the case the skip
@@ -2797,7 +2822,7 @@ Y = "!A"
         // The verdict is read off the interpreter's own output rather than its exit status: a script fed
         // through stdin leaves tclsh exiting zero whether or not a command in it failed. Anything on
         // stderr is a Tcl complaint, and the closing `end` marker is what says the whole script ran.
-        for (value, _) in AWKWARD_VOLTAGES {
+        for AwkwardVoltage { value, .. } in AWKWARD_VOLTAGES {
             let cell = analyse(&IC_DFF.replace(
                 "constraint_arcs = true",
                 &format!("constraint_arcs = true\nlogic_low = {value:?}\nlogic_high = {value:?}"),
@@ -4698,25 +4723,6 @@ Q = "(A*B + Q*(A+B))*!R"
         assert!(tcl.contains("-related_pin R"));
     }
 
-    /// Parse the single-cell `src` and analyse it twice: once as written, once with
-    /// `no_edge_collapse` forced true on every cell -- the same blanket mutation the
-    /// `--no-edge-collapse` CLI flag applies (main.rs:82-88). Proves the per-cell TOML switch and
-    /// the CLI flag are the identical code path, not two independently-tested mechanisms.
-    fn analyse_both(src: &str) -> (crate::model::AnalysedCell, crate::model::AnalysedCell) {
-        let default = crate::model::parse_spec(src)
-            .unwrap()
-            .cells
-            .remove(0)
-            .analyse()
-            .unwrap();
-        let mut spec = crate::model::parse_spec(src).unwrap();
-        for c in &mut spec.cells {
-            c.no_edge_collapse = true;
-        }
-        let forced = spec.cells.remove(0).analyse().unwrap();
-        (default, forced)
-    }
-
     /// A single transparent latch, whose enable's rising edge is a RELEASE. It has no capture, but the
     /// release is a real timing arc, so its `CLK`->`Q` arcs render `-type edge`. Opting out
     /// (`no_edge_collapse`) suppresses the classification entirely and restores `-type combinational`.
@@ -4746,7 +4752,7 @@ Q = "CLKB*M + !CLKB*Q"
 
     #[test]
     fn dlat_enable_release_is_edge_type_and_opts_out() {
-        let (default, forced) = analyse_both(DLAT);
+        let AnalysedPair { default, forced } = analyse_both(DLAT);
         let tcl_default = emit(&default, ArcsTclOptions::default());
         eprintln!("{tcl_default}");
         assert!(default.edge.captures.is_empty(), "a latch has no capture");
@@ -4768,7 +4774,7 @@ Q = "CLKB*M + !CLKB*Q"
         // `when = "transition"`. Each clock release fires from a single context (the other clock open),
         // so the conditioned copy is suppressed and only the general `-type edge` block is emitted; the
         // classification, not the `-when`, is what this test is about.
-        let (default, forced) = analyse_both(&when_variant(MCDFF, "\"transition\""));
+        let AnalysedPair { default, forced } = analyse_both(&when_variant(MCDFF, "\"transition\""));
         let tcl = emit(&default, ArcsTclOptions::default());
         eprintln!("{tcl}");
         assert!(default.edge.captures.is_empty(), "neither clock captures Q");
@@ -4837,7 +4843,7 @@ Q = "CLK*M + !CLK*Q"
         // Zero `-type edge` blocks, whether the flag is left off (default classification, a no-op on
         // these shapes) or forced on -- and the two runs emit the same arcs.
         for src in NON_COLLAPSIBLE {
-            let (default, forced) = analyse_both(src);
+            let AnalysedPair { default, forced } = analyse_both(src);
             let tcl_default = emit(&default, ArcsTclOptions::default());
             let tcl_forced = emit(&forced, ArcsTclOptions::default());
             assert_eq!(tcl_default.matches("-type edge").count(), 0);

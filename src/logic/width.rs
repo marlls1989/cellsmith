@@ -274,22 +274,30 @@ mod tests {
 
     /// The pulsed pin and its opening edge of a record [`pulses`] has already picked out, so any other
     /// cause reaching here is a filtering fault rather than a case to handle.
-    fn pulse(hz: &Hazard) -> (String, Edge) {
+    fn pulse(hz: &Hazard) -> PinEdge {
         match &hz.cause {
-            Cause::Pulse { pin } => (pin.pin.to_string(), pin.edge),
+            Cause::Pulse { pin } => pin.clone(),
             Cause::Toggle { pin } => panic!("a toggle of {pin} came through the pulse filter"),
             Cause::Race { pins } => panic!("a race over {pins:?} came through the pulse filter"),
         }
     }
 
-    /// One detected hazard as what identifies it: the pulsed pin, the pulse's opening edge, the outcome
-    /// and the nodes the record names.
-    fn keys(cell: &AnalysedCell) -> BTreeSet<(String, Edge, Outcome, String)> {
+    /// What identifies one detected pulse hazard: the pulsed pin, the pulse's opening edge, the
+    /// outcome and the nodes the record names.
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct PulseKey {
+        pin: PinEdge,
+        outcome: Outcome,
+        nodes: String,
+    }
+
+    fn keys(cell: &AnalysedCell) -> BTreeSet<PulseKey> {
         pulses(cell)
             .into_iter()
-            .map(|hz| {
-                let (pin, edge) = pulse(hz);
-                (pin, edge, hz.outcome, hz.group.join(","))
+            .map(|hz| PulseKey {
+                pin: pulse(hz),
+                outcome: hz.outcome,
+                nodes: hz.group.join(","),
             })
             .collect()
     }
@@ -313,7 +321,14 @@ mod tests {
     fn on<'h>(cell: &'h AnalysedCell, pin: &str, edge: Edge, outcome: Outcome) -> Vec<&'h Hazard> {
         let found: Vec<&Hazard> = pulses(cell)
             .into_iter()
-            .filter(|hz| hz.outcome == outcome && pulse(hz) == (pin.to_string(), edge))
+            .filter(|hz| {
+                hz.outcome == outcome
+                    && pulse(hz)
+                        == PinEdge {
+                            pin: Symbol::from(pin),
+                            edge,
+                        }
+            })
             .collect();
         assert!(
             !found.is_empty(),
@@ -323,8 +338,8 @@ mod tests {
         found
     }
 
-    /// Every record on `pin` in `edge` with `outcome` over the nodes `nodes` — all four fields of a
-    /// detection key ([`keys`]), which is what tells two observations of one pulse apart.
+    /// Every record on `pin` in `edge` with `outcome` over the nodes `nodes` — every field of a
+    /// [`PulseKey`], which is what tells two observations of one pulse apart.
     fn on_nodes<'h>(
         cell: &'h AnalysedCell,
         pin: &str,
@@ -411,18 +426,22 @@ Q = "CLK*M + !CLK*Q"
         assert_eq!(
             keys(&cell),
             [
-                (
-                    "CLK".to_string(),
-                    Edge::Rise,
-                    Outcome::Indeterminate,
-                    "Q".to_string()
-                ),
-                (
-                    "CLK".to_string(),
-                    Edge::Fall,
-                    Outcome::Indeterminate,
-                    "Q,M".to_string()
-                ),
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("CLK"),
+                        edge: Edge::Rise,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: "Q".to_string(),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("CLK"),
+                        edge: Edge::Fall,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: "Q,M".to_string(),
+                },
             ]
             .into_iter()
             .collect(),
@@ -453,7 +472,7 @@ Q = "CLK*M + !CLK*Q"
         // transparent master tracks D straight back to where it was, so every candidate lands on the
         // reference.
         assert!(
-            !pulses(&cell).iter().any(|hz| pulse(hz).0 == "D"),
+            !pulses(&cell).iter().any(|hz| pulse(hz).pin == "D"),
             "a D pulse settles back to where it started, got {:?}",
             keys(&cell)
         );
@@ -479,12 +498,14 @@ Q = "E*D + !E*Q"
         // side: with E low D reaches nothing, and with E high the transparent latch tracks D back.
         assert_eq!(
             keys(&cell),
-            [(
-                "E".to_string(),
-                Edge::Rise,
-                Outcome::Indeterminate,
-                "Q".to_string()
-            )]
+            [PulseKey {
+                pin: PinEdge {
+                    pin: Symbol::from("E"),
+                    edge: Edge::Rise,
+                },
+                outcome: Outcome::Indeterminate,
+                nodes: "Q".to_string(),
+            }]
             .into_iter()
             .collect(),
         );
@@ -521,18 +542,22 @@ Qn = "!(S+Q)"
         // settles at once.
         let both = |pin: &str| {
             [
-                (
-                    pin.to_string(),
-                    Edge::Rise,
-                    Outcome::Indeterminate,
-                    "Q,Qn".to_string(),
-                ),
-                (
-                    pin.to_string(),
-                    Edge::Rise,
-                    Outcome::Oscillation,
-                    "Q,Qn".to_string(),
-                ),
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from(pin),
+                        edge: Edge::Rise,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: "Q,Qn".to_string(),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from(pin),
+                        edge: Edge::Rise,
+                    },
+                    outcome: Outcome::Oscillation,
+                    nodes: "Q,Qn".to_string(),
+                },
             ]
         };
         assert_eq!(
@@ -591,18 +616,22 @@ Qb = "!Qa * B"
         );
         let both = |pin: &str| {
             [
-                (
-                    pin.to_string(),
-                    Edge::Fall,
-                    Outcome::Indeterminate,
-                    "Qa,Qb".to_string(),
-                ),
-                (
-                    pin.to_string(),
-                    Edge::Fall,
-                    Outcome::Oscillation,
-                    "Qa,Qb".to_string(),
-                ),
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from(pin),
+                        edge: Edge::Fall,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: "Qa,Qb".to_string(),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from(pin),
+                        edge: Edge::Fall,
+                    },
+                    outcome: Outcome::Oscillation,
+                    nodes: "Qa,Qb".to_string(),
+                },
             ]
         };
         assert_eq!(
@@ -629,7 +658,7 @@ Qb = "!Qa * B"
         // A rise pulse from idle is inert: the grant it takes is handed straight back when the request
         // drops again, so every candidate lands on the reference.
         assert!(
-            !pulses(&cell).iter().any(|hz| pulse(hz).1 == Edge::Rise),
+            !pulses(&cell).iter().any(|hz| pulse(hz).edge == Edge::Rise),
             "a request pulse from idle settles back to idle, got {:?}",
             keys(&cell)
         );
@@ -678,36 +707,46 @@ Qn = "!(S+Q)"
         assert_eq!(
             keys(&cell),
             [
-                (
-                    "S".to_string(),
-                    Edge::Rise,
-                    Outcome::Indeterminate,
-                    "Q,Qn,L".to_string()
-                ),
-                (
-                    "S".to_string(),
-                    Edge::Rise,
-                    Outcome::Indeterminate,
-                    "L".to_string()
-                ),
-                (
-                    "S".to_string(),
-                    Edge::Rise,
-                    Outcome::Oscillation,
-                    "Q,Qn".to_string()
-                ),
-                (
-                    "R".to_string(),
-                    Edge::Rise,
-                    Outcome::Indeterminate,
-                    "Q,Qn".to_string()
-                ),
-                (
-                    "R".to_string(),
-                    Edge::Rise,
-                    Outcome::Oscillation,
-                    "Q,Qn".to_string()
-                ),
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("S"),
+                        edge: Edge::Rise,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: "Q,Qn,L".to_string(),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("S"),
+                        edge: Edge::Rise,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: "L".to_string(),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("S"),
+                        edge: Edge::Rise,
+                    },
+                    outcome: Outcome::Oscillation,
+                    nodes: "Q,Qn".to_string(),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("R"),
+                        edge: Edge::Rise,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: "Q,Qn".to_string(),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("R"),
+                        edge: Edge::Rise,
+                    },
+                    outcome: Outcome::Oscillation,
+                    nodes: "Q,Qn".to_string(),
+                },
             ]
             .into_iter()
             .collect(),
@@ -747,12 +786,14 @@ Q = "!CLK*M + CLK*Q"
         );
         assert_eq!(
             keys(&cell),
-            [(
-                "CLK".to_string(),
-                Edge::Fall,
-                Outcome::Indeterminate,
-                "Q,M".to_string()
-            )]
+            [PulseKey {
+                pin: PinEdge {
+                    pin: Symbol::from("CLK"),
+                    edge: Edge::Fall,
+                },
+                outcome: Outcome::Indeterminate,
+                nodes: "Q,M".to_string(),
+            }]
             .into_iter()
             .collect(),
         );
@@ -795,30 +836,38 @@ Q = "!CLK*(EN*M + !EN*Q) + CLK*Q"
         assert_eq!(
             keys(&cell),
             [
-                (
-                    "CLK".to_string(),
-                    Edge::Fall,
-                    Outcome::Indeterminate,
-                    "Q,M".to_string()
-                ),
-                (
-                    "CLK".to_string(),
-                    Edge::Fall,
-                    Outcome::Indeterminate,
-                    "Q".to_string()
-                ),
-                (
-                    "CLK".to_string(),
-                    Edge::Fall,
-                    Outcome::Indeterminate,
-                    "M".to_string()
-                ),
-                (
-                    "EN".to_string(),
-                    Edge::Rise,
-                    Outcome::Indeterminate,
-                    "Q".to_string()
-                ),
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("CLK"),
+                        edge: Edge::Fall,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: "Q,M".to_string(),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("CLK"),
+                        edge: Edge::Fall,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: "Q".to_string(),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("CLK"),
+                        edge: Edge::Fall,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: "M".to_string(),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("EN"),
+                        edge: Edge::Rise,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: "Q".to_string(),
+                },
             ]
             .into_iter()
             .collect(),
@@ -846,30 +895,38 @@ B = "!CLK*(!SEL*D + SEL*B) + CLK*B"
         assert_eq!(
             keys(&cell),
             [
-                (
-                    "CLK".to_string(),
-                    Edge::Fall,
-                    Outcome::Indeterminate,
-                    "A".to_string()
-                ),
-                (
-                    "CLK".to_string(),
-                    Edge::Fall,
-                    Outcome::Indeterminate,
-                    "B".to_string()
-                ),
-                (
-                    "SEL".to_string(),
-                    Edge::Rise,
-                    Outcome::Indeterminate,
-                    "A".to_string()
-                ),
-                (
-                    "SEL".to_string(),
-                    Edge::Fall,
-                    Outcome::Indeterminate,
-                    "B".to_string()
-                ),
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("CLK"),
+                        edge: Edge::Fall,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: "A".to_string(),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("CLK"),
+                        edge: Edge::Fall,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: "B".to_string(),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("SEL"),
+                        edge: Edge::Rise,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: "A".to_string(),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("SEL"),
+                        edge: Edge::Fall,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: "B".to_string(),
+                },
             ]
             .into_iter()
             .collect(),

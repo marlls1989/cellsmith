@@ -741,12 +741,22 @@ Q = "W + Q*(A+B)"
         }
     }
 
+    /// One state read off the fixture's whole explored set: its A and B inputs, the keeper's resolved
+    /// Q level and the exposure's resolved W level.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    struct ExploredState {
+        a: bool,
+        b: bool,
+        q: bool,
+        w: bool,
+    }
+
     #[test]
     fn the_field_readers_return_the_coordinate_columns() {
         // `output_value` and `exposed_value` read a coordinate's column whichever half it belongs to.
-        // Pinned over the fixture's whole explored set as `(A, B, Q, W)`: the keeper holds through the
-        // two single-input vectors — hence each of them twice, once per held value — is set at `A·B`
-        // and cleared at neither input, while the exposure tracks `A·B`.
+        // Read over the fixture's whole explored set: the keeper holds through the two single-input
+        // vectors — hence each of them twice, once per held value — is set at `A·B` and cleared at
+        // neither input, while the exposure tracks `A·B`.
         let cell = coordinate_fixture();
         let builder = espresso_logic::sync_bdd_builder!();
         let bdds = crate::model::build_signal_bdds(&cell, &builder);
@@ -757,7 +767,7 @@ Q = "W + Q*(A+B)"
         )
         .expect("fixture is explored");
 
-        let mut read: Vec<(bool, bool, bool, bool)> = m
+        let mut read: Vec<ExploredState> = m
             .explored
             .order
             .iter()
@@ -766,26 +776,56 @@ Q = "W + Q*(A+B)"
                     node.value_of(pin)
                         .expect("every input is fixed in an explored state")
                 };
-                (
-                    of("A"),
-                    of("B"),
-                    m.output_value("Q", node)
+                ExploredState {
+                    a: of("A"),
+                    b: of("B"),
+                    q: m.output_value("Q", node)
                         .expect("the keeper resolves at every explored state"),
-                    m.exposed_value("W", node)
+                    w: m.exposed_value("W", node)
                         .expect("the exposure resolves at every explored state"),
-                )
+                }
             })
             .collect();
         read.sort();
         assert_eq!(
             read,
             [
-                (false, false, false, false),
-                (false, true, false, false),
-                (false, true, true, false),
-                (true, false, false, false),
-                (true, false, true, false),
-                (true, true, true, true),
+                ExploredState {
+                    a: false,
+                    b: false,
+                    q: false,
+                    w: false
+                },
+                ExploredState {
+                    a: false,
+                    b: true,
+                    q: false,
+                    w: false
+                },
+                ExploredState {
+                    a: false,
+                    b: true,
+                    q: true,
+                    w: false
+                },
+                ExploredState {
+                    a: true,
+                    b: false,
+                    q: false,
+                    w: false
+                },
+                ExploredState {
+                    a: true,
+                    b: false,
+                    q: true,
+                    w: false
+                },
+                ExploredState {
+                    a: true,
+                    b: true,
+                    q: true,
+                    w: true
+                },
             ],
         );
     }

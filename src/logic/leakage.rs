@@ -144,23 +144,29 @@ mod tests {
     use crate::logic::arcs::HeldLevel;
     use crate::model::analyse_one as analyse;
 
-    /// The (A, B, Q) triples a cell's leakage states record, sorted — the rest states, without the
-    /// paths into them.
-    fn states(cell: &crate::model::AnalysedCell) -> Vec<(bool, bool, bool)> {
-        let mut v: Vec<(bool, bool, bool)> = cell
+    /// A rest state a cell's leakage states record: the A and B inputs it fixes, and the Q level the
+    /// cell resolves there.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    struct RestState {
+        a: bool,
+        b: bool,
+        q: bool,
+    }
+
+    /// The rest states a cell's leakage states record, sorted — without the paths into them.
+    fn states(cell: &crate::model::AnalysedCell) -> Vec<RestState> {
+        let mut v: Vec<RestState> = cell
             .leakage
             .iter()
-            .map(|l| {
-                (
-                    l.inputs.value_of("A").expect("A fixed at a rest state"),
-                    l.inputs.value_of("B").expect("B fixed at a rest state"),
-                    l.levels
-                        .outputs
-                        .iter()
-                        .find(|h| h.node.as_str() == "Q")
-                        .expect("Q resolved at a rest state")
-                        .level,
-                )
+            .map(|l| RestState {
+                a: l.inputs.value_of("A").expect("A fixed at a rest state"),
+                b: l.inputs.value_of("B").expect("B fixed at a rest state"),
+                q: l.levels
+                    .outputs
+                    .iter()
+                    .find(|h| h.node.as_str() == "Q")
+                    .expect("Q resolved at a rest state")
+                    .level,
             })
             .collect();
         v.sort();
@@ -184,12 +190,36 @@ Q = "A*B + Q*(A+B)"
         assert_eq!(
             states(&cell),
             vec![
-                (false, false, false), // A=0,B=0 forces Q=0
-                (false, true, false),  // A=0,B=1 holds, reached from Q=0
-                (false, true, true),   //          … and from Q=1
-                (true, false, false),  // A=1,B=0 holds, reached from Q=0
-                (true, false, true),   //          … and from Q=1
-                (true, true, true),    // A=1,B=1 forces Q=1
+                RestState {
+                    a: false,
+                    b: false,
+                    q: false
+                }, // A=0,B=0 forces Q=0
+                RestState {
+                    a: false,
+                    b: true,
+                    q: false
+                }, // A=0,B=1 holds, reached from Q=0
+                RestState {
+                    a: false,
+                    b: true,
+                    q: true
+                }, //          … and from Q=1
+                RestState {
+                    a: true,
+                    b: false,
+                    q: false
+                }, // A=1,B=0 holds, reached from Q=0
+                RestState {
+                    a: true,
+                    b: false,
+                    q: true
+                }, //          … and from Q=1
+                RestState {
+                    a: true,
+                    b: true,
+                    q: true
+                }, // A=1,B=1 forces Q=1
             ],
             "leakage states: {:?}",
             cell.leakage,

@@ -54,24 +54,41 @@ mod smoke {
             "off-set of a C-element must be !a*!b"
         );
 
+        // One cube's assignment to the C-element's two inputs, `a` and `b`. Both fields are the same
+        // `Option<bool>`, so a transposed literal would silently check the wrong input's value.
+        #[derive(Debug, PartialEq)]
+        struct AbValues {
+            a: Option<bool>,
+            b: Option<bool>,
+        }
+
         // Universal projection onto the inputs as a two-sided FR cover: the on-set is a=b=1
         // (q⁺ forced high regardless of the held q), the off-set is a=b=0, and a≠b lands in
         // NEITHER side — the C-element hold gap is the absence of a cube, not a `D` cube.
         let fr = f.cover_over_fr(["a", "b"]).maximize();
-        let side = |t: CubeType| -> Vec<(Option<bool>, Option<bool>)> {
+        let side = |t: CubeType| -> Vec<AbValues> {
             fr.cubes()
                 .filter(|c| c.cube_type() == t)
-                .map(|c| (c.inputs().value_of("a"), c.inputs().value_of("b")))
+                .map(|c| AbValues {
+                    a: c.inputs().value_of("a"),
+                    b: c.inputs().value_of("b"),
+                })
                 .collect()
         };
         assert_eq!(
             side(CubeType::F),
-            vec![(Some(true), Some(true))],
+            vec![AbValues {
+                a: Some(true),
+                b: Some(true)
+            }],
             "on-set must be a=b=1"
         );
         assert_eq!(
             side(CubeType::R),
-            vec![(Some(false), Some(false))],
+            vec![AbValues {
+                a: Some(false),
+                b: Some(false)
+            }],
             "off-set must be a=b=0"
         );
         assert_eq!(

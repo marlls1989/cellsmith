@@ -822,7 +822,7 @@ impl fmt::Display for Literal<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::analyse_one as analyse;
+    use crate::model::{analyse_both, analyse_one as analyse, AnalysedPair};
 
     /// A cell's model as the text the sink writes: its declarations, each written in turn.
     fn emit(cell: &AnalysedCell) -> String {
@@ -1234,25 +1234,6 @@ Y = "!(A*B)"
         assert!(!v.contains(": ? : -;")); // no hysteresis
     }
 
-    /// Parse the single-cell `src` and analyse it twice: once as written, once with
-    /// `no_edge_collapse` forced true on every cell -- the same blanket mutation the
-    /// `--no-edge-collapse` CLI flag applies (main.rs:82-88). Proves the per-cell TOML switch and
-    /// the CLI flag are the identical code path, not two independently-tested mechanisms.
-    fn analyse_both(src: &str) -> (crate::model::AnalysedCell, crate::model::AnalysedCell) {
-        let default = crate::model::parse_spec(src)
-            .unwrap()
-            .cells
-            .remove(0)
-            .analyse()
-            .unwrap();
-        let mut spec = crate::model::parse_spec(src).unwrap();
-        for c in &mut spec.cells {
-            c.no_edge_collapse = true;
-        }
-        let forced = spec.cells.remove(0).analyse().unwrap();
-        (default, forced)
-    }
-
     /// Four shapes the behavioural classifier recognises as NO edge register even under default (on)
     /// collapse: a single latch, a gated (self-referencing) latch, a master/slave pair split across two
     /// DIFFERENT declared clocks (the slave stays level — its data is transparent in one phase of the
@@ -1303,7 +1284,7 @@ Q = "CLK*M + !CLK*Q"
         // collapse, a no-op on these shapes) or forced on -- and the two runs state the same UDP table
         // rows.
         for src in NON_COLLAPSIBLE {
-            let (default, forced) = analyse_both(src);
+            let AnalysedPair { default, forced } = analyse_both(src);
             let v_default = emit(&default);
             let v_forced = emit(&forced);
             for v in [&v_default, &v_forced] {
