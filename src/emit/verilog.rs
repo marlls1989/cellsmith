@@ -21,11 +21,11 @@ use std::fmt;
 
 use espresso_logic::Symbol;
 
-use crate::emit::tcl::Joined;
 use crate::logic::arcs::Edge;
 use crate::logic::edge::EdgeCaptures;
 use crate::logic::regions::{StateCube, StateRegions};
 use crate::model::AnalysedCell;
+use crate::text::Joined;
 
 /// Fixed rise/fall path delay stamped on every `specify` arc.
 const PATH_DELAY: &str = "(0.1, 0.1)";

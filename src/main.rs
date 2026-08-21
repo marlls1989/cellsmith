@@ -12,12 +12,13 @@ use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, Parser};
 use espresso_logic::{Minterm, Symbol};
+use liberty_parser::liberty::Group;
 use rayon::prelude::*;
 
-use cellsmith::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, CellArcs};
+use cellsmith::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, CellArcs, Deck};
 use cellsmith::emit::block::Description;
 use cellsmith::emit::define_cell::{cell_define_cell, Declarations, DefineCell};
-use cellsmith::emit::liberty::library_liberty;
+use cellsmith::emit::liberty::{cell_liberty, library_liberty};
 use cellsmith::emit::verilog::{cell_verilog, Item, Verilog};
 use cellsmith::logic::arcs::PinEdge;
 use cellsmith::logic::hazard::{Cause, Hazard, Outcome};
@@ -298,7 +299,10 @@ fn run(cli: Cli) -> io::Result<()> {
     let arcs = Deck(&rendered);
     let model: Vec<Item> = cells.par_iter().flat_map_iter(cell_verilog).collect();
     let verilog = Verilog(&model);
-    let liberty = library_liberty(&base, &cells);
+    let groups: Vec<Group> = cells.par_iter().flat_map_iter(cell_liberty).collect();
+    // A Liberty document ends at the library group's closing brace, so the newline that ends the last
+    // line of the artifact is the writer's: each sink below states it alongside the document.
+    let liberty = library_liberty(&base, groups);
     let blocks: Vec<DefineCell> = cells.par_iter().flat_map_iter(cell_define_cell).collect();
     let cells_tcl = Declarations(&blocks);
 
@@ -317,7 +321,7 @@ fn run(cli: Cli) -> io::Result<()> {
             let mut out = io::BufWriter::new(io::stdout().lock());
             banner(&mut out, "arcs.tcl", &arcs)?;
             banner(&mut out, "verilog", &verilog)?;
-            banner(&mut out, "liberty", &liberty)?;
+            banner(&mut out, "liberty", &format_args!("{liberty}\n"))?;
             if !cli.no_cells {
                 banner(&mut out, "cells.tcl", &cells_tcl)?;
             }
@@ -327,29 +331,13 @@ fn run(cli: Cli) -> io::Result<()> {
             fs::create_dir_all(&dir)?;
             write_file(&dir, &format!("{base}_arcs.tcl"), &arcs)?;
             write_file(&dir, &format!("{base}.v"), &verilog)?;
-            write_file(&dir, &format!("{base}.lib"), &liberty)?;
+            write_file(&dir, &format!("{base}.lib"), &format_args!("{liberty}\n"))?;
             if !cli.no_cells {
                 write_file(&dir, &format!("{base}_cells.tcl"), &cells_tcl)?;
             }
         }
     }
     Ok(())
-}
-
-/// Every cell's Liberate blocks, in the order the cells were analysed and each cell's in the order its
-/// emitter stated them. The blocks travel as values and become text here, at the sink they are written
-/// to.
-struct Deck<'a>(&'a [CellArcs]);
-
-impl fmt::Display for Deck<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for cell in self.0 {
-            for block in &cell.blocks {
-                write!(f, "{block}")?;
-            }
-        }
-        Ok(())
-    }
 }
 
 /// Read the spec's source text from wherever the argument named.

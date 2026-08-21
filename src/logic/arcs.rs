@@ -185,13 +185,14 @@ impl ArcLevels {
     }
 }
 
-/// One characterization arc: an input edge on `related` driving `output` in direction `edge`. The
-/// related pin is **always a primary input** — outputs and internal state variables are never arc
-/// sources; they are established indirectly by the prevector.
+/// One characterization arc: an input edge on `related` driving the `output` pin in the direction
+/// that pin-edge names. The related pin is **always a primary input** — outputs and internal state
+/// variables are never arc sources; they are established indirectly by the prevector. The related
+/// pin carries no edge of its own: the direction it moved is read back off `end`.
 #[derive(Debug, Clone)]
 pub struct Arc {
-    pub(crate) edge: Edge,
-    pub(crate) output: Symbol,
+    /// The driven output and the edge it makes.
+    pub(crate) output: PinEdge,
     pub(crate) related: Symbol,
     /// Start state of the measured edge (the prevector's target): the FULL machine node, over the
     /// input AND state-variable columns, not just the input projection. This is the arc's context:
@@ -210,8 +211,8 @@ pub struct Arc {
 /// states and NO output changes. Used for internal-power characterisation.
 #[derive(Debug, Clone)]
 pub struct HiddenArc {
-    pub(crate) pin: Symbol, // the toggled primary input
-    pub(crate) edge: Edge,  // that input's Rise/Fall
+    /// The toggled primary input and the edge it makes.
+    pub(crate) pin: PinEdge,
     /// Start state of the measured toggle: the FULL machine node before it (inputs and state
     /// variables), the arc's context — see [`Arc::start`].
     pub(crate) start: Minterm<Symbol>,
@@ -303,8 +304,10 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
                         }
                         let edge = if *after { Edge::Rise } else { Edge::Fall };
                         acc.0.push(Arc {
-                            edge,
-                            output: o.name.clone(),
+                            output: PinEdge {
+                                pin: o.name.clone(),
+                                edge,
+                            },
                             related: related.clone(),
                             start: node.clone(),
                             end: end.clone(),
@@ -324,8 +327,10 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
                             .value_of(related.as_str())
                             .expect("toggled input is fully fixed in the settled end state");
                         acc.1.push(HiddenArc {
-                            pin: related.clone(),
-                            edge: if rose { Edge::Rise } else { Edge::Fall },
+                            pin: PinEdge {
+                                pin: related.clone(),
+                                edge: if rose { Edge::Rise } else { Edge::Fall },
+                            },
                             start: node.clone(),
                             end: end.clone(),
                             prevector: prevector.clone(),
@@ -345,11 +350,11 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
             },
         );
     debug_assert!(
-        all_distinct(&arcs, |a| (&a.output, &a.related, a.edge, &a.start)),
+        all_distinct(&arcs, |a| (&a.output, &a.related, &a.start)),
         "arc identities are unique per firing"
     );
     debug_assert!(
-        all_distinct(&hidden, |h| (&h.pin, h.edge, &h.start)),
+        all_distinct(&hidden, |h| (&h.pin, &h.start)),
         "hidden arc identities are unique per firing"
     );
     (arcs, hidden)
@@ -386,16 +391,16 @@ Q = "A*B + Q*(A+B)"
         // off/on flat states adjacent to a hold state.
         assert!(arcs
             .iter()
-            .any(|a| a.edge == Edge::Rise && a.related == "A"));
+            .any(|a| a.output.edge == Edge::Rise && a.related == "A"));
         assert!(arcs
             .iter()
-            .any(|a| a.edge == Edge::Rise && a.related == "B"));
+            .any(|a| a.output.edge == Edge::Rise && a.related == "B"));
         assert!(arcs
             .iter()
-            .any(|a| a.edge == Edge::Fall && a.related == "A"));
+            .any(|a| a.output.edge == Edge::Fall && a.related == "A"));
         assert!(arcs
             .iter()
-            .any(|a| a.edge == Edge::Fall && a.related == "B"));
+            .any(|a| a.output.edge == Edge::Fall && a.related == "B"));
         // Every arc's prevector is a real single-step walk into its start state — the prevector is
         // input-only, so it terminates at the start context projected onto the inputs.
         for a in &arcs {
@@ -493,7 +498,7 @@ Q = "CLK*M + !CLK*Q"
             .filter(|h| h.levels.exposed.iter().any(|e| e.start != e.end))
             .collect();
         assert!(
-            moved.iter().any(|h| h.pin == "D"),
+            moved.iter().any(|h| h.pin.pin == "D"),
             "a D toggle with the clock low moves the exposed master while Q holds",
         );
     }
@@ -589,14 +594,14 @@ Q = "A*B + Q*(A+B)"
                 .levels
                 .outputs
                 .iter()
-                .find(|(n, _)| *n == a.output)
+                .find(|(n, _)| *n == a.output.pin)
                 .expect("the measured output carries a level");
             assert_eq!(
                 *level,
-                a.edge == Edge::Fall,
+                a.output.edge == Edge::Fall,
                 "{} {:?} must start at its pre-edge value",
-                a.output,
-                a.edge
+                a.output.pin,
+                a.output.edge
             );
         }
     }
@@ -639,8 +644,8 @@ Y = "A*B"
         );
         assert!(!cell.hidden_arcs.is_empty());
         assert!(cell.hidden_arcs.iter().any(|h| {
-            h.pin.as_str() == "A"
-                && h.edge == Edge::Fall
+            h.pin.pin.as_str() == "A"
+                && h.pin.edge == Edge::Fall
                 && h.levels.outputs.len() == 1
                 && h.levels.outputs[0].0.as_str() == "Y"
                 && !h.levels.outputs[0].1
@@ -674,7 +679,7 @@ Q = "E*D + !E*Q"
         let d_rise: Vec<&HiddenArc> = cell
             .hidden_arcs
             .iter()
-            .filter(|h| h.pin.as_str() == "D" && h.edge == Edge::Rise)
+            .filter(|h| h.pin.pin.as_str() == "D" && h.pin.edge == Edge::Rise)
             .collect();
         assert!(
             d_rise.len() >= 2,
@@ -734,7 +739,7 @@ Y = "K + S*L"
         let contexts = masked_values(
             cell.arcs
                 .iter()
-                .filter(|a| a.output == "Y" && a.related == "C" && a.edge == Edge::Rise)
+                .filter(|a| a.output.pin == "Y" && a.related == "C" && a.output.edge == Edge::Rise)
                 .map(|a| &a.start),
             &at,
         );
@@ -756,7 +761,7 @@ Y = "K + S*L"
         let contexts = masked_values(
             cell.hidden_arcs
                 .iter()
-                .filter(|h| h.pin == "D" && h.edge == Edge::Fall && held_low(h))
+                .filter(|h| h.pin.pin == "D" && h.pin.edge == Edge::Fall && held_low(h))
                 .map(|h| &h.start),
             &at,
         );
@@ -795,9 +800,9 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        assert!(cell.hidden_arcs.iter().any(|h| h.pin.as_str() == "A"));
-        assert!(cell.hidden_arcs.iter().any(|h| h.pin.as_str() == "B"));
-        assert!(cell.hidden_arcs.iter().all(|h| h.pin.as_str() != "Q"));
+        assert!(cell.hidden_arcs.iter().any(|h| h.pin.pin.as_str() == "A"));
+        assert!(cell.hidden_arcs.iter().any(|h| h.pin.pin.as_str() == "B"));
+        assert!(cell.hidden_arcs.iter().all(|h| h.pin.pin.as_str() != "Q"));
     }
 
     #[test]
@@ -825,10 +830,18 @@ Qb = "!Qa * B"
         );
         assert!(arcs.iter().all(|a| a.related != "Qa" && a.related != "Qb"));
         // Both inputs drive Qa (A directly, B via the cascade) and symmetrically both drive Qb.
-        assert!(arcs.iter().any(|a| a.output == "Qa" && a.related == "A"));
-        assert!(arcs.iter().any(|a| a.output == "Qa" && a.related == "B"));
-        assert!(arcs.iter().any(|a| a.output == "Qb" && a.related == "B"));
-        assert!(arcs.iter().any(|a| a.output == "Qb" && a.related == "A"));
+        assert!(arcs
+            .iter()
+            .any(|a| a.output.pin == "Qa" && a.related == "A"));
+        assert!(arcs
+            .iter()
+            .any(|a| a.output.pin == "Qa" && a.related == "B"));
+        assert!(arcs
+            .iter()
+            .any(|a| a.output.pin == "Qb" && a.related == "B"));
+        assert!(arcs
+            .iter()
+            .any(|a| a.output.pin == "Qb" && a.related == "A"));
     }
 
     #[test]
@@ -854,11 +867,11 @@ Qb = "Sb + !Qa * B"
         // Sb rises Qb.
         assert!(arcs
             .iter()
-            .any(|a| a.output == "Qb" && a.related == "Sb" && a.edge == Edge::Rise));
+            .any(|a| a.output.pin == "Qb" && a.related == "Sb" && a.output.edge == Edge::Rise));
         // Sb cascades to Qa (falls) — the required propagation via Qb.
         assert!(arcs
             .iter()
-            .any(|a| a.output == "Qa" && a.related == "Sb" && a.edge == Edge::Fall));
+            .any(|a| a.output.pin == "Qa" && a.related == "Sb" && a.output.edge == Edge::Fall));
     }
 
     #[test]
@@ -880,16 +893,16 @@ Q = "CLK*M + !CLK*Q"
         let arcs = cell.arcs.clone();
         assert!(!arcs.is_empty());
         // Internal M is never an arc source or target; only Q is a target, only CLK/D are sources.
-        assert!(arcs.iter().all(|a| a.output == "Q"));
+        assert!(arcs.iter().all(|a| a.output.pin == "Q"));
         assert!(arcs.iter().all(|a| a.related == "CLK" || a.related == "D"));
         // A CLK-driven rise and fall of Q exist (the flop captures D through the clock edge).
         let clk_rise = arcs
             .iter()
-            .find(|a| a.related == "CLK" && a.edge == Edge::Rise)
+            .find(|a| a.related == "CLK" && a.output.edge == Edge::Rise)
             .expect("a CLK→Q rise arc");
         assert!(arcs
             .iter()
-            .any(|a| a.related == "CLK" && a.edge == Edge::Fall));
+            .any(|a| a.related == "CLK" && a.output.edge == Edge::Fall));
         // The prevector is a real single-step input walk terminating at the measured start state's
         // input projection — the state variables it establishes are not part of the walk's alphabet.
         assert_eq!(

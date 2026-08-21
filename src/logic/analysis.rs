@@ -330,7 +330,7 @@ mod tests {
 
     use espresso_logic::Symbol;
 
-    use crate::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
+    use crate::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, Deck};
     use crate::emit::liberty::cell_liberty;
     use crate::emit::tcl::VectorValue;
     use crate::logic::arcs::PinEdge;
@@ -496,7 +496,7 @@ Q = "A + Q"
         assert!(liberty_parser::liberty::Liberty(cell_liberty(&cell))
             .to_string()
             .contains("statetable"));
-        let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        let _ = Deck(&[cell_arcs(&cell, ArcsTclOptions::default())]).to_string();
     }
 
     #[test]
@@ -535,7 +535,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
             !cell.constraints.is_empty(),
             "the CLK/D setup-hold hazard is constrained",
         );
-        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        let tcl = Deck(&[cell_arcs(&cell, ArcsTclOptions::default())]).to_string();
         assert!(tcl.contains("define_arc"));
     }
 
@@ -589,7 +589,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
 
         // And the deck follows the selection: the separation blocks come out, the minimum width the
         // unselected `CLK` would have carried does not.
-        let tcl = cell_arcs_tcl(&data_only, ArcsTclOptions::default());
+        let tcl = Deck(&[cell_arcs(&data_only, ArcsTclOptions::default())]).to_string();
         assert!(tcl.contains("-type setup"));
         assert!(tcl.contains("-type hold"));
         assert!(!tcl.contains("-type min_pulse_width"));

@@ -1,7 +1,8 @@
 //! Per-cell output emitters: Liberate arcs (`arcs.tcl`), the structural `define_cell` blocks
-//! (`cells.tcl`), behavioural Verilog, and Liberty snippets — over the shared rendering vocabulary in
-//! `tcl`, which is what a Liberate command's columns and lists are written in, and `block`, which is
-//! one emitted Liberate command as the value it is.
+//! (`cells.tcl`), behavioural Verilog, and Liberty snippets — over `tcl`, which is what a Liberate
+//! command's columns and brace groups are written in, `block`, which is one emitted Liberate command as
+//! the value it is, and the crate's own `text`, whose separators every one of the formats writes its
+//! lists with.
 
 pub mod arcs_tcl;
 pub mod block;

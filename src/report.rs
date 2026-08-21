@@ -9,7 +9,7 @@ use std::fmt;
 
 use espresso_logic::{Minterm, Symbol};
 
-use crate::emit::tcl::Joined;
+use crate::text::Joined;
 
 /// One state as the values it fixes, in the minterm's variable order: `{A=1, B=0}`. A column the
 /// minterm leaves free is no part of the state and is left out.

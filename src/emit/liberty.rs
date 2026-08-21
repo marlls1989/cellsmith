@@ -34,8 +34,8 @@
 //! `cell_liberty` builds one cell's `cell (...) { ... }` groups; `library_liberty` states the whole run —
 //! every cell's groups inside a single `library (<name>) { ... }` group, which is the `.lib` file
 //! cellsmith writes. Groups are built with `liberty-parser`'s `Group`/`Attribute`/`Value`
-//! trees (the same idiom as `pseudosync/src/lib.rs`) and reach a sink by wrapping in `Liberty` — `Group`
-//! itself has no `Display`.
+//! trees (the same idiom as `pseudosync/src/lib.rs`) and the whole document reaches its sink as one
+//! `Liberty` value, rendered by the crate whose syntax it is — `Group` itself has no `Display`.
 
 use liberty_parser::{
     ast::Value,
@@ -43,15 +43,14 @@ use liberty_parser::{
 };
 
 use std::collections::BTreeMap;
-use std::fmt::{self, Write as _};
+use std::fmt;
 
 use espresso_logic::Symbol;
-use rayon::prelude::*;
 
 use crate::emit::statetable::{build_state_model, EdgeRow, EdgeTok, Next, StateModel};
-use crate::emit::tcl::{Indented, Joined, Words};
 use crate::logic::regions::StateRegions;
 use crate::model::AnalysedCell;
+use crate::text::{Joined, Words};
 
 /// Add a simple `name : value;` attribute to a group.
 ///
@@ -63,33 +62,14 @@ fn set_attr(group: &mut Group, name: &str, value: Value) {
         .insert(name.to_owned(), vec![Attribute::Simple(value)]);
 }
 
-/// Every cell's Liberty groups inside a single `library (<name>) { ... }` group, so the output is a
-/// self-contained `.lib` that Liberate can consume directly as `user_data` — no external harness needed.
-/// Built by [`library_liberty`] and displayed into the sink the `.lib` is written to.
-pub struct Library<'a> {
-    name: &'a str,
-    cells: &'a [AnalysedCell],
-}
-
-/// The `.lib` a run's cells make up: the library group and, within it, every cell's own groups.
-pub fn library_liberty<'a>(name: &'a str, cells: &'a [AnalysedCell]) -> Library<'a> {
-    Library { name, cells }
-}
-
-impl fmt::Display for Library<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "library ({}) {{", self.name)?;
-        // Each cell's groups are built independently, so they are built for all the cells at once and
-        // then written in the order the cells were analysed.
-        let cells: Vec<Vec<Group>> = self.cells.par_iter().map(cell_liberty).collect();
-        // One level in: the nesting reaches each line as it is written, so nothing has to be split back
-        // into lines to be indented.
-        let mut nested = Indented::new(f, "  ");
-        for groups in cells {
-            writeln!(nested, "{}", Liberty(groups))?;
-        }
-        writeln!(f, "}}")
-    }
+/// The `.lib` a run's cells make up: `cells` — every cell's groups, as [`cell_liberty`] builds them —
+/// inside a single `library (<name>) { ... }` group, so the output is a self-contained `.lib` that
+/// Liberate can consume directly as `user_data`, no external harness needed. Nesting is the AST's own,
+/// and so is the text: the document is one `liberty-parser` value that the sink writes by displaying it.
+pub fn library_liberty(name: &str, cells: Vec<Group>) -> Liberty {
+    let mut library = Group::new("library", name);
+    library.subgroups = cells;
+    Liberty(vec![library])
 }
 
 /// The Liberty `cell (...) { ... }` groups for a cell: one per declared name, all identical. The hazards
@@ -445,7 +425,7 @@ mod tests {
     use crate::model::analyse_one as analyse;
 
     /// The text one cell renders as inside the library: the groups [`cell_liberty`] builds of it,
-    /// newline-terminated as [`Library`] writes them.
+    /// newline-terminated so [`parse_frag`]'s closing brace lands on a line of its own.
     fn fragment(cell: &AnalysedCell) -> String {
         format!("{}\n", Liberty(cell_liberty(cell)))
     }

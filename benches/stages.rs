@@ -5,7 +5,7 @@
 
 mod common;
 
-use cellsmith::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
+use cellsmith::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, Deck};
 use cellsmith::emit::liberty::cell_liberty;
 use cellsmith::emit::verilog::{cell_verilog, Verilog};
 use cellsmith::logic::analysis::{analyse_machine, Machine};
@@ -137,8 +137,8 @@ fn bench_emit_stages(c: &mut Criterion) {
     for cell in common::raw_cells() {
         let ac = cell.analyse().expect(FIXTURE);
 
-        sweep_bench!(g, "cell_arcs_tcl", cell.name[0], || {
-            cell_arcs_tcl(&ac, ArcsTclOptions::default())
+        sweep_bench!(g, "cell_arcs", cell.name[0], || {
+            Deck(&[cell_arcs(&ac, ArcsTclOptions::default())]).to_string()
         });
         sweep_bench!(g, "cell_verilog", cell.name[0], || {
             Verilog(&cell_verilog(&ac)).to_string()

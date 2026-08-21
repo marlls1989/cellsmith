@@ -7,13 +7,15 @@
 //!
 //! Modules: the input model ([`model`]), the logic core ([`logic`]: signal resolution, the state
 //! machine, arc and hazard derivation, and state-table regions), the arcs / Verilog / Liberty
-//! emitters ([`emit`]), and the diagnostics' rendering vocabulary ([`report`]).
+//! emitters ([`emit`]), the diagnostics' rendering vocabulary ([`report`]), and the separators both
+//! of those render their lists with (`text`).
 #![doc(hidden)]
 
 pub mod emit;
 pub mod logic;
 pub mod model;
 pub mod report;
+pub(crate) mod text;
 
 #[cfg(test)]
 mod smoke {

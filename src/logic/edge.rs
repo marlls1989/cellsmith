@@ -592,9 +592,9 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         else {
             continue;
         };
-        if types_edge(&a.output, &a.related, clock_edge, &sp) {
+        if types_edge(&a.output.pin, &a.related, clock_edge, &sp) {
             labels.insert(EdgeLabel {
-                output: a.output.clone(),
+                output: a.output.pin.clone(),
                 clock: a.related.clone(),
                 clock_edge,
                 start: a.start.clone(),
@@ -3413,8 +3413,8 @@ GCLK = "CLK*EL"
                     .map(|a| {
                         format!(
                             "{:?} {} {} {}",
-                            a.edge,
-                            a.output,
+                            a.output.edge,
+                            a.output.pin,
                             a.related,
                             c.async_pins.contains(&a.related)
                         )
@@ -3427,7 +3427,7 @@ GCLK = "CLK*EL"
                 let mut v: Vec<String> = c
                     .hidden_arcs
                     .iter()
-                    .map(|h| format!("{:?} {}", h.edge, h.pin))
+                    .map(|h| format!("{:?} {}", h.pin.edge, h.pin.pin))
                     .collect();
                 v.sort();
                 v
@@ -4303,14 +4303,14 @@ Y = "CLK*A + !CLK*B + Y*A*B"
             let mut edge_ctx = 0;
             let mut comb_ctx = 0;
             for a in &arcs {
-                if a.output.as_str() != "Y"
+                if a.output.pin.as_str() != "Y"
                     || a.related.as_str() != "CLK"
                     || a.end.value_of("CLK") != Some(false)
                 {
                     continue; // only Y's CLK Fall arcs
                 }
                 let labelled = es.labels.contains(&EdgeLabel {
-                    output: a.output.clone(),
+                    output: a.output.pin.clone(),
                     clock: a.related.clone(),
                     clock_edge: Edge::Fall,
                     start: a.start.clone(),

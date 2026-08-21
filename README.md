@@ -445,7 +445,7 @@ Two targets, each a profile of a different thing, both driven off the 9 cells in
 
 - `benches/stages.rs` — per-stage timings, grouped by fixture: `signal` (`parse`, `build_signal_bdds`,
   `minimise`), `machine` (`machine_build`, `arcs_derive`, `confluence_detect`, `analyse_machine`,
-  `leakage_derive`, `derive_regions`), and `emit` (`cell_arcs_tcl`, `cell_verilog`, `cell_liberty`).
+  `leakage_derive`, `derive_regions`), and `emit` (`cell_arcs`, `cell_verilog`, `cell_liberty`).
 - `benches/aggregate.rs` — whole-pipeline timings: `whole_cell` (`Cell::analyse` per cell) and
   `whole_run` (the full 9-cell run: `analyse` plus all three emitters and `library_liberty`).
 

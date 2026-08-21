@@ -14,10 +14,11 @@ use std::fmt;
 
 use espresso_logic::{BoolExpr, Symbol};
 
-use crate::emit::tcl::{Braced, IcColumn, Joined, VectorValue, Words};
+use crate::emit::tcl::{Braced, IcColumn, VectorValue};
 // Private, deliberately: `PinEdge`'s own path is `crate::logic::arcs`, which its doc states it
 // serves alongside hazard detection, so this module uses it rather than re-exporting a second path.
 use crate::logic::arcs::{Edge, PinEdge};
+use crate::text::{Joined, Words};
 
 /// The two pins one constraint block switches, and the edge each makes: the pin it names on
 /// `-related_pin` and the pin it names on `-pin`, in that order. A separation carries the pair it holds

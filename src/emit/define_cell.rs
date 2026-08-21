@@ -22,8 +22,9 @@ use espresso_logic::Symbol;
 use indexmap::IndexMap;
 
 use crate::emit::arcs_tcl::pinlist;
-use crate::emit::tcl::{Braced, Words};
+use crate::emit::tcl::Braced;
 use crate::model::AnalysedCell;
+use crate::text::Words;
 
 /// A resolved template triple: the `(delay, power, constraint)` names an alias attaches, each `Some`
 /// only when the alias override or the cell-wide template supplies it.

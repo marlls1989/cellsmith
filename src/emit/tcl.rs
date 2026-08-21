@@ -1,10 +1,10 @@
 //! The vocabulary a Liberate command is written in: what one `-vector` or `-ic` column holds, and the
-//! wrappers Tcl's own syntax puts around a list of them.
+//! brace group Tcl's own syntax puts around a list of them. The separator that writes such a list is no
+//! part of Tcl and lives in [`crate::text`].
 //!
 //! Each is a typed value carrying a [`fmt::Display`], so a block is assembled from the values it states
 //! and the characters are produced once, into the writer it is being written to, where the value is
-//! displayed. [`Indented`] is the same idea for a whole artifact: a [`fmt::Write`] that nests everything
-//! passing through it under a line prefix.
+//! displayed.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -61,103 +61,13 @@ impl From<bool> for VectorValue {
     }
 }
 
-/// A sequence of items written one after another with `sep` between consecutive ones and nothing
-/// else — the one separator loop the artifacts' display vocabulary needs, shared by every fixed list
-/// this crate writes (a Tcl word list, a diagnostic's comma list, a state-table row's node columns).
-/// `project` reads the value actually displayed out of what `source` yields: the identity where the
-/// source already iterates the displayed values themselves, and a genuine projection where it iterates
-/// something a displayed value has to be read out of or picked from — a struct field, a header-aligned
-/// pair, an either-or of two renderings.
-pub(crate) struct Joined<S, F> {
-    source: S,
-    sep: &'static str,
-    project: F,
-}
-
-impl<S, F> Joined<S, F> {
-    pub(crate) fn new(source: S, sep: &'static str, project: F) -> Self {
-        Joined {
-            source,
-            sep,
-            project,
-        }
-    }
-}
-
-impl<S, F, Item, T> fmt::Display for Joined<S, F>
-where
-    S: Iterator<Item = Item> + Clone,
-    F: Fn(Item) -> T,
-    T: fmt::Display,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, item) in self.source.clone().enumerate() {
-            if i > 0 {
-                f.write_str(self.sep)?;
-            }
-            write!(f, "{}", (self.project)(item))?;
-        }
-        Ok(())
-    }
-}
-
-/// Several values as one Tcl list body: each written in turn, separated by a single space. The
-/// separator is all this adds — the braces a `-pinlist`, `-vector` or `-probe` puts around the list are
-/// [`Braced`]'s, and the `-ic` word's quotes are the line's own.
-pub(crate) struct Words<'a, T: fmt::Display>(pub(crate) &'a [T]);
-
-impl<T: fmt::Display> fmt::Display for Words<'_, T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Joined::new(self.0.iter(), " ", std::convert::identity).fmt(f)
-    }
-}
-
 /// One value inside a Tcl brace group, which is what makes it a single argument however much
-/// whitespace it holds.
+/// whitespace it holds. What goes inside is usually a [`Words`](crate::text::Words) list.
 pub(crate) struct Braced<T: fmt::Display>(pub(crate) T);
 
 impl<T: fmt::Display> fmt::Display for Braced<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{{{}}}", self.0)
-    }
-}
-
-/// A [`fmt::Write`] that nests what is written through it one level deeper: every line reaches `writer`
-/// behind `prefix`.
-///
-/// The prefix falls due at a line's first character and nowhere else, which is what lets a line arrive
-/// across several writes and still be prefixed once. An EMPTY line — a newline with no content before it
-/// — is passed through bare, so nesting leaves no line holding nothing but trailing whitespace.
-pub(crate) struct Indented<'w, W: fmt::Write> {
-    writer: &'w mut W,
-    prefix: &'w str,
-    /// Whether the next character written begins a line, and so has the prefix due before it.
-    at_line_start: bool,
-}
-
-impl<'w, W: fmt::Write> Indented<'w, W> {
-    /// Nest everything written here under `prefix`, writing it on to `writer`.
-    pub(crate) fn new(writer: &'w mut W, prefix: &'w str) -> Self {
-        Indented {
-            writer,
-            prefix,
-            at_line_start: true,
-        }
-    }
-}
-
-impl<W: fmt::Write> fmt::Write for Indented<'_, W> {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        // `split_inclusive` keeps each terminator with the line it ends, so a chunk that is exactly a
-        // newline is an empty line and a chunk without one leaves its line still open.
-        for line in s.split_inclusive('\n') {
-            if self.at_line_start && line != "\n" {
-                self.writer.write_str(self.prefix)?;
-            }
-            self.writer.write_str(line)?;
-            self.at_line_start = line.ends_with('\n');
-        }
-        Ok(())
     }
 }
 
@@ -361,48 +271,7 @@ fn is_one_brace_group(value: &str) -> bool {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::fmt::Write;
-
     use super::*;
-
-    /// Write `chunks` through an [`Indented`] under `prefix`, one write per chunk — which is how a line
-    /// comes to arrive in pieces.
-    fn indented(prefix: &str, chunks: &[&str]) -> String {
-        let mut out = String::new();
-        let mut nested = Indented::new(&mut out, prefix);
-        for chunk in chunks {
-            nested
-                .write_str(chunk)
-                .expect("writing into a String cannot fail");
-        }
-        out
-    }
-
-    #[test]
-    fn every_line_reaches_the_writer_behind_the_prefix() {
-        assert_eq!(indented("  ", &["a\nb\n"]), "  a\n  b\n");
-        // The prefix falls due at the next line's first character, so a text left mid-line ends there
-        // and one ending on its terminator leaves no prefix dangling after it.
-        assert_eq!(indented("  ", &["a\nb"]), "  a\n  b");
-    }
-
-    #[test]
-    fn a_line_arriving_in_several_writes_is_prefixed_once() {
-        assert_eq!(
-            indented("\t", &["ce", "ll", " (C2) {\n"]),
-            "\tcell (C2) {\n"
-        );
-        assert_eq!(indented("\t", &["a\n", "b\n"]), "\ta\n\tb\n");
-    }
-
-    #[test]
-    fn an_empty_line_is_passed_through_bare() {
-        // A line with nothing on it takes no prefix: an indent there would be trailing whitespace and
-        // nothing else.
-        assert_eq!(indented("  ", &["a\n\nb\n"]), "  a\n\n  b\n");
-        assert_eq!(indented("  ", &["\n"]), "\n");
-        assert_eq!(indented("  ", &[]), "");
-    }
 
     #[test]
     fn a_one_element_logic_voltage_is_written_as_it_stands() {

@@ -1445,6 +1445,7 @@ pub(crate) fn analyse_one(src: &str) -> AnalysedCell {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, Deck};
     use crate::logic::arcs::{Edge, PinEdge};
     use crate::logic::constraint::ConstraintKind;
     use crate::logic::hazard::{Cause, Outcome};
@@ -2253,10 +2254,7 @@ M = "CLK"
         // appears in no other artifact. The behavioural artifacts keep the spec's own name, which is
         // what the model was built and explored in.
         let cell = analyse_one(NODES_SRC);
-        let arcs = crate::emit::arcs_tcl::cell_arcs_tcl(
-            &cell,
-            crate::emit::arcs_tcl::ArcsTclOptions::default(),
-        );
+        let arcs = Deck(&[cell_arcs(&cell, ArcsTclOptions::default())]).to_string();
         assert!(arcs.contains("-pinlist {CLK D XI7/m Q}"), "{arcs}");
         assert!(arcs.contains("-pinlist {CLK D XI4/m Q}"), "{arcs}");
         assert!(
@@ -2266,7 +2264,8 @@ M = "CLK"
 
         for other in [
             crate::emit::verilog::Verilog(&crate::emit::verilog::cell_verilog(&cell)).to_string(),
-            crate::emit::liberty::library_liberty("lib", std::slice::from_ref(&cell)).to_string(),
+            crate::emit::liberty::library_liberty("lib", crate::emit::liberty::cell_liberty(&cell))
+                .to_string(),
             crate::emit::define_cell::Declarations(&crate::emit::define_cell::cell_define_cell(
                 &cell,
             ))
@@ -2286,10 +2285,7 @@ M = "CLK"
         // exposed column, so it stays one block naming both; a walked one carries the column and fans
         // out by group exactly as a measured block does.
         let cell = analyse_one(NODES_SRC);
-        let arcs = crate::emit::arcs_tcl::cell_arcs_tcl(
-            &cell,
-            crate::emit::arcs_tcl::ArcsTclOptions::default(),
-        );
+        let arcs = Deck(&[cell_arcs(&cell, ArcsTclOptions::default())]).to_string();
         for block in arcs.split("define_arc").skip(1) {
             let block = block.split("\n\n").next().unwrap_or(block);
             let (x1, x4) = (block.contains("XI7/m"), block.contains("XI4/m"));
@@ -2343,10 +2339,7 @@ sela0 = "!CLK*D + CLK*sela0"
 Q = "CLK*sela0 + !CLK*Q"
 "#,
         );
-        let arcs = crate::emit::arcs_tcl::cell_arcs_tcl(
-            &cell,
-            crate::emit::arcs_tcl::ArcsTclOptions::default(),
-        );
+        let arcs = Deck(&[cell_arcs(&cell, ArcsTclOptions::default())]).to_string();
         assert!(arcs.contains("-pinlist {CLK D sela0 Q}"), "{arcs}");
         assert!(!arcs.contains("{ DFFX1 }"), "one group names both:\n{arcs}");
         assert!(arcs.contains("{ DFFX1 DFFX4 }"), "{arcs}");
@@ -2655,9 +2648,9 @@ Q = "CLK*M + !CLK*Q"
                 .arcs
                 .iter()
                 .map(|a| ArcRecord {
-                    output: a.output.clone(),
+                    output: a.output.pin.clone(),
                     related: a.related.clone(),
-                    edge: a.edge,
+                    edge: a.output.edge,
                     start: a.start.clone(),
                 })
                 .collect(),
@@ -2665,8 +2658,8 @@ Q = "CLK*M + !CLK*Q"
                 .hidden_arcs
                 .iter()
                 .map(|h| HiddenArcRecord {
-                    pin: h.pin.clone(),
-                    edge: h.edge,
+                    pin: h.pin.pin.clone(),
+                    edge: h.pin.edge,
                     start: h.start.clone(),
                 })
                 .collect(),
@@ -2767,11 +2760,11 @@ Q = "CLK*M + !CLK*Q"
             // among its columns, and no block of the other run does. Leakage is switched off for this
             // comparison and asserted on its own below, where a walked block states the exposed node
             // through its own `-pinlist`.
-            let opts = crate::emit::arcs_tcl::ArcsTclOptions {
+            let opts = ArcsTclOptions {
                 emit_leakage: false,
                 ..Default::default()
             };
-            let arcs = |c| crate::emit::arcs_tcl::cell_arcs_tcl(c, opts);
+            let arcs = |c| Deck(&[cell_arcs(c, opts)]).to_string();
             let pinlists = |tcl: String| -> Vec<String> {
                 tcl.lines()
                     .map(str::trim)
@@ -2797,9 +2790,9 @@ Q = "CLK*M + !CLK*Q"
             // A walked leakage block states the exposed node through its own `-pinlist`, exactly as a
             // measured block does — so it names the node under the exposing run and none does under the
             // exposure-free one. A bare block carries no column under either run.
-            let all = crate::emit::arcs_tcl::ArcsTclOptions::default();
+            let all = ArcsTclOptions::default();
             for (c, expect_named) in [(&exposed, true), (&plain, false)] {
-                let tcl = crate::emit::arcs_tcl::cell_arcs_tcl(c, all);
+                let tcl = Deck(&[cell_arcs(c, all)]).to_string();
                 let leakage: Vec<String> = tcl
                     .split("define_leakage")
                     .skip(1)
