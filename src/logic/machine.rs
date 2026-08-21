@@ -349,6 +349,15 @@ impl Explored {
     }
 }
 
+/// A candidate input paired with its settlement map, the pair the ranking sorts to fix the BFS seed
+/// order.
+struct Candidate {
+    /// The candidate input assignment, drawn from the pooled on/off covers.
+    input: Minterm<Symbol>,
+    /// Its settlement map: per state variable, the value the fixed inputs force, or absent.
+    settlement: Vec<Option<bool>>,
+}
+
 /// Explore the reachable **stable** states of the machine, starting from initialisation candidates
 /// discovered from the signal covers (never an assumed all-zero state).
 ///
@@ -497,18 +506,21 @@ pub(crate) fn explore<B: Brand, C: ManagerCell + Send + Sync>(
 
     // Rank the candidates: most state variables settled first, ties toward state nearest the inputs,
     // then by minterm order for determinism.
-    let mut ranked: Vec<(Minterm<Symbol>, Vec<Option<bool>>)> = pool
+    let mut ranked: Vec<Candidate> = pool
         .into_par_iter()
         .map(|x| {
-            let m = settlement(&x);
-            (x, m)
+            let settlement = settlement(&x);
+            Candidate {
+                input: x,
+                settlement,
+            }
         })
         .collect();
     ranked.sort_by(|a, b| {
-        settle_count(&b.1)
-            .cmp(&settle_count(&a.1))
-            .then_with(|| depth_sum(&a.1).cmp(&depth_sum(&b.1)))
-            .then_with(|| a.0.cmp(&b.0))
+        settle_count(&b.settlement)
+            .cmp(&settle_count(&a.settlement))
+            .then_with(|| depth_sum(&a.settlement).cmp(&depth_sum(&b.settlement)))
+            .then_with(|| a.input.cmp(&b.input))
     });
 
     // Seed the BFS from the ranked candidates: widen each candidate input onto the full columns (the
@@ -518,8 +530,8 @@ pub(crate) fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     // order into `prev` fixes the order seeds are pushed onto the BFS queue.
     let mut prev: HashMap<Minterm<Symbol>, Option<Minterm<Symbol>>> = HashMap::new();
     let mut frontier: Vec<Minterm<Symbol>> = Vec::new();
-    for (x, _) in &ranked {
-        let seed = x.project_to(&full_names);
+    for candidate in &ranked {
+        let seed = candidate.input.project_to(&full_names);
         let Some(st) = settle(&stepped, &seed) else {
             continue;
         };

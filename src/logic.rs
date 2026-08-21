@@ -30,11 +30,16 @@ pub(crate) fn assignment(m: &Minterm<Symbol>) -> BTreeMap<Symbol, bool> {
 /// A minterm's fixed values as a product of literals, in the minterm's variable order: `A & B`,
 /// `!R & S`. No fixed value ⇒ the tautology `1`.
 pub fn condition(m: &Minterm<Symbol>) -> BoolExpr {
-    let lits: Vec<(Symbol, bool)> = m
+    let lits: Vec<Literal> = m
         .vars()
         .iter()
         .zip(m.iter())
-        .filter_map(|(n, v)| v.map(|b| (n.clone(), b)))
+        .filter_map(|(n, v)| {
+            v.map(|positive| Literal {
+                var: n.clone(),
+                positive,
+            })
+        })
         .collect();
     product(&lits)
 }
@@ -57,6 +62,16 @@ pub(crate) fn mint_state_node(base: &str, taken: impl Fn(&Symbol) -> bool) -> Sy
     name
 }
 
+/// One literal of a product: a variable and whether it appears positive (`k`) or negated (`!k`).
+/// Ordered on `(var, positive)`, the order every caller of [`product`] sorts a slice of these by so
+/// that two conditions naming the same literals sort to the same sequence and compare structurally
+/// equal.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct Literal {
+    pub(crate) var: Symbol,
+    pub(crate) positive: bool,
+}
+
 /// A product of literals `k`/`!k` — `A & !B & C` — as one expression. No literal ⇒ the tautology `1`.
 /// Neither sorted nor deduplicated: what the product ranges over, and in which order, is the caller's.
 ///
@@ -65,15 +80,15 @@ pub(crate) fn mint_state_node(base: &str, taken: impl Fn(&Symbol) -> bool) -> Sy
 /// `A & (B & C)`. The fold runs inside [`BoolExpr::build`], espresso-logic's constructor for an
 /// expression assembled from data — it serialises the whole product in one pass, where composing with
 /// `&` reallocates the token stream at every operator.
-pub(crate) fn product(lits: &[(Symbol, bool)]) -> BoolExpr {
+pub(crate) fn product(lits: &[Literal]) -> BoolExpr {
     BoolExpr::build(|b| {
         lits.iter()
-            .map(|(k, v)| {
-                let lit = b.var(k);
-                if *v {
-                    lit
+            .map(|lit| {
+                let expr = b.var(&lit.var);
+                if lit.positive {
+                    expr
                 } else {
-                    !lit
+                    !expr
                 }
             })
             .reduce(|acc, lit| acc & lit)

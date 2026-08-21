@@ -276,12 +276,14 @@ fn run(cli: Cli) -> io::Result<()> {
             // reached the emitter first is nothing to report. What differs across them wants exposing.
             let block = Description(&m.block);
             let states: Vec<State> = m.states.iter().map(State).collect();
-            let mut fields: Vec<(&str, &dyn fmt::Display)> = vec![("block", &block)];
-            fields.extend(
-                states
-                    .iter()
-                    .map(|s| ("cell state", s as &dyn fmt::Display)),
-            );
+            let mut fields: Vec<SubblockField> = vec![SubblockField {
+                label: "block",
+                value: &block,
+            }];
+            fields.extend(states.iter().map(|s| SubblockField {
+                label: "cell state",
+                value: s,
+            }));
             subblock(&mut err, "  - ", &fields)?;
         }
     }
@@ -358,16 +360,20 @@ fn banner(out: &mut impl io::Write, kind: &str, body: &impl fmt::Display) -> io:
     writeln!(out, "{body}")
 }
 
+/// One field of a warning's subblock: the colon-labelled name written to stderr and the value rendered
+/// beside it. `&str` itself implements `Display`, so where the value is also a string a bare tuple would
+/// let label and value swap places and still compile; the names on these fields are what rules that out.
+struct SubblockField<'a> {
+    label: &'a str,
+    value: &'a dyn fmt::Display,
+}
+
 /// Write one warning detail block: colon-labelled fields, indented under the header with their values
 /// column-aligned. `lead` opens the first line — a hazard warning states one block and opens it at the
 /// same indent as the rest, while the masked-arc warning states a block per conflated arc and bullets
 /// each so the blocks read apart.
-fn subblock(
-    w: &mut impl io::Write,
-    lead: &str,
-    fields: &[(&str, &dyn fmt::Display)],
-) -> io::Result<()> {
-    for (i, (label, value)) in fields.iter().enumerate() {
+fn subblock(w: &mut impl io::Write, lead: &str, fields: &[SubblockField]) -> io::Result<()> {
+    for (i, SubblockField { label, value }) in fields.iter().enumerate() {
         let marker = if i == 0 { lead } else { "    " };
         // The colon belongs to the label, so it is what the 16-column field is padded around: the label
         // and its colon go out first, then the padding that would have followed them.
@@ -479,22 +485,38 @@ fn hazard_warning<'a>(
         })
         .collect();
 
-    let mut fields: Vec<(&str, &dyn fmt::Display)> =
-        vec![("when", &when), ("reached along", &path)];
+    let mut fields: Vec<SubblockField> = vec![
+        SubblockField {
+            label: "when",
+            value: &when,
+        },
+        SubblockField {
+            label: "reached along",
+            value: &path,
+        },
+    ];
     if let Some(pre_state) = &pre_state {
-        fields.push(("pre-hazard", pre_state));
+        fields.push(SubblockField {
+            label: "pre-hazard",
+            value: pre_state,
+        });
     }
     if let Some(orders) = &orders {
-        fields.push(("orders", orders));
+        fields.push(SubblockField {
+            label: "orders",
+            value: orders,
+        });
     }
     if let Some(trigger) = &trigger {
-        fields.push(("triggered by", trigger));
+        fields.push(SubblockField {
+            label: "triggered by",
+            value: trigger,
+        });
     }
-    fields.extend(
-        landings
-            .iter()
-            .map(|(label, effect)| (*label, effect as &dyn fmt::Display)),
-    );
+    fields.extend(landings.iter().map(|(label, effect)| SubblockField {
+        label,
+        value: effect,
+    }));
 
     writeln!(
         w,

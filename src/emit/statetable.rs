@@ -48,6 +48,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use espresso_logic::{Anonymous, Cover, Minimizable, Minterm, Symbol};
 
+use crate::emit::RegionAction;
 use crate::logic::arcs::Edge;
 use crate::logic::regions::{StateCube, StateRegions};
 use crate::model::AnalysedCell;
@@ -273,11 +274,14 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     // column (a level signal may reference one) even though they contribute no level row. `state_orig`
     // (built alongside `internal_nodes` above) doubles as the node-order name list for `current`/`next` —
     // it must be the SIGNAL names, since the covers and the minterm keys are written in those terms.
-    let level: Vec<(Symbol, &StateRegions)> = cell
+    let level: Vec<LevelSignal> = cell
         .signal_regions()
         .filter(|(_, sr)| sr.hysteretic)
         .filter(|(sig, _)| !folded.contains(&sig.name) && !edge_nodes.contains(&sig.name))
-        .map(|(sig, sr)| (sig.name.clone(), sr))
+        .map(|(sig, sr)| LevelSignal {
+            name: sig.name.clone(),
+            regions: sr,
+        })
         .collect();
     let shared_header: Vec<Symbol> = input_nodes
         .iter()
@@ -292,19 +296,27 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     // F cover over the shared header, joint-minimises it, and folds each cube into `row_map`. A zero-cube
     // region cover (e.g. an empty hold set) contributes no column and is skipped — the fold reads outputs
     // BY NAME, so a missing column just means no cube asserts that node in that region.
-    type Pick = fn(&StateRegions) -> &Cover<Symbol, Anonymous>;
-    let passes: [(Next, Pick); 3] = [
-        (Next::High, |sr| &sr.on_cover),
-        (Next::Low, |sr| &sr.off_cover),
-        (Next::Hold, |sr| &sr.hold_cover),
+    let passes: [CoverPass; 3] = [
+        CoverPass {
+            action: Next::High,
+            pick: |sr| &sr.on_cover,
+        },
+        CoverPass {
+            action: Next::Low,
+            pick: |sr| &sr.off_cover,
+        },
+        CoverPass {
+            action: Next::Hold,
+            pick: |sr| &sr.hold_cover,
+        },
     ];
 
     let mut row_map: BTreeMap<Minterm<Symbol>, Vec<Option<Next>>> = BTreeMap::new();
-    for (tag, pick) in passes {
+    for CoverPass { action, pick } in passes {
         let mut labels: Vec<Symbol> = Vec::new();
         let mut joint: Option<Cover<Symbol, Symbol>> = None;
-        for (name, sr) in &level {
-            let cover = pick(sr);
+        for LevelSignal { name, regions } in &level {
+            let cover = pick(regions);
             // rename_outputs needs a one-output header; a zero-cube cover has none — skip it.
             if cover.num_cubes() == 0 {
                 continue;
@@ -328,7 +340,7 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
                 .cloned()
                 .collect::<BTreeSet<_>>(),
             labels.iter().cloned().collect::<BTreeSet<_>>(),
-            "joint {tag:?} cover carries exactly the stacked node names",
+            "joint {action:?} cover carries exactly the stacked node names",
         );
         // Joint (multi-output, cube-shared) minimisation, falling back to the un-minimised cover.
         let minimised = joint.clone().minimize().unwrap_or(joint);
@@ -343,12 +355,12 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
                 let i = cols_layout.node_index[out];
                 // Accepted disjointness guarantee: on/off/hold are pairwise disjoint PER NODE, so a
                 // slot is never stamped two DIFFERENT definite actions; overlapping cubes across passes
-                // only ever re-stamp the same tag into a slot.
+                // only ever re-stamp the same action into a slot.
                 debug_assert!(
-                    slots[i].is_none() || slots[i] == Some(tag),
+                    slots[i].is_none() || slots[i] == Some(action),
                     "state slot for {out} stamped conflicting next actions",
                 );
-                slots[i] = Some(tag);
+                slots[i] = Some(action);
             }
         }
     }
@@ -387,7 +399,16 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
                 Edge::Fall => EdgeTok::Fall,
             };
             let regions = &capture.regions;
-            for (action, cubes) in [(Next::High, &regions.on), (Next::Low, &regions.off)] {
+            for RegionAction { cubes, action } in [
+                RegionAction {
+                    cubes: &regions.on,
+                    action: Next::High,
+                },
+                RegionAction {
+                    cubes: &regions.off,
+                    action: Next::Low,
+                },
+            ] {
                 for cube in cubes {
                     push(&capture.clock.pin, active, action, cube, &regions.cols);
                 }
@@ -409,10 +430,19 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
         let off_clock = er.clocks();
         let off_clock = off_clock[0];
         let off = &er.off_edge;
-        for (action, cubes) in [
-            (Next::High, &off.on),
-            (Next::Low, &off.off),
-            (Next::Hold, &off.hold),
+        for RegionAction { cubes, action } in [
+            RegionAction {
+                cubes: &off.on,
+                action: Next::High,
+            },
+            RegionAction {
+                cubes: &off.off,
+                action: Next::Low,
+            },
+            RegionAction {
+                cubes: &off.hold,
+                action: Next::Hold,
+            },
         ] {
             for cube in cubes {
                 push(off_clock, off_token, action, cube, &off.cols);
@@ -427,6 +457,31 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
         rows,
         edge_rows,
     })
+}
+
+/// One level-sensitive state signal feeding the cover-algebra pass: the signal's cached region covers
+/// under the name those covers are written in.
+struct LevelSignal<'a> {
+    /// The signal's ORIGINAL name. The covers, the shared header and the minterm row keys are all
+    /// written in signal names, so this is the name the pass stamps into an output column and reads back
+    /// — never the minted table-node name a state output prints (`Q` -> `Q_st`).
+    name: Symbol,
+    /// The signal's on/off/hold region covers, as the minimiser cached them.
+    regions: &'a StateRegions,
+}
+
+/// How a cover pass reaches the cover it stacks: one of the three cached region covers of a signal's
+/// [`StateRegions`].
+type Pick = fn(&StateRegions) -> &Cover<Symbol, Anonymous>;
+
+/// One pass of the cover-algebra fold: the region cover it takes from each level signal, and the action
+/// every asserted output column of that cover's cubes stamps into a row slot.
+struct CoverPass {
+    /// The next-state action this pass writes.
+    action: Next,
+    /// The cover it reads for that action — `on_cover` for `High`, `off_cover` for `Low`, `hold_cover`
+    /// for `Hold`.
+    pick: Pick,
 }
 
 /// Column layout shared by every [`EdgeRow`] built for one cell: each input/state node's original name

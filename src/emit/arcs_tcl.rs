@@ -66,6 +66,7 @@ use crate::logic::assignment;
 use crate::logic::constraint::{Constraint, ConstraintKind, VictimNode};
 use crate::logic::edge::EdgeLabel;
 use crate::logic::leakage::LeakageState;
+use crate::logic::Literal;
 use crate::model::{AnalysedCell, ArcClass};
 
 /// Knobs for the arc emitter.
@@ -1205,9 +1206,10 @@ fn related_edge(arc: &Arc) -> Edge {
 /// naming the same literals one condition — and the block a firing renders is what tells two firings
 /// apart ([`Blocks::state`]).
 fn when(end: &espresso_logic::Minterm<espresso_logic::Symbol>, exclude: &str) -> Option<BoolExpr> {
-    let mut lits: Vec<(Symbol, bool)> = assignment(end)
+    let mut lits: Vec<Literal> = assignment(end)
         .into_iter()
         .filter(|(k, _)| *k != exclude)
+        .map(|(var, positive)| Literal { var, positive })
         .collect();
     if lits.is_empty() {
         return None;
@@ -1221,16 +1223,15 @@ fn when(end: &espresso_logic::Minterm<espresso_logic::Symbol>, exclude: &str) ->
 /// the distinct stored-value contexts of a state-holding cell that share one input vector. `None` when
 /// no literal is fixed.
 fn hidden_when(h: &HiddenArc) -> Option<BoolExpr> {
-    let mut lits: Vec<(Symbol, bool)> = assignment(&h.end)
+    let mut lits: Vec<Literal> = assignment(&h.end)
         .into_iter()
         .filter(|(k, _)| *k != h.pin.pin.as_str())
+        .map(|(var, positive)| Literal { var, positive })
         .collect();
-    lits.extend(
-        h.levels
-            .outputs
-            .iter()
-            .map(|lvl| (lvl.node.clone(), lvl.level)),
-    );
+    lits.extend(h.levels.outputs.iter().map(|lvl| Literal {
+        var: lvl.node.clone(),
+        positive: lvl.level,
+    }));
     if lits.is_empty() {
         return None;
     }
@@ -1257,16 +1258,15 @@ fn constraint_when(c: &Constraint) -> Option<BoolExpr> {
         .prevector
         .last()
         .expect("path_to seeds its chain with the probed node itself");
-    let mut lits: Vec<(Symbol, bool)> = assignment(held)
+    let mut lits: Vec<Literal> = assignment(held)
         .into_iter()
         .filter(|(k, _)| pins.edge_of(k.as_str()).is_none())
+        .map(|(var, positive)| Literal { var, positive })
         .collect();
-    lits.extend(
-        c.levels
-            .outputs
-            .iter()
-            .map(|lvl| (lvl.node.clone(), lvl.level)),
-    );
+    lits.extend(c.levels.outputs.iter().map(|lvl| Literal {
+        var: lvl.node.clone(),
+        positive: lvl.level,
+    }));
     if lits.is_empty() {
         return None;
     }
@@ -1280,13 +1280,14 @@ fn constraint_when(c: &Constraint) -> Option<BoolExpr> {
 /// The condition is the whole of what the bare form states, so it is always written: a cell with no
 /// input and no output fixes no literal, and the block then rests under the tautology `1`.
 fn leakage_when(l: &LeakageState) -> BoolExpr {
-    let mut lits: Vec<(Symbol, bool)> = assignment(&l.inputs).into_iter().collect();
-    lits.extend(
-        l.levels
-            .outputs
-            .iter()
-            .map(|lvl| (lvl.node.clone(), lvl.level)),
-    );
+    let mut lits: Vec<Literal> = assignment(&l.inputs)
+        .into_iter()
+        .map(|(var, positive)| Literal { var, positive })
+        .collect();
+    lits.extend(l.levels.outputs.iter().map(|lvl| Literal {
+        var: lvl.node.clone(),
+        positive: lvl.level,
+    }));
     lits.sort();
     crate::logic::product(&lits)
 }

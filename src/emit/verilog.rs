@@ -21,6 +21,7 @@ use std::fmt;
 
 use espresso_logic::Symbol;
 
+use crate::emit::RegionAction;
 use crate::logic::arcs::{Edge, PinEdge};
 use crate::logic::edge::EdgeCaptures;
 use crate::logic::regions::{StateCube, StateRegions};
@@ -219,12 +220,21 @@ impl fmt::Display for Constant<'_> {
 /// The UDP table rows: one per region cube of the signal's on, off and hold regions.
 fn table_rows(sr: &StateRegions) -> Vec<TableRow<'_>> {
     let mut rows: Vec<TableRow> = Vec::new();
-    for (region, next) in [
-        (&sr.on, Next::On),
-        (&sr.off, Next::Off),
-        (&sr.hold, Next::Hold),
+    for RegionAction { cubes, action } in [
+        RegionAction {
+            cubes: &sr.on,
+            action: Next::On,
+        },
+        RegionAction {
+            cubes: &sr.off,
+            action: Next::Off,
+        },
+        RegionAction {
+            cubes: &sr.hold,
+            action: Next::Hold,
+        },
     ] {
-        rows.extend(region.iter().map(|cube| TableRow { cube, next }));
+        rows.extend(cubes.iter().map(|cube| TableRow { cube, next: action }));
     }
     // IEEE 1364 matches a UDP row by its pattern and resolves an overlap by rule, never by a row's
     // position, so a consumer reads the table as a set of rows. This order over the row values is the
@@ -378,8 +388,17 @@ fn edge_table_rows(er: &EdgeCaptures) -> Vec<EdgeRow> {
     // `(clock, edge)`, each keeping its single edge indicator in the capturing clock's column.
     for capture in &er.captures {
         let regions = &capture.regions;
-        for (region, next) in [(&regions.on, Next::On), (&regions.off, Next::Off)] {
-            rows.extend(region.iter().map(|cube| {
+        for RegionAction { cubes, action } in [
+            RegionAction {
+                cubes: &regions.on,
+                action: Next::On,
+            },
+            RegionAction {
+                cubes: &regions.off,
+                action: Next::Off,
+            },
+        ] {
+            rows.extend(cubes.iter().map(|cube| {
                 region_row(
                     er,
                     &cols,
@@ -387,7 +406,7 @@ fn edge_table_rows(er: &EdgeCaptures) -> Vec<EdgeRow> {
                     Some(&capture.clock),
                     &regions.cols,
                     cube,
-                    next,
+                    action,
                 )
             }));
         }
@@ -395,11 +414,20 @@ fn edge_table_rows(er: &EdgeCaptures) -> Vec<EdgeRow> {
 
     // (b) Async set/clear as LEVEL rows (every clock `?`): by IEEE 1364 a level row dominates the edge
     // rows, and F1/F2 guarantee any overlap agrees, so the set/clear wins independent of the clocks.
-    for (region, next) in [(&er.off_edge.on, Next::On), (&er.off_edge.off, Next::Off)] {
+    for RegionAction { cubes, action } in [
+        RegionAction {
+            cubes: &er.off_edge.on,
+            action: Next::On,
+        },
+        RegionAction {
+            cubes: &er.off_edge.off,
+            action: Next::Off,
+        },
+    ] {
         rows.extend(
-            region
+            cubes
                 .iter()
-                .map(|cube| region_row(er, &cols, &clocks, None, &er.off_edge.cols, cube, next)),
+                .map(|cube| region_row(er, &cols, &clocks, None, &er.off_edge.cols, cube, action)),
         );
     }
 

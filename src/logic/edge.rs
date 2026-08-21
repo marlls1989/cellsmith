@@ -310,6 +310,18 @@ struct ActiveEdge {
     clock: PinEdge,
 }
 
+/// One clock keyed together with every direction it is active on — one clock, possibly several
+/// directions, kept as a unit rather than flattened into separate [`PinEdge`]s: [`synth_node_captures`]
+/// groups a node's captures by clock (input-pin order, `Rise` before `Fall` within a clock), and that
+/// grouping is the contract the two passes share.
+#[derive(Debug, Clone)]
+struct ClockEdges {
+    /// The clock pin.
+    clock: Symbol,
+    /// The directions this clock is active on, `Rise` before `Fall`.
+    directions: Vec<Edge>,
+}
+
 /// A latch taken in one phase of one clock: what the opacity memo is keyed on. The two names carry
 /// different roles — `latch` is a state variable, `clock` an input the phase belongs to — and `level` is
 /// the clock's level, never the latch's value.
@@ -341,6 +353,17 @@ struct Forcing {
     /// settling it either way is a behaviour change, which is why neither was done in passing.
     #[allow(dead_code)]
     forced: bool,
+}
+
+/// One read-gate pin on a register output: a forcing pin whose toggling never moves any state variable
+/// in the output's cone, so it READS the held content rather than overwriting it. `pass_level` is the
+/// level at which it does so — the pin's un-asserted level.
+#[derive(Debug, Clone)]
+struct ReadGatePin {
+    /// The forcing pin.
+    pin: Symbol,
+    /// The pin's un-asserted level, at which the gate passes the held content through.
+    pass_level: bool,
 }
 
 /// Discover each node's edge arcs from the cell's toggle-and-settle behaviour and label the cell's
@@ -729,11 +752,11 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         let agg = &aggs[i];
         // The keying clocks in cell input-pin order, each with its active directions kept (Rise before
         // Fall). Every clock present carries at least one active-edge direction.
-        let clock_edges: Vec<(Symbol, Vec<Edge>)> = inputs
+        let clock_edges: Vec<ClockEdges> = inputs
             .iter()
             .filter(|p| s.iter().any(|a| &a.clock.pin == *p))
             .map(|clock| {
-                let edges: Vec<Edge> = [Edge::Rise, Edge::Fall]
+                let directions: Vec<Edge> = [Edge::Rise, Edge::Fall]
                     .into_iter()
                     .filter(|&edge| {
                         s.contains(&ActiveEdge {
@@ -744,7 +767,10 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                         })
                     })
                     .collect();
-                (clock.clone(), edges)
+                ClockEdges {
+                    clock: clock.clone(),
+                    directions,
+                }
             })
             .collect();
 
@@ -833,7 +859,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
             let cone = cone_of(y.as_str());
             // A forcing pin is a READ-GATE iff toggling it never moves any state variable in the output's
             // cone (its pass level is the pin's un-asserted level).
-            let mut gate_pass: Vec<(Symbol, bool)> = Vec::new();
+            let mut gate_pass: Vec<ReadGatePin> = Vec::new();
             for (pin, forcing) in &forcing_of[iy] {
                 let changes_cone = cone.iter().any(|w| {
                     index_of
@@ -841,7 +867,10 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                         .is_some_and(|&iw| aggs[iw].moves.iter().any(|mv| &mv.pin == pin))
                 });
                 if !changes_cone {
-                    gate_pass.push((pin.clone(), !forcing.asserted));
+                    gate_pass.push(ReadGatePin {
+                        pin: pin.clone(),
+                        pass_level: !forcing.asserted,
+                    });
                 }
             }
             if gate_pass.is_empty() {
@@ -852,7 +881,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
             let pass_min = Minterm::with_labels(
                 &gate_pass
                     .iter()
-                    .map(|(g, p)| (g.as_str(), Some(*p)))
+                    .map(|g| (g.pin.as_str(), Some(g.pass_level)))
                     .collect::<Vec<_>>(),
             )
             .expect("distinct read-gate pins");
@@ -1429,16 +1458,17 @@ fn synth_node_captures<B: Brand, C: ManagerCell>(
     fold_eligible: &BTreeSet<Symbol>,
     inputs_set: &BTreeSet<&str>,
     inputs: &[Symbol],
-    clock_edges: &[(Symbol, Vec<Edge>)],
+    clock_edges: &[ClockEdges],
     agg: &CandAgg,
 ) -> Synthesised {
-    let clocks: Vec<Symbol> = clock_edges.iter().map(|(c, _)| c.clone()).collect();
+    let clocks: Vec<Symbol> = clock_edges.iter().map(|ce| ce.clock.clone()).collect();
 
     // Capture per clock (input-pin order), per active edge (Rise first). The uniform header is the inputs
     // minus THAT capture's clock, then every candidate signal name; any OTHER clock stays as a level
     // column. The drop-loop then sheds the columns emission does not need.
     let mut captures: Vec<Capture> = Vec::new();
-    for (clock, edges) in clock_edges {
+    for ce in clock_edges {
+        let clock = &ce.clock;
         let header: Vec<Symbol> = inputs
             .iter()
             .filter(|p| p.as_str() != clock.as_str())
@@ -1446,7 +1476,7 @@ fn synth_node_captures<B: Brand, C: ManagerCell>(
             .chain(candidates.iter().cloned())
             .collect();
 
-        for &edge in edges {
+        for &edge in &ce.directions {
             let active = ActiveEdge {
                 clock: PinEdge {
                     pin: clock.clone(),

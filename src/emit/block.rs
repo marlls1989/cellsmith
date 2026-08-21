@@ -363,7 +363,7 @@ impl fmt::Display for Description<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logic::product;
+    use crate::logic::{product, Literal};
 
     fn sym(name: &str) -> Symbol {
         Symbol::from(name)
@@ -392,7 +392,13 @@ mod tests {
 
     /// A condition as the product of literals every `-when` here is built from.
     fn when(lits: &[(&str, bool)]) -> BoolExpr {
-        let lits: Vec<(Symbol, bool)> = lits.iter().map(|(n, v)| (sym(n), *v)).collect();
+        let lits: Vec<Literal> = lits
+            .iter()
+            .map(|(var, positive)| Literal {
+                var: sym(var),
+                positive: *positive,
+            })
+            .collect();
         product(&lits)
     }
 

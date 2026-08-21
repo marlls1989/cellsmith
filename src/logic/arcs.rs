@@ -241,6 +241,27 @@ pub struct DerivedArcs {
     pub(crate) hidden: Vec<HiddenArc>,
 }
 
+/// One output across a single input toggle: the level it holds at the state the toggle starts from and
+/// the level it holds once the toggle has settled — the same two ends `ExposedLevel` states for an
+/// exposed internal node, and `None` at an end the output is not defined at. A pair that moves is a
+/// transition arc, whose direction is the `end` level; a toggle whose pairs all hold is a hidden arc.
+struct OutputLevels<'a> {
+    /// The output the levels are read off.
+    output: &'a AnalysedOutput,
+    /// The level at the toggle's start state.
+    start: Option<bool>,
+    /// The level at the state the toggle settles in.
+    end: Option<bool>,
+}
+
+impl OutputLevels<'_> {
+    /// Whether the output is defined at both ends of the toggle and holds the same level across it — the
+    /// per-output half of the hidden-arc condition, which every output of the cell has to meet.
+    fn holds(&self) -> bool {
+        matches!((self.start, self.end), (Some(start), Some(end)) if start == end)
+    }
+}
+
 /// Derive transition arcs for every output of a cell by re-walking its shared asynchronous state machine
 /// (see [`machine`] and [`Machine`]). A machine node is a [`Minterm<Symbol>`] over
 /// `[inputs…, state_vars…]`; traversal states may be partial, but each arc is measured only from a
@@ -297,29 +318,28 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Deri
                 // The end is projected onto the inputs — it is what the `-vector` and `-when` render from —
                 // while the start keeps the full machine node, the arc's context.
                 let end = np.project_to(inputs);
-                // Collect each output's (before, after) once so both the transition and hidden paths read it.
-                let vals: Vec<(&AnalysedOutput, Option<bool>, Option<bool>)> = cell
+                // Take each output's levels at both ends of the toggle once, so the transition and hidden
+                // paths read the same ones.
+                let output_levels: Vec<OutputLevels> = cell
                     .outputs
                     .iter()
-                    .map(|o| {
-                        (
-                            o,
-                            m.output_value(&o.name, node),
-                            m.output_value(&o.name, &np),
-                        )
+                    .map(|o| OutputLevels {
+                        output: o,
+                        start: m.output_value(&o.name, node),
+                        end: m.output_value(&o.name, &np),
                     })
                     .collect();
-                for (o, before, after) in &vals {
-                    let (Some(before), Some(after)) = (before, after) else {
+                for out in &output_levels {
+                    let (Some(before), Some(after)) = (out.start, out.end) else {
                         continue;
                     };
                     if before == after {
                         continue;
                     }
-                    let edge = if *after { Edge::Rise } else { Edge::Fall };
+                    let edge = if after { Edge::Rise } else { Edge::Fall };
                     acc.arcs.push(Arc {
                         output: PinEdge {
-                            pin: o.name.clone(),
+                            pin: out.output.name.clone(),
                             edge,
                         },
                         related: related.clone(),
@@ -332,11 +352,7 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Deri
 
                 // Hidden path: a settled input toggle where every output is defined at both ends and none of
                 // them changed — internal-power characterisation.
-                if !vals.is_empty()
-                    && vals
-                        .iter()
-                        .all(|(_, b, a)| matches!((b, a), (Some(b), Some(a)) if b == a))
-                {
+                if !output_levels.is_empty() && output_levels.iter().all(|out| out.holds()) {
                     let rose = end
                         .value_of(related.as_str())
                         .expect("toggled input is fully fixed in the settled end state");

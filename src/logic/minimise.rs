@@ -341,18 +341,35 @@ pub fn minimise_state_space<B: Brand, C: ManagerCell>(
 /// What is LEFT for [`fold_pass`]: signals whose definition must be SUBSTITUTED into consumers and
 /// dropped — fold permits such a substitution unless it would create a self-reference, and permits a
 /// self-reference-creating one only when the inserted function has support arity 1.
+/// A dedup group: the function shared by every signal in `members`, discovered by scanning `order`
+/// for plain-BDD equality.
+struct DuplicateGroup<B: Brand, C: ManagerCell> {
+    function: Bdd<B, C>,
+    members: Vec<Symbol>,
+}
+
+/// A preserved duplicate demoted rather than purged: `member` keeps its name, but its stored function
+/// becomes `alias`, the group representative's `var(rep)`.
+struct Demotion<B: Brand, C: ManagerCell> {
+    member: Symbol,
+    alias: Bdd<B, C>,
+}
+
 fn dedup_pass<B: Brand, C: ManagerCell>(
     bdds: &mut BTreeMap<Symbol, Bdd<B, C>>,
     order: &[Symbol],
     p: &Preserved,
     result: &mut Minimised,
 ) -> bool {
-    let mut groups: Vec<(Bdd<B, C>, Vec<Symbol>)> = Vec::new();
+    let mut groups: Vec<DuplicateGroup<B, C>> = Vec::new();
     for s in order {
         let Some(f) = bdds.get(s) else { continue };
-        match groups.iter_mut().find(|(g, _)| g == f) {
-            Some((_, members)) => members.push(s.clone()),
-            None => groups.push((f.clone(), vec![s.clone()])),
+        match groups.iter_mut().find(|group| &group.function == f) {
+            Some(group) => group.members.push(s.clone()),
+            None => groups.push(DuplicateGroup {
+                function: f.clone(),
+                members: vec![s.clone()],
+            }),
         }
     }
     // Accumulate every committed group's equation-field edits, then apply them ONCE at pass end. The
@@ -360,9 +377,10 @@ fn dedup_pass<B: Brand, C: ManagerCell>(
     // substitution and pushed through one stream compose ([`Composer::compose_map`]) that shares a
     // single memo across all surviving functions, instead of re-walking the map per group, per signal.
     let mut rename: BTreeMap<Symbol, Bdd<B, C>> = BTreeMap::new();
-    let mut demoted: Vec<(Symbol, Bdd<B, C>)> = Vec::new();
+    let mut demoted: Vec<Demotion<B, C>> = Vec::new();
     let mut purged: Vec<Symbol> = Vec::new();
-    for (_, members) in groups.into_iter().filter(|(_, m)| m.len() >= 2) {
+    for group in groups.into_iter().filter(|g| g.members.len() >= 2) {
+        let members = group.members;
         // The coordinate lands on an output pin where the group holds one; failing that on a preserved
         // member, so an exposed name keeps it; failing that on the first member in scan order. An
         // exposed internal never outranks a real output pin.
@@ -403,7 +421,10 @@ fn dedup_pass<B: Brand, C: ManagerCell>(
             rename.insert(m.clone(), rep_var.clone());
             if p.is_preserved(&m) {
                 // Preserved duplicate: demoted to var(rep) at pass end, name kept — never purged.
-                demoted.push((m, rep_var.clone()));
+                demoted.push(Demotion {
+                    member: m,
+                    alias: rep_var.clone(),
+                });
             } else {
                 // Plain internal duplicate: purged. The interface and the exposed names are sacred —
                 // result.purged ∩ preserved = ∅.
@@ -430,7 +451,7 @@ fn dedup_pass<B: Brand, C: ManagerCell>(
     // Rewrite every surviving consumer of a retired member in one shared-memo stream pass. Functions
     // referencing no retired member are held out (an untouched no-op); demoted signals are held out too
     // — their whole entry is overwritten with var(rep) below, not composed.
-    let demoted_names: BTreeSet<&Symbol> = demoted.iter().map(|(m, _)| m).collect();
+    let demoted_names: BTreeSet<&Symbol> = demoted.iter().map(|d| &d.member).collect();
     let names: Vec<Symbol> = order
         .iter()
         .filter(|n| bdds.contains_key(*n) && !demoted_names.contains(*n))
@@ -453,10 +474,10 @@ fn dedup_pass<B: Brand, C: ManagerCell>(
 
     // Demote each preserved duplicate to var(rep) (name kept). Its entry is still the snapshot original,
     // so the change-check is against the pre-pass function.
-    for (m, rep_var) in demoted {
-        if bdds[&m] != rep_var {
-            result.changed.insert(m.clone());
-            bdds.insert(m, rep_var);
+    for Demotion { member, alias } in demoted {
+        if bdds[&member] != alias {
+            result.changed.insert(member.clone());
+            bdds.insert(member, alias);
             progress = true;
         }
     }
