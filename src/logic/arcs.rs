@@ -96,6 +96,14 @@ pub(crate) struct ExposedLevel {
     pub(crate) end: bool,
 }
 
+/// One node and the level it holds at the state being stated: an output pin's held value across a
+/// measured arc, or a rest state's settled value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HeldLevel {
+    pub(crate) node: Symbol,
+    pub(crate) level: bool,
+}
+
 /// What the cell's non-input columns hold across a measured arc: each output pin's level at the arc's
 /// start state, in `cell.outputs` order, and each exposed internal node's levels at both ends of the
 /// measurement, in the machine's exposure order. Liberate reads the start levels as the arc's `-ic`
@@ -104,7 +112,7 @@ pub(crate) struct ExposedLevel {
 /// arc whose outputs all hold.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ArcLevels {
-    pub(crate) outputs: Vec<(Symbol, bool)>,
+    pub(crate) outputs: Vec<HeldLevel>,
     pub(crate) exposed: Vec<ExposedLevel>,
 }
 
@@ -137,7 +145,10 @@ impl ArcLevels {
                     let v = m
                         .output_value(&o.name, node)
                         .expect("every output is defined at a fully-initialised probed state");
-                    (o.name.clone(), v)
+                    HeldLevel {
+                        node: o.name.clone(),
+                        level: v,
+                    }
                 })
                 .collect(),
             exposed: m
@@ -223,15 +234,20 @@ pub struct HiddenArc {
     pub(crate) levels: ArcLevels,
 }
 
+/// What [`derive`] yields for one cell: its transition arcs and its hidden internal-power arcs.
+#[derive(Debug, Default)]
+pub struct DerivedArcs {
+    pub(crate) arcs: Vec<Arc>,
+    pub(crate) hidden: Vec<HiddenArc>,
+}
+
 /// Derive transition arcs for every output of a cell by re-walking its shared asynchronous state machine
 /// (see [`machine`] and [`Machine`]). A machine node is a [`Minterm<Symbol>`] over
 /// `[inputs…, state_vars…]`; traversal states may be partial, but each arc is measured only from a
 /// fully-initialised (determinate) state (see `Machine::arc_eligible`). Also derives the
 /// whole-cell internal-power ('hidden') arcs — single input toggles that settle but leave every
 /// output unchanged.
-pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
-    m: &Machine<B, C>,
-) -> (Vec<Arc>, Vec<HiddenArc>) {
+pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> DerivedArcs {
     let cell = m.cell;
     let inputs = &cell.inputs;
     // Both coordinate halves, stepped together: a re-walk toggle must recompute a combinational
@@ -252,103 +268,97 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
     // `ex.order` and contributes at most one toggle per input, hence at most one arc per output, so
     // two firings never share an identity. The `debug_assert!`s below read that back off the
     // assembled arcs.
-    let (arcs, hidden) = ex
+    let DerivedArcs { arcs, hidden } = ex
         .order
         .par_iter()
-        .fold(
-            || (Vec::new(), Vec::new()),
-            |mut acc, node| {
-                // ELIGIBILITY: only measure from a FULLY-DETERMINATE start — a partially-fixed start
-                // carries an uninitialised latch that must not be read as a held value, so it seeds
-                // traversal but is never an arc context (see `Machine::arc_eligible`).
-                if !m.arc_eligible(node) {
-                    return acc;
-                }
-                // The start levels and the prevector reaching them belong to this state alone, so every
-                // toggle out of it measures from the same ones: both are taken once, here.
-                let start_levels = ArcLevels::at(m, node);
-                let prevector = ex.path_to(node, inputs);
-                for related in inputs {
-                    // Toggle one input, hold the (partial) state, and let the state settle.
-                    let toggled = machine::toggle(node, &[related.as_str()]);
-                    let Some(np) = machine::settle(&deltas, &toggled) else {
+        .fold(DerivedArcs::default, |mut acc, node| {
+            // ELIGIBILITY: only measure from a FULLY-DETERMINATE start — a partially-fixed start
+            // carries an uninitialised latch that must not be read as a held value, so it seeds
+            // traversal but is never an arc context (see `Machine::arc_eligible`).
+            if !m.arc_eligible(node) {
+                return acc;
+            }
+            // The start levels and the prevector reaching them belong to this state alone, so every
+            // toggle out of it measures from the same ones: both are taken once, here.
+            let start_levels = ArcLevels::at(m, node);
+            let prevector = ex.path_to(node, inputs);
+            for related in inputs {
+                // Toggle one input, hold the (partial) state, and let the state settle.
+                let toggled = machine::toggle(node, &[related.as_str()]);
+                let Some(np) = machine::settle(&deltas, &toggled) else {
+                    continue;
+                };
+                // The start levels completed with where this toggle leaves the exposed nodes — the one
+                // part of the sample the toggle decides — cloned per arc derived from it. Both paths
+                // below take the same sample: an exposed node can move across a toggle every output
+                // holds through.
+                let levels = start_levels.ending_at(m, &np);
+                // An arc for every output that is defined at both ends and flips across this input toggle.
+                // The end is projected onto the inputs — it is what the `-vector` and `-when` render from —
+                // while the start keeps the full machine node, the arc's context.
+                let end = np.project_to(inputs);
+                // Collect each output's (before, after) once so both the transition and hidden paths read it.
+                let vals: Vec<(&AnalysedOutput, Option<bool>, Option<bool>)> = cell
+                    .outputs
+                    .iter()
+                    .map(|o| {
+                        (
+                            o,
+                            m.output_value(&o.name, node),
+                            m.output_value(&o.name, &np),
+                        )
+                    })
+                    .collect();
+                for (o, before, after) in &vals {
+                    let (Some(before), Some(after)) = (before, after) else {
                         continue;
                     };
-                    // The start levels completed with where this toggle leaves the exposed nodes — the one
-                    // part of the sample the toggle decides — cloned per arc derived from it. Both paths
-                    // below take the same sample: an exposed node can move across a toggle every output
-                    // holds through.
-                    let levels = start_levels.ending_at(m, &np);
-                    // An arc for every output that is defined at both ends and flips across this input toggle.
-                    // The end is projected onto the inputs — it is what the `-vector` and `-when` render from —
-                    // while the start keeps the full machine node, the arc's context.
-                    let end = np.project_to(inputs);
-                    // Collect each output's (before, after) once so both the transition and hidden paths read it.
-                    let vals: Vec<(&AnalysedOutput, Option<bool>, Option<bool>)> = cell
-                        .outputs
-                        .iter()
-                        .map(|o| {
-                            (
-                                o,
-                                m.output_value(&o.name, node),
-                                m.output_value(&o.name, &np),
-                            )
-                        })
-                        .collect();
-                    for (o, before, after) in &vals {
-                        let (Some(before), Some(after)) = (before, after) else {
-                            continue;
-                        };
-                        if before == after {
-                            continue;
-                        }
-                        let edge = if *after { Edge::Rise } else { Edge::Fall };
-                        acc.0.push(Arc {
-                            output: PinEdge {
-                                pin: o.name.clone(),
-                                edge,
-                            },
-                            related: related.clone(),
-                            start: node.clone(),
-                            end: end.clone(),
-                            prevector: prevector.clone(),
-                            levels: levels.clone(),
-                        });
+                    if before == after {
+                        continue;
                     }
-
-                    // Hidden path: a settled input toggle where every output is defined at both ends and none of
-                    // them changed — internal-power characterisation.
-                    if !vals.is_empty()
-                        && vals
-                            .iter()
-                            .all(|(_, b, a)| matches!((b, a), (Some(b), Some(a)) if b == a))
-                    {
-                        let rose = end
-                            .value_of(related.as_str())
-                            .expect("toggled input is fully fixed in the settled end state");
-                        acc.1.push(HiddenArc {
-                            pin: PinEdge {
-                                pin: related.clone(),
-                                edge: if rose { Edge::Rise } else { Edge::Fall },
-                            },
-                            start: node.clone(),
-                            end: end.clone(),
-                            prevector: prevector.clone(),
-                            levels: levels.clone(),
-                        });
-                    }
+                    let edge = if *after { Edge::Rise } else { Edge::Fall };
+                    acc.arcs.push(Arc {
+                        output: PinEdge {
+                            pin: o.name.clone(),
+                            edge,
+                        },
+                        related: related.clone(),
+                        start: node.clone(),
+                        end: end.clone(),
+                        prevector: prevector.clone(),
+                        levels: levels.clone(),
+                    });
                 }
-                acc
-            },
-        )
-        .reduce(
-            || (Vec::new(), Vec::new()),
-            |(mut a, mut h), (b, hb)| {
-                a.extend(b);
-                h.extend(hb);
-                (a, h)
-            },
-        );
+
+                // Hidden path: a settled input toggle where every output is defined at both ends and none of
+                // them changed — internal-power characterisation.
+                if !vals.is_empty()
+                    && vals
+                        .iter()
+                        .all(|(_, b, a)| matches!((b, a), (Some(b), Some(a)) if b == a))
+                {
+                    let rose = end
+                        .value_of(related.as_str())
+                        .expect("toggled input is fully fixed in the settled end state");
+                    acc.hidden.push(HiddenArc {
+                        pin: PinEdge {
+                            pin: related.clone(),
+                            edge: if rose { Edge::Rise } else { Edge::Fall },
+                        },
+                        start: node.clone(),
+                        end: end.clone(),
+                        prevector: prevector.clone(),
+                        levels: levels.clone(),
+                    });
+                }
+            }
+            acc
+        })
+        .reduce(DerivedArcs::default, |mut acc, part| {
+            acc.arcs.extend(part.arcs);
+            acc.hidden.extend(part.hidden);
+            acc
+        });
     debug_assert!(
         all_distinct(&arcs, |a| (&a.output, &a.related, &a.start)),
         "arc identities are unique per firing"
@@ -357,7 +367,7 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(
         all_distinct(&hidden, |h| (&h.pin, &h.start)),
         "hidden arc identities are unique per firing"
     );
-    (arcs, hidden)
+    DerivedArcs { arcs, hidden }
 }
 
 /// Whether every item carries a distinct identity under `key`, which may borrow from the item it keys.
@@ -447,12 +457,12 @@ QN = "!Q"
                 levels
                     .outputs
                     .iter()
-                    .map(|(n, _)| n.as_str())
+                    .map(|h| h.node.as_str())
                     .collect::<Vec<_>>(),
                 names
             );
-            for (name, value) in &levels.outputs {
-                assert_eq!(Some(*value), m.output_value(name, node));
+            for h in &levels.outputs {
+                assert_eq!(Some(h.level), m.output_value(&h.node, node));
             }
             eligible += 1;
         }
@@ -567,7 +577,7 @@ Y = "!(W + C)"
         assert!(sampled > 0, "the fixture explores at least one state");
 
         // Across a measured arc the two ends differ wherever the toggled input moves W.
-        let (arcs, _) = derive(&m);
+        let arcs = derive(&m).arcs;
         assert!(
             arcs.iter()
                 .any(|a| a.levels.exposed[0].start != a.levels.exposed[0].end),
@@ -590,14 +600,14 @@ Q = "A*B + Q*(A+B)"
         );
         assert!(!cell.arcs.is_empty());
         for a in &cell.arcs {
-            let (_, level) = a
+            let level = a
                 .levels
                 .outputs
                 .iter()
-                .find(|(n, _)| *n == a.output.pin)
+                .find(|lvl| lvl.node == a.output.pin)
                 .expect("the measured output carries a level");
             assert_eq!(
-                *level,
+                level.level,
                 a.output.edge == Edge::Fall,
                 "{} {:?} must start at its pre-edge value",
                 a.output.pin,
@@ -647,8 +657,8 @@ Y = "A*B"
             h.pin.pin.as_str() == "A"
                 && h.pin.edge == Edge::Fall
                 && h.levels.outputs.len() == 1
-                && h.levels.outputs[0].0.as_str() == "Y"
-                && !h.levels.outputs[0].1
+                && h.levels.outputs[0].node.as_str() == "Y"
+                && !h.levels.outputs[0].level
         }));
         // Single-output cell: every hidden arc holds exactly one output value.
         assert!(cell.hidden_arcs.iter().all(|h| h.levels.outputs.len() == 1));
@@ -690,8 +700,8 @@ Q = "E*D + !E*Q"
             h.levels
                 .outputs
                 .iter()
-                .find(|(s, _)| s.as_str() == "Q")
-                .map(|(_, v)| *v)
+                .find(|lvl| lvl.node.as_str() == "Q")
+                .map(|lvl| lvl.level)
         };
         assert!(d_rise.iter().any(|h| q_val(h) == Some(false)));
         assert!(d_rise.iter().any(|h| q_val(h) == Some(true)));
@@ -757,7 +767,12 @@ Y = "K + S*L"
         // so two hidden arcs, though their input vectors and held output values coincide.
         let cell = analyse(MASKED_PAIR);
         let at = [("E", false), ("D", true), ("S", false), ("C", false)];
-        let held_low = |h: &HiddenArc| h.levels.outputs.iter().all(|(o, v)| o == "Y" && !v);
+        let held_low = |h: &HiddenArc| {
+            h.levels
+                .outputs
+                .iter()
+                .all(|lvl| lvl.node == "Y" && !lvl.level)
+        };
         let contexts = masked_values(
             cell.hidden_arcs
                 .iter()

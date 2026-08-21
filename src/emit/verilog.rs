@@ -738,16 +738,23 @@ impl fmt::Display for Sop<'_> {
         if sr.on.iter().any(|cube| literals(sr, cube).next().is_none()) {
             return f.write_str("1'b1");
         }
-        Joined::new(sr.on.iter(), " | ", |cube| Product(sr, cube)).fmt(f)
+        Joined::new(sr.on.iter(), " | ", |cube| Product { regions: sr, cube }).fmt(f)
     }
 }
 
 /// One product term of a [`Sop`]: the cube's literals, `&`-joined inside parentheses.
-struct Product<'a>(&'a StateRegions, &'a StateCube);
+struct Product<'a> {
+    regions: &'a StateRegions,
+    cube: &'a StateCube,
+}
 
 impl fmt::Display for Product<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let literals = Joined::new(literals(self.0, self.1), " & ", std::convert::identity);
+        let literals = Joined::new(
+            literals(self.regions, self.cube),
+            " & ",
+            std::convert::identity,
+        );
         write!(f, "({literals})")
     }
 }

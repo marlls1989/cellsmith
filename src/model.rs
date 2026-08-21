@@ -147,7 +147,7 @@ impl NodeNames {
 /// The characterisation-template references for a cell (or a drive-strength alias override): the
 /// `delay`, `power` and `constraint` template names the `define_cell` emitter attaches. Structural
 /// only — each name is taken verbatim from the spec, never generated; an absent field is `None`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TemplateSpec {
     #[serde(default, deserialize_with = "de_opt_symbol")]
@@ -1026,14 +1026,17 @@ impl Cell {
             return Ok(self
                 .finish_view(analysed, &bdds, &min, Exploration::Fresh(budget))
                 .map_err(stopped)?
-                .0);
+                .view);
         }
 
         // The exposed nodes survived the run above, so this view carries them as machine coordinates:
         // the arc view (see `AnalysedCell::exposed_view`). Only plain data — arcs, hazards, regions,
         // the explored states — comes back out of the map, so the map is free to be minimised further
         // beneath it. This is the cell's one exploration; the model view below reads it.
-        let (arc_view, explored) = self
+        let FinishedView {
+            view: arc_view,
+            explored,
+        } = self
             .finish_view(analysed, &bdds, &min, Exploration::Fresh(budget))
             .map_err(stopped)?;
 
@@ -1058,7 +1061,9 @@ impl Cell {
                 .as_ref()
                 .expect("a fresh exploration that returned hands its states back"),
         );
-        let (mut model, _) = self
+        let FinishedView {
+            view: mut model, ..
+        } = self
             .finish_view(self.analyse_signals()?, &bdds, &min.then(released), reused)
             .map_err(stopped)?;
         debug_assert!(
@@ -1086,7 +1091,7 @@ impl Cell {
         bdds: &BTreeMap<Symbol, Bdd<B, C>>,
         min: &crate::logic::minimise::Minimised,
         exploration: Exploration<'_>,
-    ) -> Result<(AnalysedCell, Option<Explored>), ExplorationLimit> {
+    ) -> Result<FinishedView, ExplorationLimit> {
         recompute_signal_metadata(&mut view, bdds, min);
 
         // Build the cell's state machine once and derive both its transition arcs and its hazards from
@@ -1122,7 +1127,7 @@ impl Cell {
         // regions carrying the same cyclic classifier's verdict per signal.
         view.regions = derive_regions(&view, bdds);
 
-        Ok((view, explored))
+        Ok(FinishedView { view, explored })
     }
 
     /// Validate the cell and parse its functions into the pre-minimise [`AnalysedCell`]: every signal's
@@ -1363,6 +1368,13 @@ impl Cell {
     }
 }
 
+/// The result of [`Cell::finish_view`]: the finished view, and the states this view explored for the
+/// other view to project — `None` when it reused an exploration.
+struct FinishedView {
+    view: AnalysedCell,
+    explored: Option<Explored>,
+}
+
 /// Build every signal's BDD once from the shared per-cell `builder`, keyed by signal name in
 /// `signals()` order (outputs then internals).
 ///
@@ -1446,7 +1458,7 @@ pub(crate) fn analyse_one(src: &str) -> AnalysedCell {
 mod tests {
     use super::*;
     use crate::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, Deck};
-    use crate::logic::arcs::PinEdge;
+    use crate::logic::arcs::{HeldLevel, PinEdge};
     use crate::logic::constraint::ConstraintKind;
     use crate::logic::hazard::{Cause, Outcome};
     use espresso_logic::{bdd_builder, expr, Minterm};
@@ -2590,7 +2602,7 @@ Q = "CLK*M + !CLK*Q"
     #[derive(Debug, PartialEq, Eq)]
     struct LeakageRecord {
         inputs: Minterm<Symbol>,
-        outputs: Vec<(Symbol, bool)>,
+        outputs: Vec<HeldLevel>,
     }
 
     /// One generated constraint by its identity: the pin it constrains with the edge that pin makes,

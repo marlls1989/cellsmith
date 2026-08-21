@@ -27,17 +27,24 @@ impl fmt::Display for State<'_> {
             .zip(self.0.iter())
             .filter_map(|(name, value)| value.map(|v| (name, v)))
             .collect();
-        Joined::new(fixed.iter(), ", ", |&(name, value)| Assignment(name, value)).fmt(f)?;
+        Joined::new(fixed.iter(), ", ", |&(name, value)| Assignment {
+            name,
+            value,
+        })
+        .fmt(f)?;
         f.write_str("}")
     }
 }
 
 /// One `name=value` pair inside a [`State`]: the variable and the value the minterm fixes it to.
-struct Assignment<'a>(&'a Symbol, bool);
+struct Assignment<'a> {
+    name: &'a Symbol,
+    value: bool,
+}
 
 impl fmt::Display for Assignment<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}={}", self.0, u8::from(self.1))
+        write!(f, "{}={}", self.name, u8::from(self.value))
     }
 }
 

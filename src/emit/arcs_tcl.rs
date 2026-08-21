@@ -61,7 +61,7 @@ use crate::emit::block::{
 use crate::emit::tcl::{IcColumn, VectorValue};
 // `Edge` and `PinEdge` come from their own module, not through `block`: block.rs keeps its `use`
 // of them private, so `crate::logic::arcs` stays the one path every consumer reaches them by.
-use crate::logic::arcs::{Arc, ArcLevels, Edge, ExposedLevel, HiddenArc, PinEdge};
+use crate::logic::arcs::{Arc, ArcLevels, Edge, ExposedLevel, HeldLevel, HiddenArc, PinEdge};
 use crate::logic::assignment;
 use crate::logic::constraint::{Constraint, ConstraintKind, VictimNode};
 use crate::logic::edge::EdgeLabel;
@@ -1180,11 +1180,8 @@ fn exposed_levels(levels: &ArcLevels) -> BTreeMap<&str, &ExposedLevel> {
 
 /// One set of levels by node name — the lookup a column builder indexes as [`columns`] walks the
 /// exposures and then the outputs, each column reading the single level its node holds.
-fn levels_by_name(levels: &[(Symbol, bool)]) -> BTreeMap<&str, bool> {
-    levels
-        .iter()
-        .map(|(node, level)| (node.as_str(), *level))
-        .collect()
+fn levels_by_name(levels: &[HeldLevel]) -> BTreeMap<&str, bool> {
+    levels.iter().map(|h| (h.node.as_str(), h.level)).collect()
 }
 
 /// The edge the arc's `related` clock pin makes, read from its value in the end state — the same
@@ -1228,7 +1225,12 @@ fn hidden_when(h: &HiddenArc) -> Option<BoolExpr> {
         .into_iter()
         .filter(|(k, _)| *k != h.pin.pin.as_str())
         .collect();
-    lits.extend(h.levels.outputs.iter().map(|(s, v)| (s.clone(), *v)));
+    lits.extend(
+        h.levels
+            .outputs
+            .iter()
+            .map(|lvl| (lvl.node.clone(), lvl.level)),
+    );
     if lits.is_empty() {
         return None;
     }
@@ -1259,7 +1261,12 @@ fn constraint_when(c: &Constraint) -> Option<BoolExpr> {
         .into_iter()
         .filter(|(k, _)| pins.edge_of(k.as_str()).is_none())
         .collect();
-    lits.extend(c.levels.outputs.iter().map(|(s, v)| (s.clone(), *v)));
+    lits.extend(
+        c.levels
+            .outputs
+            .iter()
+            .map(|lvl| (lvl.node.clone(), lvl.level)),
+    );
     if lits.is_empty() {
         return None;
     }
@@ -1274,7 +1281,12 @@ fn constraint_when(c: &Constraint) -> Option<BoolExpr> {
 /// input and no output fixes no literal, and the block then rests under the tautology `1`.
 fn leakage_when(l: &LeakageState) -> BoolExpr {
     let mut lits: Vec<(Symbol, bool)> = assignment(&l.inputs).into_iter().collect();
-    lits.extend(l.levels.outputs.iter().cloned());
+    lits.extend(
+        l.levels
+            .outputs
+            .iter()
+            .map(|lvl| (lvl.node.clone(), lvl.level)),
+    );
     lits.sort();
     crate::logic::product(&lits)
 }

@@ -169,7 +169,10 @@ fn remedy(hazard: &Hazard, clock_pins: &[Symbol]) -> Option<Constraint> {
     let (kind, pin) = match &hazard.cause {
         // A separation states that two edges stay apart, and one edge has nothing to be separated from.
         Cause::Toggle { .. } => return None,
-        Cause::Race { pins: [x, y] } => separation(x, y, clock_pins),
+        Cause::Race { pins: [x, y] } => {
+            let Separation { kind, pin } = separation(x, y, clock_pins);
+            (kind, pin)
+        }
         Cause::Pulse { pin } => (ConstraintKind::MinPulseWidth, pin.clone()),
     };
     Some(Constraint {
@@ -184,19 +187,28 @@ fn remedy(hazard: &Hazard, clock_pins: &[Symbol]) -> Option<Constraint> {
     })
 }
 
-/// The separation that holds two racing pins apart, as the kind and the pin it constrains: a directed
+/// The kind of separation that holds two racing pins apart, and the pin it constrains: a directed
 /// setup/hold when exactly one of the pair is a declared clock — the other pin being the data the clock
 /// is constrained against — else a symmetric non_seq of the two as they were probed.
-fn separation(x: &PinEdge, y: &PinEdge, clock_pins: &[Symbol]) -> (ConstraintKind, PinEdge) {
+struct Separation {
+    kind: ConstraintKind,
+    pin: PinEdge,
+}
+
+/// The separation that holds two racing pins apart. See [`Separation`].
+fn separation(x: &PinEdge, y: &PinEdge, clock_pins: &[Symbol]) -> Separation {
     let is_clock = |r: &PinEdge| clock_pins.contains(&r.pin);
     if is_clock(x) ^ is_clock(y) {
         let (clk, data) = if is_clock(x) { (x, y) } else { (y, x) };
-        (
-            ConstraintKind::SetupHold { clock: clk.clone() },
-            data.clone(),
-        )
+        Separation {
+            kind: ConstraintKind::SetupHold { clock: clk.clone() },
+            pin: data.clone(),
+        }
     } else {
-        (ConstraintKind::NonSeq { other: x.clone() }, y.clone())
+        Separation {
+            kind: ConstraintKind::NonSeq { other: x.clone() },
+            pin: y.clone(),
+        }
     }
 }
 

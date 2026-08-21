@@ -1692,7 +1692,7 @@ mod tests {
     /// the delay arcs first, then label against them. Shadowing the glob-imported `super::classify`
     /// keeps every call site in the natural form.
     fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> EdgeArcs {
-        let (arcs, _) = crate::logic::arcs::derive(m);
+        let arcs = crate::logic::arcs::derive(m).arcs;
         super::classify(m, &arcs)
     }
 
@@ -4311,7 +4311,7 @@ Y = "CLK*A + !CLK*B + Y*A*B"
         edge_when: bool, // the mask value at which the fall reveals `L`
     ) {
         with_machine!(src, |_b, _a, _m2, m| {
-            let (arcs, _) = crate::logic::arcs::derive(&m);
+            let arcs = crate::logic::arcs::derive(&m).arcs;
             let es = classify(&m);
             assert_captures_faithful(&m, &es);
             let mut edge_ctx = 0;

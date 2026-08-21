@@ -719,7 +719,7 @@ Q = "CLK*M + !CLK*Q"
                 c.levels
                     .outputs
                     .iter()
-                    .map(|(n, _)| n.clone())
+                    .map(|h| h.node.clone())
                     .collect::<Vec<_>>(),
                 outputs
             );

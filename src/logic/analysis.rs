@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
 
-use crate::logic::arcs::{self, Arc, HiddenArc};
+use crate::logic::arcs::{self, Arc, DerivedArcs, HiddenArc};
 use crate::logic::confluence;
 use crate::logic::constraint::{self, Constraint};
 use crate::logic::hazard::Hazard;
@@ -274,7 +274,10 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
 ) -> Result<Derivations, machine::ExplorationLimit> {
     let reused = matches!(exploration, Exploration::Reused(_));
     let m = Machine::build(cell, bdds, exploration)?;
-    let (arcs, hidden_arcs) = arcs::derive(&m);
+    let DerivedArcs {
+        arcs,
+        hidden: hidden_arcs,
+    } = arcs::derive(&m);
     // Detect the hazards, then generate the constraints that avoid them — two separate stages. Every
     // hazard is always detected — the race-cause and pulse-cause ones alike (they drive the warnings and
     // annotations); what the cell's selection decides is which of them get a constraint. The selection

@@ -5,9 +5,9 @@
 //! characterisation templates the cell carries (`-delay`/`-power`/`-constraint`). Clock and async pins
 //! are split out of `-input` into their own flags but still appear verbatim in `-pinlist`; any flag
 //! whose pin set is empty is omitted. The drive-strength aliases are bundled by their resolved
-//! `(delay, power, constraint)` template triple — each alias inherits the cell-wide `template` unless
-//! its `template_overrides` entry supplies a field — so aliases sharing a triple emit as one block, in
-//! first-appearance order.
+//! `TemplateSpec` — each alias inherits the cell-wide `template` unless its `template_overrides` entry
+//! supplies a field — so aliases resolving to the same template emit as one block, in first-appearance
+//! order.
 //!
 //! Unlike the arcs emitter these blocks carry no `-type`/`-when`/`-related_pin`/`-function`: they are
 //! purely the cell's structural declaration.
@@ -23,12 +23,8 @@ use indexmap::IndexMap;
 
 use crate::emit::arcs_tcl::pinlist;
 use crate::emit::tcl::Braced;
-use crate::model::AnalysedCell;
+use crate::model::{AnalysedCell, TemplateSpec};
 use crate::text::Words;
-
-/// A resolved template triple: the `(delay, power, constraint)` names an alias attaches, each `Some`
-/// only when the alias override or the cell-wide template supplies it.
-type Triple = (Option<Symbol>, Option<Symbol>, Option<Symbol>);
 
 /// One `define_cell` block: the pins the cell declares, split into the flags Liberate reads them under,
 /// the characterisation templates the block's aliases resolve to, and the aliases it speaks for.
@@ -91,8 +87,9 @@ impl fmt::Display for Declarations<'_> {
     }
 }
 
-/// All `define_cell` blocks for a cell, one per resolved template triple. Aliases sharing a triple are
-/// bundled into a single block; the blocks follow the first-appearance order of their aliases.
+/// All `define_cell` blocks for a cell, one per resolved `TemplateSpec`. Aliases resolving to the same
+/// template are bundled into a single block; the blocks follow the first-appearance order of their
+/// aliases.
 pub fn cell_define_cell(cell: &AnalysedCell) -> Vec<DefineCell> {
     // Pin flags are group-independent, so compute them once. Clock and async pins are lifted out of
     // `-input` into their own flags (they still appear in `-pinlist`, which is untouched).
@@ -105,26 +102,27 @@ pub fn cell_define_cell(cell: &AnalysedCell) -> Vec<DefineCell> {
         .collect();
     let outputs: Vec<Symbol> = cell.outputs.iter().map(|o| o.name.clone()).collect();
 
-    // Resolve one alias's template triple: the alias override wins per field, else the cell-wide
-    // template, else `None`.
-    let resolve = |name: &Symbol| -> Triple {
+    // Resolve one alias's template: the alias override wins per field, else the cell-wide template,
+    // else `None`.
+    let resolve = |name: &Symbol| -> TemplateSpec {
         let ov = cell.template_overrides.get(name);
         let def = cell.template.as_ref();
-        let delay = ov
-            .and_then(|o| o.delay.clone())
-            .or_else(|| def.and_then(|d| d.delay.clone()));
-        let power = ov
-            .and_then(|o| o.power.clone())
-            .or_else(|| def.and_then(|d| d.power.clone()));
-        let constraint = ov
-            .and_then(|o| o.constraint.clone())
-            .or_else(|| def.and_then(|d| d.constraint.clone()));
-        (delay, power, constraint)
+        TemplateSpec {
+            delay: ov
+                .and_then(|o| o.delay.clone())
+                .or_else(|| def.and_then(|d| d.delay.clone())),
+            power: ov
+                .and_then(|o| o.power.clone())
+                .or_else(|| def.and_then(|d| d.power.clone())),
+            constraint: ov
+                .and_then(|o| o.constraint.clone())
+                .or_else(|| def.and_then(|d| d.constraint.clone())),
+        }
     };
 
-    // Bundle the aliases by resolved triple. `IndexMap` insertion order groups by first appearance and
+    // Bundle the aliases by resolved template. `IndexMap` insertion order groups by first appearance and
     // keeps each group's aliases in written order.
-    let mut groups: IndexMap<Triple, Vec<Symbol>> = IndexMap::new();
+    let mut groups: IndexMap<TemplateSpec, Vec<Symbol>> = IndexMap::new();
     for alias in &cell.name {
         groups
             .entry(resolve(alias))
@@ -133,21 +131,30 @@ pub fn cell_define_cell(cell: &AnalysedCell) -> Vec<DefineCell> {
     }
 
     // The pin flags and the `-pinlist` are the cell's own, so every block states the same ones; what a
-    // block adds of its own is its template triple and the aliases that resolved to it.
+    // block adds of its own is its resolved template and the aliases that resolved to it.
     let pinlist = pinlist(cell);
     groups
         .into_iter()
-        .map(|((delay, power, constraint), names)| DefineCell {
-            inputs: data_inputs.clone(),
-            outputs: outputs.clone(),
-            clocks: cell.clock_pins.clone(),
-            async_pins: cell.async_pins.clone(),
-            pinlist: pinlist.clone(),
-            delay,
-            power,
-            constraint,
-            names,
-        })
+        .map(
+            |(
+                TemplateSpec {
+                    delay,
+                    power,
+                    constraint,
+                },
+                names,
+            )| DefineCell {
+                inputs: data_inputs.clone(),
+                outputs: outputs.clone(),
+                clocks: cell.clock_pins.clone(),
+                async_pins: cell.async_pins.clone(),
+                pinlist: pinlist.clone(),
+                delay,
+                power,
+                constraint,
+                names,
+            },
+        )
         .collect()
 }
 

@@ -253,22 +253,37 @@ impl Preserved {
     }
 }
 
-/// `Some((t, parity))` iff `f` is a bare ±alias of another surviving key.
+/// Which of the two bare forms a ±alias took: the target variable itself, or its complement.
+enum Parity {
+    Direct,
+    Inverted,
+}
+
+/// A bare ±alias of another surviving key: the key aliased to, and the parity the alias took.
+struct Alias {
+    target: Symbol,
+    parity: Parity,
+}
+
+/// `Some(alias)` iff `f` is a bare ±alias of another surviving key.
 ///
-/// `parity` is `0` when `f == var(t)` and `1` when `f == !var(t)`. Serves [`fold_pass`]'s arity-1
-/// substitution decision (folding the coordinate onto an output alias): `!var(x)` is just an arity-1
-/// function like `var(x)`, so a bare ±alias always collapses.
+/// Serves [`fold_pass`]'s arity-1 substitution decision (folding the coordinate onto an output alias):
+/// `!var(x)` is just an arity-1 function like `var(x)`, so a bare ±alias always collapses.
 fn alias_target<B: Brand, C: ManagerCell>(
     name: &Symbol,
     f: &Bdd<B, C>,
     bdds: &BTreeMap<Symbol, Bdd<B, C>>,
-) -> Option<(Symbol, u8)> {
+) -> Option<Alias> {
     let vars: Vec<Symbol> = f.variables().collect();
     if vars.len() == 1 && vars[0] != *name && bdds.contains_key(&vars[0]) {
         let t = vars[0].clone();
         let b = f.builder();
-        let parity = if *f == b.var(t.as_str()) { 0 } else { 1 };
-        Some((t, parity))
+        let parity = if *f == b.var(t.as_str()) {
+            Parity::Direct
+        } else {
+            Parity::Inverted
+        };
+        Some(Alias { target: t, parity })
     } else {
         None
     }
@@ -477,17 +492,16 @@ fn fold_pass<B: Brand, C: ManagerCell>(
         // settles in the complement-pair shape instead — the arity-1 relay fold below composes `s` into
         // `t`'s definer, leaving `t` self-holding and `s` a consumer-free alias on its pin (I1).
         if p.is_output(s) {
-            if let Some((t, parity)) = alias_target(s, &f_s, bdds) {
+            if let Some(Alias { target: t, parity }) = alias_target(s, &f_s, bdds) {
                 if !p.is_preserved(&t) {
                     let b = f_s.builder();
                     // `t` expressed as ±s.
-                    let g = if parity == 0 {
-                        b.var(s.as_str())
-                    } else {
-                        !&b.var(s.as_str())
+                    let g = match parity {
+                        Parity::Direct => b.var(s.as_str()),
+                        Parity::Inverted => !&b.var(s.as_str()),
                     };
                     let mut new_s = bdds[&t].compose(t.as_str(), &g);
-                    if parity == 1 {
+                    if let Parity::Inverted = parity {
                         new_s = !&new_s;
                     }
                     if new_s != f_s {
