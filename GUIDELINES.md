@@ -98,9 +98,31 @@ same content — not when the generated files are byte-for-byte identical.
 - A closed set of kinds is an `enum`, not a string token. Model it so that picking the
   variant *is* the classification, and an impossible combination can't be built in the first
   place.
-- A key or record whose fields are told apart only by position — especially when several
-  share a type — should be a named struct. If swapping two fields would still compile while
-  silently changing behaviour, the fields need names.
+- **A tuple must not escape the scope that makes it.** Within a function a tuple is an ordinary
+  Rust value: a map's own key and value, `enumerate`, `zip`, a chain of iterator adaptors, a buffer
+  of pairs assembled to satisfy an external signature, an iterator of pairs collected into a map.
+  Use them freely. What a tuple may not do is outlive that scope — it is not a struct field, not a
+  map key, and not the element type of a collection that is kept or handed back. A value with more
+  than one component that lives beyond the scope building it is a value of ours and takes a name:
+  a struct, or an enum variant, with named fields.
+
+  A concrete function does not return a tuple. Where a generic one does — `zip`, `partition`,
+  `enumerate` — the components are whatever the caller supplied and there is nothing to name; where
+  ours does, each component means something particular here and the tuple leaves the reader to work
+  it out. The exception is a return whose tuple is std's protocol rather than our data: an
+  `Iterator<Item = (K, V)>` is the shape `collect` consumes to build a map, and a method offering
+  that shape keeps it.
+
+  The same holds for a struct or an enum variant that tells its own components apart by position —
+  give them names. A single-component newtype is unaffected; one value has no positions to confuse.
+  Where two components share a type the cost is immediate — a transposition compiles and changes
+  meaning silently — but that is the sharpest case, not the reason: `.0` and `.1` tell a reader
+  nothing about what they hold.
+
+  In a corner case the question to ask is whether the shape encodes something meaningful and whether
+  it can drift. A pair that carries a fact of this domain, and that two readers could come to
+  disagree about, takes a name however local it is. A buffer whose shape a foreign signature
+  dictates carries nothing of ours and cannot drift; leave it.
 - Choose each collection for how it is used: a hash map or set where the access is
   membership, lookup or grouping; an ordered map only where the iteration order is claimed by
   an external format (see above). Don't reach for an ordered container just for its
