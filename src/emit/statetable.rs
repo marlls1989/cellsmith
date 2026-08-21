@@ -381,14 +381,15 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
             |clock: &Symbol, token: EdgeTok, action: Next, cube: &StateCube, cols: &[Symbol]| {
                 edge_rows.push(cols_layout.edge_row(clock, token, reg, action, cube, cols));
             };
-        for (clock, edge, capture) in &er.captures {
-            let active = match edge {
+        for capture in &er.captures {
+            let active = match capture.clock.edge {
                 Edge::Rise => EdgeTok::Rise,
                 Edge::Fall => EdgeTok::Fall,
             };
-            for (action, cubes) in [(Next::High, &capture.on), (Next::Low, &capture.off)] {
+            let regions = &capture.regions;
+            for (action, cubes) in [(Next::High, &regions.on), (Next::Low, &regions.off)] {
                 for cube in cubes {
-                    push(clock, active, action, cube, &capture.cols);
+                    push(&capture.clock.pin, active, action, cube, &regions.cols);
                 }
             }
         }
@@ -398,7 +399,7 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
         // clock-independent; its row marks the register's clock column (the sole clock for a single-clock
         // register).
         let off_token = if single {
-            match er.captures[0].1 {
+            match er.captures[0].clock.edge {
                 Edge::Rise => EdgeTok::NotRise,
                 Edge::Fall => EdgeTok::NotFall,
             }

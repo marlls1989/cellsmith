@@ -91,17 +91,26 @@ use crate::logic::arcs::{Arc as DelayArc, Edge, PinEdge};
 use crate::logic::machine;
 use crate::logic::regions::{self, StateRegions};
 
+/// One active edge of one clock and the combinational next-state the node captures on it.
+#[derive(Debug, Clone)]
+pub(crate) struct Capture {
+    /// The clock the capture keys off, with the direction it moves in.
+    pub(crate) clock: PinEdge,
+    /// The captured next-state function, as combinational state-table regions (total — off is the
+    /// complement of on, empty hold).
+    pub(crate) regions: StateRegions,
+}
+
 /// The edge arcs carried by one node: the node re-expressed as an edge register on one or more clocks,
 /// each active edge making it capture-and-hold a next-state value.
 #[derive(Debug, Clone)]
 pub(crate) struct EdgeCaptures {
     /// The node the edge arcs belong to.
     pub(crate) node: Symbol,
-    /// The captured next-state function per active edge, as combinational state-table regions (total —
-    /// off is the complement of on, empty hold). Each capture carries ITS OWN clock. Grouped by clock in
-    /// cell input-pin order, `Rise` before `Fall` within a clock; a single-clock node keeps one entry per
-    /// active edge (two for a dual-edge node with `Rise` first).
-    pub(crate) captures: Vec<(Symbol, Edge, StateRegions)>,
+    /// One entry per active edge, each carrying ITS OWN clock. Grouped by clock in cell input-pin
+    /// order, `Rise` before `Fall` within a clock; a single-clock node keeps one entry per active edge
+    /// (two for a dual-edge node with `Rise` first).
+    pub(crate) captures: Vec<Capture>,
     /// The off-edge (hold) function as state-table regions, keyed by the clock set's phase vector: on/off
     /// are the set/clear covers, hold is the quiescent region. A phase-agreed forcing drops the clocks
     /// from its cover; a phase-conditioned one keeps its gating clock literal (`CLK*R`).
@@ -114,9 +123,9 @@ impl EdgeCaptures {
     /// The distinct clocks the edge arcs key off, in first-appearance (capture) order.
     pub(crate) fn clocks(&self) -> Vec<&Symbol> {
         let mut out: Vec<&Symbol> = Vec::new();
-        for (clock, _, _) in &self.captures {
-            if !out.contains(&clock) {
-                out.push(clock);
+        for c in &self.captures {
+            if !out.contains(&&c.clock.pin) {
+                out.push(&c.clock.pin);
             }
         }
         out
@@ -255,7 +264,10 @@ impl CandAgg {
 
 /// A synthesised register: its per-clock, per-edge captures (each carrying its clock, grouped by clock in
 /// input-pin order with Rise first) and its off-edge.
-type Synthesised = (Vec<(Symbol, Edge, StateRegions)>, StateRegions);
+struct Synthesised {
+    captures: Vec<Capture>,
+    off_edge: StateRegions,
+}
 
 /// One candidate edge arc on a node: the keying clock — an input the cell declares as one — with the
 /// direction that clock moves in. The decision core's whole currency — each arc on a node is typed
@@ -667,7 +679,10 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
             })
             .collect();
 
-        let (node_captures, off_edge) = synth_node_captures(
+        let Synthesised {
+            captures: node_captures,
+            off_edge,
+        } = synth_node_captures(
             builder
                 .as_ref()
                 .expect("an active edge implies a state variable, hence a builder"),
@@ -840,11 +855,12 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                     .iter()
                     .find(|ec| ec.node == y)
                     .expect("a register output has an EdgeCaptures entry");
-                let node_captures: Vec<(Symbol, Edge, StateRegions)> = y_ec
+                let node_captures: Vec<Capture> = y_ec
                     .captures
                     .iter()
-                    .map(|(clock, edge, sr)| {
-                        (clock.clone(), *edge, cofactor_capture(b, sr, &pass_min))
+                    .map(|c| Capture {
+                        clock: c.clock.clone(),
+                        regions: cofactor_capture(b, &c.regions, &pass_min),
                     })
                     .collect();
                 let off_edge = cofactor_off_edge(b, &y_ec.off_edge, &pass_min);
@@ -1340,7 +1356,7 @@ fn synth_node_captures<B: Brand, C: ManagerCell>(
     // Capture per clock (input-pin order), per active edge (Rise first). The uniform header is the inputs
     // minus THAT capture's clock, then every candidate signal name; any OTHER clock stays as a level
     // column. The drop-loop then sheds the columns emission does not need.
-    let mut captures: Vec<(Symbol, Edge, StateRegions)> = Vec::new();
+    let mut captures: Vec<Capture> = Vec::new();
     for (clock, edges) in clock_edges {
         let header: Vec<Symbol> = inputs
             .iter()
@@ -1350,20 +1366,24 @@ fn synth_node_captures<B: Brand, C: ManagerCell>(
             .collect();
 
         for &edge in edges {
+            let active = ActiveEdge {
+                clock: PinEdge {
+                    pin: clock.clone(),
+                    edge,
+                },
+            };
             let samples = agg
                 .captures
-                .get(&ActiveEdge {
-                    clock: PinEdge {
-                        pin: clock.clone(),
-                        edge,
-                    },
-                })
+                .get(&active)
                 .map(|c| c.samples.as_slice())
                 .unwrap_or(&[]);
             let cols = drop_loop_columns(&header, samples, inputs_set, fold_eligible);
             let sr = synth_capture(builder, &cols, samples)
                 .expect("the uniform header is conflict-free, so no dropped subset conflicts");
-            captures.push((clock.clone(), edge, sr));
+            captures.push(Capture {
+                clock: active.clock,
+                regions: sr,
+            });
         }
     }
 
@@ -1375,7 +1395,7 @@ fn synth_node_captures<B: Brand, C: ManagerCell>(
     // reset keeps its gating clock pinned to the forcing level (`CLK*R`).
     let off_edge = synth_off_edge(builder, inputs, &clocks, &agg.stable);
 
-    (captures, off_edge)
+    Synthesised { captures, off_edge }
 }
 
 /// The three-valued phase classification of a projection's observed values.
@@ -1634,11 +1654,11 @@ fn synth_off_edge<B: Brand, C: ManagerCell>(
 }
 
 /// The node's column set: the first-appearance union of every capture's cols then the off-edge's cols.
-fn capture_cols(captures: &[(Symbol, Edge, StateRegions)], off_edge: &StateRegions) -> Vec<Symbol> {
+fn capture_cols(captures: &[Capture], off_edge: &StateRegions) -> Vec<Symbol> {
     let mut cols: Vec<Symbol> = Vec::new();
     let sources = captures
         .iter()
-        .map(|(_, _, sr)| &sr.cols)
+        .map(|c| &c.regions.cols)
         .chain([&off_edge.cols]);
     for src in sources {
         for s in src {
@@ -1918,15 +1938,12 @@ mod tests {
             let covers: BTreeMap<ActiveEdge, Bdd<B, C>> = r
                 .captures
                 .iter()
-                .map(|(clock, edge, sr)| {
+                .map(|c| {
                     (
                         ActiveEdge {
-                            clock: PinEdge {
-                                pin: clock.clone(),
-                                edge: *edge,
-                            },
+                            clock: c.clock.clone(),
                         },
-                        builder.build_cover(&sr.on_cover),
+                        builder.build_cover(&c.regions.on_cover),
                     )
                 })
                 .collect();
@@ -2263,9 +2280,10 @@ GCLK = "enA*CLKA+enB*CLKB"
             let q = reg(&es, "Q");
             assert_eq!(clocks_of(q), ["CLK"]);
             assert_eq!(q.captures.len(), 1);
-            let (clk, edge, cap) = &q.captures[0];
-            assert_eq!(clk, "CLK");
-            assert_eq!(*edge, Edge::Rise);
+            let capture = &q.captures[0];
+            let cap = &capture.regions;
+            assert_eq!(capture.clock.pin, "CLK");
+            assert_eq!(capture.clock.edge, Edge::Rise);
             assert_eq!(cols_of(cap), ["D"]);
             assert_eq!(cap.on, vec![vec![Some(true)]]);
             assert_eq!(cap.off, vec![vec![Some(false)]]);
@@ -2297,7 +2315,7 @@ GCLK = "enA*CLKA+enB*CLKB"
                 let r = reg(&es, name);
                 assert_eq!(clocks_of(r), [clock], "{name}");
                 assert_eq!(r.captures.len(), 1, "{name}");
-                assert_eq!(r.captures[0].1, Edge::Fall, "{name}");
+                assert_eq!(r.captures[0].clock.edge, Edge::Fall, "{name}");
             }
             // Each synchroniser's three latches are two flops in series: sela1/selb1 fold as the
             // first flop's internal master, sela2/selb2 capture on the rising edge and enA/enB on
@@ -2306,7 +2324,7 @@ GCLK = "enA*CLKA+enB*CLKB"
                 let r = reg(&es, name);
                 assert_eq!(clocks_of(r), [clock], "{name} is single-clock");
                 assert_eq!(r.captures.len(), 1, "{name}");
-                assert_eq!(r.captures[0].1, Edge::Rise, "{name}");
+                assert_eq!(r.captures[0].clock.edge, Edge::Rise, "{name}");
             }
             let mut folded = folded_list(&es);
             folded.sort();
@@ -2470,7 +2488,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
                 let q = reg(&es, "Q");
                 assert_eq!(clocks_of(q), ["CLK"], "{label}");
                 assert_eq!(q.captures.len(), 1, "{label}: rise only");
-                assert_eq!(q.captures[0].1, Edge::Rise, "{label}");
+                assert_eq!(q.captures[0].clock.edge, Edge::Rise, "{label}");
                 let off = builder.build_cover(&q.off_edge.off_cover);
                 let want = builder.var("CLK").and(&builder.var("R"));
                 assert!(
@@ -2504,8 +2522,8 @@ Q = "!R*(CLK*M + !CLK*Q)"
             assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             assert_eq!(q.captures.len(), 1);
-            let (_clk, edge, cap) = &q.captures[0];
-            assert_eq!(*edge, Edge::Rise);
+            assert_eq!(q.captures[0].clock.edge, Edge::Rise);
+            let cap = &q.captures[0].regions;
             // capture == !D, recorded verbatim (no special-casing).
             let on = builder.build_cover(&cap.on_cover);
             assert!(on.equivalent_to(&!&builder.var("D")), "capture must be !D");
@@ -2519,7 +2537,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
             let es = classify(&m);
             assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
-            assert_eq!(q.captures[0].1, Edge::Rise);
+            assert_eq!(q.captures[0].clock.edge, Edge::Rise);
             // M is an output master (never folded); the slave Q is recognised. The cover PREFERS the input
             // D over the internal M (cover columns prefer inputs), and D coincides with M over the CLK=0
             // capture domain — where the rising edge samples the master — so `D` and `M` are the same
@@ -2529,7 +2547,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
                 "an output master is not folded"
             );
             assert_eq!(
-                cols_of(&q.captures[0].2),
+                cols_of(&q.captures[0].regions),
                 ["D"],
                 "the capture prefers input D"
             );
@@ -2543,7 +2561,9 @@ Q = "!R*(CLK*M + !CLK*Q)"
             {
                 reach0 = reach0.or(&super::cube_bdd(&builder, state));
             }
-            let on = builder.build_cover(&q.captures[0].2.on_cover).and(&reach0);
+            let on = builder
+                .build_cover(&q.captures[0].regions.on_cover)
+                .and(&reach0);
             let want = builder.var("M").and(&reach0);
             assert!(
                 on.equivalent_to(&want),
@@ -2595,20 +2615,20 @@ Q = "!R*(CLK*M + !CLK*Q)"
             assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             let mm = reg(&es, "M");
-            assert_eq!(q.captures[0].1, Edge::Rise);
-            assert_eq!(mm.captures[0].1, Edge::Fall);
+            assert_eq!(q.captures[0].clock.edge, Edge::Rise);
+            assert_eq!(mm.captures[0].clock.edge, Edge::Fall);
             let want = (!&builder.var("R")).and(&!&builder.var("Q"));
             // Q's rising capture is the toggle !R*!Q over cols [R, Q] (the self-referential ring closes on
             // Q, not the folded/dropped master).
-            assert_eq!(cols_of(&q.captures[0].2), ["R", "Q"]);
-            let q_on = builder.build_cover(&q.captures[0].2.on_cover);
+            assert_eq!(cols_of(&q.captures[0].regions), ["R", "Q"]);
+            let q_on = builder.build_cover(&q.captures[0].regions.on_cover);
             assert!(
                 q_on.equivalent_to(&want),
                 "Q captures !R*!Q (the toggle ring)"
             );
             // M's falling capture is the same toggle over the same cols: at the pre-fall (CLK=1) states
             // M equals Q, so capturing !M is capturing !Q.
-            let mcap = &mm.captures[0].2;
+            let mcap = &mm.captures[0].regions;
             assert_eq!(cols_of(mcap), ["R", "Q"]);
             let m_on = builder.build_cover(&mcap.on_cover);
             assert!(
@@ -2646,10 +2666,10 @@ Qn = "!( !(!M*CLK) * Q )"
             assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             let qn = reg(&es, "Qn");
-            assert_eq!(q.captures[0].1, Edge::Rise);
-            assert_eq!(qn.captures[0].1, Edge::Rise);
-            let q_on = builder.build_cover(&q.captures[0].2.on_cover);
-            let qn_on = builder.build_cover(&qn.captures[0].2.on_cover);
+            assert_eq!(q.captures[0].clock.edge, Edge::Rise);
+            assert_eq!(qn.captures[0].clock.edge, Edge::Rise);
+            let q_on = builder.build_cover(&q.captures[0].regions.on_cover);
+            let qn_on = builder.build_cover(&qn.captures[0].regions.on_cover);
             assert!(q_on.equivalent_to(&builder.var("D")), "Q captures D");
             assert!(qn_on.equivalent_to(&!&builder.var("D")), "Qn captures !D");
             assert_eq!(folded_list(&es), ["M"], "shared master M folded once");
@@ -2677,10 +2697,10 @@ Q = "CLK*L1 + !CLK*L2"
             assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             assert_eq!(q.captures.len(), 2, "dual edge");
-            assert_eq!(q.captures[0].1, Edge::Rise);
-            assert_eq!(q.captures[1].1, Edge::Fall);
-            for (_, _, cap) in &q.captures {
-                let on = builder.build_cover(&cap.on_cover);
+            assert_eq!(q.captures[0].clock.edge, Edge::Rise);
+            assert_eq!(q.captures[1].clock.edge, Edge::Fall);
+            for capture in &q.captures {
+                let on = builder.build_cover(&capture.regions.on_cover);
                 assert!(on.equivalent_to(&builder.var("D")), "each edge captures D");
             }
             let mut folded = folded_list(&es);
@@ -2799,9 +2819,11 @@ Y = "!(T*A)"
             let yst = reg(&es, "Y_st");
             assert_eq!(yst.captures.len(), 2, "dual edge");
             let nd = !&builder.var("D");
-            for (_, _, cap) in &yst.captures {
+            for capture in &yst.captures {
                 assert!(
-                    builder.build_cover(&cap.on_cover).equivalent_to(&nd),
+                    builder
+                        .build_cover(&capture.regions.on_cover)
+                        .equivalent_to(&nd),
                     "each edge captures !D"
                 );
             }
@@ -2870,9 +2892,11 @@ Y = "!((CLK*L1 + !CLK*L2)*A) + B"
             let yst = reg(&es, "Y_st");
             assert_eq!(yst.captures.len(), 2, "dual edge");
             let nd = !&builder.var("D");
-            for (_, _, cap) in &yst.captures {
+            for capture in &yst.captures {
                 assert!(
-                    builder.build_cover(&cap.on_cover).equivalent_to(&nd),
+                    builder
+                        .build_cover(&capture.regions.on_cover)
+                        .equivalent_to(&nd),
                     "each edge captures !D"
                 );
             }
@@ -3044,8 +3068,8 @@ Y = "!(Q*A)"
                 .iter_mut()
                 .find(|ec| ec.node == name)
                 .expect("the minted register carries edge captures");
-            let good = builder.build_cover(&er.captures[0].2.on_cover);
-            er.captures[0].2.on_cover = regions::minimise_bdd(&!&good);
+            let good = builder.build_cover(&er.captures[0].regions.on_cover);
+            er.captures[0].regions.on_cover = regions::minimise_bdd(&!&good);
             assert!(
                 fails(|| assert_captures_faithful(&m, &es)),
                 "corrupting a derived register's capture cover must make the replay harness fail"
@@ -3250,7 +3274,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
             let q = reg(&es, "Q");
             assert_eq!(clocks_of(q), ["CLK"]);
             assert_eq!(q.captures.len(), 1);
-            assert_eq!(q.captures[0].1, Edge::Rise);
+            assert_eq!(q.captures[0].clock.edge, Edge::Rise);
             let off = builder.build_cover(&q.off_edge.off_cover);
             let r = builder.var("R");
             assert!(off.equivalent_to(&r), "off_edge.off must cover R");
@@ -3258,7 +3282,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
             // MOR: declaring R a clock changes nothing behavioural. Q's capture generalises past
             // the folded master to !R*D.
             assert!(folded_list(&es).contains(&"M"), "the master folds");
-            let on = builder.build_cover(&q.captures[0].2.on_cover);
+            let on = builder.build_cover(&q.captures[0].regions.on_cover);
             let want = (!&r).and(&builder.var("D"));
             assert!(on.equivalent_to(&want), "capture is !R*D");
             let cols = q.cols.iter().map(Symbol::as_str).collect::<Vec<_>>();
@@ -3598,7 +3622,7 @@ Q = "!R*(B + CLK*M + !CLK*Q)"
             // The edge arc: CLK rising captures.
             assert_eq!(clocks_of(q), ["CLK"]);
             assert_eq!(q.captures.len(), 1);
-            assert_eq!(q.captures[0].1, Edge::Rise);
+            assert_eq!(q.captures[0].clock.edge, Edge::Rise);
             // The combinational set B is a Forced1 off-edge column (only while not cleared); the async
             // clear R is a Forced0 column. Edge and combinational arcs coexist on the one output.
             let on = builder.build_cover(&q.off_edge.on_cover);
@@ -3667,7 +3691,7 @@ Q = "!CLR*(PRE + CLK*M + !CLK*Q)"
             assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             assert_eq!(clocks_of(q), ["CLK"]);
-            assert_eq!(q.captures[0].1, Edge::Rise);
+            assert_eq!(q.captures[0].clock.edge, Edge::Rise);
             // The async set/clear off-edge covers: PRE forces 1 (only while not cleared), CLR forces 0.
             let on = builder.build_cover(&q.off_edge.on_cover);
             let off = builder.build_cover(&q.off_edge.off_cover);
@@ -3717,7 +3741,7 @@ Q = "!CLKB*M2 + CLKB*Q"
             let arcs: Vec<(&str, Edge)> = q
                 .captures
                 .iter()
-                .map(|(c, e, _)| (c.as_str(), *e))
+                .map(|c| (c.clock.pin.as_str(), c.clock.edge))
                 .collect();
             assert_eq!(
                 arcs,
@@ -3726,11 +3750,12 @@ Q = "!CLKB*M2 + CLKB*Q"
             );
             // The CLKA capture characterises the condition: Q captures D when CLKB is transparent
             // (CLKB=0) and re-delivers its own held value when CLKB is opaque (CLKB=1).
-            let (_, _, cap_a) = q
+            let cap_a = &q
                 .captures
                 .iter()
-                .find(|(c, e, _)| c == "CLKA" && *e == Edge::Rise)
-                .unwrap();
+                .find(|c| c.clock.pin == "CLKA" && c.clock.edge == Edge::Rise)
+                .unwrap()
+                .regions;
             let on = builder.build_cover(&cap_a.on_cover);
             let clkb = builder.var("CLKB");
             let want = clkb
@@ -3741,11 +3766,12 @@ Q = "!CLKB*M2 + CLKB*Q"
                 "CLKA capture is CLKB*Q + !CLKB*D (conditioned on CLKB transparent)"
             );
             // The CLKB-fall opening reveals the surviving master node M2.
-            let (_, _, cap_b) = q
+            let cap_b = &q
                 .captures
                 .iter()
-                .find(|(c, e, _)| c == "CLKB" && *e == Edge::Fall)
-                .unwrap();
+                .find(|c| c.clock.pin == "CLKB" && c.clock.edge == Edge::Fall)
+                .unwrap()
+                .regions;
             assert_eq!(cols_of(cap_b), ["M2"], "CLKB fall reveals M2");
             let on_b = builder.build_cover(&cap_b.on_cover);
             assert!(
@@ -3892,12 +3918,19 @@ Q = "!( !(M2*!CLKB) * Qn )"
             assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             assert_eq!(q.captures.len(), 1);
-            let (clk, edge, cap) = &q.captures[0];
-            assert_eq!((clk.as_str(), *edge), ("CLK", Edge::Rise));
-            assert_eq!(cols_of(cap), cols_of(&dff.captures[0].2));
-            assert_eq!(cap.on, dff.captures[0].2.on, "same capture as the pass DFF");
-            assert_eq!(cap.off, dff.captures[0].2.off);
-            assert_eq!(cap.hold, dff.captures[0].2.hold);
+            let capture = &q.captures[0];
+            let cap = &capture.regions;
+            assert_eq!(
+                (capture.clock.pin.as_str(), capture.clock.edge),
+                ("CLK", Edge::Rise)
+            );
+            assert_eq!(cols_of(cap), cols_of(&dff.captures[0].regions));
+            assert_eq!(
+                cap.on, dff.captures[0].regions.on,
+                "same capture as the pass DFF"
+            );
+            assert_eq!(cap.off, dff.captures[0].regions.off);
+            assert_eq!(cap.hold, dff.captures[0].regions.hold);
             assert_eq!(q.off_edge.hold, dff.off_edge.hold, "universal hold");
             assert!(q.off_edge.on.is_empty() && q.off_edge.off.is_empty());
             let on = builder.build_cover(&cap.on_cover);
@@ -3905,10 +3938,10 @@ Q = "!( !(M2*!CLKB) * Qn )"
             // The complement carries the same edge capturing !D.
             let qn = reg(&es, "Qn");
             assert_eq!(
-                (qn.captures[0].0.as_str(), qn.captures[0].1),
+                (qn.captures[0].clock.pin.as_str(), qn.captures[0].clock.edge),
                 ("CLK", Edge::Rise)
             );
-            let qn_on = builder.build_cover(&qn.captures[0].2.on_cover);
+            let qn_on = builder.build_cover(&qn.captures[0].regions.on_cover);
             assert!(qn_on.equivalent_to(&!&builder.var("D")), "Qn captures !D");
 
             // The pass DFF folds its lone master M; the NAND master pair M/Mn is captureless and
@@ -3944,7 +3977,7 @@ Q = "!( !(M2*!CLKB) * Qn )"
             let arcs: Vec<(&str, Edge)> = q
                 .captures
                 .iter()
-                .map(|(c, e, _)| (c.as_str(), *e))
+                .map(|c| (c.clock.pin.as_str(), c.clock.edge))
                 .collect();
             assert_eq!(
                 arcs,
@@ -3963,11 +3996,12 @@ Q = "!( !(M2*!CLKB) * Qn )"
             );
             // Same conditioned capture as the pass-gate HPIPE, written over the complement the NAND style
             // exposes: D while CLKB is transparent, the held value re-delivered while CLKB is opaque.
-            let (_, _, cap_a) = q
+            let cap_a = &q
                 .captures
                 .iter()
-                .find(|(c, e, _)| c == "CLKA" && *e == Edge::Rise)
-                .unwrap();
+                .find(|c| c.clock.pin == "CLKA" && c.clock.edge == Edge::Rise)
+                .unwrap()
+                .regions;
             let on = builder.build_cover(&cap_a.on_cover).and(&reach);
             let clkb = builder.var("CLKB");
             let want = clkb
@@ -3984,7 +4018,7 @@ Q = "!( !(M2*!CLKB) * Qn )"
                 "master node keeps CLKA"
             );
             assert_eq!(
-                reg(&es, "M2").captures[0].1,
+                reg(&es, "M2").captures[0].clock.edge,
                 Edge::Rise,
                 "master captures on the CLKA rising edge"
             );
@@ -4091,7 +4125,7 @@ Q = "!( !(M2*!CLKB) * Qn )"
                 reg(&es, "Q")
                     .captures
                     .iter()
-                    .map(|(c, e, _)| (c.as_str(), *e))
+                    .map(|c| (c.clock.pin.as_str(), c.clock.edge))
                     .collect::<Vec<_>>(),
                 [("CLKA", Edge::Rise), ("CLKB", Edge::Fall)],
                 "Q's active edges: the CLKA capture and its own CLKB-fall opening"
@@ -4237,7 +4271,11 @@ Y = "CLK + !CLK*!R*Y"
             let y = reg(&es, "Y");
             assert_eq!(clocks_of(y), ["CLK"]);
             assert_eq!(y.captures.len(), 1);
-            assert_eq!(y.captures[0].1, Edge::Rise, "Y generates on the rise");
+            assert_eq!(
+                y.captures[0].clock.edge,
+                Edge::Rise,
+                "Y generates on the rise"
+            );
             assert_eq!(
                 labels_of(&es, "Y"),
                 [("CLK", Edge::Rise)],

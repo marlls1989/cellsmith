@@ -3854,7 +3854,7 @@ Q = "CLK*M + !CLK*Q"
             .edge
             .captures
             .iter()
-            .all(|r| r.captures.iter().all(|(_, e, _)| *e == Edge::Rise)));
+            .all(|r| r.captures.iter().all(|c| c.clock.edge == Edge::Rise)));
         let tcl = emit(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
         assert!(tcl.matches("-type edge").count() >= 1);
@@ -4055,12 +4055,12 @@ Q = "!CLKB*M2 + CLKB*Q"
         assert!(q
             .captures
             .iter()
-            .any(|(c, e, _)| c == "CLKA" && *e == Edge::Rise));
+            .any(|c| c.clock.pin == "CLKA" && c.clock.edge == Edge::Rise));
         // Q captures on its own CLKB FALLING edge (the master-slave reveal) alongside the CLKA capture.
         assert!(
             q.captures
                 .iter()
-                .any(|(c, e, _)| c == "CLKB" && *e == Edge::Fall),
+                .any(|c| c.clock.pin == "CLKB" && c.clock.edge == Edge::Fall),
             "Q captures on CLKB's falling (opening) edge"
         );
         assert!(

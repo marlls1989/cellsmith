@@ -21,7 +21,7 @@ use std::fmt;
 
 use espresso_logic::Symbol;
 
-use crate::logic::arcs::Edge;
+use crate::logic::arcs::{Edge, PinEdge};
 use crate::logic::edge::EdgeCaptures;
 use crate::logic::regions::{StateCube, StateRegions};
 use crate::model::AnalysedCell;
@@ -376,15 +376,16 @@ fn edge_table_rows(er: &EdgeCaptures) -> Vec<EdgeRow> {
     // (a) Capture rows: the combinational next-state sampled on one active edge of one clock. Each
     // capture carries its own clock; a dual-edge (or multi-clock) register contributes one group per
     // `(clock, edge)`, each keeping its single edge indicator in the capturing clock's column.
-    for (clock, edge, capture) in &er.captures {
-        for (region, next) in [(&capture.on, Next::On), (&capture.off, Next::Off)] {
+    for capture in &er.captures {
+        let regions = &capture.regions;
+        for (region, next) in [(&regions.on, Next::On), (&regions.off, Next::Off)] {
             rows.extend(region.iter().map(|cube| {
                 region_row(
                     er,
                     &cols,
                     &clocks,
-                    Some((clock, *edge)),
-                    &capture.cols,
+                    Some(&capture.clock),
+                    &regions.cols,
                     cube,
                     next,
                 )
@@ -408,7 +409,11 @@ fn edge_table_rows(er: &EdgeCaptures) -> Vec<EdgeRow> {
     // faces captured, emits none.
     for &clock in &clocks {
         for edge in [Edge::Rise, Edge::Fall] {
-            if er.captures.iter().any(|(c, e, _)| c == clock && *e == edge) {
+            if er
+                .captures
+                .iter()
+                .any(|c| &c.clock.pin == clock && c.clock.edge == edge)
+            {
                 continue;
             }
             let mut cells: Vec<EdgeColumn> = cols.iter().map(|_| EdgeColumn::any()).collect();
@@ -446,8 +451,8 @@ fn edge_table_rows(er: &EdgeCaptures) -> Vec<EdgeRow> {
 
 /// One region row of an edge-register table: the data columns (`cols`, self and clocks excluded) filled
 /// from `cube` by column name against `region_cols`, then the clock columns (`clocks`, in order), the
-/// current-state (`reg`) field and the `next` action. When `active` is `Some((clock, edge))` the
-/// capturing clock's column carries that `edge` and every OTHER clock column carries its level
+/// current-state (`reg`) field and the `next` action. When `active` names a clock edge, that clock's
+/// column carries the edge and every OTHER clock column carries its level
 /// from `cube` (a conditioned capture references the other clock's level); when `active` is `None` (a
 /// clock-independent level row) every clock column reads its `cube` level, which is `?` for an off-edge
 /// region since it never references a clock. A data or clock column the cube does not constrain (or absent
@@ -458,7 +463,7 @@ fn region_row(
     er: &EdgeCaptures,
     cols: &[&Symbol],
     clocks: &[&Symbol],
-    active: Option<(&Symbol, Edge)>,
+    active: Option<&PinEdge>,
     region_cols: &[Symbol],
     cube: &StateCube,
     next: Next,
@@ -470,7 +475,7 @@ fn region_row(
     // Clock columns LAST, in clocks() order: the capturing clock carries its edge indicator, every other
     // clock its conditioning level from the cube.
     cells.extend(clocks.iter().map(|&clock| match active {
-        Some((active_clock, edge)) if clock == active_clock => EdgeColumn::Edge(edge),
+        Some(active) if clock == &active.pin => EdgeColumn::Edge(active.edge),
         _ => EdgeColumn::Level(level_at(clock, region_cols, cube)),
     }));
     let reg = if er.cols.contains(&er.node) {
