@@ -221,31 +221,64 @@ pub(crate) struct RegisterRead {
     pub(crate) function: StateRegions,
 }
 
+/// One observation of a candidate node: a domain state with the node's value there. A capture sample
+/// carries the pre-state of a clock toggle and the value that toggle delivered; a stable sample carries a
+/// reachable stable state and the value held there. Both feed the same cover synthesis.
+#[derive(Clone)]
+struct Sample {
+    /// The state the value was observed at.
+    state: Minterm<Symbol>,
+    /// The node's value there.
+    value: bool,
+}
+
+/// One settling firing of a clock edge, as the typing replays it for content-dependence.
+#[derive(Clone)]
+struct Firing {
+    /// The state the firing started from.
+    pre: Minterm<Symbol>,
+    /// The stable state it settled at.
+    dest: Minterm<Symbol>,
+    /// The node's value once settled.
+    post: bool,
+}
+
 /// A single clock edge's observations for one candidate: whether any sample changed the value (the
-/// vacuity gate), the `(pre-state, post-value)` samples (unchanged clock-toggle samples included) for
-/// cover synthesis, and the full per-firing census the typing replays for content-dependence.
+/// vacuity gate), the samples (unchanged clock-toggle samples included) for cover synthesis, and the
+/// full per-firing census the typing replays for content-dependence.
 #[derive(Default, Clone)]
 struct CapAgg {
     changed: bool,
-    samples: Vec<(Minterm<Symbol>, bool)>,
-    /// One entry per settling firing of this edge — CHANGED OR NOT: `(pre-state, destination stable
-    /// state, post value)`.
-    firings: Vec<(Minterm<Symbol>, Minterm<Symbol>, bool)>,
+    samples: Vec<Sample>,
+    /// One entry per settling firing of this edge — CHANGED OR NOT.
+    firings: Vec<Firing>,
+}
+
+/// One single-input toggle that CHANGED a candidate node. Every moving toggle is recorded uniformly —
+/// clock, data and async alike — and the decision core reads them back for the node's forcing pins. The
+/// source state is kept so a move can be replayed from where it started (the forcing classification needs
+/// the pre-toggle state, not just where it landed).
+#[derive(Clone)]
+struct Move {
+    /// The input whose toggle moved the node.
+    pin: Symbol,
+    /// The stable state the toggle started from.
+    source: Minterm<Symbol>,
+    /// The stable state it settled at.
+    dest: Minterm<Symbol>,
+    /// The node's value once settled.
+    post: bool,
 }
 
 /// The aggregated observations of one candidate node across the whole exploration walk.
 #[derive(Default, Clone)]
 struct CandAgg {
-    /// One entry per single-input toggle that CHANGED the node: `(toggled input, SOURCE stable state,
-    /// destination stable state, post value)`. Every moving toggle is recorded uniformly — clock, data
-    /// and async alike — and the decision core reads them back for the node's forcing pins. The source
-    /// state is kept so a move can be replayed from where it started (the forcing classification needs
-    /// the pre-toggle state, not just where it landed).
-    moves: Vec<(Symbol, Minterm<Symbol>, Minterm<Symbol>, bool)>,
+    /// One entry per single-input toggle that CHANGED the node.
+    moves: Vec<Move>,
     /// Per candidate edge arc: the clock-edge observations.
     captures: BTreeMap<ActiveEdge, CapAgg>,
-    /// The `(stable state, value)` samples, for the off-edge synthesis.
-    stable: Vec<(Minterm<Symbol>, bool)>,
+    /// The stable-state samples, for the off-edge synthesis.
+    stable: Vec<Sample>,
 }
 
 impl CandAgg {
@@ -287,6 +320,29 @@ struct LatchPhase {
     level: bool,
 }
 
+/// How one pin forces one node: the pin level at which the forcing applies, and the value the node is
+/// held at while it does.
+#[derive(Debug, Clone)]
+struct Forcing {
+    /// The pin level that forces the node.
+    asserted: bool,
+    /// The value the node is forced to at that level.
+    ///
+    /// Nothing reads this, and `dead_code` says so: the two things the classifier asks of a forcing pin
+    /// — exclude the states it holds from edge inference, and tell a read gate from a reset — both need
+    /// only the level at which it forces, never the value it forces to. Deriving it is not wasted even so,
+    /// because the agreement the derivation demands IS the test: `pinned_value` admits a forcing pin only
+    /// where one constant covers every state at that level, and the accumulation loop only where every
+    /// move on the pin settles on one post value.
+    ///
+    /// It is kept because it distinguishes a set from a reset, which nothing in the classifier currently
+    /// asks but something plausibly will. Whether that makes its absence from every reader a latent defect
+    /// or makes the value redundant is an open question, left for review rather than settled here — and
+    /// settling it either way is a behaviour change, which is why neither was done in passing.
+    #[allow(dead_code)]
+    forced: bool,
+}
+
 /// Discover each node's edge arcs from the cell's toggle-and-settle behaviour and label the cell's
 /// delay arcs per arc. Read-only over the shared [`Machine`]: it re-walks the exploration and only ADDS
 /// an annotation, mirroring [`super::arcs::derive`] — whose derived arcs are also the SOURCE of the
@@ -300,7 +356,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // `captures` come out empty from the loops below — there is no early return (its absence was what let
     // an unrelated flop change an unrelated arc's type). Every path that needs the builder is guarded by
     // a non-empty opener set, which implies a state variable exists.
-    let builder = m.deltas.first().map(|(_, d)| d.builder());
+    let builder = m.deltas.first().map(|c| c.delta.builder());
 
     let cell = m.cell;
     let inputs = &cell.inputs;
@@ -335,7 +391,10 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         let v0: Vec<Option<bool>> = candidates.iter().map(|c| value(c, node)).collect();
         for (i, b) in v0.iter().enumerate() {
             if let Some(b) = b {
-                out[i].stable.push((node.clone(), *b));
+                out[i].stable.push(Sample {
+                    state: node.clone(),
+                    value: *b,
+                });
             }
         }
         for related in inputs {
@@ -362,8 +421,15 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                             },
                         })
                         .or_default();
-                    cap.samples.push((node.clone(), b1));
-                    cap.firings.push((node.clone(), np.clone(), b1));
+                    cap.samples.push(Sample {
+                        state: node.clone(),
+                        value: b1,
+                    });
+                    cap.firings.push(Firing {
+                        pre: node.clone(),
+                        dest: np.clone(),
+                        post: b1,
+                    });
                     if b0 != b1 {
                         cap.changed = true;
                     }
@@ -371,9 +437,12 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                 if b0 != b1 {
                     // Every moving toggle — clock, data or async alike — is a uniform move: the source
                     // state, the destination stable state and the post value the decision core reads.
-                    out[i]
-                        .moves
-                        .push((related.clone(), node.clone(), np.clone(), b1));
+                    out[i].moves.push(Move {
+                        pin: related.clone(),
+                        source: node.clone(),
+                        dest: np.clone(),
+                        post: b1,
+                    });
                 }
             }
         }
@@ -397,7 +466,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // decides the fold-eligible internals the drop-loop prefers to shed — is settled first. Forcing plays
     // no part in typing; it is consumed only by off-edge synthesis and the forcing exemption in
     // `retain_active_edges`.
-    let forcing_of: Vec<BTreeMap<Symbol, (bool, bool)>> = candidates
+    let forcing_of: Vec<BTreeMap<Symbol, Forcing>> = candidates
         .iter()
         .zip(&aggs)
         .map(|(name, agg)| scan.forcing_pins(name, &agg.moves))
@@ -409,11 +478,11 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // combinational coordinate is not a candidate, so it carries no entry here and no cone, propagation
     // or liveness question is ever asked of it.
     let mut fn_of: BTreeMap<&str, &Bdd<B, C>> = BTreeMap::new();
-    for (n, d) in &m.deltas {
-        fn_of.insert(n.as_str(), d);
+    for coord in &m.deltas {
+        fn_of.insert(coord.signal.as_str(), &coord.delta);
     }
-    for (n, d) in m.combinational_outputs() {
-        fn_of.insert(n.as_str(), d);
+    for coord in m.combinational_outputs() {
+        fn_of.insert(coord.signal.as_str(), &coord.delta);
     }
 
     // OPACITY over the live dependency loops. `live_succ[i]` is state `i`'s live-dependency graph among the
@@ -626,11 +695,11 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                 if !cap.changed {
                     continue; // vacuity gate: some eligible firing must change the node
                 }
-                let types = cap.firings.iter().any(|(pre, np, post)| {
-                    scan.is_eligible(pre)
-                        && scan.is_eligible(np)
-                        && m.output_value(name.as_str(), pre) != Some(*post)
-                        && types_edge(name, &arc.clock.pin, arc.clock.edge, np)
+                let types = cap.firings.iter().any(|f| {
+                    scan.is_eligible(&f.pre)
+                        && scan.is_eligible(&f.dest)
+                        && m.output_value(name.as_str(), &f.pre) != Some(f.post)
+                        && types_edge(name, &arc.clock.pin, arc.clock.edge, &f.dest)
                 });
                 if types {
                     s.insert(arc.clone());
@@ -765,14 +834,14 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
             // A forcing pin is a READ-GATE iff toggling it never moves any state variable in the output's
             // cone (its pass level is the pin's un-asserted level).
             let mut gate_pass: Vec<(Symbol, bool)> = Vec::new();
-            for (pin, (asserted, _)) in &forcing_of[iy] {
+            for (pin, forcing) in &forcing_of[iy] {
                 let changes_cone = cone.iter().any(|w| {
                     index_of
                         .get(w.as_str())
-                        .is_some_and(|&iw| aggs[iw].moves.iter().any(|(p, _, _, _)| p == pin))
+                        .is_some_and(|&iw| aggs[iw].moves.iter().any(|mv| &mv.pin == pin))
                 });
                 if !changes_cone {
-                    gate_pass.push((pin.clone(), !*asserted));
+                    gate_pass.push((pin.clone(), !forcing.asserted));
                 }
             }
             if gate_pass.is_empty() {
@@ -823,7 +892,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
             let read_header: Vec<Symbol> = std::iter::once(reg_name.clone())
                 .chain(gate_cols.iter().cloned())
                 .collect();
-            let read_samples: Vec<(Minterm<Symbol>, bool)> = ex
+            let read_samples: Vec<Sample> = ex
                 .order
                 .iter()
                 .filter_map(|s| {
@@ -842,7 +911,10 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                     for g in &gate_cols {
                         labels.push((g.as_str(), s.value_of(g.as_str())));
                     }
-                    Some((Minterm::with_labels(&labels).ok()?, yv))
+                    Some(Sample {
+                        state: Minterm::with_labels(&labels).ok()?,
+                        value: yv,
+                    })
                 })
                 .collect();
             let reads_sr = synth_capture(b, &read_header, &read_samples)
@@ -1057,10 +1129,12 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
                 if !self.eligible[i] {
                     return succ;
                 }
-                for (target, delta) in &self.m.deltas {
-                    for n in delta.variables() {
-                        if self.m.state_set.contains(&n) && residual_depends(delta, s, n.as_str()) {
-                            succ.entry(n).or_default().insert(target.clone());
+                for coord in &self.m.deltas {
+                    for n in coord.delta.variables() {
+                        if self.m.state_set.contains(&n)
+                            && residual_depends(&coord.delta, s, n.as_str())
+                        {
+                            succ.entry(n).or_default().insert(coord.signal.clone());
                         }
                     }
                 }
@@ -1080,13 +1154,13 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
     fn retain_active_edges(
         &self,
         node: &str,
-        node_forcing: &BTreeMap<Symbol, (bool, bool)>,
+        node_forcing: &BTreeMap<Symbol, Forcing>,
         s: &mut BTreeSet<ActiveEdge>,
     ) {
         let is_forced = |st: &Minterm<Symbol>| {
             node_forcing
                 .iter()
-                .any(|(p, (a, _))| st.value_of(p.as_str()) == Some(*a))
+                .any(|(p, f)| st.value_of(p.as_str()) == Some(f.asserted))
         };
         loop {
             let mut to_remove: Option<ActiveEdge> = None;
@@ -1156,13 +1230,9 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
     /// destination level of the pin — a set or clear, whatever the pin's declared class. Stratified:
     /// moves whose source or destination lie under an already-established forcing pin's asserted level
     /// are discounted before re-classifying (a clear pulsing the node inside a preset's region is still
-    /// a clear). A pin dragging the node BOTH ways (a tracked data pin) never classifies. Returns
-    /// `pin -> (asserted level, forced node value)`.
-    fn forcing_pins(
-        &self,
-        node: &Symbol,
-        moves: &[(Symbol, Minterm<Symbol>, Minterm<Symbol>, bool)],
-    ) -> BTreeMap<Symbol, (bool, bool)> {
+    /// a clear). A pin dragging the node BOTH ways (a tracked data pin) never classifies. Returns each
+    /// forcing pin with the level that asserts it and the value it forces the node to.
+    fn forcing_pins(&self, node: &Symbol, moves: &[Move]) -> BTreeMap<Symbol, Forcing> {
         let inputs = &self.m.cell.inputs;
         // Clause 2 - GLOBAL CONSTANT-PINNING: exactly one level of the pin holds the node at one constant
         // across ALL reachable stable states (an async override whose release re-acquires, like a toggle
@@ -1171,7 +1241,7 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
         // the node to a constant either (the node carries content in both phases), so declaration plays no
         // part — a level-forcing reset is a forcing pin whether or not it was declared a clock, which is how
         // `RDFF`'s clock-declared `R` is handled here.
-        let mut pinning: BTreeMap<Symbol, (bool, bool)> = BTreeMap::new();
+        let mut pinning: BTreeMap<Symbol, Forcing> = BTreeMap::new();
         for x in inputs {
             let pinned_value = |level: bool| -> Option<bool> {
                 let mut seen: Option<bool> = None;
@@ -1193,16 +1263,28 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
             match (pinned_value(false), pinned_value(true)) {
                 (Some(_), Some(_)) | (None, None) => {} // both levels pin to a constant (degenerate) or neither
                 (Some(v), None) => {
-                    pinning.insert(x.clone(), (false, v));
+                    pinning.insert(
+                        x.clone(),
+                        Forcing {
+                            asserted: false,
+                            forced: v,
+                        },
+                    );
                 }
                 (None, Some(v)) => {
-                    pinning.insert(x.clone(), (true, v));
+                    pinning.insert(
+                        x.clone(),
+                        Forcing {
+                            asserted: true,
+                            forced: v,
+                        },
+                    );
                 }
             }
         }
         // Monotone accumulation: established forcing pins are never re-litigated, so each round can only
         // ADD pins and the loop terminates within `inputs.len()` rounds.
-        let mut forcing: BTreeMap<Symbol, (bool, bool)> = pinning;
+        let mut forcing: BTreeMap<Symbol, Forcing> = pinning;
         loop {
             let mut added = false;
             for x in inputs {
@@ -1212,31 +1294,31 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
                 let mut dest_levels: BTreeSet<bool> = BTreeSet::new();
                 let mut posts: BTreeSet<bool> = BTreeSet::new();
                 let mut any = false;
-                for (pin, src, dest, post) in moves {
-                    if pin != x {
+                for mv in moves {
+                    if &mv.pin != x {
                         continue;
                     }
                     any = true;
-                    let discounted = forcing.iter().any(|(p, (a, _))| {
+                    let discounted = forcing.iter().any(|(p, f)| {
                         p != x
-                            && (src.value_of(p.as_str()) == Some(*a)
-                                || dest.value_of(p.as_str()) == Some(*a))
+                            && (mv.source.value_of(p.as_str()) == Some(f.asserted)
+                                || mv.dest.value_of(p.as_str()) == Some(f.asserted))
                     });
                     if discounted {
                         continue;
                     }
-                    if let Some(l) = dest.value_of(x.as_str()) {
+                    if let Some(l) = mv.dest.value_of(x.as_str()) {
                         dest_levels.insert(l);
                     }
-                    posts.insert(*post);
+                    posts.insert(mv.post);
                 }
                 if any && dest_levels.len() == 1 && posts.len() == 1 {
                     forcing.insert(
                         x.clone(),
-                        (
-                            dest_levels.into_iter().next().unwrap(),
-                            posts.into_iter().next().unwrap(),
-                        ),
+                        Forcing {
+                            asserted: dest_levels.into_iter().next().unwrap(),
+                            forced: posts.into_iter().next().unwrap(),
+                        },
                     );
                     added = true;
                 }
@@ -1282,15 +1364,14 @@ fn reaches_self(succ: &BTreeMap<Symbol, BTreeSet<Symbol>>, w: &Symbol) -> bool {
     false
 }
 
-/// Are the `(pre-projection, post-value)` samples CONFLICT-FREE over `cols` — no two samples whose
-/// pre-states project equally deliver different values? The drop-loop's sole test: a sample-level
-/// grouping, no BDD quantification.
-fn conflict_free(cols: &[Symbol], samples: &[(Minterm<Symbol>, bool)]) -> bool {
+/// Are the samples CONFLICT-FREE over `cols` — no two samples whose states project equally deliver
+/// different values? The drop-loop's sole test: a sample-level grouping, no BDD quantification.
+fn conflict_free(cols: &[Symbol], samples: &[Sample]) -> bool {
     let mut seen: HashMap<Minterm<Symbol>, bool> = HashMap::new();
-    for (pre, post) in samples {
-        let proj = pre.project_to(cols.iter().map(Symbol::as_str));
-        if let Some(prev) = seen.insert(proj, *post) {
-            if prev != *post {
+    for sample in samples {
+        let proj = sample.state.project_to(cols.iter().map(Symbol::as_str));
+        if let Some(prev) = seen.insert(proj, sample.value) {
+            if prev != sample.value {
                 return false;
             }
         }
@@ -1308,7 +1389,7 @@ fn conflict_free(cols: &[Symbol], samples: &[(Minterm<Symbol>, bool)]) -> bool {
 /// could legally keep `sela1`).
 fn drop_loop_columns(
     header: &[Symbol],
-    samples: &[(Minterm<Symbol>, bool)],
+    samples: &[Sample],
     inputs_set: &BTreeSet<&str>,
     fold_eligible: &BTreeSet<Symbol>,
 ) -> Vec<Symbol> {
@@ -1528,8 +1609,8 @@ fn cofactor_off_edge<B: Brand, C: ManagerCell>(
     regions_from(&on, &off, &hold, &header)
 }
 
-/// Synthesise a capture region from its `(pre-state, post-value)` samples over `header`. The witnessed
-/// on-samples are the ON-set, the witnessed off-samples the OFF-set and the unwitnessed remainder a
+/// Synthesise a capture region from its samples over `header`. The witnessed on-samples are the ON-set,
+/// the witnessed off-samples the OFF-set and the unwitnessed remainder a
 /// don't-care set: the capture is the ON-set generalised (incompletely-specified minimisation) so it
 /// generalises past the reachable pre-states to the underlying function — reachability need not cover
 /// every projection for the cover to land on the true capture. The generalised on-set is total, its off
@@ -1540,13 +1621,16 @@ fn cofactor_off_edge<B: Brand, C: ManagerCell>(
 fn synth_capture<B: Brand, C: ManagerCell>(
     builder: &BddBuilder<B, C>,
     header: &[Symbol],
-    samples: &[(Minterm<Symbol>, bool)],
+    samples: &[Sample],
 ) -> Option<StateRegions> {
     let mut on_pts = builder.constant(false);
     let mut off_pts = builder.constant(false);
-    for (pre, post) in samples {
-        let cube = cube_bdd(builder, &pre.project_to(header.iter().map(Symbol::as_str)));
-        if *post {
+    for sample in samples {
+        let cube = cube_bdd(
+            builder,
+            &sample.state.project_to(header.iter().map(Symbol::as_str)),
+        );
+        if sample.value {
             on_pts = on_pts.or(&cube);
         } else {
             off_pts = off_pts.or(&cube);
@@ -1614,25 +1698,27 @@ fn synth_off_edge<B: Brand, C: ManagerCell>(
     builder: &BddBuilder<B, C>,
     header_off: &[Symbol],
     clocks: &[Symbol],
-    stable: &[(Minterm<Symbol>, bool)],
+    stable: &[Sample],
 ) -> StateRegions {
     // Group the stable samples by off-edge projection, then by the clocks' phase vector.
     let mut groups: BTreeMap<Minterm<Symbol>, BTreeMap<Vec<bool>, Vec<bool>>> = BTreeMap::new();
-    'sample: for (state, val) in stable {
+    'sample: for sample in stable {
         let mut phase: Vec<bool> = Vec::with_capacity(clocks.len());
         for c in clocks {
-            match state.value_of(c.as_str()) {
+            match sample.state.value_of(c.as_str()) {
                 Some(b) => phase.push(b),
                 None => continue 'sample, // a keying clock unset ⇒ skip this sample
             }
         }
-        let proj = state.project_to(header_off.iter().map(Symbol::as_str));
+        let proj = sample
+            .state
+            .project_to(header_off.iter().map(Symbol::as_str));
         groups
             .entry(proj)
             .or_default()
             .entry(phase)
             .or_default()
-            .push(*val);
+            .push(sample.value);
     }
 
     let mut on_pts = builder.constant(false);
@@ -1785,16 +1871,16 @@ mod tests {
         es: &EdgeArcs,
     ) -> BTreeMap<Symbol, Bdd<B, C>> {
         let mut values: BTreeMap<Symbol, Bdd<B, C>> = BTreeMap::new();
-        let Some((_, any)) = m.deltas.first() else {
+        let Some(any) = m.deltas.first() else {
             return values; // no state variables, so nothing was factored out
         };
-        let b = any.builder();
+        let b = any.delta.builder();
         let mut fn_of: BTreeMap<&str, &Bdd<B, C>> = BTreeMap::new();
-        for (n, d) in &m.deltas {
-            fn_of.insert(n.as_str(), d);
+        for coord in &m.deltas {
+            fn_of.insert(coord.signal.as_str(), &coord.delta);
         }
-        for (n, d) in m.combinational_outputs() {
-            fn_of.insert(n.as_str(), d);
+        for coord in m.combinational_outputs() {
+            fn_of.insert(coord.signal.as_str(), &coord.delta);
         }
         let is_machine_node = |name: &Symbol| {
             m.state_set.contains(name.as_str()) || m.cell.outputs.iter().any(|o| &o.name == name)
@@ -1875,10 +1961,10 @@ mod tests {
         m: &Machine<B, C>,
         es: &EdgeArcs,
     ) {
-        let Some((_, any_delta)) = m.deltas.first() else {
+        let Some(any) = m.deltas.first() else {
             return; // no state variables ⇒ nothing carries a capture
         };
-        let builder = any_delta.builder();
+        let builder = any.delta.builder();
         let inputs = &m.cell.inputs;
 
         // The classifier's own scan context — the transition table and the ELIGIBLE stable states, measured
@@ -2154,11 +2240,11 @@ mod tests {
             .chain(read_gated.iter().copied())
             .collect();
         let mut fn_of: BTreeMap<&str, &Bdd<B, C>> = BTreeMap::new();
-        for (n, d) in &m.deltas {
-            fn_of.insert(n.as_str(), d);
+        for coord in &m.deltas {
+            fn_of.insert(coord.signal.as_str(), &coord.delta);
         }
-        for (n, d) in m.combinational_outputs() {
-            fn_of.insert(n.as_str(), d);
+        for coord in m.combinational_outputs() {
+            fn_of.insert(coord.signal.as_str(), &coord.delta);
         }
         let candidates = output_names
             .iter()
@@ -2192,10 +2278,10 @@ mod tests {
         m: &Machine<B, C>,
         es: &EdgeArcs,
     ) {
-        let Some((_, any)) = m.deltas.first() else {
+        let Some(any) = m.deltas.first() else {
             return;
         };
-        let b = any.builder();
+        let b = any.delta.builder();
         let derived = derived_values(m, es);
         for d in &es.derived {
             let reg_value = |s: &Minterm<Symbol>| -> Option<bool> {
@@ -2754,8 +2840,8 @@ L3 = "!K3*L2 + K3*L3"
                     .combinational
                     .iter()
                     .chain(&m.deltas)
-                    .find(|(s, _)| s.as_str() == n)
-                    .map(|(_, d)| d)
+                    .find(|c| c.signal.as_str() == n)
+                    .map(|c| &c.delta)
                     .expect("a delta for the queried node");
                 f.variables()
                     .filter(|v| m.state_set.contains(v))

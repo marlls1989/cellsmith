@@ -175,7 +175,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
     // harmless, and no guard is added to carve it back out.
     let support: BTreeMap<Symbol, BTreeSet<Symbol>> = deltas
         .iter()
-        .map(|(n, d)| (n.clone(), d.variables().collect()))
+        .map(|c| (c.signal.clone(), c.delta.variables().collect()))
         .collect();
 
     let ex = &m.explored;

@@ -557,7 +557,7 @@ Y = "!(W + C)"
         assert_eq!(m.exposed, ["W"]);
         assert!(
             !m.state_set.contains(&Symbol::from("W"))
-                && m.combinational.iter().any(|(n, _)| n.as_str() == "W"),
+                && m.combinational.iter().any(|c| c.signal.as_str() == "W"),
             "a combinational exposure is a combinational coordinate, not a state one",
         );
 

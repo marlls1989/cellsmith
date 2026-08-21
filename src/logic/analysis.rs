@@ -144,13 +144,19 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
         // other internal was folded away and is not in `signals()` at all.
         let deltas: Vec<machine::Delta<B, C>> = state_vars
             .iter()
-            .map(|v| (v.clone(), bdds[v].clone()))
+            .map(|v| machine::Delta {
+                signal: v.clone(),
+                delta: bdds[v].clone(),
+            })
             .collect();
         let combinational: Vec<machine::Delta<B, C>> = signals
             .iter()
             .map(|s| &s.name)
             .filter(|nm| !state_set.contains(*nm))
-            .map(|nm| (nm.clone(), bdds[nm].clone()))
+            .map(|nm| machine::Delta {
+                signal: nm.clone(),
+                delta: bdds[nm].clone(),
+            })
             .collect();
         // The exposed nodes surviving in this view. A combinational exposure is one of the coordinates
         // above; a state-variable exposure is one of the state columns.
@@ -174,9 +180,9 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
                     .chain(
                         combinational
                             .iter()
-                            .filter(|(n, _)| output_names.contains(n)),
+                            .filter(|c| output_names.contains(&c.signal)),
                     )
-                    .map(|(_, d)| d.clone())
+                    .map(|c| c.delta.clone())
                     .collect();
                 machine::explore(coords, &seed_funcs, inputs, budget)?
             }
@@ -220,7 +226,7 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
     pub(crate) fn combinational_outputs(&self) -> impl Iterator<Item = &machine::Delta<B, C>> {
         self.combinational
             .iter()
-            .filter(|(n, _)| self.cell.outputs.iter().any(|o| o.name == *n))
+            .filter(|c| self.cell.outputs.iter().any(|o| o.name == c.signal))
     }
 
     /// The machine's coordinate δ set, in [`machine::Coordinates`] order — the state variables followed
@@ -710,7 +716,7 @@ Q = "W + Q*(A+B)"
         assert_eq!(
             m.combinational
                 .iter()
-                .map(|(n, _)| n.as_str())
+                .map(|c| c.signal.as_str())
                 .collect::<Vec<_>>(),
             ["W"],
             "the exposed combinational node is the other coordinate",
@@ -720,14 +726,15 @@ Q = "W + Q*(A+B)"
             "the fixture explores at least one state"
         );
         for node in &m.explored.order {
-            for (name, delta) in m.deltas.iter().chain(&m.combinational) {
+            for coord in m.deltas.iter().chain(&m.combinational) {
+                let name = &coord.signal;
                 assert!(
                     node.vars().iter().any(|v| v == name),
                     "coordinate {name} has no column at {node:?}",
                 );
                 assert_eq!(
                     node.value_of(name.as_str()),
-                    delta.evaluate_fast(node),
+                    coord.delta.evaluate_fast(node),
                     "coordinate {name}'s column disagrees with its δ at {node:?}",
                 );
             }

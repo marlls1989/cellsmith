@@ -51,8 +51,18 @@ use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
 use rayon::prelude::*;
 
-/// A coordinate paired with its next-state function δ (over inputs + state variables).
-pub(crate) type Delta<B, C> = (Symbol, Bdd<B, C>);
+/// A coordinate paired with its next-state function δ (over inputs + state variables). Cloning one
+/// duplicates the `Bdd` handle — the manager reference and the root node — not the diagram, so a
+/// coordinate costs no more to copy than its δ does. The derived bounds `B: Clone, C: Clone` are carried
+/// by the struct's own: `Brand` is `Copy` and `ManagerCell` is `Clone`, so they hold wherever a `Bdd`
+/// does.
+#[derive(Clone)]
+pub(crate) struct Delta<B: Brand, C: ManagerCell> {
+    /// The coordinate the δ writes — a state variable or a combinational survivor.
+    pub(crate) signal: Symbol,
+    /// That coordinate's next-state function.
+    pub(crate) delta: Bdd<B, C>,
+}
 
 /// The machine's coordinates — every signal surviving the minimisation — split by the role [`explore`]
 /// gives each half.
@@ -80,7 +90,7 @@ impl<B: Brand, C: ManagerCell> Coordinates<'_, B, C> {
         self.state
             .iter()
             .chain(self.combinational)
-            .map(|(name, _)| name.clone())
+            .map(|c| c.signal.clone())
             .collect()
     }
 
@@ -199,8 +209,8 @@ fn step<B: Brand, C: ManagerCell>(
     // written is `None`, so the `expect` is a standing check — in release as well as debug — that every
     // δ handed here names a column of the node.
     let mut next = node.clone();
-    for (name, d) in deltas {
-        next.set_value_of(name.as_str(), d.evaluate_fast(node))
+    for coord in deltas {
+        next.set_value_of(coord.signal.as_str(), coord.delta.evaluate_fast(node))
             .expect("every delta names a column of the node");
     }
     next
@@ -378,7 +388,7 @@ pub(crate) fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     let state_index: HashMap<&str, usize> = state_deltas
         .iter()
         .enumerate()
-        .map(|(i, (n, _))| (n.as_str(), i))
+        .map(|(i, c)| (c.signal.as_str(), i))
         .collect();
 
     // Forced on/off cover of a function over the inputs. `cover_over_fr(input_names)` re-bases the
@@ -431,8 +441,9 @@ pub(crate) fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     // cannot be parallelised.
     let support: Vec<BTreeSet<usize>> = state_deltas
         .iter()
-        .map(|(_, d)| {
-            d.variables()
+        .map(|c| {
+            c.delta
+                .variables()
                 .filter_map(|v| state_index.get(v.as_str()).copied())
                 .collect()
         })
@@ -472,7 +483,7 @@ pub(crate) fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     let settlement = |x: &Minterm<Symbol>| -> Vec<Option<bool>> {
         state_deltas
             .iter()
-            .map(|(_, d)| d.evaluate_fast(x))
+            .map(|c| c.delta.evaluate_fast(x))
             .collect()
     };
     let settle_count = |m: &[Option<bool>]| m.iter().filter(|o| o.is_some()).count();
@@ -576,7 +587,10 @@ mod tests {
         // Q = A*B + Q*(A+B). Over columns [A, B, Q], hold state 01/10 keeps Q; 11 forces Q high.
         let builder = bdd_builder!();
         let dq = builder.parse("A*B + Q*(A+B)").unwrap();
-        let deltas = vec![(Symbol::from("Q"), dq)];
+        let deltas = vec![Delta {
+            signal: Symbol::from("Q"),
+            delta: dq,
+        }];
 
         // A=1 B=0 Q=1 is a stable hold state.
         let hold = node_from(&["A", "B", "Q"], |n| matches!(n, "A" | "Q"));
@@ -596,7 +610,10 @@ mod tests {
         // covers — the on-set (A=1,B=1,Q=1) and the off-set (A=0,B=0,Q=0), both present.
         let builder = sync_bdd_builder!();
         let dq = builder.parse("A*B + Q*(A+B)").unwrap();
-        let deltas = vec![(Symbol::from("Q"), dq.clone())];
+        let deltas = vec![Delta {
+            signal: Symbol::from("Q"),
+            delta: dq.clone(),
+        }];
         let inputs = [Symbol::from("A"), Symbol::from("B")];
         let explored = explore(
             Coordinates {
@@ -675,7 +692,10 @@ mod tests {
         // position — the standing check that a δ handed to `step` names a coordinate of the node.
         let builder = bdd_builder!();
         let dq = builder.parse("A*B + Q*(A+B)").unwrap();
-        let deltas = vec![(Symbol::from("Q"), dq)];
+        let deltas = vec![Delta {
+            signal: Symbol::from("Q"),
+            delta: dq,
+        }];
         let no_q = node_from(&["A", "B"], |n| n == "A");
         let _ = step(&deltas, &no_q);
     }
@@ -685,7 +705,10 @@ mod tests {
         // Under a hold input (A=1 B=0) with Q undefined, Q is not forced: it stays absent.
         let builder = bdd_builder!();
         let dq = builder.parse("A*B + Q*(A+B)").unwrap();
-        let deltas = vec![(Symbol::from("Q"), dq)];
+        let deltas = vec![Delta {
+            signal: Symbol::from("Q"),
+            delta: dq,
+        }];
         let node = node_from_opt(&["A", "B", "Q"], |n| match n {
             "A" => Some(true),
             "B" => Some(false),
@@ -702,7 +725,16 @@ mod tests {
         let builder = bdd_builder!();
         let da = builder.parse("!Qb*A").unwrap();
         let db = builder.parse("!Qa*B").unwrap();
-        let deltas = vec![(Symbol::from("Qa"), da), (Symbol::from("Qb"), db)];
+        let deltas = vec![
+            Delta {
+                signal: Symbol::from("Qa"),
+                delta: da,
+            },
+            Delta {
+                signal: Symbol::from("Qb"),
+                delta: db,
+            },
+        ];
         let both_low = node_from(&["A", "B", "Qa", "Qb"], |n| matches!(n, "A" | "B"));
         assert_eq!(settle(&deltas, &both_low), None);
     }
@@ -715,7 +747,16 @@ mod tests {
         let builder = bdd_builder!();
         let da = builder.parse("!Qb*A").unwrap();
         let db = builder.parse("!Qa*B").unwrap();
-        let deltas = vec![(Symbol::from("Qa"), da), (Symbol::from("Qb"), db)];
+        let deltas = vec![
+            Delta {
+                signal: Symbol::from("Qa"),
+                delta: da,
+            },
+            Delta {
+                signal: Symbol::from("Qb"),
+                delta: db,
+            },
+        ];
         let both_low = node_from(&["A", "B", "Qa", "Qb"], |n| matches!(n, "A" | "B"));
 
         let cycle = settle_or_cycle(&deltas, &both_low).expect_err("oscillates, no stable state");
@@ -742,7 +783,10 @@ mod tests {
         // settle() reports.
         let builder = bdd_builder!();
         let dq = builder.parse("A*B + Q*(A+B)").unwrap();
-        let deltas = vec![(Symbol::from("Q"), dq)];
+        let deltas = vec![Delta {
+            signal: Symbol::from("Q"),
+            delta: dq,
+        }];
         let forcing = node_from(&["A", "B", "Q"], |n| matches!(n, "A" | "B"));
 
         let trace = settle_trace(&deltas, &forcing).expect("settles");
@@ -765,7 +809,16 @@ mod tests {
         let builder = bdd_builder!();
         let da = builder.parse("!Qb*A").unwrap();
         let db = builder.parse("!Qa*B").unwrap();
-        let deltas = vec![(Symbol::from("Qa"), da), (Symbol::from("Qb"), db)];
+        let deltas = vec![
+            Delta {
+                signal: Symbol::from("Qa"),
+                delta: da,
+            },
+            Delta {
+                signal: Symbol::from("Qb"),
+                delta: db,
+            },
+        ];
         let both_low = node_from(&["A", "B", "Qa", "Qb"], |n| matches!(n, "A" | "B"));
 
         let cycle = settle_trace(&deltas, &both_low).expect_err("oscillates, no stable state");
