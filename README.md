@@ -485,7 +485,7 @@ cargo resolves these Rust crates automatically — the only *external* requireme
   provides the BDD and cover/minterm engine cellsmith is built on (BDD feedback projection and
   cover/minterm extraction).
 - [`liberty-parser`](https://crates.io/crates/liberty-parser) `0.3` — the published Liberty parser
-  crate (used as `liberty_parse`); its generic Liberty `Group` trees back the `.lib` emitter.
+  crate; its generic Liberty `Group` trees back the `.lib` emitter.
 
 Plus the standard ecosystem crates: `serde`/`toml` (spec parsing), `clap` (CLI), `indexmap`, and
 `rayon` (parallelism).

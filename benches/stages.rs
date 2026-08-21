@@ -14,7 +14,7 @@ use cellsmith::logic::minimise::{minimise_state_space, Preserved};
 use cellsmith::logic::{arcs, confluence, leakage, width};
 use cellsmith::model::{build_signal_bdds, derive_regions};
 use espresso_logic::{sync_bdd_builder, Symbol};
-use liberty_parse::liberty::Liberty;
+use liberty_parser::liberty::Liberty;
 
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 

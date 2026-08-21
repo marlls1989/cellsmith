@@ -1620,7 +1620,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
         let cell = analyse(src);
         // The rendered rows are the device under test — the sole path through `EdgeInputs`.
         let liberty =
-            liberty_parse::liberty::Liberty(crate::emit::liberty::cell_liberty(&cell)).to_string();
+            liberty_parser::liberty::Liberty(crate::emit::liberty::cell_liberty(&cell)).to_string();
         let (input_names, state_names, rows) = parse_rendered_statetable(&liberty);
         let model = build_state_model(&cell).expect("fixture is sequential");
         assert_eq!(

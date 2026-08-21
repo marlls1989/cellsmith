@@ -33,11 +33,11 @@
 //!
 //! `cell_liberty` builds one cell's `cell (...) { ... }` groups; `library_liberty` states the whole run —
 //! every cell's groups inside a single `library (<name>) { ... }` group, which is the `.lib` file
-//! cellsmith writes. Groups are built with `liberty-parse`'s `Group`/`Attribute`/`Value`
+//! cellsmith writes. Groups are built with `liberty-parser`'s `Group`/`Attribute`/`Value`
 //! trees (the same idiom as `pseudosync/src/lib.rs`) and reach a sink by wrapping in `Liberty` — `Group`
 //! itself has no `Display`.
 
-use liberty_parse::{
+use liberty_parser::{
     ast::Value,
     liberty::{Attribute, Group, Liberty},
 };
@@ -56,7 +56,7 @@ use crate::model::AnalysedCell;
 /// Add a simple `name : value;` attribute to a group.
 ///
 /// Constructed via `Group`'s own `attributes` map so we never name `IndexMap` directly — the crate
-/// and `liberty-parse` pull different major versions of `indexmap`, whose types are incompatible.
+/// and `liberty-parser` pull different major versions of `indexmap`, whose types are incompatible.
 fn set_attr(group: &mut Group, name: &str, value: Value) {
     group
         .attributes
@@ -256,7 +256,7 @@ fn statetable_group(model: &StateModel) -> Group {
 /// The joint table body: one `<inputs> : <current> : <next>` row per [`StateModel::rows`] entry, then the
 /// edge-triggered rows ([`StateModel::edge_rows`]), separated by a comma and a newline so one statetable
 /// row occupies one line of the emitted Liberty, in model order. The body is the VALUE of the `table`
-/// attribute, which `liberty-parse` holds as a string, so this is where the rows become text.
+/// attribute, which `liberty-parser` holds as a string, so this is where the rows become text.
 struct Table<'a>(&'a StateModel);
 
 impl fmt::Display for Table<'_> {
@@ -450,10 +450,10 @@ mod tests {
         format!("{}\n", Liberty(cell_liberty(cell)))
     }
 
-    /// Wrap a bare cell fragment and assert it round-trips through `liberty_parse::parse_lib`.
+    /// Wrap a bare cell fragment and assert it round-trips through `liberty_parser::parse_lib`.
     fn parse_frag(frag: &str) -> Liberty {
         let wrapped = format!("library (test) {{\n{frag}}}\n");
-        liberty_parse::parse_lib(&wrapped).expect("emitted Liberty must parse")
+        liberty_parser::parse_lib(&wrapped).expect("emitted Liberty must parse")
     }
 
     /// Locate a cell group by name in a parsed library.
@@ -555,7 +555,7 @@ Q = "CLK*M + !CLK*Q"
         assert!(frag.contains("pin (M)"));
         assert!(frag.contains("direction : internal;"));
         assert!(frag.contains("internal_node : \"M\";"));
-        // The fragment still round-trips through liberty-parse.
+        // The fragment still round-trips through liberty-parser.
         let lib = parse_frag(&frag);
         let cellg = lib
             .iter()
