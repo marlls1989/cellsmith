@@ -87,7 +87,7 @@ use espresso_logic::{Cover, CoverType, CubeType, Minimizable, Minterm, Symbol};
 use rayon::prelude::*;
 
 use crate::logic::analysis::Machine;
-use crate::logic::arcs::{Arc as DelayArc, Edge};
+use crate::logic::arcs::{Arc as DelayArc, Edge, PinEdge};
 use crate::logic::machine;
 use crate::logic::regions::{self, StateRegions};
 
@@ -163,8 +163,8 @@ pub(crate) struct EdgeArcs {
 
 /// One EDGE-typed delay arc at full identity — the identity [`super::arcs::derive`] keys an
 /// [`super::arcs::Arc`] on. The two pins are the arc's ends and are not interchangeable: `output` is where
-/// the transition lands, `clock` the related pin it came from, and `clock_edge` the direction the CLOCK
-/// moves in, which is not in general the direction the output moves in.
+/// the transition lands and `clock` the related pin it came from, carrying the direction the CLOCK moves
+/// in, which is not in general the direction the output moves in.
 ///
 /// The start minterm is the machine's own node, so it is as wide as the machine's coordinates — a
 /// column per state variable and per combinational survivor. That width never has to be matched by
@@ -175,10 +175,8 @@ pub(crate) struct EdgeArcs {
 pub(crate) struct EdgeLabel {
     /// The output pin the arc lands on.
     pub(crate) output: Symbol,
-    /// The related pin, a declared clock.
-    pub(crate) clock: Symbol,
-    /// The clock's own direction across the firing.
-    pub(crate) clock_edge: Edge,
+    /// The related pin — a declared clock — with its own direction across the firing.
+    pub(crate) clock: PinEdge,
     /// The stable state the firing started from: `super::arcs::Arc::start` verbatim.
     pub(crate) start: Minterm<Symbol>,
 }
@@ -259,16 +257,12 @@ impl CandAgg {
 /// input-pin order with Rise first) and its off-edge.
 type Synthesised = (Vec<(Symbol, Edge, StateRegions)>, StateRegions);
 
-/// One candidate edge arc on a node: a clock and the direction that clock moves in. The decision core's
-/// whole currency — each arc on a node is typed independently, so edge and combinational arcs coexist
-/// freely on one output. The two halves cannot disagree: the direction is an [`Edge`], never a level the
-/// caller has to keep in step with it.
+/// One candidate edge arc on a node: the keying clock — an input the cell declares as one — with the
+/// direction that clock moves in. The decision core's whole currency — each arc on a node is typed
+/// independently, so edge and combinational arcs coexist freely on one output.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct ActiveEdge {
-    /// The keying clock — an input the cell declares as one.
-    clock: Symbol,
-    /// The direction the clock moves in.
-    edge: Edge,
+    clock: PinEdge,
 }
 
 /// A latch taken in one phase of one clock: what the opacity memo is keyed on. The two names carry
@@ -350,8 +344,10 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                     let cap = out[i]
                         .captures
                         .entry(ActiveEdge {
-                            clock: related.clone(),
-                            edge: toggled_edge,
+                            clock: PinEdge {
+                                pin: related.clone(),
+                                edge: toggled_edge,
+                            },
                         })
                         .or_default();
                     cap.samples.push((node.clone(), b1));
@@ -595,8 +591,10 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         if types_edge(&a.output.pin, &a.related, clock_edge, &sp) {
             labels.insert(EdgeLabel {
                 output: a.output.pin.clone(),
-                clock: a.related.clone(),
-                clock_edge,
+                clock: PinEdge {
+                    pin: a.related.clone(),
+                    edge: clock_edge,
+                },
                 start: a.start.clone(),
             });
         }
@@ -620,7 +618,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                     scan.is_eligible(pre)
                         && scan.is_eligible(np)
                         && m.output_value(name.as_str(), pre) != Some(*post)
-                        && types_edge(name, &arc.clock, arc.edge, np)
+                        && types_edge(name, &arc.clock.pin, arc.clock.edge, np)
                 });
                 if types {
                     s.insert(arc.clone());
@@ -652,14 +650,16 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         // Fall). Every clock present carries at least one active-edge direction.
         let clock_edges: Vec<(Symbol, Vec<Edge>)> = inputs
             .iter()
-            .filter(|p| s.iter().any(|a| &a.clock == *p))
+            .filter(|p| s.iter().any(|a| &a.clock.pin == *p))
             .map(|clock| {
                 let edges: Vec<Edge> = [Edge::Rise, Edge::Fall]
                     .into_iter()
                     .filter(|&edge| {
                         s.contains(&ActiveEdge {
-                            clock: clock.clone(),
-                            edge,
+                            clock: PinEdge {
+                                pin: clock.clone(),
+                                edge,
+                            },
                         })
                     })
                     .collect();
@@ -1075,10 +1075,10 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
         loop {
             let mut to_remove: Option<ActiveEdge> = None;
             'search: for arc in s.iter() {
-                let k = &arc.clock;
+                let k = &arc.clock.pin;
                 for (si, st) in self.order.iter().enumerate() {
                     if !self.eligible[si]
-                        || st.value_of(k.as_str()) != Some(arc.edge.settled_level())
+                        || st.value_of(k.as_str()) != Some(arc.clock.edge.settled_level())
                         || is_forced(st)
                     {
                         continue;
@@ -1111,10 +1111,12 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
                         // Is the toggle of `x` itself an active edge of the node's current set?
                         let x_is_active_edge = self.clock_set.contains(x.as_str()) && {
                             s.contains(&ActiveEdge {
-                                clock: x.clone(),
-                                edge: Edge::from_settled_level(
-                                    dest.value_of(x.as_str()) == Some(true),
-                                ),
+                                clock: PinEdge {
+                                    pin: x.clone(),
+                                    edge: Edge::from_settled_level(
+                                        dest.value_of(x.as_str()) == Some(true),
+                                    ),
+                                },
                             })
                         };
                         if !x_is_active_edge {
@@ -1351,8 +1353,10 @@ fn synth_node_captures<B: Brand, C: ManagerCell>(
             let samples = agg
                 .captures
                 .get(&ActiveEdge {
-                    clock: clock.clone(),
-                    edge,
+                    clock: PinEdge {
+                        pin: clock.clone(),
+                        edge,
+                    },
                 })
                 .map(|c| c.samples.as_slice())
                 .unwrap_or(&[]);
@@ -1723,7 +1727,7 @@ mod tests {
         let mut v: Vec<(&str, &str, Edge)> = es
             .labels
             .iter()
-            .map(|l| (l.output.as_str(), l.clock.as_str(), l.clock_edge))
+            .map(|l| (l.output.as_str(), l.clock.pin.as_str(), l.clock.edge))
             .collect();
         v.sort();
         v.dedup();
@@ -1917,8 +1921,10 @@ mod tests {
                 .map(|(clock, edge, sr)| {
                     (
                         ActiveEdge {
-                            clock: clock.clone(),
-                            edge: *edge,
+                            clock: PinEdge {
+                                pin: clock.clone(),
+                                edge: *edge,
+                            },
                         },
                         builder.build_cover(&sr.on_cover),
                     )
@@ -1940,14 +1946,14 @@ mod tests {
             // and the discriminator between a latch CLOSE (change-free: the node already tracks the
             // delivered value through the open phase) and an edge that moves the node.
             let changes = |arc: &ActiveEdge| -> bool {
-                let xi = inputs.iter().position(|p| p == &arc.clock).unwrap();
+                let xi = inputs.iter().position(|p| p == &arc.clock.pin).unwrap();
                 scan.order.iter().enumerate().any(|(si, s)| {
-                    s.value_of(arc.clock.as_str()) == Some(!arc.edge.settled_level())
+                    s.value_of(arc.clock.pin.as_str()) == Some(!arc.clock.edge.settled_level())
                         && scan.next[si][xi].is_some_and(|ni| value(&scan.order[ni]) != value(s))
                 })
             };
             let is_transparent = |arc: &ActiveEdge| -> bool {
-                phase_transparent(&r.node, &arc.clock, !arc.edge.settled_level())
+                phase_transparent(&r.node, &arc.clock.pin, !arc.clock.edge.settled_level())
             };
 
             // The OPEN phases: a CHANGE-FREE arc whose pre-phase is genuinely transparent is a latch
@@ -1955,7 +1961,13 @@ mod tests {
             let open: Vec<(Symbol, bool, &Bdd<B, C>)> = covers
                 .keys()
                 .filter(|arc| !changes(arc) && is_transparent(arc))
-                .map(|arc| (arc.clock.clone(), !arc.edge.settled_level(), &covers[arc]))
+                .map(|arc| {
+                    (
+                        arc.clock.pin.clone(),
+                        !arc.clock.edge.settled_level(),
+                        &covers[arc],
+                    )
+                })
                 .collect();
             let open_at = |s: &Minterm<Symbol>| {
                 open.iter()
@@ -1998,8 +2010,10 @@ mod tests {
                     let got = value(dest);
                     // The toggle leaves `x` at the complement of the level it started from.
                     let toggled = ActiveEdge {
-                        clock: x.clone(),
-                        edge: Edge::from_settled_level(s.value_of(x.as_str()) == Some(false)),
+                        clock: PinEdge {
+                            pin: x.clone(),
+                            edge: Edge::from_settled_level(s.value_of(x.as_str()) == Some(false)),
+                        },
                     };
 
                     // (2) CAPTURE: this toggle is an emitted arc firing from its matching pre-phase.
@@ -2014,7 +2028,7 @@ mod tests {
                             got, want,
                             "capture unfaithful: node {node}, clock {x} {:?} from pre {s:?} settled \
                              to {dest:?}: observed {got:?} != synthesised capture {want:?}",
-                            toggled.edge
+                            toggled.clock.edge
                         );
                         continue;
                     }
@@ -2061,8 +2075,8 @@ mod tests {
                     changes(arc) || is_transparent(arc),
                     "vacuous edge arc: node {node}, clock {} {:?} never changes the node and its \
                      opposite phase is not transparent",
-                    arc.clock.as_str(),
-                    arc.edge
+                    arc.clock.pin.as_str(),
+                    arc.clock.edge
                 );
             }
         }
@@ -4311,8 +4325,10 @@ Y = "CLK*A + !CLK*B + Y*A*B"
                 }
                 let labelled = es.labels.contains(&EdgeLabel {
                     output: a.output.pin.clone(),
-                    clock: a.related.clone(),
-                    clock_edge: Edge::Fall,
+                    clock: PinEdge {
+                        pin: a.related.clone(),
+                        edge: Edge::Fall,
+                    },
                     start: a.start.clone(),
                 });
                 match a.start.value_of(mask) {

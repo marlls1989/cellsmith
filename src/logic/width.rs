@@ -255,11 +255,12 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
 
 #[cfg(test)]
 mod tests {
-    use crate::logic::arcs::Edge;
+    use crate::logic::arcs::{Edge, PinEdge};
     use crate::logic::constraint::{Constraint, ConstraintKind};
     use crate::logic::hazard::{Cause, Hazard, Outcome};
     use crate::model::analyse_one as analyse;
     use crate::model::AnalysedCell;
+    use espresso_logic::Symbol;
     use std::collections::BTreeSet;
 
     /// This pass's own records, picked out of the cell's one `hazards` list by their cause: the
@@ -884,15 +885,23 @@ B = "!CLK*(!SEL*D + SEL*B) + CLK*B"
             .collect()
     }
 
-    /// One generated constraint as the triple that identifies it: the constrained pin, the pulse's
+    /// What identifies a generated constraint: the pin its opening edge constrains, and the victim
+    /// nodes it probes.
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct ConstraintKey {
+        pin: PinEdge,
+        nodes: Vec<Symbol>,
+    }
+
+    /// One generated constraint as the key that identifies it: the constrained pin, the pulse's
     /// opening edge and the victim nodes it probes. The levels sampled beside those nodes name WHICH probed
     /// state the representative came from, which is a choice the exploration order makes.
-    fn constrained(cell: &AnalysedCell) -> BTreeSet<(String, Edge, String)> {
+    fn constrained(cell: &AnalysedCell) -> BTreeSet<ConstraintKey> {
         widths(cell)
             .into_iter()
-            .map(|c| {
-                let nodes: Vec<&str> = c.nodes.iter().map(|p| p.node.as_str()).collect();
-                (c.pin.pin.to_string(), c.pin.edge, nodes.join(","))
+            .map(|c| ConstraintKey {
+                pin: c.pin.clone(),
+                nodes: c.nodes.iter().map(|n| n.node.clone()).collect(),
             })
             .collect()
     }
@@ -924,8 +933,20 @@ Q = "CLK*M + !CLK*Q"
         assert_eq!(
             constrained(&declared),
             [
-                ("CLK".to_string(), Edge::Rise, "Q".to_string()),
-                ("CLK".to_string(), Edge::Fall, "Q,M".to_string()),
+                ConstraintKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("CLK"),
+                        edge: Edge::Rise,
+                    },
+                    nodes: vec![Symbol::from("Q")],
+                },
+                ConstraintKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("CLK"),
+                        edge: Edge::Fall,
+                    },
+                    nodes: vec![Symbol::from("Q"), Symbol::from("M")],
+                },
             ]
             .into_iter()
             .collect(),
@@ -960,8 +981,20 @@ Qn = "!(S+Q)"
         assert_eq!(
             constrained(&cell),
             [
-                ("S".to_string(), Edge::Rise, "Q,Qn".to_string()),
-                ("R".to_string(), Edge::Rise, "Q,Qn".to_string()),
+                ConstraintKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("S"),
+                        edge: Edge::Rise,
+                    },
+                    nodes: vec![Symbol::from("Q"), Symbol::from("Qn")],
+                },
+                ConstraintKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("R"),
+                        edge: Edge::Rise,
+                    },
+                    nodes: vec![Symbol::from("Q"), Symbol::from("Qn")],
+                },
             ]
             .into_iter()
             .collect(),

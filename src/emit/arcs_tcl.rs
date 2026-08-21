@@ -443,8 +443,7 @@ impl TransitionIdentity {
             TransitionIdentity::Async(transition)
         } else if cell.edge.labels.contains(&EdgeLabel {
             output: arc.output.pin.clone(),
-            clock: arc.related.clone(),
-            clock_edge: related_edge,
+            clock: transition.related.clone(),
             start: arc.start.clone(),
         }) {
             TransitionIdentity::Edge(transition)
@@ -4056,7 +4055,7 @@ Q = "!CLKB*M2 + CLKB*Q"
             cell.edge
                 .labels
                 .iter()
-                .any(|l| l.output == "Q" && l.clock == "CLKB" && l.clock_edge == Edge::Fall),
+                .any(|l| l.output == "Q" && l.clock.pin == "CLKB" && l.clock.edge == Edge::Fall),
             "Q's own latch opens on CLKB's falling edge (an edge arc): {:?}",
             cell.edge.labels
         );
@@ -4190,7 +4189,7 @@ Q = "EN*D + !EN*Q"
             cell.edge
                 .labels
                 .iter()
-                .any(|l| l.output == "Q" && l.clock == "EN" && l.clock_edge == Edge::Rise),
+                .any(|l| l.output == "Q" && l.clock.pin == "EN" && l.clock.edge == Edge::Rise),
             "the enable's rising edge opens the latch (an edge arc): {:?}",
             cell.edge.labels
         );
@@ -4859,7 +4858,7 @@ M = "!CLK*D + CLK*M"
             cell.edge
                 .labels
                 .iter()
-                .any(|l| l.output == "M" && l.clock == "CLK" && l.clock_edge == Edge::Fall),
+                .any(|l| l.output == "M" && l.clock.pin == "CLK" && l.clock.edge == Edge::Fall),
             "the exposed master opens on CLK's fall (an edge arc): {:?}",
             cell.edge.labels
         );
