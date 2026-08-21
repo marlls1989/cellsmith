@@ -122,6 +122,8 @@ impl Default for ExplorationBudget {
 /// One exploration is one cell's, but this says only which budget stopped it and at what ceiling. The
 /// cell it stopped, and the command-line flag that raises the ceiling, are added by the layer walking
 /// the cells, which wraps this ([`ModelError::Exploration`](crate::model::ModelError::Exploration)).
+// `Clone` and `#[non_exhaustive]` are inert here for the same reason as on `ModelError`'s derives
+// (see the note there): they follow the espresso-logic error idiom rather than serving a call site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExplorationLimit {

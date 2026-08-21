@@ -17,7 +17,7 @@
 //! text once, in [`Display`](fmt::Display), written into the writer the model is going out on.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::{self, Write as _};
+use std::fmt;
 
 use espresso_logic::Symbol;
 
@@ -191,8 +191,8 @@ impl fmt::Display for Primitive<'_> {
         }
         writeln!(f, "reg    {pin};")?;
         writeln!(f, "table")?;
-        for line in table_lines(sr) {
-            writeln!(f, "\t{line}")?;
+        for row in table_rows(sr) {
+            writeln!(f, "\t{row}")?;
         }
         writeln!(f, "endtable")?;
         writeln!(f, "endprimitive")
@@ -216,22 +216,54 @@ impl fmt::Display for Constant<'_> {
     }
 }
 
-/// The UDP table rows, one per region cube, in a deterministic (sorted) order. Each row is
-/// `<input pattern> : ? : <next>` where `next` is `1` (on), `0` (off) or `-` (hold). A row is held as
-/// the line it is written as: the order the rows come out in is that line's own sort order.
-fn table_lines(sr: &StateRegions) -> Vec<String> {
-    let mut lines: Vec<String> = Vec::new();
-    for cube in &sr.on {
-        lines.push(format!("{} : ? : 1;", Pattern(cube)));
+/// The UDP table rows: one per region cube of the signal's on, off and hold regions.
+fn table_rows(sr: &StateRegions) -> Vec<TableRow<'_>> {
+    let mut rows: Vec<TableRow> = Vec::new();
+    for (region, next) in [
+        (&sr.on, Next::On),
+        (&sr.off, Next::Off),
+        (&sr.hold, Next::Hold),
+    ] {
+        rows.extend(region.iter().map(|cube| TableRow { cube, next }));
     }
-    for cube in &sr.off {
-        lines.push(format!("{} : ? : 0;", Pattern(cube)));
+    // IEEE 1364 matches a UDP row by its pattern and resolves an overlap by rule, never by a row's
+    // position, so a consumer reads the table as a set of rows. This order over the row values is the
+    // tool's own and carries nothing to that consumer.
+    rows.sort();
+    rows
+}
+
+/// One row of a level-sensitive UDP table: the region cube it matches over the signal's columns and the
+/// state the pin takes there. The current-state (`reg`) field is `?` — a level row matches on the input
+/// columns alone, and a hold row is what carries the pin's prior state forward.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct TableRow<'a> {
+    cube: &'a StateCube,
+    next: Next,
+}
+
+impl fmt::Display for TableRow<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} : ? : {};", Pattern(self.cube), self.next)
     }
-    for cube in &sr.hold {
-        lines.push(format!("{} : ? : -;", Pattern(cube)));
+}
+
+/// Where a UDP table row leaves the pin: driven high (`1`), driven low (`0`) or unchanged (`-`).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Next {
+    On,
+    Off,
+    Hold,
+}
+
+impl fmt::Display for Next {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Next::On => "1",
+            Next::Off => "0",
+            Next::Hold => "-",
+        })
     }
-    lines.sort();
-    lines
 }
 
 /// A cube as space-separated UDP table columns, one [`Level`] per column of the header order.
@@ -244,6 +276,7 @@ impl fmt::Display for Pattern<'_> {
 }
 
 /// One column value as a Verilog UDP table symbol: `1` high, `0` low, `?` any.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct Level(Option<bool>);
 
 impl fmt::Display for Level {
@@ -305,8 +338,8 @@ impl fmt::Display for EdgePrimitive<'_> {
         writeln!(f, "input  {inputs};")?;
         writeln!(f, "reg    {pin};")?;
         writeln!(f, "table")?;
-        for line in edge_table_lines(er) {
-            writeln!(f, "\t{line}")?;
+        for row in edge_table_rows(er) {
+            writeln!(f, "\t{row}")?;
         }
         writeln!(f, "endtable")?;
         writeln!(f, "endprimitive")
@@ -329,74 +362,44 @@ impl fmt::Display for ClockComment<'_> {
     }
 }
 
-/// The edge-register UDP table rows, sorted for determinism (a row being held as the line it is written
-/// as, since the order they come out in is that line's own sort order). Column order is the data cols
-/// (`er.cols` minus the register's own symbol and the clocks) then the clocks in
-/// [`EdgeCaptures::clocks`] order; the current-state (`reg`) field is `?` except on a self-referencing
-/// register's capture rows, where it carries that register's own literal. Each capture row carries
-/// exactly ONE edge indicator (IEEE 1364); the capturing clock's column holds it while every other clock
-/// column carries the conditioning level. For a single clock every rule reduces exactly to the
-/// single-clock rows.
-fn edge_table_lines(er: &EdgeCaptures) -> Vec<String> {
+/// The edge-register UDP table rows. Column order is the data cols (`er.cols` minus the register's own
+/// symbol and the clocks) then the clocks in [`EdgeCaptures::clocks`] order; the current-state (`reg`)
+/// field is `?` except on a self-referencing register's capture rows, where it carries that register's
+/// own literal. Each capture row carries exactly ONE edge indicator (IEEE 1364); the capturing clock's
+/// column holds it while every other clock column carries the conditioning level. For a single clock
+/// every rule reduces exactly to the single-clock rows.
+fn edge_table_rows(er: &EdgeCaptures) -> Vec<EdgeRow> {
     let cols = data_cols(er);
     let clocks = er.clocks();
-    let mut lines: Vec<String> = Vec::new();
+    let mut rows: Vec<EdgeRow> = Vec::new();
 
     // (a) Capture rows: the combinational next-state sampled on one active edge of one clock. Each
     // capture carries its own clock; a dual-edge (or multi-clock) register contributes one group per
     // `(clock, edge)`, each keeping its single edge indicator in the capturing clock's column.
     for (clock, edge, capture) in &er.captures {
-        let capture_edge = match edge {
-            Edge::Rise => "(01)",
-            Edge::Fall => "(10)",
-        };
-        for cube in &capture.on {
-            lines.push(region_row(
-                er,
-                &cols,
-                &clocks,
-                Some((clock, capture_edge)),
-                &capture.cols,
-                cube,
-                "1",
-            ));
-        }
-        for cube in &capture.off {
-            lines.push(region_row(
-                er,
-                &cols,
-                &clocks,
-                Some((clock, capture_edge)),
-                &capture.cols,
-                cube,
-                "0",
-            ));
+        for (region, next) in [(&capture.on, Next::On), (&capture.off, Next::Off)] {
+            rows.extend(region.iter().map(|cube| {
+                region_row(
+                    er,
+                    &cols,
+                    &clocks,
+                    Some((clock, *edge)),
+                    &capture.cols,
+                    cube,
+                    next,
+                )
+            }));
         }
     }
 
     // (b) Async set/clear as LEVEL rows (every clock `?`): by IEEE 1364 a level row dominates the edge
     // rows, and F1/F2 guarantee any overlap agrees, so the set/clear wins independent of the clocks.
-    for cube in &er.off_edge.on {
-        lines.push(region_row(
-            er,
-            &cols,
-            &clocks,
-            None,
-            &er.off_edge.cols,
-            cube,
-            "1",
-        ));
-    }
-    for cube in &er.off_edge.off {
-        lines.push(region_row(
-            er,
-            &cols,
-            &clocks,
-            None,
-            &er.off_edge.cols,
-            cube,
-            "0",
-        ));
+    for (region, next) in [(&er.off_edge.on, Next::On), (&er.off_edge.off, Next::Off)] {
+        rows.extend(
+            region
+                .iter()
+                .map(|cube| region_row(er, &cols, &clocks, None, &er.off_edge.cols, cube, next)),
+        );
     }
 
     // (c) Opposite-edge ignore: for each clock, each edge face with NO capture entry holds on a
@@ -404,35 +407,47 @@ fn edge_table_lines(er: &EdgeCaptures) -> Vec<String> {
     // elsewhere. A single-edge clock emits its one inactive edge (as today); a dual-edge clock, both
     // faces captured, emits none.
     for &clock in &clocks {
-        for (edge, indicator) in [(Edge::Rise, "(01)"), (Edge::Fall, "(10)")] {
+        for edge in [Edge::Rise, Edge::Fall] {
             if er.captures.iter().any(|(c, e, _)| c == clock && *e == edge) {
                 continue;
             }
-            let mut cells: Vec<&str> = cols.iter().map(|_| "?").collect();
-            for &c in &clocks {
-                cells.push(if c == clock { indicator } else { "?" });
-            }
-            lines.push(format!("{} : ? : -;", cells.join(" ")));
+            let mut cells: Vec<EdgeColumn> = cols.iter().map(|_| EdgeColumn::any()).collect();
+            cells.extend(clocks.iter().map(|&c| {
+                if c == clock {
+                    EdgeColumn::Edge(edge)
+                } else {
+                    EdgeColumn::any()
+                }
+            }));
+            rows.push(EdgeRow::holding(cells));
         }
     }
 
     // (d) Steady-clock data-transition ignore: a change on any data column with every clock stable holds.
     for i in 0..cols.len() {
-        let mut cells: Vec<&str> = (0..cols.len())
-            .map(|j| if i == j { "(??)" } else { "?" })
+        let mut cells: Vec<EdgeColumn> = (0..cols.len())
+            .map(|j| {
+                if i == j {
+                    EdgeColumn::Change
+                } else {
+                    EdgeColumn::any()
+                }
+            })
             .collect();
-        cells.extend(clocks.iter().map(|_| "?"));
-        lines.push(format!("{} : ? : -;", cells.join(" ")));
+        cells.extend(clocks.iter().map(|_| EdgeColumn::any()));
+        rows.push(EdgeRow::holding(cells));
     }
 
-    lines.sort();
-    lines
+    // The tool's own order over the row values, carrying nothing to a UDP consumer, as in
+    // `table_rows` above.
+    rows.sort();
+    rows
 }
 
 /// One region row of an edge-register table: the data columns (`cols`, self and clocks excluded) filled
 /// from `cube` by column name against `region_cols`, then the clock columns (`clocks`, in order), the
-/// current-state (`reg`) field and the `next` action. When `active` is `Some((clock, indicator))` the
-/// capturing clock's column carries that edge `indicator` and every OTHER clock column carries its level
+/// current-state (`reg`) field and the `next` action. When `active` is `Some((clock, edge))` the
+/// capturing clock's column carries that `edge` and every OTHER clock column carries its level
 /// from `cube` (a conditioned capture references the other clock's level); when `active` is `None` (a
 /// clock-independent level row) every clock column reads its `cube` level, which is `?` for an off-edge
 /// region since it never references a clock. A data or clock column the cube does not constrain (or absent
@@ -443,39 +458,83 @@ fn region_row(
     er: &EdgeCaptures,
     cols: &[&Symbol],
     clocks: &[&Symbol],
-    active: Option<(&Symbol, &'static str)>,
+    active: Option<(&Symbol, Edge)>,
     region_cols: &[Symbol],
     cube: &StateCube,
-    next: &str,
-) -> String {
-    let mut row = String::new();
-    for &c in cols {
-        column(&mut row, level_at(c, region_cols, cube));
-    }
+    next: Next,
+) -> EdgeRow {
+    let mut cells: Vec<EdgeColumn> = cols
+        .iter()
+        .map(|&c| EdgeColumn::Level(level_at(c, region_cols, cube)))
+        .collect();
     // Clock columns LAST, in clocks() order: the capturing clock carries its edge indicator, every other
     // clock its conditioning level from the cube.
-    for &clock in clocks {
-        match active {
-            Some((active_clock, indicator)) if clock == active_clock => column(&mut row, indicator),
-            _ => column(&mut row, level_at(clock, region_cols, cube)),
-        }
-    }
+    cells.extend(clocks.iter().map(|&clock| match active {
+        Some((active_clock, edge)) if clock == active_clock => EdgeColumn::Edge(edge),
+        _ => EdgeColumn::Level(level_at(clock, region_cols, cube)),
+    }));
     let reg = if er.cols.contains(&er.node) {
         level_at(&er.node, region_cols, cube)
     } else {
         Level(None)
     };
-    write!(row, " : {reg} : {next};").expect("writing into a String cannot fail");
-    row
+    EdgeRow { cells, reg, next }
 }
 
-/// Append one column to a row under construction, space-separated from the column before it. The rows are
-/// sorted before they are emitted, so each is assembled as the string that sort orders.
-fn column(row: &mut String, cell: impl fmt::Display) {
-    if !row.is_empty() {
-        row.push(' ');
+/// One row of an edge-sensitive UDP table: its columns in the primitive's port order (the data columns
+/// then the clocks), the current-state (`reg`) field and the state the register takes.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct EdgeRow {
+    cells: Vec<EdgeColumn>,
+    reg: Level,
+    next: Next,
+}
+
+impl EdgeRow {
+    /// A row that leaves the register where it was, its current state unread: the shape of both ignore
+    /// rules — an inactive clock face and a data change under steady clocks.
+    fn holding(cells: Vec<EdgeColumn>) -> EdgeRow {
+        EdgeRow {
+            cells,
+            reg: Level(None),
+            next: Next::Hold,
+        }
     }
-    write!(row, "{cell}").expect("writing into a String cannot fail");
+}
+
+impl fmt::Display for EdgeRow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let cells = Joined::new(self.cells.iter(), " ", std::convert::identity);
+        write!(f, "{cells} : {} : {};", self.reg, self.next)
+    }
+}
+
+/// One column of an [`EdgeRow`]: a steady [`Level`], the clock edge the row fires on (`(01)` for a rise,
+/// `(10)` for a fall), or a change to any value (`(??)`), which is what a steady-clock ignore row keys
+/// its data column off.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum EdgeColumn {
+    Level(Level),
+    Edge(Edge),
+    Change,
+}
+
+impl EdgeColumn {
+    /// The any-value column `?`, which is what a column the row leaves unconstrained carries.
+    fn any() -> EdgeColumn {
+        EdgeColumn::Level(Level(None))
+    }
+}
+
+impl fmt::Display for EdgeColumn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EdgeColumn::Level(level) => write!(f, "{level}"),
+            EdgeColumn::Edge(Edge::Rise) => f.write_str("(01)"),
+            EdgeColumn::Edge(Edge::Fall) => f.write_str("(10)"),
+            EdgeColumn::Change => f.write_str("(??)"),
+        }
+    }
 }
 
 /// The level of column `col` in `cube`, looked up by name against `region_cols` (a subset of the
@@ -956,6 +1015,28 @@ GCLK = "enA*CLKA+enB*CLKB"
         &rest[..end]
     }
 
+    /// Every UDP table row a model states, each under the `primitive` header it belongs to and the whole
+    /// sorted -- the rows a run emits, blind to the order they came out in. This is what
+    /// `crate::emit::arcs_tcl`'s `shaped_blocks` is over the Tcl deck: a UDP consumer matches a row by
+    /// its pattern rather than by its position, so what two runs of one cell have to agree on is the SET
+    /// of rows under each primitive.
+    fn table_row_set(v: &str) -> Vec<String> {
+        let mut rows: Vec<String> = Vec::new();
+        let mut head = "";
+        let mut in_table = false;
+        for line in v.lines() {
+            match line {
+                _ if line.starts_with("primitive ") => head = line,
+                "table" => in_table = true,
+                "endtable" => in_table = false,
+                _ if in_table => rows.push(format!("{head}\t{}", line.trim())),
+                _ => {}
+            }
+        }
+        rows.sort();
+        rows
+    }
+
     #[test]
     fn dcmux_udp_is_a_level_reg() {
         // DCMUX collapses to a LEVEL model (its falls are combinational and the active-edge filter
@@ -1179,8 +1260,8 @@ Q = "CLK*M + !CLK*Q"
     #[test]
     fn non_collapsible_suite_verilog_matches_the_no_edge_collapse_flag() {
         // No clock-edge indicator (`(01)`/`(10)`) appears, whether the flag is left off (default
-        // collapse, a no-op on these shapes) or forced on -- and the two runs emit byte-identical
-        // Verilog.
+        // collapse, a no-op on these shapes) or forced on -- and the two runs state the same UDP table
+        // rows.
         for src in NON_COLLAPSIBLE {
             let (default, forced) = analyse_both(src);
             let v_default = emit(&default);
@@ -1189,7 +1270,7 @@ Q = "CLK*M + !CLK*Q"
                 assert!(!v.contains("(01)"), "unexpected rising-edge token");
                 assert!(!v.contains("(10)"), "unexpected falling-edge token");
             }
-            assert_eq!(v_default, v_forced);
+            assert_eq!(table_row_set(&v_default), table_row_set(&v_forced));
         }
     }
 
@@ -1197,7 +1278,8 @@ Q = "CLK*M + !CLK*Q"
     fn dff_opt_out_restores_master_primitive_via_either_switch() {
         // The two-latch DFF, opted out directly (`no_edge_collapse = true` in the TOML) versus opted
         // out via the CLI-flag-equivalent blanket mutation over the whole spec: both switches restore
-        // the SAME two-latch Verilog -- a `DFF_M` primitive and wire, absent under default collapse.
+        // the SAME two-latch model -- a `DFF_M` primitive and wire, absent under default collapse, over
+        // the same UDP table rows.
         const DFF: &str = r#"
 [[cell]]
 name = "DFF"
@@ -1228,7 +1310,7 @@ Q = "CLK*M + !CLK*Q"
             assert!(v.contains("primitive DFF_M("));
             assert!(v.contains("wire   M;"));
         }
-        assert_eq!(v_direct, v_via_flag);
+        assert_eq!(table_row_set(&v_direct), table_row_set(&v_via_flag));
     }
 
     #[test]

@@ -49,7 +49,7 @@ use std::collections::BTreeMap;
 
 use espresso_logic::{BoolExpr, Minterm, Symbol};
 
-use crate::logic::arcs::{ArcLevels, Edge, PinEdge};
+use crate::logic::arcs::{ArcLevels, PinEdge};
 
 /// What the hazard's timing is between: inputs that don't converge when toggled, one alone or two
 /// together, or one signal racing itself.
@@ -61,12 +61,9 @@ pub enum Cause {
     /// Two inputs probed together that don't converge: the pair the probe toggled, one [`PinEdge`]
     /// each, in the order it named them.
     Race { pins: [PinEdge; 2] },
-    /// One signal racing itself: the two edges of a single pin, bounding a pulse.
-    Pulse {
-        pin: Symbol,
-        /// The OPENING edge of the pulse — rise means the pulse is high, fall low.
-        edge: Edge,
-    },
+    /// One signal racing itself: the two edges of a single pin, bounding a pulse. The edge the
+    /// [`PinEdge`] names is the OPENING one — rise means the pulse is high, fall low.
+    Pulse { pin: PinEdge },
 }
 
 /// What the machine does under the hazard's timing. The variant is the whole of the classification:

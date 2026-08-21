@@ -48,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A cell that reaches one input assignment in several stored states is constrained in each of
   them.** A state-holding cell arrives at one input assignment in more than one stored state — a
-  C-element holds either value under `A*!B` — and those used to be folded into a single constraint
+  C-element holds either value under `A & !B` — and those used to be folded into a single constraint
   before emission could see them, so such a cell now emits more constraint blocks. Where a block's
   `-ic` and `-vector` cannot tell two of them apart, the run warns that too few nodes are exposed
   for `-ic` to express the cell state, naming the arc and every state that block conflates, rather
@@ -91,6 +91,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   segfaults on one inside a `define_leakage` block. Rest states no column tells apart render one block
   between them, which the conflation warning names; listing the node that separates them in the cell's
   `expose` gives each its own block.
+
+- **A run ends at the cell whose exploration passes a ceiling, naming that one cell and writing
+  nothing.** A cell stopped at `--max-candidates` or `--max-states` has no arcs, hazards, leakage
+  states or constraints, so the analysis fails there instead of carrying the cell to the end of
+  the run: the error names the cell, the ceiling it passed and the flag that raises it. Cells are
+  analysed in parallel and rayon does not say which error a failed collect returns, so where
+  several cells pass a ceiling the one named is whichever the analysis reached — raise that cell's
+  ceiling, rerun, and the next is named in turn. A run used to analyse every cell first and list
+  every offending one before exiting.
 
 ## [0.5.1] - 2026-08-08
 

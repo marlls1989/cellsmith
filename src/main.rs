@@ -531,7 +531,7 @@ impl fmt::Display for CauseHeader<'_> {
         match self.0 {
             Cause::Toggle { pin } => write!(f, "toggling {pin}"),
             Cause::Race { pins: [a, b] } => write!(f, "too little separation between {a} and {b}"),
-            Cause::Pulse { pin, edge } => write!(f, "a short pulse on {pin}{edge}"),
+            Cause::Pulse { pin } => write!(f, "a short pulse on {pin}"),
         }
     }
 }

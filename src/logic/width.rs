@@ -59,7 +59,7 @@ use espresso_logic::bdd::{Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::analysis::Machine;
-use crate::logic::arcs::ArcLevels;
+use crate::logic::arcs::{ArcLevels, PinEdge};
 use crate::logic::confluence::{edge_from, node_levels_at, oscillating_group};
 use crate::logic::hazard::{Cause, Hazard, Outcome};
 use crate::logic::machine;
@@ -192,8 +192,10 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
             };
 
             let cause = Cause::Pulse {
-                pin: p.clone(),
-                edge: edge_from(s, p.as_str()),
+                pin: PinEdge {
+                    pin: p.clone(),
+                    edge: edge_from(s, p.as_str()),
+                },
             };
             // A candidate converges somewhere the reference does not over these nodes, so which state a
             // pulse leaves them in is decided by its width: the hazard proper, empty exactly where every
@@ -273,7 +275,7 @@ mod tests {
     /// cause reaching here is a filtering fault rather than a case to handle.
     fn pulse(hz: &Hazard) -> (String, Edge) {
         match &hz.cause {
-            Cause::Pulse { pin, edge } => (pin.to_string(), *edge),
+            Cause::Pulse { pin } => (pin.pin.to_string(), pin.edge),
             Cause::Toggle { pin } => panic!("a toggle of {pin} came through the pulse filter"),
             Cause::Race { pins } => panic!("a race over {pins:?} came through the pulse filter"),
         }
@@ -890,7 +892,7 @@ B = "!CLK*(!SEL*D + SEL*B) + CLK*B"
             .into_iter()
             .map(|c| {
                 let nodes: Vec<&str> = c.nodes.iter().map(|p| p.node.as_str()).collect();
-                (c.pin.to_string(), c.pin_edge, nodes.join(","))
+                (c.pin.pin.to_string(), c.pin.edge, nodes.join(","))
             })
             .collect()
     }

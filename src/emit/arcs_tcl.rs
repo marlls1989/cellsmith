@@ -602,21 +602,14 @@ fn groups(cell: &AnalysedCell, extra: &[Symbol]) -> Vec<Group> {
 /// A constraint's members all switch the same pins, what differs between them being the `-type`, so this
 /// is read once per constraint and the members cannot be handed different pins.
 fn switching_pins(c: &Constraint) -> RacingPins {
-    let pin = PinEdge {
+    let separation = |related: &PinEdge| RacingPins {
+        related: related.clone(),
         pin: c.pin.clone(),
-        edge: c.pin_edge,
-    };
-    let separation = |related: &Symbol, edge: Edge| RacingPins {
-        related: PinEdge {
-            pin: related.clone(),
-            edge,
-        },
-        pin: pin.clone(),
     };
     match &c.kind {
-        ConstraintKind::SetupHold { clock, clock_edge } => separation(clock, *clock_edge),
-        ConstraintKind::NonSeq { other, other_edge } => separation(other, *other_edge),
-        ConstraintKind::MinPulseWidth => RacingPins::pulse(&pin),
+        ConstraintKind::SetupHold { clock } => separation(clock),
+        ConstraintKind::NonSeq { other } => separation(other),
+        ConstraintKind::MinPulseWidth => RacingPins::pulse(&c.pin),
     }
 }
 
@@ -689,7 +682,7 @@ fn constraint_blocks(
 /// classification: it decides which `-type`s the constraint fans out to and which pin each of those
 /// blocks relates to, with the edge THAT pin makes ([`constraint_blocks`] and [`switching_pins`] read
 /// both off it) — a separation's related half is the pin its kind names, and a minimum pulse width
-/// relates the constrained pin to itself, which is the `pin` and `pin_edge` already here. Everything
+/// relates the constrained pin to itself, which is the `pin` already here. Everything
 /// else a block carries — the `-ic` levels, the `-vector`'s held digits and the `-when` — names the
 /// OBSERVATION it was measured from, so one identity comes out as one general block however many
 /// observations were made of it, and each of those observations returns as its own conditioned block
@@ -697,8 +690,7 @@ fn constraint_blocks(
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ConstraintIdentity {
     kind: ConstraintKind,
-    pin: Symbol,
-    pin_edge: Edge,
+    pin: PinEdge,
     /// The victim nodes probed, by name ([`Constraint::victim_names`]). An identity states WHICH nodes the
     /// block is about, and the level each holds belongs to the one probed state an observation was
     /// measured from — so reading the levels here would split the observations of one constraint into an
@@ -711,7 +703,6 @@ impl ConstraintIdentity {
         ConstraintIdentity {
             kind: c.kind.clone(),
             pin: c.pin.clone(),
-            pin_edge: c.pin_edge,
             nodes: c.victim_names(),
         }
     }
@@ -762,7 +753,7 @@ impl ConstraintRank {
 /// its own conditioned block under `--when`, characterised in the input context it was observed in — so
 /// a conditioned block can carry a `-probe` narrower than any general block's.
 fn dominates(outer: &Constraint, inner: &Constraint) -> bool {
-    (&outer.kind, &outer.pin, outer.pin_edge) == (&inner.kind, &inner.pin, inner.pin_edge)
+    (&outer.kind, &outer.pin) == (&inner.kind, &inner.pin)
         && strictly_within(&inner.victim_names(), &outer.victim_names())
 }
 

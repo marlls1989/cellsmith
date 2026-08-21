@@ -531,6 +531,9 @@ fn de_constraint_pins<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Constrai
 /// Every variant but [`Spec`](Self::Spec) reports a rule the cell model imposes on top of what TOML
 /// can express — a name used twice, a pin referenced that was never declared — and names the cell it
 /// was checking, so a spec holding many cells says which one is at fault.
+// `Clone` and `#[non_exhaustive]` follow the espresso-logic error idiom this crate's errors are written
+// in — `CoverError` and its siblings carry the same pair. Nothing in cellsmith clones a `ModelError` or
+// matches one from outside the crate; the derives are here so the two crates' errors present one shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ModelError {
@@ -1442,7 +1445,7 @@ pub(crate) fn analyse_one(src: &str) -> AnalysedCell {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logic::arcs::Edge;
+    use crate::logic::arcs::{Edge, PinEdge};
     use crate::logic::constraint::ConstraintKind;
     use crate::logic::hazard::{Cause, Outcome};
     use espresso_logic::{bdd_builder, expr, Minterm};
@@ -2604,8 +2607,7 @@ Q = "CLK*M + !CLK*Q"
     #[derive(Debug, PartialEq, Eq)]
     struct ConstraintRecord {
         kind: ConstraintKind,
-        pin: Symbol,
-        pin_edge: Edge,
+        pin: PinEdge,
         nodes: Vec<Symbol>,
     }
 
@@ -2682,7 +2684,6 @@ Q = "CLK*M + !CLK*Q"
                 .map(|c| ConstraintRecord {
                     kind: c.kind.clone(),
                     pin: c.pin.clone(),
-                    pin_edge: c.pin_edge,
                     nodes: c.victim_names(),
                 })
                 .collect(),

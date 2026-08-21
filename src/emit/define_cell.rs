@@ -22,7 +22,7 @@ use espresso_logic::Symbol;
 use indexmap::IndexMap;
 
 use crate::emit::arcs_tcl::pinlist;
-use crate::emit::tcl::Words;
+use crate::emit::tcl::{Braced, Words};
 use crate::model::AnalysedCell;
 
 /// A resolved template triple: the `(delay, power, constraint)` names an alias attaches, each `Some`
@@ -51,18 +51,18 @@ impl fmt::Display for DefineCell {
         writeln!(f, "define_cell \\")?;
         // Data inputs only — an all-clock/all-async cell drops the flag entirely.
         if !self.inputs.is_empty() {
-            writeln!(f, "\t-input {{ {} }} \\", Words(&self.inputs))?;
+            writeln!(f, "\t-input {} \\", Braced(Words(&self.inputs)))?;
         }
-        writeln!(f, "\t-output {{ {} }} \\", Words(&self.outputs))?;
+        writeln!(f, "\t-output {} \\", Braced(Words(&self.outputs)))?;
         if !self.clocks.is_empty() {
-            writeln!(f, "\t-clock {{ {} }} \\", Words(&self.clocks))?;
+            writeln!(f, "\t-clock {} \\", Braced(Words(&self.clocks)))?;
         }
         if !self.async_pins.is_empty() {
-            writeln!(f, "\t-async {{ {} }} \\", Words(&self.async_pins))?;
+            writeln!(f, "\t-async {} \\", Braced(Words(&self.async_pins)))?;
         }
         // `-pinlist` is the arcs emitter's source of truth — all inputs (incl. clock + async) then
         // outputs — and is emitted unfiltered.
-        writeln!(f, "\t-pinlist {{ {} }} \\", Words(&self.pinlist))?;
+        writeln!(f, "\t-pinlist {} \\", Braced(Words(&self.pinlist)))?;
         if let Some(d) = &self.delay {
             writeln!(f, "\t-delay {d} \\")?;
         }
@@ -72,7 +72,7 @@ impl fmt::Display for DefineCell {
         if let Some(c) = &self.constraint {
             writeln!(f, "\t-constraint {c} \\")?;
         }
-        writeln!(f, "\t{{ {} }}", Words(&self.names))?;
+        writeln!(f, "\t{}", Braced(Words(&self.names)))?;
         writeln!(f)
     }
 }
@@ -189,7 +189,7 @@ constraint = "ct"
         assert!(tcl.contains("-delay dt \\"));
         assert!(tcl.contains("-power pt \\"));
         assert!(tcl.contains("-constraint ct \\"));
-        assert!(tcl.contains("{ INVX1 INVX2 }"));
+        assert!(tcl.contains("{INVX1 INVX2}"));
     }
 
     /// (b) No template at all: ONE block, no template flags, all aliases braced together.
@@ -209,7 +209,7 @@ Y = "!A"
         assert!(!tcl.contains("-delay"));
         assert!(!tcl.contains("-power"));
         assert!(!tcl.contains("-constraint"));
-        assert!(tcl.contains("{ INVX1 INVX2 }"));
+        assert!(tcl.contains("{INVX1 INVX2}"));
     }
 
     /// (c) An override that changes a field splits the aliases into TWO blocks with the correct
@@ -231,12 +231,12 @@ delay = "dt2"
         );
         eprintln!("{tcl}");
         assert_eq!(tcl.matches("define_cell").count(), 2);
-        assert!(block_with(&tcl, "{ INVX1 }").contains("-delay dt \\"));
-        assert!(block_with(&tcl, "{ INVX2 }").contains("-delay dt2 \\"));
+        assert!(block_with(&tcl, "{INVX1}").contains("-delay dt \\"));
+        assert!(block_with(&tcl, "{INVX2}").contains("-delay dt2 \\"));
     }
 
     /// (d) Two non-adjacent aliases share a triple while the middle one is overridden: they group
-    /// together (`{ A C }`) ahead of the odd one (`{ B }`), in first-appearance order.
+    /// together (`{A C}`) ahead of the odd one (`{B}`), in first-appearance order.
     #[test]
     fn non_adjacent_same_triple_first_appearance_order() {
         let tcl = emit(
@@ -254,12 +254,9 @@ delay = "other"
         );
         eprintln!("{tcl}");
         assert_eq!(tcl.matches("define_cell").count(), 2);
-        let ac = tcl.find("{ A C }").expect("A and C share a group");
-        let b = tcl.find("{ B }").expect("B is its own group");
-        assert!(
-            ac < b,
-            "first-appearance order puts {{ A C }} before {{ B }}"
-        );
+        let ac = tcl.find("{A C}").expect("A and C share a group");
+        let b = tcl.find("{B}").expect("B is its own group");
+        assert!(ac < b, "first-appearance order puts {{A C}} before {{B}}");
     }
 
     /// (e) A template that sets only delay + power emits no `-constraint` flag.
@@ -303,7 +300,7 @@ delay = "dt2"
 "#,
         );
         eprintln!("{tcl}");
-        let inv2 = block_with(&tcl, "{ INVX2 }");
+        let inv2 = block_with(&tcl, "{INVX2}");
         assert!(inv2.contains("-delay dt2 \\"));
         assert!(inv2.contains("-power pt \\"));
         assert!(inv2.contains("-constraint ct \\"));
@@ -345,9 +342,9 @@ Q = "(A*B + Q*(A+B))*!R"
 "#,
         );
         eprintln!("{tcl}");
-        assert!(tcl.contains("-input { A B }"));
-        assert!(tcl.contains("-async { R }"));
-        assert!(tcl.contains("-pinlist { A B R Q }"));
+        assert!(tcl.contains("-input {A B}"));
+        assert!(tcl.contains("-async {R}"));
+        assert!(tcl.contains("-pinlist {A B R Q}"));
     }
 
     /// (i) A cell with no async pins emits no `-async` flag.
@@ -364,7 +361,7 @@ Y = "A*B"
         );
         eprintln!("{tcl}");
         assert!(!tcl.contains("-async"));
-        assert!(tcl.contains("-input { A B }"));
+        assert!(tcl.contains("-input {A B}"));
     }
 
     /// (j) An internal state node is excluded from both `-output` and `-pinlist`.
@@ -384,8 +381,8 @@ Q = "CLK*M + !CLK*Q"
         );
         eprintln!("{tcl}");
         // Only the external output Q is listed; the internal master latch M never appears.
-        assert!(tcl.contains("-output { Q }"));
-        assert!(tcl.contains("-pinlist { CLK D Q }"));
+        assert!(tcl.contains("-output {Q}"));
+        assert!(tcl.contains("-pinlist {CLK D Q}"));
     }
 
     /// (k) When every input is async, `-input` is dropped entirely — but `-pinlist` still lists them.
@@ -403,8 +400,8 @@ Q = "!R*(S + Q)"
         );
         eprintln!("{tcl}");
         assert!(!tcl.contains("-input"));
-        assert!(tcl.contains("-async { S R }"));
-        assert!(tcl.contains("-pinlist { S R Q }"));
+        assert!(tcl.contains("-async {S R}"));
+        assert!(tcl.contains("-pinlist {S R Q}"));
     }
 
     /// (l) A declared clock pin is lifted out of `-input` into `-clock`, yet still appears in
@@ -424,9 +421,9 @@ Q = "CLK*M + !CLK*Q"
 "#,
         );
         eprintln!("{tcl}");
-        assert!(tcl.contains("-input { D }"));
-        assert!(tcl.contains("-clock { CLK }"));
-        assert!(tcl.contains("-pinlist { CLK D Q }"));
+        assert!(tcl.contains("-input {D}"));
+        assert!(tcl.contains("-clock {CLK}"));
+        assert!(tcl.contains("-pinlist {CLK D Q}"));
     }
 
     /// (m) A cell with no clock pins emits no `-clock` flag.

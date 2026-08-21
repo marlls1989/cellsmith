@@ -48,7 +48,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use espresso_logic::{Minterm, Symbol};
 
-use crate::logic::arcs::{ArcLevels, Edge, PinEdge};
+use crate::logic::arcs::{ArcLevels, PinEdge};
 use crate::logic::hazard::{Cause, Hazard};
 use crate::model::ConstraintPins;
 
@@ -59,10 +59,11 @@ use crate::model::ConstraintPins;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum ConstraintKind {
     /// A directed separation: the constrained pin is data, and this is the declared clock it is held
-    /// around.
-    SetupHold { clock: Symbol, clock_edge: Edge },
-    /// A symmetric separation between two requests, neither of which is a declared clock.
-    NonSeq { other: Symbol, other_edge: Edge },
+    /// around, with the edge that clock makes.
+    SetupHold { clock: PinEdge },
+    /// A symmetric separation between two requests, neither of which is a declared clock: the other
+    /// request, with the edge it makes.
+    NonSeq { other: PinEdge },
     /// A minimum pulse width on the constrained pin, which the emitted block names on both `-pin` and
     /// `-related_pin`: the constraint relates the pin to itself.
     MinPulseWidth,
@@ -84,12 +85,10 @@ pub(crate) struct VictimNode {
 #[derive(Debug, Clone)]
 pub(crate) struct Constraint {
     pub(crate) kind: ConstraintKind,
-    /// The pin this constraint constrains — the block's `-pin`.
-    pub(crate) pin: Symbol,
-    /// The edge that pin makes: the data edge of a separation, or the pulse's OPENING polarity, rise
-    /// meaning the pulse is high and fall low. A minimum-pulse-width block states that one edge, and
-    /// Liberate searches the width itself.
-    pub(crate) pin_edge: Edge,
+    /// The pin this constraint constrains — the block's `-pin` — with the edge it makes: the data edge
+    /// of a separation, or the pulse's OPENING polarity, rise meaning the pulse is high and fall low. A
+    /// minimum-pulse-width block states that one edge, and Liberate searches the width itself.
+    pub(crate) pin: PinEdge,
     /// The prevector: the input-assignment path that drives every state variable into the state where
     /// the constraint manifests (each node projected onto the inputs).
     pub(crate) prevector: Vec<Minterm<Symbol>>,
@@ -141,11 +140,11 @@ impl Constraint {
     /// names one pin, which is the pin that selects it.
     pub(crate) fn selected_by(&self, selection: &ConstraintPins) -> bool {
         match &self.kind {
-            ConstraintKind::NonSeq { other, .. } => {
-                selection.selects(&self.pin) || selection.selects(other)
+            ConstraintKind::NonSeq { other } => {
+                selection.selects(&self.pin.pin) || selection.selects(&other.pin)
             }
             ConstraintKind::SetupHold { .. } | ConstraintKind::MinPulseWidth => {
-                selection.selects(&self.pin)
+                selection.selects(&self.pin.pin)
             }
         }
     }
@@ -167,16 +166,15 @@ pub(crate) fn constrain(hazards: &[Hazard], clock_pins: &[Symbol]) -> Vec<Constr
 /// The constraint that removes `hazard`, or `None` where its cause states no timing to constrain — a
 /// lone toggle, which names one edge and so no separation.
 fn remedy(hazard: &Hazard, clock_pins: &[Symbol]) -> Option<Constraint> {
-    let (kind, pin, pin_edge) = match &hazard.cause {
+    let (kind, pin) = match &hazard.cause {
         // A separation states that two edges stay apart, and one edge has nothing to be separated from.
         Cause::Toggle { .. } => return None,
         Cause::Race { pins: [x, y] } => separation(x, y, clock_pins),
-        Cause::Pulse { pin, edge } => (ConstraintKind::MinPulseWidth, pin.clone(), *edge),
+        Cause::Pulse { pin } => (ConstraintKind::MinPulseWidth, pin.clone()),
     };
     Some(Constraint {
         kind,
         pin,
-        pin_edge,
         prevector: hazard.prevector.clone(),
         levels: hazard.levels.clone(),
         nodes: victims(&hazard.group, &hazard.node_levels),
@@ -189,27 +187,16 @@ fn remedy(hazard: &Hazard, clock_pins: &[Symbol]) -> Option<Constraint> {
 /// The separation that holds two racing pins apart, as the kind and the pin it constrains: a directed
 /// setup/hold when exactly one of the pair is a declared clock — the other pin being the data the clock
 /// is constrained against — else a symmetric non_seq of the two as they were probed.
-fn separation(x: &PinEdge, y: &PinEdge, clock_pins: &[Symbol]) -> (ConstraintKind, Symbol, Edge) {
+fn separation(x: &PinEdge, y: &PinEdge, clock_pins: &[Symbol]) -> (ConstraintKind, PinEdge) {
     let is_clock = |r: &PinEdge| clock_pins.contains(&r.pin);
     if is_clock(x) ^ is_clock(y) {
         let (clk, data) = if is_clock(x) { (x, y) } else { (y, x) };
         (
-            ConstraintKind::SetupHold {
-                clock: clk.pin.clone(),
-                clock_edge: clk.edge,
-            },
-            data.pin.clone(),
-            data.edge,
+            ConstraintKind::SetupHold { clock: clk.clone() },
+            data.clone(),
         )
     } else {
-        (
-            ConstraintKind::NonSeq {
-                other: x.pin.clone(),
-                other_edge: x.edge,
-            },
-            y.pin.clone(),
-            y.edge,
-        )
+        (ConstraintKind::NonSeq { other: x.clone() }, y.clone())
     }
 }
 
@@ -247,30 +234,17 @@ enum SituationKind {
 
 impl SituationKind {
     fn of(c: &Constraint) -> Self {
-        let constrained = PinEdge {
-            pin: c.pin.clone(),
-            edge: c.pin_edge,
-        };
         match &c.kind {
-            ConstraintKind::SetupHold { clock, clock_edge } => SituationKind::SetupHold {
-                data: constrained,
-                clock: PinEdge {
-                    pin: clock.clone(),
-                    edge: *clock_edge,
-                },
+            ConstraintKind::SetupHold { clock } => SituationKind::SetupHold {
+                data: c.pin.clone(),
+                clock: clock.clone(),
             },
-            ConstraintKind::NonSeq { other, other_edge } => {
-                let mut pair = [
-                    constrained,
-                    PinEdge {
-                        pin: other.clone(),
-                        edge: *other_edge,
-                    },
-                ];
+            ConstraintKind::NonSeq { other } => {
+                let mut pair = [c.pin.clone(), other.clone()];
                 pair.sort();
                 SituationKind::NonSeq { pair }
             }
-            ConstraintKind::MinPulseWidth => SituationKind::MinPulseWidth { pin: constrained },
+            ConstraintKind::MinPulseWidth => SituationKind::MinPulseWidth { pin: c.pin.clone() },
         }
     }
 }

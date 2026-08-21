@@ -400,8 +400,8 @@ mod tests {
     /// through a filtering fault.
     fn related(c: &Constraint) -> (&str, Edge) {
         match &c.kind {
-            ConstraintKind::SetupHold { clock, clock_edge } => (clock.as_str(), *clock_edge),
-            ConstraintKind::NonSeq { other, other_edge } => (other.as_str(), *other_edge),
+            ConstraintKind::SetupHold { clock } => (clock.pin.as_str(), clock.edge),
+            ConstraintKind::NonSeq { other } => (other.pin.as_str(), other.edge),
             ConstraintKind::MinPulseWidth => {
                 panic!("a minimum pulse width came through the separation filter")
             }
@@ -411,7 +411,7 @@ mod tests {
     /// The two pins a separation holds apart, sorted, so a test pins which pins it relates rather than
     /// which side of it each landed on.
     fn apart(c: &Constraint) -> Vec<&str> {
-        let mut pins = vec![related(c).0, c.pin.as_str()];
+        let mut pins = vec![related(c).0, c.pin.pin.as_str()];
         pins.sort();
         pins
     }
@@ -488,7 +488,7 @@ Q = "CLK*M + !CLK*Q"
         );
         assert!(
             cons.iter()
-                .any(|c| related(c) == ("CLK", Edge::Rise) && c.pin == "D"),
+                .any(|c| related(c) == ("CLK", Edge::Rise) && c.pin.pin == "D"),
             "expected a setup/hold of D around CLK↑, got {cons:?}"
         );
     }
@@ -627,7 +627,7 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
         );
         let mut endangered: Vec<Vec<&str>> = separations(&cell)
             .into_iter()
-            .filter(|c| related(c).0 == "CLKB" && c.pin.as_str() == "DB")
+            .filter(|c| related(c).0 == "CLKB" && c.pin.pin.as_str() == "DB")
             .map(|c| c.nodes.iter().map(|p| p.node.as_str()).collect())
             .collect();
         endangered.sort();

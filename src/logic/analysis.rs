@@ -333,7 +333,7 @@ mod tests {
     use crate::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
     use crate::emit::liberty::cell_liberty;
     use crate::emit::tcl::VectorValue;
-    use crate::logic::arcs::Edge;
+    use crate::logic::arcs::PinEdge;
     use crate::logic::constraint::{Constraint, ConstraintKind};
     use crate::logic::hazard::{Cause, Outcome};
     use crate::logic::machine::{ExplorationBudget, ExplorationLimit};
@@ -548,7 +548,11 @@ Q = "!R*(CLK*M + !CLK*Q)"
         // The pins constrained, as a set: which observation supplied a constraint states nothing, so
         // two runs agree here without agreeing on the records behind it.
         let pins = |c: &crate::model::AnalysedCell| {
-            let mut v: Vec<String> = c.constraints.iter().map(|k| k.pin.to_string()).collect();
+            let mut v: Vec<String> = c
+                .constraints
+                .iter()
+                .map(|k| k.pin.pin.to_string())
+                .collect();
             v.sort();
             v.dedup();
             v
@@ -559,7 +563,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
                 .hazards
                 .iter()
                 .map(|h| match &h.cause {
-                    Cause::Pulse { pin, .. } => format!("pulse {pin}"),
+                    Cause::Pulse { pin } => format!("pulse {}", pin.pin),
                     Cause::Toggle { pin } => format!("toggle {}", pin.pin),
                     Cause::Race { pins: [x, y] } => format!("race {}+{}", x.pin, y.pin),
                 })
@@ -782,19 +786,17 @@ Q = "W + Q*(A+B)"
     /// the selections below must not depend on. The probed state is left out: these tests compare WHICH
     /// constraints a selection returns, and the selections of one cell answer over the same states.
     fn describe(c: &Constraint) -> String {
-        let end = |pin: &Symbol, edge: Edge| format!("{pin}/{}", VectorValue::from(edge));
+        let end = |p: &PinEdge| format!("{}/{}", p.pin, VectorValue::from(p.edge));
         let head = match &c.kind {
-            ConstraintKind::SetupHold { clock, clock_edge } => format!(
-                "setup_hold {} around {}",
-                end(&c.pin, c.pin_edge),
-                end(clock, *clock_edge),
-            ),
-            ConstraintKind::NonSeq { other, other_edge } => {
-                let mut ends = [end(&c.pin, c.pin_edge), end(other, *other_edge)];
+            ConstraintKind::SetupHold { clock } => {
+                format!("setup_hold {} around {}", end(&c.pin), end(clock))
+            }
+            ConstraintKind::NonSeq { other } => {
+                let mut ends = [end(&c.pin), end(other)];
                 ends.sort();
                 format!("non_seq {} {}", ends[0], ends[1])
             }
-            ConstraintKind::MinPulseWidth => format!("min_pulse_width {}", end(&c.pin, c.pin_edge)),
+            ConstraintKind::MinPulseWidth => format!("min_pulse_width {}", end(&c.pin)),
         };
         let nodes: Vec<String> = c.nodes.iter().map(|v| v.node.to_string()).collect();
         format!("{head} over {}", nodes.join(","))

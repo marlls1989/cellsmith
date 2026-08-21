@@ -3486,9 +3486,9 @@ GCLK = "CLK*EL"
                     .constraints
                     .iter()
                     .map(|k| {
-                        // The kind carries the other pin of a separation and the edge it makes, so the
-                        // pin the constraint constrains and its own edge complete the identity.
-                        format!("{:?} {} {:?}", k.kind, k.pin, k.pin_edge)
+                        // The kind carries the other pin of a separation with the edge it makes, so
+                        // the pin the constraint constrains completes the identity.
+                        format!("{:?} {}", k.kind, k.pin)
                     })
                     .collect();
                 v.sort();
