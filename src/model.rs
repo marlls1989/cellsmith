@@ -1446,7 +1446,7 @@ pub(crate) fn analyse_one(src: &str) -> AnalysedCell {
 mod tests {
     use super::*;
     use crate::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, Deck};
-    use crate::logic::arcs::{Edge, PinEdge};
+    use crate::logic::arcs::PinEdge;
     use crate::logic::constraint::ConstraintKind;
     use crate::logic::hazard::{Cause, Outcome};
     use espresso_logic::{bdd_builder, expr, Minterm};
@@ -2564,23 +2564,22 @@ Q = "CLK*M + !CLK*Q"
         ]
     }
 
-    /// One transition arc reduced to the identity [`crate::logic::arcs::derive`] keys it on. The rest of
-    /// an arc follows from that identity — its end state and levels are read off the start state, and its
-    /// prevector is one path into it.
+    /// One transition arc reduced to the identity [`crate::logic::arcs::derive`] keys it on: the driven
+    /// output with the edge it makes, the related pin — which holds no edge of its own — and the state
+    /// the arc is measured from. The rest of an arc follows from that identity — its end state and levels
+    /// are read off the start state, and its prevector is one path into it.
     #[derive(Debug, PartialEq, Eq)]
     struct ArcRecord {
-        output: Symbol,
+        output: PinEdge,
         related: Symbol,
-        edge: Edge,
         start: Minterm<Symbol>,
     }
 
-    /// One internal-power ('hidden') arc reduced to its identity: the toggled pin, its direction and the
-    /// state the toggle is measured from.
+    /// One internal-power ('hidden') arc reduced to its identity: the toggled pin with the edge it makes,
+    /// and the state the toggle is measured from.
     #[derive(Debug, PartialEq, Eq)]
     struct HiddenArcRecord {
-        pin: Symbol,
-        edge: Edge,
+        pin: PinEdge,
         start: Minterm<Symbol>,
     }
 
@@ -2648,9 +2647,8 @@ Q = "CLK*M + !CLK*Q"
                 .arcs
                 .iter()
                 .map(|a| ArcRecord {
-                    output: a.output.pin.clone(),
+                    output: a.output.clone(),
                     related: a.related.clone(),
-                    edge: a.output.edge,
                     start: a.start.clone(),
                 })
                 .collect(),
@@ -2658,8 +2656,7 @@ Q = "CLK*M + !CLK*Q"
                 .hidden_arcs
                 .iter()
                 .map(|h| HiddenArcRecord {
-                    pin: h.pin.pin.clone(),
-                    edge: h.pin.edge,
+                    pin: h.pin.clone(),
                     start: h.start.clone(),
                 })
                 .collect(),

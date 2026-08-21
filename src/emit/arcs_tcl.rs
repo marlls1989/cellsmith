@@ -392,17 +392,16 @@ fn generalised<T, K: Hash + Eq>(
     )
 }
 
-/// The event a transition arc measures: the output pin and the edge it makes, the related pin and the
-/// edge IT makes. The side inputs' held levels, the held outputs and the internal state are the firing's
+/// The event a transition arc measures, as two [`PinEdge`]s: the driven output with the edge it makes,
+/// and the related pin with the edge IT makes — the direction [`related_edge`] reads off the arc's end
+/// state. The side inputs' held levels, the held outputs and the internal state are the firing's
 /// CONDITION rather than part of the event, so they are absent — one transition yields ONE general block
 /// however many contexts it was measured from, and every one of those contexts returns as its own
 /// conditioned block under `--when`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Transition {
-    output: Symbol,
-    edge: Edge,
-    related: Symbol,
-    related_edge: Edge,
+    output: PinEdge,
+    related: PinEdge,
 }
 
 /// A transition arc's identity. The variant IS Liberate's `-type` taxonomy for a measured transition,
@@ -434,10 +433,11 @@ impl TransitionIdentity {
     fn of(cell: &AnalysedCell, arc: &Arc) -> Self {
         let related_edge = related_edge(arc);
         let transition = Transition {
-            output: arc.output.pin.clone(),
-            edge: arc.output.edge,
-            related: arc.related.clone(),
-            related_edge,
+            output: arc.output.clone(),
+            related: PinEdge {
+                pin: arc.related.clone(),
+                edge: related_edge,
+            },
         };
         if cell.async_pins.contains(&arc.related) {
             TransitionIdentity::Async(transition)
@@ -454,22 +454,18 @@ impl TransitionIdentity {
     }
 }
 
-/// A hidden arc's identity: the toggled pin and the edge it makes. That pair IS the event; the other
+/// A hidden arc's identity: the toggled [`PinEdge`]. That pin with its edge IS the event; the other
 /// inputs' held levels and the held outputs are its condition and ride in [`hidden_when`], so they
 /// are absent here for the same reason as in [`Transition`]. A hidden arc is one kind of block, so
 /// nothing here classifies — a toggle no output follows structurally holds no related pin either.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct HiddenIdentity {
-    pin: Symbol,
-    edge: Edge,
+    pin: PinEdge,
 }
 
 impl HiddenIdentity {
     fn of(h: &HiddenArc) -> Self {
-        HiddenIdentity {
-            pin: h.pin.pin.clone(),
-            edge: h.pin.edge,
-        }
+        HiddenIdentity { pin: h.pin.clone() }
     }
 }
 
@@ -1932,8 +1928,7 @@ Q = "E*D + !E*Q"
                 .to_string()
         };
         for (event, n) in &contexts {
-            let HiddenIdentity { edge, .. } = event;
-            let rf = VectorValue::from(*edge).to_string();
+            let rf = VectorValue::from(event.pin.edge).to_string();
             let conditioned: Vec<String> = d_hidden(&selected)
                 .into_iter()
                 .filter(|b| has_when(b) && d_field(b) == rf)
