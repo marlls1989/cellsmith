@@ -971,11 +971,20 @@ Y = "!A"
             .iter()
             .find(|g| g.name == "INVX2")
             .expect("INVX2 cell present");
-        // One pin's identity in the comparison below: its name and the rendered `direction` attribute.
+        /// A pin's declared direction, over Liberty's closed keyword set.
+        #[derive(Debug, PartialEq, Eq)]
+        enum Direction {
+            Input,
+            Output,
+            Inout,
+            Internal,
+        }
+        /// One pin's identity in the comparison below: its name and its declared direction, `None` where
+        /// the pin carries no `direction` attribute.
         #[derive(Debug, PartialEq, Eq)]
         struct PinSignature {
             name: Symbol,
-            direction: String,
+            direction: Option<Direction>,
         }
         // Identical pin sets: same pin names and directions, differing only in the group name.
         let pins = |g: &&Group| -> Vec<PinSignature> {
@@ -984,11 +993,18 @@ Y = "!A"
                 .filter(|p| p.type_ == "pin")
                 .map(|p| PinSignature {
                     name: Symbol::from(p.name.as_str()),
-                    direction: p
-                        .attributes
-                        .get("direction")
-                        .map(|v| format!("{v:?}"))
-                        .unwrap_or_default(),
+                    direction: p.attributes.get("direction").map(|_| {
+                        match attr_expr(p, "direction")
+                            .expect("direction is a simple expression attribute")
+                            .as_str()
+                        {
+                            "input" => Direction::Input,
+                            "output" => Direction::Output,
+                            "inout" => Direction::Inout,
+                            "internal" => Direction::Internal,
+                            other => panic!("unrecognised direction attribute: {other}"),
+                        }
+                    }),
                 })
                 .collect()
         };

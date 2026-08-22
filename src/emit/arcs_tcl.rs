@@ -559,8 +559,7 @@ impl Group {
 /// whatever it carries.
 fn groups(cell: &AnalysedCell, extra: &[Symbol]) -> Vec<Group> {
     /// The netlist names one drive strength's block addresses, which is what decides whether two of
-    /// them can share it. Both halves are lists of netlist names, so they are named rather than
-    /// positional: transposing them would regroup the cell silently.
+    /// them can share it.
     #[derive(PartialEq, Eq, Hash)]
     struct Columns {
         /// The cell's exposed nodes, in `cell.exposed` order — a column on every block.
@@ -5055,47 +5054,59 @@ Q = "CLKB*M + !CLKB*Q"
         }
         // The toggle conflation is this test's subject; the leakage side is covered by
         // unexposed_latches_conflate_into_one_masked_leakage_block.
-        let toggles: Vec<(&Conflation, &PinEdge)> = rendered
+        /// One masked toggle the report names: the conflation entry and the toggled pin its hidden block states.
+        struct MaskedToggle<'a> {
+            report: &'a Conflation,
+            pin: &'a PinEdge,
+        }
+        let toggles: Vec<MaskedToggle> = rendered
             .conflations
             .iter()
             .filter_map(|m| match &m.block {
-                Block::Hidden(t) => Some((m, &t.pin)),
+                Block::Hidden(t) => Some(MaskedToggle {
+                    report: m,
+                    pin: &t.pin,
+                }),
                 _ => None,
             })
             .collect();
         assert!(!toggles.is_empty(), "the fixture masks a toggle:\n{tcl}");
-        for (m, pin) in &toggles {
+        for t in &toggles {
             // The report names the toggle in full, beside the kind selected above: every state the block
             // conflates is one firing of exactly the toggle its pins name, and pins naming some other
             // toggle name no firing of this cell.
-            for s in &m.states {
+            for s in &t.report.states {
                 let firings = cell
                     .arc_view()
                     .hidden_arcs
                     .iter()
-                    .filter(|h| h.start == *s && h.pin == **pin)
+                    .filter(|h| h.start == *s && h.pin == *t.pin)
                     .count();
                 assert_eq!(
                     firings, 1,
-                    "each conflated state is one firing of the toggle the report names: {m:?}"
+                    "each conflated state is one firing of the toggle the report names: {:?}",
+                    t.report
                 );
             }
             assert!(
-                m.states.len() > 1,
-                "only a block covering several states is reported: {m:?}"
+                t.report.states.len() > 1,
+                "only a block covering several states is reported: {:?}",
+                t.report
             );
             // The report is read by comparing the states: each fixes M, and they are distinct — that
             // difference IS the node to expose.
-            let distinct: HashSet<&Minterm<Symbol>> = m.states.iter().collect();
+            let distinct: HashSet<&Minterm<Symbol>> = t.report.states.iter().collect();
             assert_eq!(
                 distinct.len(),
-                m.states.len(),
-                "the states a block conflates are distinct: {m:?}"
+                t.report.states.len(),
+                "the states a block conflates are distinct: {:?}",
+                t.report
             );
-            for s in &m.states {
+            for s in &t.report.states {
                 assert!(
                     s.value_of("M").is_some(),
-                    "each state fixes the node no column carries: {m:?}"
+                    "each state fixes the node no column carries: {:?}",
+                    t.report
                 );
             }
         }
