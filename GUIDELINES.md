@@ -109,14 +109,18 @@ rendered text, values, counts or multisets — and byte-identity or whole-text c
 this defect in its plainest form. State instead what the output must contain, and derive it
 from the input the test controls.
 
-Two relations survive, because in each the relation is the property. Where a format the
-output feeds imposes a correspondence — a `-vector`'s characters lining up with the
-`-pinlist`, Liberty's statetable rows matched first-to-last — the test asserts that
-correspondence, as the emission-order rule above already states. And where documented
-behaviour is itself an equivalence or a non-interference claim — a switch observed to change
-one named thing and nothing else, two spellings of one cell classifying alike — the
-agreement is the property; such a test names the delta it permits, and the content both
-sides share is pinned by a direct test of its own.
+Where the parts of one output must correspond, that correspondence is itself a property and
+is asserted as one. The pin order a run produced is the same order in its `-pinlist`, its
+`-vector`'s characters and its `-ic`'s columns; Liberty's statetable rows are matched
+first-to-last. Neither fixes which order the run picks — the claim is that the parts agree
+with each other — so it holds for every output the tool is free to produce, and it needs no
+second run to state.
+
+One relation between two runs does survive, because there the relation is the documented
+behaviour: where a switch is specified to change one named thing and nothing else, or two
+spellings of one cell are specified to classify alike, the agreement is the property. Such a
+test names the delta it permits, and the content both sides share is pinned by a direct test
+of its own.
 
 ## Prefer real types to stand-ins
 
