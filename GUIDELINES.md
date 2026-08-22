@@ -113,6 +113,13 @@ The property a test asserts is one the code or its documentation states. Where n
 it, the claim belongs there first — otherwise the test pins something nothing promised, which
 is how a test comes to fail on an output that was always valid.
 
+An order is where this bites hardest, so a justification for keeping one must not be
+self-referential: it names what outside this crate requires the order, as part of a contract
+with that reader. "Held sorted so the report is stable", "ordered so the fold is
+well-defined", "sorted so the comparison passes" each justify the order by our own use of it
+and answer to nothing; they are not reasons. Where no external reader requires it, the order
+is free, and neither the code nor a test may depend on it.
+
 A correspondence between the parts of one output is a property like any other, and so is a
 relation between two runs where that relation is the specified behaviour. Examples, not the
 list: the pin order a run produced is the same order in its `-pinlist`, its `-vector`'s
