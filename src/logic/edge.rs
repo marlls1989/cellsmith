@@ -332,27 +332,11 @@ struct LatchPhase {
     level: bool,
 }
 
-/// How one pin forces one node: the pin level at which the forcing applies, and the value the node is
-/// held at while it does.
+/// How one pin forces one node: the pin level at which the forcing applies.
 #[derive(Debug, Clone)]
 struct Forcing {
     /// The pin level that forces the node.
     asserted: bool,
-    /// The value the node is forced to at that level.
-    ///
-    /// Nothing reads this, and `dead_code` says so: the two things the classifier asks of a forcing pin
-    /// — exclude the states it holds from edge inference, and tell a read gate from a reset — both need
-    /// only the level at which it forces, never the value it forces to. Deriving it is not wasted even so,
-    /// because the agreement the derivation demands IS the test: `pinned_value` admits a forcing pin only
-    /// where one constant covers every state at that level, and the accumulation loop only where every
-    /// move on the pin settles on one post value.
-    ///
-    /// It is kept because it distinguishes a set from a reset, which nothing in the classifier currently
-    /// asks but something plausibly will. Whether that makes its absence from every reader a latent defect
-    /// or makes the value redundant is an open question, left for review rather than settled here — and
-    /// settling it either way is a behaviour change, which is why neither was done in passing.
-    #[allow(dead_code)]
-    forced: bool,
 }
 
 /// One read-gate pin on a register output: a forcing pin whose toggling never moves any state variable
@@ -1291,23 +1275,11 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
             };
             match (pinned_value(false), pinned_value(true)) {
                 (Some(_), Some(_)) | (None, None) => {} // both levels pin to a constant (degenerate) or neither
-                (Some(v), None) => {
-                    pinning.insert(
-                        x.clone(),
-                        Forcing {
-                            asserted: false,
-                            forced: v,
-                        },
-                    );
+                (Some(_), None) => {
+                    pinning.insert(x.clone(), Forcing { asserted: false });
                 }
-                (None, Some(v)) => {
-                    pinning.insert(
-                        x.clone(),
-                        Forcing {
-                            asserted: true,
-                            forced: v,
-                        },
-                    );
+                (None, Some(_)) => {
+                    pinning.insert(x.clone(), Forcing { asserted: true });
                 }
             }
         }
@@ -1346,7 +1318,6 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
                         x.clone(),
                         Forcing {
                             asserted: dest_levels.into_iter().next().unwrap(),
-                            forced: posts.into_iter().next().unwrap(),
                         },
                     );
                     added = true;
@@ -1869,18 +1840,18 @@ mod tests {
     /// collapse to a single `LabelSite` here — the test cares which directions are edge, not how many
     /// contexts present them.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-    struct LabelSite<'a> {
-        output: &'a str,
+    struct LabelSite {
+        output: Symbol,
         clock: PinEdge,
     }
 
     /// The DISTINCT edge arcs as `LabelSite`s, in sorted order.
-    fn label_list(es: &EdgeArcs) -> Vec<LabelSite<'_>> {
-        let mut v: Vec<LabelSite<'_>> = es
+    fn label_list(es: &EdgeArcs) -> Vec<LabelSite> {
+        let mut v: Vec<LabelSite> = es
             .labels
             .iter()
             .map(|l| LabelSite {
-                output: l.output.as_str(),
+                output: l.output.clone(),
                 clock: l.clock.clone(),
             })
             .collect();
@@ -2893,7 +2864,7 @@ L3 = "!K3*L2 + K3*L3"
             // cross-clock latches).
             assert!(
                 label_list(&es).contains(&LabelSite {
-                    output: "L3",
+                    output: Symbol::from("L3"),
                     clock: pin("K1", Edge::Fall)
                 }),
                 "K1->L3 must type edge under the two-birth gate: {:?}",
@@ -3107,11 +3078,11 @@ Y = "!((CLK*L1 + !CLK*L2)*A) + B"
             // The two CLK->Y arcs type EDGE under the two-birth gate (the internal-node birth propagates
             // onward to Y). This is the teeth arc.
             assert!(label_list(&es).contains(&LabelSite {
-                output: "Y",
+                output: Symbol::from("Y"),
                 clock: pin("CLK", Edge::Rise)
             }));
             assert!(label_list(&es).contains(&LabelSite {
-                output: "Y",
+                output: Symbol::from("Y"),
                 clock: pin("CLK", Edge::Fall)
             }));
 
@@ -3754,11 +3725,11 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
                 label_list(&es),
                 [
                     LabelSite {
-                        output: "Q",
+                        output: Symbol::from("Q"),
                         clock: pin("CLKA", Edge::Rise)
                     },
                     LabelSite {
-                        output: "Q",
+                        output: Symbol::from("Q"),
                         clock: pin("CLKB", Edge::Rise)
                     }
                 ],
@@ -4220,7 +4191,7 @@ Q = "!( !(M2*!CLKB) * Qn )"
             assert_eq!(
                 label_list(&es),
                 [LabelSite {
-                    output: "Q",
+                    output: Symbol::from("Q"),
                     clock: pin("CLK", Edge::Rise)
                 }]
             );
@@ -4236,7 +4207,7 @@ Q = "!( !(M2*!CLKB) * Qn )"
             assert_eq!(
                 label_list(&es),
                 [LabelSite {
-                    output: "Q",
+                    output: Symbol::from("Q"),
                     clock: pin("CLK", Edge::Rise)
                 }]
             );
@@ -4256,7 +4227,7 @@ Q = "!( !(M2*!CLKB) * Qn )"
             assert_eq!(
                 label_list(&es),
                 [LabelSite {
-                    output: "Q",
+                    output: Symbol::from("Q"),
                     clock: pin("CLK", Edge::Fall)
                 }],
                 "the transparent-low cascade opens on the fall — a generation on the output"
@@ -4271,11 +4242,11 @@ Q = "!( !(M2*!CLKB) * Qn )"
                 label_list(&es),
                 [
                     LabelSite {
-                        output: "Q",
+                        output: Symbol::from("Q"),
                         clock: pin("CLK", Edge::Rise)
                     },
                     LabelSite {
-                        output: "Q",
+                        output: Symbol::from("Q"),
                         clock: pin("CLK", Edge::Fall)
                     }
                 ]
@@ -4296,11 +4267,11 @@ Q = "!( !(M2*!CLKB) * Qn )"
                 label_list(&es),
                 [
                     LabelSite {
-                        output: "Q",
+                        output: Symbol::from("Q"),
                         clock: pin("CLKA", Edge::Rise)
                     },
                     LabelSite {
-                        output: "Q",
+                        output: Symbol::from("Q"),
                         clock: pin("CLKB", Edge::Rise)
                     }
                 ]
@@ -4315,11 +4286,11 @@ Q = "!( !(M2*!CLKB) * Qn )"
                 label_list(&es),
                 [
                     LabelSite {
-                        output: "Q",
+                        output: Symbol::from("Q"),
                         clock: pin("CLKA", Edge::Rise)
                     },
                     LabelSite {
-                        output: "Q",
+                        output: Symbol::from("Q"),
                         clock: pin("CLKB", Edge::Fall)
                     }
                 ]
@@ -4350,11 +4321,11 @@ Q = "!( !(M2*!CLKB) * Qn )"
                 label_list(&es),
                 [
                     LabelSite {
-                        output: "Q",
+                        output: Symbol::from("Q"),
                         clock: pin("CLKA", Edge::Fall)
                     },
                     LabelSite {
-                        output: "Q",
+                        output: Symbol::from("Q"),
                         clock: pin("CLKB", Edge::Rise)
                     }
                 ]
@@ -4401,11 +4372,11 @@ Q = "!( !(M2*!CLKB) * Qn )"
                 NDLAT_TOML,
                 vec![
                     LabelSite {
-                        output: "Q",
+                        output: Symbol::from("Q"),
                         clock: pin("CLK", Edge::Rise),
                     },
                     LabelSite {
-                        output: "Qn",
+                        output: Symbol::from("Qn"),
                         clock: pin("CLK", Edge::Rise),
                     },
                 ],
@@ -4414,11 +4385,11 @@ Q = "!( !(M2*!CLKB) * Qn )"
                 NDFF_TOML,
                 vec![
                     LabelSite {
-                        output: "Q",
+                        output: Symbol::from("Q"),
                         clock: pin("CLK", Edge::Rise),
                     },
                     LabelSite {
-                        output: "Qn",
+                        output: Symbol::from("Qn"),
                         clock: pin("CLK", Edge::Rise),
                     },
                 ],
@@ -4427,19 +4398,19 @@ Q = "!( !(M2*!CLKB) * Qn )"
                 NHPIPE_TOML,
                 vec![
                     LabelSite {
-                        output: "Q",
+                        output: Symbol::from("Q"),
                         clock: pin("CLKA", Edge::Rise),
                     },
                     LabelSite {
-                        output: "Q",
+                        output: Symbol::from("Q"),
                         clock: pin("CLKB", Edge::Fall),
                     },
                     LabelSite {
-                        output: "Qn",
+                        output: Symbol::from("Qn"),
                         clock: pin("CLKA", Edge::Rise),
                     },
                     LabelSite {
-                        output: "Qn",
+                        output: Symbol::from("Qn"),
                         clock: pin("CLKB", Edge::Fall),
                     },
                 ],
@@ -4686,10 +4657,10 @@ Y = "!CLK*R + L"
             let labs = label_list(&es);
             assert!(
                 labs.contains(&LabelSite {
-                    output: "Q",
+                    output: Symbol::from("Q"),
                     clock: pin("CLK", Edge::Rise)
                 }) && labs.contains(&LabelSite {
-                    output: "Q",
+                    output: Symbol::from("Q"),
                     clock: pin("CLK", Edge::Fall)
                 }) && labs.len() == 2,
                 "DET exposes D on both edges: {labs:?}"
