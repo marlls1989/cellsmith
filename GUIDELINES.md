@@ -93,6 +93,31 @@ same content — not when the generated files are byte-for-byte identical.
 - The `examples/*` files are generated artifacts. Regenerate them with the tool; never edit
   one by hand, and never regenerate one just to make a diff go away.
 
+## Tests assert properties
+
+A test states a property of the thing under test and asserts it semantically — on the
+records, the values or the fields that carry the claim, against an expectation derived from
+the input. A fixture is chosen so the expected content is forced by its own behaviour, and
+the assertion holds for every output the tool is free to produce; a test that fails on a
+second, equally valid output is asserting a rendering, not a property, and is not a valid
+test.
+
+Running the code twice and asserting the two results agree does not test behaviour: it
+passes whenever the two paths are self-consistent, including when both are wrong, so it
+cannot fail for the reason anyone cares about. The same holds whatever the currency —
+rendered text, values, counts or multisets — and byte-identity or whole-text comparison is
+this defect in its plainest form. State instead what the output must contain, and derive it
+from the input the test controls.
+
+Two relations survive, because in each the relation is the property. Where a format the
+output feeds imposes a correspondence — a `-vector`'s characters lining up with the
+`-pinlist`, Liberty's statetable rows matched first-to-last — the test asserts that
+correspondence, as the emission-order rule above already states. And where documented
+behaviour is itself an equivalence or a non-interference claim — a switch observed to change
+one named thing and nothing else, two spellings of one cell classifying alike — the
+agreement is the property; such a test names the delta it permits, and the content both
+sides share is pinned by a direct test of its own.
+
 ## Prefer real types to stand-ins
 
 - A closed set of kinds is an `enum`, not a string token. Model it so that picking the
