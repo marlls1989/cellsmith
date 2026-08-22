@@ -87,7 +87,7 @@ impl fmt::Display for Declarations<'_> {
     }
 }
 
-/// All `define_cell` blocks for a cell, one per resolved `TemplateSpec`. Aliases resolving to the same
+/// All `define_cell` blocks for a cell, one per resolved [`TemplateSpec`]. Aliases resolving to the same
 /// template are bundled into a single block; the blocks follow the first-appearance order of their
 /// aliases.
 pub fn cell_define_cell(cell: &AnalysedCell) -> Vec<DefineCell> {

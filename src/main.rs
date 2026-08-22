@@ -361,8 +361,7 @@ fn banner(out: &mut impl io::Write, kind: &str, body: &impl fmt::Display) -> io:
 }
 
 /// One field of a warning's subblock: the colon-labelled name written to stderr and the value rendered
-/// beside it. `&str` itself implements `Display`, so where the value is also a string a bare tuple would
-/// let label and value swap places and still compile; the names on these fields are what rules that out.
+/// beside it.
 struct SubblockField<'a> {
     label: &'a str,
     value: &'a dyn fmt::Display,

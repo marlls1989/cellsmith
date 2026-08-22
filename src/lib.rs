@@ -54,8 +54,7 @@ mod smoke {
             "off-set of a C-element must be !a*!b"
         );
 
-        // One cube's assignment to the C-element's two inputs, `a` and `b`. Both fields are the same
-        // `Option<bool>`, so a transposed literal would silently check the wrong input's value.
+        // One cube's assignment to the C-element's two inputs, `a` and `b`.
         #[derive(Debug, PartialEq)]
         struct AbValues {
             a: Option<bool>,

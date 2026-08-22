@@ -325,6 +325,20 @@ pub fn minimise_state_space<B: Brand, C: ManagerCell>(
     result
 }
 
+/// A dedup group: the function shared by every signal in `members`, discovered by scanning `order`
+/// for plain-BDD equality.
+struct DuplicateGroup<B: Brand, C: ManagerCell> {
+    function: Bdd<B, C>,
+    members: Vec<Symbol>,
+}
+
+/// A preserved duplicate demoted rather than purged: `member` keeps its name, but its stored function
+/// becomes `alias`, the group representative's `var(rep)`.
+struct Demotion<B: Brand, C: ManagerCell> {
+    member: Symbol,
+    alias: Bdd<B, C>,
+}
+
 /// One dedup pass: collapse every plain-BDD-equal group onto a single coordinate. Returns whether it
 /// committed anything.
 ///
@@ -341,20 +355,6 @@ pub fn minimise_state_space<B: Brand, C: ManagerCell>(
 /// What is LEFT for [`fold_pass`]: signals whose definition must be SUBSTITUTED into consumers and
 /// dropped — fold permits such a substitution unless it would create a self-reference, and permits a
 /// self-reference-creating one only when the inserted function has support arity 1.
-/// A dedup group: the function shared by every signal in `members`, discovered by scanning `order`
-/// for plain-BDD equality.
-struct DuplicateGroup<B: Brand, C: ManagerCell> {
-    function: Bdd<B, C>,
-    members: Vec<Symbol>,
-}
-
-/// A preserved duplicate demoted rather than purged: `member` keeps its name, but its stored function
-/// becomes `alias`, the group representative's `var(rep)`.
-struct Demotion<B: Brand, C: ManagerCell> {
-    member: Symbol,
-    alias: Bdd<B, C>,
-}
-
 fn dedup_pass<B: Brand, C: ManagerCell>(
     bdds: &mut BTreeMap<Symbol, Bdd<B, C>>,
     order: &[Symbol],
@@ -633,9 +633,7 @@ mod tests {
     use espresso_logic::bdd::BddBuilder;
     use espresso_logic::bdd_builder;
 
-    /// One signal's definition in a fixture table: its name paired with its expression. Both fields are
-    /// `&str`, and a transposed literal would define a signal named after its own expression, so the
-    /// pairing is a named struct rather than a tuple.
+    /// One signal's definition in a fixture table: the name the signal is stored under and the expression text parsed into its BDD.
     struct SignalDef {
         name: &'static str,
         expr: &'static str,
@@ -661,8 +659,7 @@ mod tests {
         ParsedSystem { signals, order }
     }
 
-    /// Build a signal map from `(name, expr)` pairs in a fresh builder, plus the scan order and the
-    /// [`Preserved`] set — the outputs alone, or the outputs plus an `exposed:` list.
+    /// Build a signal map from [`SignalDef`] definitions in a fresh builder, plus the scan order and the [`Preserved`] set — the outputs alone, or the outputs plus an `exposed:` list.
     macro_rules! system {
         (
             outputs: [$($out:literal),* $(,)?],

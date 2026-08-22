@@ -149,7 +149,7 @@ impl NodeNames {
 /// only — each name is taken verbatim from the spec, never generated; an absent field is `None`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct TemplateSpec {
+pub struct TemplateSpec {
     #[serde(default, deserialize_with = "de_opt_symbol")]
     pub(crate) delay: Option<Symbol>,
     #[serde(default, deserialize_with = "de_opt_symbol")]
@@ -2801,7 +2801,7 @@ Q = "CLK*M + !CLK*Q"
             let exposed = analyse_one(&fixture.exposing);
             let plain = analyse_one(&fixture.exposure_free);
             let node = fixture.node;
-            assert_eq!(exposed.exposed, [node.clone()]);
+            assert_eq!(exposed.exposed, *std::slice::from_ref(&node));
             assert!(plain.exposed.is_empty());
 
             let cell = exposed.repr_name();

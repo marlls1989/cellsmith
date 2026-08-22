@@ -242,7 +242,7 @@ pub struct DerivedArcs {
 }
 
 /// One output across a single input toggle: the level it holds at the state the toggle starts from and
-/// the level it holds once the toggle has settled — the same two ends `ExposedLevel` states for an
+/// the level it holds once the toggle has settled — the same two ends [`ExposedLevel`] states for an
 /// exposed internal node, and `None` at an end the output is not defined at. A pair that moves is a
 /// transition arc, whose direction is the `end` level; a toggle whose pairs all hold is a hidden arc.
 struct OutputLevels<'a> {
