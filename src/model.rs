@@ -2801,7 +2801,7 @@ Q = "CLK*M + !CLK*Q"
             let exposed = analyse_one(&fixture.exposing);
             let plain = analyse_one(&fixture.exposure_free);
             let node = fixture.node;
-            assert_eq!(exposed.exposed, *std::slice::from_ref(&node));
+            assert_eq!(exposed.exposed, [node.clone()]);
             assert!(plain.exposed.is_empty());
 
             let cell = exposed.repr_name();

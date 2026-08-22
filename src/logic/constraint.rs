@@ -166,14 +166,14 @@ pub(crate) fn constrain(hazards: &[Hazard], clock_pins: &[Symbol]) -> Vec<Constr
 /// The constraint that removes `hazard`, or `None` where its cause states no timing to constrain — a
 /// lone toggle, which names one edge and so no separation.
 fn remedy(hazard: &Hazard, clock_pins: &[Symbol]) -> Option<Constraint> {
-    let (kind, pin) = match &hazard.cause {
+    let Separation { kind, pin } = match &hazard.cause {
         // A separation states that two edges stay apart, and one edge has nothing to be separated from.
         Cause::Toggle { .. } => return None,
-        Cause::Race { pins: [x, y] } => {
-            let Separation { kind, pin } = separation(x, y, clock_pins);
-            (kind, pin)
-        }
-        Cause::Pulse { pin } => (ConstraintKind::MinPulseWidth, pin.clone()),
+        Cause::Race { pins: [x, y] } => separation(x, y, clock_pins),
+        Cause::Pulse { pin } => Separation {
+            kind: ConstraintKind::MinPulseWidth,
+            pin: pin.clone(),
+        },
     };
     Some(Constraint {
         kind,

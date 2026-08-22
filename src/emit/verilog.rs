@@ -797,20 +797,20 @@ impl fmt::Display for Product<'_> {
 fn literals<'a>(
     sr: &'a StateRegions,
     cube: &'a StateCube,
-) -> impl Iterator<Item = Literal<'a>> + Clone {
+) -> impl Iterator<Item = CubeLiteral<'a>> + Clone {
     sr.cols
         .iter()
         .zip(cube.iter())
-        .filter_map(|(col, &value)| value.map(|level| Literal { col, level }))
+        .filter_map(|(col, &value)| value.map(|level| CubeLiteral { col, level }))
 }
 
 /// One literal of a Verilog expression: the column, negated (`~`) where the cube holds it low.
-struct Literal<'a> {
+struct CubeLiteral<'a> {
     col: &'a Symbol,
     level: bool,
 }
 
-impl fmt::Display for Literal<'_> {
+impl fmt::Display for CubeLiteral<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if !self.level {
             f.write_str("~")?;
