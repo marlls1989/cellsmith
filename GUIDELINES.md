@@ -109,18 +109,17 @@ rendered text, values, counts or multisets — and byte-identity or whole-text c
 this defect in its plainest form. State instead what the output must contain, and derive it
 from the input the test controls.
 
-Where the parts of one output must correspond, that correspondence is itself a property and
-is asserted as one. The pin order a run produced is the same order in its `-pinlist`, its
-`-vector`'s characters and its `-ic`'s columns; a Liberty statetable's rows carry their
-values in the order that table's own header declares its pin columns. Neither fixes which
-order the run picks — the claim is that the parts agree with each other — so it holds for
-every output the tool is free to produce, and it needs no second run to state.
+The property a test asserts is one the code or its documentation states. Where neither states
+it, the claim belongs there first — otherwise the test pins something nothing promised, which
+is how a test comes to fail on an output that was always valid.
 
-One relation between two runs does survive, because there the relation is the documented
-behaviour: where a switch is specified to change one named thing and nothing else, or two
-spellings of one cell are specified to classify alike, the agreement is the property. Such a
-test names the delta it permits, and the content both sides share is pinned by a direct test
-of its own.
+A correspondence between the parts of one output is a property like any other, and so is a
+relation between two runs where that relation is the specified behaviour. Examples, not the
+list: the pin order a run produced is the same order in its `-pinlist`, its `-vector`'s
+characters and its `-ic`'s columns; a switch documented to change one named thing leaves the
+rest alone. Neither fixes which output the run picks, so both hold for every output the tool
+is free to produce. A test resting on a two-run relation names the delta it permits, and the
+content both sides share is pinned by a direct test of its own.
 
 ## Prefer real types to stand-ins
 
