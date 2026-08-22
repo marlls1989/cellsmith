@@ -288,18 +288,25 @@ mod tests {
     struct PulseKey {
         pin: PinEdge,
         outcome: Outcome,
-        nodes: String,
+        nodes: Vec<Symbol>,
     }
 
+    /// One detected hazard as what identifies it: the pulsed pin, the pulse's opening edge, the outcome
+    /// and the nodes the record names.
     fn keys(cell: &AnalysedCell) -> BTreeSet<PulseKey> {
         pulses(cell)
             .into_iter()
             .map(|hz| PulseKey {
                 pin: pulse(hz),
                 outcome: hz.outcome,
-                nodes: hz.group.join(","),
+                nodes: hz.group.clone(),
             })
             .collect()
+    }
+
+    /// A [`PulseKey::nodes`] literal from comma-separated names, in the same order as the group.
+    fn group(names: &[&str]) -> Vec<Symbol> {
+        names.iter().map(|n| Symbol::from(*n)).collect()
     }
 
     /// The cell's race-cause oscillations — [`super::super::confluence`]'s records, a lone toggle's as
@@ -345,15 +352,20 @@ mod tests {
         pin: &str,
         edge: Edge,
         outcome: Outcome,
-        nodes: &str,
+        nodes: &[&str],
     ) -> Vec<&'h Hazard> {
         let found: Vec<&Hazard> = on(cell, pin, edge, outcome)
             .into_iter()
-            .filter(|hz| hz.group.join(",") == nodes)
+            .filter(|hz| {
+                hz.group
+                    .iter()
+                    .map(Symbol::as_str)
+                    .eq(nodes.iter().copied())
+            })
             .collect();
         assert!(
             !found.is_empty(),
-            "no {outcome:?} {pin}{edge} hazard over {{{nodes}}} in {:?}",
+            "no {outcome:?} {pin}{edge} hazard over {nodes:?} in {:?}",
             keys(cell)
         );
         found
@@ -432,7 +444,7 @@ Q = "CLK*M + !CLK*Q"
                         edge: Edge::Rise,
                     },
                     outcome: Outcome::Indeterminate,
-                    nodes: "Q".to_string(),
+                    nodes: group(&["Q"]),
                 },
                 PulseKey {
                     pin: PinEdge {
@@ -440,7 +452,7 @@ Q = "CLK*M + !CLK*Q"
                         edge: Edge::Fall,
                     },
                     outcome: Outcome::Indeterminate,
-                    nodes: "Q,M".to_string(),
+                    nodes: group(&["Q", "M"]),
                 },
             ]
             .into_iter()
@@ -504,7 +516,7 @@ Q = "E*D + !E*Q"
                     edge: Edge::Rise,
                 },
                 outcome: Outcome::Indeterminate,
-                nodes: "Q".to_string(),
+                nodes: group(&["Q"]),
             }]
             .into_iter()
             .collect(),
@@ -548,7 +560,7 @@ Qn = "!(S+Q)"
                         edge: Edge::Rise,
                     },
                     outcome: Outcome::Indeterminate,
-                    nodes: "Q,Qn".to_string(),
+                    nodes: group(&["Q", "Qn"]),
                 },
                 PulseKey {
                     pin: PinEdge {
@@ -556,7 +568,7 @@ Qn = "!(S+Q)"
                         edge: Edge::Rise,
                     },
                     outcome: Outcome::Oscillation,
-                    nodes: "Q,Qn".to_string(),
+                    nodes: group(&["Q", "Qn"]),
                 },
             ]
         };
@@ -622,7 +634,7 @@ Qb = "!Qa * B"
                         edge: Edge::Fall,
                     },
                     outcome: Outcome::Indeterminate,
-                    nodes: "Qa,Qb".to_string(),
+                    nodes: group(&["Qa", "Qb"]),
                 },
                 PulseKey {
                     pin: PinEdge {
@@ -630,7 +642,7 @@ Qb = "!Qa * B"
                         edge: Edge::Fall,
                     },
                     outcome: Outcome::Oscillation,
-                    nodes: "Qa,Qb".to_string(),
+                    nodes: group(&["Qa", "Qb"]),
                 },
             ]
         };
@@ -713,7 +725,7 @@ Qn = "!(S+Q)"
                         edge: Edge::Rise,
                     },
                     outcome: Outcome::Indeterminate,
-                    nodes: "Q,Qn,L".to_string(),
+                    nodes: group(&["Q", "Qn", "L"]),
                 },
                 PulseKey {
                     pin: PinEdge {
@@ -721,7 +733,7 @@ Qn = "!(S+Q)"
                         edge: Edge::Rise,
                     },
                     outcome: Outcome::Indeterminate,
-                    nodes: "L".to_string(),
+                    nodes: group(&["L"]),
                 },
                 PulseKey {
                     pin: PinEdge {
@@ -729,7 +741,7 @@ Qn = "!(S+Q)"
                         edge: Edge::Rise,
                     },
                     outcome: Outcome::Oscillation,
-                    nodes: "Q,Qn".to_string(),
+                    nodes: group(&["Q", "Qn"]),
                 },
                 PulseKey {
                     pin: PinEdge {
@@ -737,7 +749,7 @@ Qn = "!(S+Q)"
                         edge: Edge::Rise,
                     },
                     outcome: Outcome::Indeterminate,
-                    nodes: "Q,Qn".to_string(),
+                    nodes: group(&["Q", "Qn"]),
                 },
                 PulseKey {
                     pin: PinEdge {
@@ -745,7 +757,7 @@ Qn = "!(S+Q)"
                         edge: Edge::Rise,
                     },
                     outcome: Outcome::Oscillation,
-                    nodes: "Q,Qn".to_string(),
+                    nodes: group(&["Q", "Qn"]),
                 },
             ]
             .into_iter()
@@ -753,13 +765,19 @@ Qn = "!(S+Q)"
         );
         // Each record's waypoints are its own nodes' halves of the same two states: the cascade rests
         // set with L raised, and the reference's closing S↓ holds all three there.
-        for hz in on_nodes(&cell, "S", Edge::Rise, Outcome::Indeterminate, "Q,Qn,L") {
+        for hz in on_nodes(
+            &cell,
+            "S",
+            Edge::Rise,
+            Outcome::Indeterminate,
+            &["Q", "Qn", "L"],
+        ) {
             assert_eq!(
                 waypoints(hz),
                 held(&[("Q", true), ("Qn", false), ("L", true)])
             );
         }
-        for hz in on_nodes(&cell, "S", Edge::Rise, Outcome::Oscillation, "Q,Qn") {
+        for hz in on_nodes(&cell, "S", Edge::Rise, Outcome::Oscillation, &["Q", "Qn"]) {
             assert_eq!(waypoints(hz), held(&[("Q", true), ("Qn", false)]));
         }
     }
@@ -792,7 +810,7 @@ Q = "!CLK*M + CLK*Q"
                     edge: Edge::Fall,
                 },
                 outcome: Outcome::Indeterminate,
-                nodes: "Q,M".to_string(),
+                nodes: group(&["Q", "M"]),
             }]
             .into_iter()
             .collect(),
@@ -842,7 +860,7 @@ Q = "!CLK*(EN*M + !EN*Q) + CLK*Q"
                         edge: Edge::Fall,
                     },
                     outcome: Outcome::Indeterminate,
-                    nodes: "Q,M".to_string(),
+                    nodes: group(&["Q", "M"]),
                 },
                 PulseKey {
                     pin: PinEdge {
@@ -850,7 +868,7 @@ Q = "!CLK*(EN*M + !EN*Q) + CLK*Q"
                         edge: Edge::Fall,
                     },
                     outcome: Outcome::Indeterminate,
-                    nodes: "Q".to_string(),
+                    nodes: group(&["Q"]),
                 },
                 PulseKey {
                     pin: PinEdge {
@@ -858,7 +876,7 @@ Q = "!CLK*(EN*M + !EN*Q) + CLK*Q"
                         edge: Edge::Fall,
                     },
                     outcome: Outcome::Indeterminate,
-                    nodes: "M".to_string(),
+                    nodes: group(&["M"]),
                 },
                 PulseKey {
                     pin: PinEdge {
@@ -866,7 +884,7 @@ Q = "!CLK*(EN*M + !EN*Q) + CLK*Q"
                         edge: Edge::Rise,
                     },
                     outcome: Outcome::Indeterminate,
-                    nodes: "Q".to_string(),
+                    nodes: group(&["Q"]),
                 },
             ]
             .into_iter()
@@ -901,7 +919,7 @@ B = "!CLK*(!SEL*D + SEL*B) + CLK*B"
                         edge: Edge::Fall,
                     },
                     outcome: Outcome::Indeterminate,
-                    nodes: "A".to_string(),
+                    nodes: group(&["A"]),
                 },
                 PulseKey {
                     pin: PinEdge {
@@ -909,7 +927,7 @@ B = "!CLK*(!SEL*D + SEL*B) + CLK*B"
                         edge: Edge::Fall,
                     },
                     outcome: Outcome::Indeterminate,
-                    nodes: "B".to_string(),
+                    nodes: group(&["B"]),
                 },
                 PulseKey {
                     pin: PinEdge {
@@ -917,7 +935,7 @@ B = "!CLK*(!SEL*D + SEL*B) + CLK*B"
                         edge: Edge::Rise,
                     },
                     outcome: Outcome::Indeterminate,
-                    nodes: "A".to_string(),
+                    nodes: group(&["A"]),
                 },
                 PulseKey {
                     pin: PinEdge {
@@ -925,7 +943,7 @@ B = "!CLK*(!SEL*D + SEL*B) + CLK*B"
                         edge: Edge::Fall,
                     },
                     outcome: Outcome::Indeterminate,
-                    nodes: "B".to_string(),
+                    nodes: group(&["B"]),
                 },
             ]
             .into_iter()

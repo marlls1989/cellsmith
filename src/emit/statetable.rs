@@ -1496,18 +1496,48 @@ M = "!R*(!CLK*D + CLK*M)"
 Q = "!R*(CLK*M + !CLK*Q)"
 "#;
 
-    /// One rendered statetable row as its emitted token strings: `H`/`L`/`-` levels, the clock-edge tokens
+    /// One rendered statetable token: a level (`H`/`L`), a don't-care (`-`), a clock-edge token
+    /// (`R`/`F`/`~R`/`~F`), or hold (`N`) in the next field.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Token {
+        Dash,
+        High,
+        Low,
+        Rise,
+        Fall,
+        NotRise,
+        NotFall,
+        Hold,
+    }
+
+    /// Parse one rendered statetable token. This replay only ever reads text our own emitter wrote, so
+    /// an unrecognised token is a failure to report, not a case to accommodate.
+    fn parse(tok: &str) -> Token {
+        match tok {
+            "-" => Token::Dash,
+            "H" => Token::High,
+            "L" => Token::Low,
+            "R" => Token::Rise,
+            "F" => Token::Fall,
+            "~R" => Token::NotRise,
+            "~F" => Token::NotFall,
+            "N" => Token::Hold,
+            other => panic!("unrecognised rendered statetable token {other:?}"),
+        }
+    }
+
+    /// One rendered statetable row as its emitted tokens: `H`/`L`/`-` levels, the clock-edge tokens
     /// `R`/`F`/`~R`/`~F`, and `N` (hold) in the next field.
     struct RenderedRow {
-        inputs: Vec<String>,
-        current: Vec<String>,
-        next: Vec<String>,
+        inputs: Vec<Token>,
+        current: Vec<Token>,
+        next: Vec<Token>,
     }
 
     /// The `statetable` block parsed out of a rendered cell: the two header node lists and the rows.
     struct RenderedStatetable {
-        input_names: Vec<String>,
-        state_names: Vec<String>,
+        input_names: Vec<Symbol>,
+        state_names: Vec<Symbol>,
         rows: Vec<RenderedRow>,
     }
 
@@ -1523,13 +1553,13 @@ Q = "!R*(CLK*M + !CLK*Q)"
         let brace = block.find('{').expect("statetable header brace");
         // The header carries exactly two quoted fields: the input nodes then the state nodes.
         let quoted: Vec<&str> = block[..brace].split('"').collect();
-        let words = |f: &str| {
+        let names_of = |f: &str| {
             f.split_whitespace()
-                .map(str::to_owned)
-                .collect::<Vec<String>>()
+                .map(Symbol::from)
+                .collect::<Vec<Symbol>>()
         };
-        let input_names = words(quoted[1]);
-        let state_names = words(quoted[3]);
+        let input_names = names_of(quoted[1]);
+        let state_names = names_of(quoted[3]);
 
         // Search past the header brace so the `table :` attribute is not confused with `statetable`.
         let table_at = brace + block[brace..].find("table").expect("a table attribute");
@@ -1544,9 +1574,9 @@ Q = "!R*(CLK*M + !CLK*Q)"
                 let fields: Vec<&str> = row.split(':').collect();
                 assert_eq!(fields.len(), 3, "malformed statetable row {row:?}");
                 RenderedRow {
-                    inputs: words(fields[0]),
-                    current: words(fields[1]),
-                    next: words(fields[2]),
+                    inputs: fields[0].split_whitespace().map(parse).collect(),
+                    current: fields[1].split_whitespace().map(parse).collect(),
+                    next: fields[2].split_whitespace().map(parse).collect(),
                 }
             })
             .collect();
@@ -1563,7 +1593,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
     /// edge); current-state columns match the evolving node vector `cur`. `-` matches anything — a level
     /// don't-care, or a dual-edge off-edge's free clock column.
     fn row_matches(
-        input_names: &[String],
+        input_names: &[Symbol],
         row: &RenderedRow,
         cur: &[bool],
         event: Option<&str>,
@@ -1573,26 +1603,26 @@ Q = "!R*(CLK*M + !CLK*Q)"
             let toggled_here = event == Some(name.as_str());
             let rose = toggled_here && dest.value_of(name.as_str()) == Some(true);
             let fell = toggled_here && dest.value_of(name.as_str()) == Some(false);
-            let ok = match tok.as_str() {
-                "-" => true,
-                "H" => dest.value_of(name.as_str()) == Some(true),
-                "L" => dest.value_of(name.as_str()) == Some(false),
-                "R" => rose,
-                "F" => fell,
-                "~R" => !rose,
-                "~F" => !fell,
-                other => panic!("unknown input token {other:?}"),
+            let ok = match tok {
+                Token::Dash => true,
+                Token::High => dest.value_of(name.as_str()) == Some(true),
+                Token::Low => dest.value_of(name.as_str()) == Some(false),
+                Token::Rise => rose,
+                Token::Fall => fell,
+                Token::NotRise => !rose,
+                Token::NotFall => !fell,
+                Token::Hold => panic!("a hold token in an input field"),
             };
             if !ok {
                 return false;
             }
         }
         for (idx, tok) in row.current.iter().enumerate() {
-            let ok = match tok.as_str() {
-                "-" => true,
-                "H" => cur[idx],
-                "L" => !cur[idx],
-                other => panic!("unknown current token {other:?}"),
+            let ok = match tok {
+                Token::Dash => true,
+                Token::High => cur[idx],
+                Token::Low => !cur[idx],
+                other => panic!("token {other:?} in a current-state field"),
             };
             if !ok {
                 return false;
@@ -1605,7 +1635,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
     /// order (level rows then edge rows), skip any that defer this node (`-`) or fail to match, and take
     /// the first definite action. No matching row leaves the node held.
     fn predict_node(
-        input_names: &[String],
+        input_names: &[Symbol],
         rows: &[RenderedRow],
         node: usize,
         cur: &[bool],
@@ -1613,14 +1643,14 @@ Q = "!R*(CLK*M + !CLK*Q)"
         dest: &Minterm<Symbol>,
     ) -> bool {
         for row in rows {
-            match row.next[node].as_str() {
-                "-" => continue, // deferred to a lower-priority row per Liberty per-output resolution
+            match row.next[node] {
+                Token::Dash => continue, // deferred to a lower-priority row per Liberty per-output resolution
                 action if row_matches(input_names, row, cur, event, dest) => {
                     return match action {
-                        "H" => true,
-                        "L" => false,
-                        "N" => cur[node],
-                        other => panic!("unknown next token {other:?}"),
+                        Token::High => true,
+                        Token::Low => false,
+                        Token::Hold => cur[node],
+                        other => panic!("token {other:?} in a next-state field"),
                     };
                 }
                 _ => {}
@@ -1634,7 +1664,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
     /// a stable state. Mirrors the async cell's own `settle`, so the stable state is comparable to the
     /// machine's settled state; an oscillation where the machine settled is a faithfulness failure.
     fn settle_rendered(
-        input_names: &[String],
+        input_names: &[Symbol],
         rows: &[RenderedRow],
         cur0: Vec<bool>,
         toggled: &str,
@@ -1676,11 +1706,11 @@ Q = "!R*(CLK*M + !CLK*Q)"
         } = parse_rendered_statetable(&liberty);
         let model = build_state_model(&cell).expect("fixture is sequential");
         assert_eq!(
-            input_names.iter().map(String::as_str).collect::<Vec<_>>(),
+            input_names.iter().map(Symbol::as_str).collect::<Vec<_>>(),
             names(&model.input_nodes),
         );
         assert_eq!(
-            state_names.iter().map(String::as_str).collect::<Vec<_>>(),
+            state_names.iter().map(Symbol::as_str).collect::<Vec<_>>(),
             names(&model.internal_nodes),
         );
         // The rendered header carries TABLE-NODE names; the machine below answers only to SIGNAL names,
