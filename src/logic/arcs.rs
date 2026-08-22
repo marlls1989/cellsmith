@@ -376,14 +376,37 @@ pub fn derive<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Deri
             acc
         });
     debug_assert!(
-        all_distinct(&arcs, |a| (&a.output, &a.related, &a.start)),
+        all_distinct(&arcs, |a| FiringIdentity {
+            output: &a.output,
+            related: &a.related,
+            start: &a.start,
+        }),
         "arc identities are unique per firing"
     );
     debug_assert!(
-        all_distinct(&hidden, |h| (&h.pin, &h.start)),
+        all_distinct(&hidden, |h| HiddenFiringIdentity {
+            pin: &h.pin,
+            start: &h.start,
+        }),
         "hidden arc identities are unique per firing"
     );
     DerivedArcs { arcs, hidden }
+}
+
+/// What identifies one derived firing: the driven output's edge, the input that drove it, and the
+/// full machine start state the measurement fires from.
+#[derive(PartialEq, Eq, Hash)]
+struct FiringIdentity<'a> {
+    output: &'a PinEdge,
+    related: &'a Symbol,
+    start: &'a Minterm<Symbol>,
+}
+
+/// What identifies one derived hidden firing: the toggled pin and the start state it toggles from.
+#[derive(PartialEq, Eq, Hash)]
+struct HiddenFiringIdentity<'a> {
+    pin: &'a PinEdge,
+    start: &'a Minterm<Symbol>,
 }
 
 /// Whether every item carries a distinct identity under `key`, which may borrow from the item it keys.

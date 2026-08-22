@@ -248,14 +248,18 @@ impl Held {
         writeln!(
             f,
             "\t-pinlist {} \\",
-            Braced(Projected(&self.columns, |c: &LevelColumn| &c.name))
+            Braced(Projected {
+                columns: &self.columns,
+                project: |c: &LevelColumn| &c.name,
+            })
         )?;
         writeln!(
             f,
             "\t-vector {} \\",
-            Braced(Projected(&self.columns, |c: &LevelColumn| {
-                VectorValue::from(c.level)
-            }))
+            Braced(Projected {
+                columns: &self.columns,
+                project: |c: &LevelColumn| VectorValue::from(c.level),
+            })
         )?;
         writeln!(f, "\t-when \"{}\" \\", self.when)?;
         write_names(f, &self.names)
@@ -290,7 +294,10 @@ fn write_columns(f: &mut fmt::Formatter<'_>, columns: &[Column]) -> fmt::Result 
     writeln!(
         f,
         "\t-pinlist {} \\",
-        Braced(Projected(columns, |c: &Column| &c.name))
+        Braced(Projected {
+            columns,
+            project: |c: &Column| &c.name,
+        })
     )?;
     if let Some(ic) = columns
         .iter()
@@ -306,7 +313,10 @@ fn write_columns(f: &mut fmt::Formatter<'_>, columns: &[Column]) -> fmt::Result 
     writeln!(
         f,
         "\t-vector {} \\",
-        Braced(Projected(columns, |c: &Column| c.value))
+        Braced(Projected {
+            columns,
+            project: |c: &Column| c.value,
+        })
     )
 }
 
@@ -329,11 +339,14 @@ fn write_names(f: &mut fmt::Formatter<'_>, names: &[Symbol]) -> fmt::Result {
 /// in turn and separated by a single space. This is [`Words`] over a list whose items are read out of a
 /// larger value, and it is what makes `-pinlist`, `-ic` and `-vector` three walks of the same columns in
 /// the same order.
-struct Projected<'a, C, T, F: Fn(&'a C) -> T>(&'a [C], F);
+struct Projected<'a, C, T, F: Fn(&'a C) -> T> {
+    columns: &'a [C],
+    project: F,
+}
 
 impl<'a, C, T: fmt::Display, F: Fn(&'a C) -> T> fmt::Display for Projected<'a, C, T, F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Joined::new(self.0.iter(), " ", &self.1).fmt(f)
+        Joined::new(self.columns.iter(), " ", &self.project).fmt(f)
     }
 }
 

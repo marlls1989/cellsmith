@@ -525,16 +525,14 @@ fn hazard_warning<'a>(
         .map(Orders);
     let trigger =
         Trigger::of(occasion.cause).filter(|_| effects.contains_key(&Outcome::Oscillation));
-    let landings: Vec<(&str, EffectField)> = effects
+    let outcomes: Vec<OutcomeField> = effects
         .iter()
-        .map(|(outcome, effect)| {
-            (
-                outcome_str(*outcome),
-                EffectField {
-                    cause: occasion.cause,
-                    effect,
-                },
-            )
+        .map(|(outcome, effect)| OutcomeField {
+            label: outcome_str(*outcome),
+            effect: EffectField {
+                cause: occasion.cause,
+                effect,
+            },
         })
         .collect();
 
@@ -566,9 +564,9 @@ fn hazard_warning<'a>(
             value: trigger,
         });
     }
-    fields.extend(landings.iter().map(|(label, effect)| SubblockField {
-        label,
-        value: effect,
+    fields.extend(outcomes.iter().map(|o| SubblockField {
+        label: o.label,
+        value: &o.effect,
     }));
 
     writeln!(
@@ -645,6 +643,13 @@ impl fmt::Display for EffectField<'_> {
         }
         Ok(())
     }
+}
+
+/// One outcome's landing field: the label the outcome is reported under and the effect written beside
+/// it.
+struct OutcomeField<'a> {
+    label: &'static str,
+    effect: EffectField<'a>,
 }
 
 /// The triggering transitions of an indeterminate race: the two orders its edges can arrive in, since
