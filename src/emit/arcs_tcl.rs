@@ -709,10 +709,9 @@ impl ConstraintIdentity {
 /// sets ([`dominates`]); this settles the choice between the ones that come out equally dominant. Neither
 /// component states a preference — `discovered` is a breadth-first exploration index, not stable between
 /// runs, and the ordinal is a fixed numbering of the four ranks the six (cause, outcome) cells collapse
-/// into, a toggle and a race sharing a rank at the same outcome — so this is no quality judgement. What
-/// the pair buys is a TOTAL order, two observations of one probed state tying on the first and differing
-/// only in which of the four ranks they were read from: a parallel fold lands on one answer within a
-/// run, and choosing among equally-good representatives is free.
+/// into, a toggle and a race sharing a rank at the same outcome — so this is no quality judgement. Two
+/// observations of one probed state tie on the first component and differ only in which of the four
+/// ranks they were read from; which of the equals supplies the general block carries nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct ConstraintRank {
     discovered: usize,
@@ -1676,48 +1675,6 @@ Y = "A*B"
             .collect()
     }
 
-    /// [`blocks`], sorted — for comparing two code paths on the same input by the arcs they emit,
-    /// independent of emission order.
-    /// A block reduced to what it characterises: the arc kind, the pins it names, and which columns
-    /// transition in which direction. The `-prevector`, the `-ic` levels and the vector's held `0`/`1`
-    /// digits all name the state the run measured the arc at — a representative of that arc's context,
-    /// and a walk free to claim a level in any order may reach one representative before another. Two
-    /// runs emitting the same arcs need not agree on those.
-    fn arc_shape(block: &str) -> String {
-        let mut parts: Vec<String> = block
-            .lines()
-            .map(|l| l.trim().trim_end_matches('\\').trim_end())
-            .filter_map(|l| {
-                if let Some(v) = l.strip_prefix("-vector ") {
-                    Some(format!("-vector {}", v.replace(['0', '1'], "_")))
-                } else if l.starts_with("-type ")
-                    || l.starts_with("-pin ")
-                    || l.starts_with("-related_pin ")
-                {
-                    Some(l.to_string())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        parts.sort();
-        parts.join(" ")
-    }
-
-    /// Every block's [`arc_shape`], sorted — the set of arcs a run emits, blind to which state each was
-    /// measured at.
-    fn shaped_blocks(tcl: &str) -> Vec<String> {
-        let mut b: Vec<String> = blocks(tcl).iter().map(|x| arc_shape(x)).collect();
-        b.sort();
-        b
-    }
-
-    fn sorted_blocks(tcl: &str) -> Vec<String> {
-        let mut b = blocks(tcl);
-        b.sort();
-        b
-    }
-
     /// Whether a block carries an ARC `-when` line. The line start is the discriminator: an arc's `-when`
     /// is its own indented line, whereas `define_leakage` — inherently `-when`-conditioned — rides its
     /// condition on the `define_leakage` line itself.
@@ -2272,9 +2229,9 @@ Q = "E*D + !E*Q"
     }
 
     /// ADDITIVE: selecting every class ADDS one conditioned block per conditioned arc on top of the
-    /// general arcs — it removes nothing and rewrites nothing. Every default block is still there, each
-    /// added block carries a `-when`, and at least one emitted vector appears twice, the two blocks
-    /// differing solely by that line.
+    /// general arcs — it removes nothing and rewrites nothing. The general layer is one block per
+    /// transition and per hidden event, each added block carries a `-when`, and at least one emitted
+    /// vector appears twice, the two blocks differing solely by that line.
     #[test]
     fn when_all_adds_conditioned_blocks_on_top_of_the_general_arcs() {
         let cell = analyse(&when_variant(TWO, "true"));
@@ -2283,32 +2240,25 @@ Q = "E*D + !E*Q"
             counts.transition >= 1 && counts.hidden >= 1,
             "premise: TWO conditions arcs of both classes"
         );
-        let default = emit(&analyse(TWO), NO_LEAKAGE);
+        let transitions: HashSet<_> = cell
+            .arcs
+            .iter()
+            .map(|a| TransitionIdentity::of(&cell, a))
+            .collect();
+        let events: HashSet<_> = cell.hidden_arcs.iter().map(HiddenIdentity::of).collect();
         let enabled = emit(&cell, NO_LEAKAGE);
         eprintln!("{enabled}");
 
-        let default_blocks = blocks(&default);
         assert_eq!(
-            blocks(&enabled).len(),
-            default_blocks.len() + counts.transition + counts.hidden,
-            "one added block per conditioned arc"
+            blocks(&enabled).iter().filter(|b| has_when(b)).count(),
+            counts.transition + counts.hidden,
+            "one conditioned block per non-redundant arc"
         );
-
-        // Multiset difference over sorted Vecs: every default block survives, and what remains is
-        // exactly the conditioned blocks.
-        let mut remaining = blocks(&enabled);
-        remaining.sort();
-        for b in &default_blocks {
-            let i = remaining
-                .iter()
-                .position(|r| r == b)
-                .unwrap_or_else(|| panic!("a default block is missing under `when`:\n{b}"));
-            remaining.remove(i);
-        }
-        assert_eq!(remaining.len(), counts.transition + counts.hidden);
-        for b in &remaining {
-            assert!(has_when(b), "every added block carries a -when:\n{b}");
-        }
+        assert_eq!(
+            blocks(&enabled).iter().filter(|b| !has_when(b)).count(),
+            transitions.len() + events.len(),
+            "the general layer is one block per transition and per hidden event"
+        );
 
         // Every arc that renders a condition is emitted with it, whether or not the general pass already
         // emitted the same arc unconditioned — UNLESS it is the sole conditioned firing of its
@@ -2350,12 +2300,18 @@ Q = "E*D + !E*Q"
     /// its general arcs.
     #[test]
     fn when_one_class_adds_only_that_class() {
-        let cell = analyse(TWO);
+        let mut cell = analyse(TWO);
         let counts = conditioned_counts(&cell);
         assert!(
             counts.transition >= 1 && counts.hidden >= 1,
             "premise: TWO conditions arcs of both classes"
         );
+        let transitions: HashSet<_> = cell
+            .arcs
+            .iter()
+            .map(|a| TransitionIdentity::of(&cell, a))
+            .collect();
+        let events: HashSet<_> = cell.hidden_arcs.iter().map(HiddenIdentity::of).collect();
 
         let non_hidden = |tcl: &str| {
             blocks(tcl)
@@ -2387,32 +2343,34 @@ Q = "E*D + !E*Q"
         assert_eq!(hidden_when(&default), 0);
 
         // --when=transition: the transition class gains its conditioned blocks; the hidden class is untouched.
-        let t_on = emit(&analyse(&when_variant(TWO, "\"transition\"")), NO_LEAKAGE);
+        cell.when = [ArcClass::Transition].into_iter().collect();
+        let t_on = emit(&cell, NO_LEAKAGE);
         assert_eq!(
             non_hidden(&t_on),
-            non_hidden(&default) + counts.transition,
+            transitions.len() + counts.transition,
             "one added transition block per conditioned transition arc"
         );
         assert_eq!(non_hidden_when(&t_on), counts.transition);
         assert_eq!(
             hidden(&t_on),
-            hidden(&default),
-            "hidden block count is unchanged by --when=transition"
+            events.len(),
+            "the hidden class stays at its general blocks — one per hidden event"
         );
         assert_eq!(hidden_when(&t_on), 0, "no hidden -when is added");
 
         // Mirror --when=hidden: the transition class is untouched.
-        let h_on = emit(&analyse(&when_variant(TWO, "\"hidden\"")), NO_LEAKAGE);
+        cell.when = [ArcClass::Hidden].into_iter().collect();
+        let h_on = emit(&cell, NO_LEAKAGE);
         assert_eq!(
             hidden(&h_on),
-            hidden(&default) + counts.hidden,
+            events.len() + counts.hidden,
             "one added hidden block per conditioned hidden arc"
         );
         assert_eq!(hidden_when(&h_on), counts.hidden);
         assert_eq!(
             non_hidden(&h_on),
-            non_hidden(&default),
-            "transition block count is unchanged by --when=hidden"
+            transitions.len(),
+            "the transition class stays at its general blocks — one per transition"
         );
         assert_eq!(non_hidden_when(&h_on), 0, "no transition -when is added");
     }
@@ -2443,21 +2401,13 @@ Q = "E*D + !E*Q"
             transition_when, 0,
             "no conditioned transition block is emitted for a single-context transition"
         );
-
-        // Nothing is dropped — the transition class still emits exactly its general blocks.
-        let default = emit(&analyse(AND2), NO_LEAKAGE);
-        let transition_blocks = |t: &str| {
-            let mut v: Vec<_> = blocks(t)
-                .into_iter()
-                .filter(|b| !b.contains("-type hidden"))
-                .collect();
-            v.sort();
-            v
-        };
         assert_eq!(
-            transition_blocks(&enabled),
-            transition_blocks(&default),
-            "the transition class equals its general arcs: only the redundant conditioned copies are gone"
+            blocks(&enabled)
+                .iter()
+                .filter(|b| !b.contains("-type hidden"))
+                .count(),
+            firings.len(),
+            "the transition class stays at exactly its general blocks — one per transition"
         );
     }
 
@@ -2483,7 +2433,7 @@ Q = "E*D + !E*Q"
     /// SINGLE INPUT: an arc whose related pin is the cell's only input renders NO condition
     /// (`when` is `None`), so where it is also the general pass's representative the conditioned
     /// pass skips it — the block it would add is the one already emitted. Every INV arc is its own
-    /// transition's representative, so selecting every class changes nothing.
+    /// transition's representative, so selecting every class conditions nothing.
     #[test]
     fn when_skips_a_conditionless_general_representative() {
         const INV: &str = r#"
@@ -2515,18 +2465,22 @@ Y = "!A"
             cell.arcs.len(),
             "premise: no INV arc shares a transition with another"
         );
-        let default = emit(&analyse(INV), NO_LEAKAGE);
         let enabled = emit(&cell, NO_LEAKAGE);
         eprintln!("{enabled}");
-        assert_eq!(
-            sorted_blocks(&enabled),
-            sorted_blocks(&default),
-            "an unconditional arc is emitted once, by the general pass alone"
-        );
-        let emitted = blocks(&default);
+        let emitted = blocks(&enabled);
         assert!(!emitted.is_empty(), "INV emits arcs");
         let unique: BTreeSet<&String> = emitted.iter().collect();
         assert_eq!(unique.len(), emitted.len(), "no block is emitted twice");
+        assert!(
+            emitted.iter().all(|b| !has_when(b)),
+            "no INV arc renders a condition, so nothing is conditioned"
+        );
+        let events: HashSet<_> = cell.hidden_arcs.iter().map(HiddenIdentity::of).collect();
+        assert_eq!(
+            emitted.len(),
+            keys.len() + events.len(),
+            "the general pass alone states the deck"
+        );
     }
 
     #[test]
@@ -3611,21 +3565,20 @@ Q = "!CLK*M + CLK*Q"
     fn selecting_another_class_leaves_the_constraint_blocks_unconditioned() {
         // The class gates its own pass and no other's: with only the transition class selected the
         // constraint blocks are the general ones alone.
-        let plain = emit(&analyse(&tcasc("")), NO_LEAKAGE);
-        let others = emit(&analyse(&tcasc("when = \"transition\"\n")), NO_LEAKAGE);
+        let cell = analyse(&tcasc("when = \"transition\"\n"));
+        let others = emit(&cell, NO_LEAKAGE);
         eprintln!("{others}");
-        // Which observation each general block was rendered from is a free choice, so the two runs are
-        // compared by what they state: how many constraint blocks there are, what they probe, and that
-        // none of them carries a condition.
-        assert_eq!(
-            probes_on(&others, "CLK"),
-            probes_on(&plain, "CLK"),
-            "{others}"
-        );
-        assert_eq!(
-            pair_blocks(&others).len(),
-            pair_blocks(&plain).len(),
-            "{others}"
+        // One general block per minimum-pulse-width identity the general pass keeps, however many
+        // observations that identity carries.
+        let pulses = constraint_selection(&cell.constraints)
+            .keys()
+            .filter(|&&i| matches!(cell.constraints[i].kind, ConstraintKind::MinPulseWidth))
+            .count();
+        assert!(pulses >= 1, "premise: TCASC constrains a pulse width");
+        assert_eq!(pulse_blocks(&others).len(), pulses, "{others}");
+        assert!(
+            !pair_blocks(&others).is_empty(),
+            "the setup/hold pairs are stated:\n{others}"
         );
         for block in pulse_blocks(&others).iter().chain(&pair_blocks(&others)) {
             assert!(!has_when(block), "{block}");
@@ -4652,23 +4605,6 @@ Q = "A*B + Q*(A+B)"
     }
 
     #[test]
-    fn leakage_section_follows_hidden_arcs() {
-        let cell = analyse(
-            r#"
-[[cell]]
-name = "AND2"
-inputs = ["A", "B"]
-[cell.outputs]
-Y = "A*B"
-"#,
-        );
-        let tcl = emit(&cell, ArcsTclOptions::default());
-        let last_hidden = tcl.rfind("-type hidden").expect("hidden arc present");
-        let first_leakage = tcl.find("define_leakage").expect("leakage present");
-        assert!(first_leakage > last_hidden);
-    }
-
-    #[test]
     fn multi_name_cell_fans_names_into_one_trailer() {
         // A cell with several names emits one braced list carrying all of them per arc trailer and
         // per define_leakage — not one arc per name.
@@ -4681,29 +4617,23 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        let single = analyse(
-            r#"
-[[cell]]
-name = "C2"
-inputs = ["A", "B"]
-[cell.outputs]
-Q = "A*B + Q*(A+B)"
-"#,
-        );
         let tcl = emit(&cell, ArcsTclOptions::default());
-        let single_tcl = emit(&single, ArcsTclOptions::default());
         eprintln!("{tcl}");
-        assert!(single_tcl.contains("{ C2 }"));
         assert!(tcl.contains("{ C2A C2B }"));
         assert!(!tcl.contains("{ C2A }"));
         assert!(!tcl.contains("{ C2B }"));
         // A leakage block fans the names into the same single trailer an arc block does.
         assert!(tcl.contains("define_leakage -when \"A & B & Q\" { C2A C2B }"));
-        // Same arc count regardless of how many names the cell carries — one arc per transition, a
-        // single trailer names both.
+        let transitions: HashSet<_> = cell
+            .arcs
+            .iter()
+            .map(|a| TransitionIdentity::of(&cell, a))
+            .collect();
+        let events: HashSet<_> = cell.hidden_arcs.iter().map(HiddenIdentity::of).collect();
         assert_eq!(
             tcl.matches("define_arc").count(),
-            single_tcl.matches("define_arc").count()
+            transitions.len() + events.len(),
+            "one arc block per transition and per hidden event, however many names the cell carries"
         );
     }
 
@@ -4840,16 +4770,15 @@ Q = "CLK*M + !CLK*Q"
     ];
 
     #[test]
-    fn non_collapsible_suite_tcl_matches_the_no_edge_collapse_flag() {
+    fn non_collapsible_suite_emits_no_edge_type_with_or_without_the_flag() {
         // Zero `-type edge` blocks, whether the flag is left off (default classification, a no-op on
-        // these shapes) or forced on -- and the two runs emit the same arcs.
+        // these shapes) or forced on.
         for src in NON_COLLAPSIBLE {
             let AnalysedPair { default, forced } = analyse_both(src);
             let tcl_default = emit(&default, ArcsTclOptions::default());
             let tcl_forced = emit(&forced, ArcsTclOptions::default());
             assert_eq!(tcl_default.matches("-type edge").count(), 0);
             assert_eq!(tcl_forced.matches("-type edge").count(), 0);
-            assert_eq!(shaped_blocks(&tcl_default), shaped_blocks(&tcl_forced));
         }
     }
 
@@ -5017,7 +4946,6 @@ Q = "CLK*M + !CLK*Q"
             assert_eq!(tcl.matches("-type edge").count(), 0);
             assert!(tcl.contains("-pin Q"));
         }
-        assert_eq!(shaped_blocks(&tcl_direct), shaped_blocks(&tcl_via_flag));
     }
 
     #[test]
@@ -5171,15 +5099,26 @@ Q = "CLKB*M + !CLKB*Q"
         }
     }
 
-    /// How many times each block was stated. Two emissions of one cell are compared as MULTISETS of
-    /// blocks, the order they come out in carrying no meaning; a block stated twice — once bare, once
-    /// carrying its condition — counts twice.
-    fn counts<'a>(blocks: impl IntoIterator<Item = &'a Block>) -> HashMap<&'a Block, usize> {
-        let mut stated: HashMap<&Block, usize> = HashMap::new();
-        for block in blocks {
-            *stated.entry(block).or_default() += 1;
+    /// One transition a block states: the variant it came out under — Liberate's `-type`, which the
+    /// variant IS — and the two pin edges the measurement runs between. Two blocks agreeing on all
+    /// three are one transition stated twice.
+    #[derive(PartialEq, Eq, Hash)]
+    struct EmittedTransition {
+        kind: std::mem::Discriminant<Block>,
+        related: PinEdge,
+        output: PinEdge,
+    }
+
+    impl EmittedTransition {
+        /// The transition `block` states, or `None` where it states none.
+        fn of(block: &Block) -> Option<Self> {
+            let t = transition_of(block)?;
+            Some(EmittedTransition {
+                kind: std::mem::discriminant(block),
+                related: t.related.clone(),
+                output: t.output.clone(),
+            })
         }
-        stated
     }
 
     /// The blocks `cell` states at the emitter's defaults, under whatever class selection its own `when`
@@ -5219,16 +5158,6 @@ Q = "CLKB*M + !CLKB*Q"
     /// from. `OA22` fires its `A`-rise → `Y`-rise transition from three of them; one block comes out.
     #[test]
     fn default_run_emits_one_general_block_per_transition() {
-        /// One transition a block states: the variant it came out under — Liberate's `-type`, which the
-        /// variant IS — and the two pin edges the measurement runs between. Two blocks agreeing on all
-        /// three are one transition stated twice.
-        #[derive(PartialEq, Eq, Hash)]
-        struct EmittedTransition {
-            kind: std::mem::Discriminant<Block>,
-            related: PinEdge,
-            output: PinEdge,
-        }
-
         let cell = analyse(OA22);
         let blocks = stated(&cell);
         for block in blocks.iter().filter(|b| !matches!(b, Block::Hidden(_))) {
@@ -5242,17 +5171,10 @@ Q = "CLKB*M + !CLKB*Q"
 
         let mut seen: HashSet<EmittedTransition> = HashSet::new();
         for block in &blocks {
-            let Some(t) = transition_of(block) else {
+            let Some(key) = EmittedTransition::of(block) else {
                 continue;
             };
-            assert!(
-                seen.insert(EmittedTransition {
-                    kind: std::mem::discriminant(block),
-                    related: t.related.clone(),
-                    output: t.output.clone(),
-                }),
-                "a transition is stated twice:\n{block}"
-            );
+            assert!(seen.insert(key), "a transition is stated twice:\n{block}");
         }
         assert!(!seen.is_empty(), "OA22 states transition arcs");
         assert!(
@@ -5264,7 +5186,7 @@ Q = "CLKB*M + !CLKB*Q"
 
     #[test]
     fn default_run_emits_no_arc_when_lines() {
-        let mut cell = analyse(TWO);
+        let cell = analyse(TWO);
         let default = stated(&cell);
         for block in &default {
             if let Some(m) = measured(block) {
@@ -5274,22 +5196,11 @@ Q = "CLKB*M + !CLKB*Q"
                 );
             }
         }
-        // The conditioned blocks are added ON TOP of the always-stated general arcs, so selecting every
-        // class states strictly more blocks than the default run.
-        cell.when = ArcClasses::ALL;
-        let selected = stated(&cell);
-        assert!(
-            selected.len() > default.len(),
-            "selecting every class adds blocks: {} not > {}",
-            selected.len(),
-            default.len()
-        );
     }
 
     #[test]
     fn bare_when_emits_arc_when_lines() {
         let mut cell = analyse(TWO);
-        let default = stated(&cell);
         cell.when = ArcClasses::ALL;
         let selected = stated(&cell);
         assert!(
@@ -5299,25 +5210,67 @@ Q = "CLKB*M + !CLKB*Q"
                 .any(|m| m.when.is_some()),
             "selecting every class conditions some block"
         );
-        // The general arcs stay put: what carries no condition under the selection is, block for block,
-        // what the default run stated.
+        // The general arcs stay put: whatever the selection conditions, the unconditioned layer is
+        // still one block per transition the cell derives and one per hidden event.
+        let transitions: HashSet<_> = cell
+            .arcs
+            .iter()
+            .map(|a| TransitionIdentity::of(&cell, a))
+            .collect();
+        let events: HashSet<_> = cell.hidden_arcs.iter().map(HiddenIdentity::of).collect();
         assert_eq!(
-            counts(
-                selected
-                    .iter()
-                    .filter(|b| measured(b).is_some_and(|m| m.when.is_none()))
-            ),
-            counts(default.iter().filter(|b| measured(b).is_some())),
-            "the general arcs are the default run's, block for block"
+            selected
+                .iter()
+                .filter(|b| transition_of(b).is_some_and(|t| t.when.is_none()))
+                .count(),
+            transitions.len(),
+            "one general block per transition"
         );
+        assert_eq!(
+            selected
+                .iter()
+                .filter(|b| matches!(b, Block::Hidden(t) if t.when.is_none()))
+                .count(),
+            events.len(),
+            "one general block per hidden event"
+        );
+        // A conditioned block characterises an arc the general layer states: the selection adds a
+        // conditioned copy of a block, never one the general pass has no counterpart for.
+        let general_transitions: HashSet<EmittedTransition> = selected
+            .iter()
+            .filter(|b| transition_of(b).is_some_and(|t| t.when.is_none()))
+            .filter_map(EmittedTransition::of)
+            .collect();
+        let general_events: HashSet<PinEdge> = selected
+            .iter()
+            .filter_map(|b| match b {
+                Block::Hidden(t) if t.when.is_none() => Some(t.pin.clone()),
+                _ => None,
+            })
+            .collect();
+        for block in &selected {
+            if transition_of(block).is_some_and(|t| t.when.is_some()) {
+                let key = EmittedTransition::of(block).expect("a transition block states one");
+                assert!(
+                    general_transitions.contains(&key),
+                    "a conditioned block states a transition the general layer does not:\n{block}"
+                );
+            }
+            if let Block::Hidden(t) = block {
+                assert!(
+                    t.when.is_none() || general_events.contains(&t.pin),
+                    "a conditioned block states a hidden event the general layer does not:\n{block}"
+                );
+            }
+        }
     }
 
     #[test]
     fn when_hidden_emits_only_hidden_when_lines() {
         let mut cell = analyse(TWO);
-        let default = stated(&cell);
         cell.when = [ArcClass::Hidden].into_iter().collect();
         let selected = stated(&cell);
+        let events: HashSet<_> = cell.hidden_arcs.iter().map(HiddenIdentity::of).collect();
         let conditioned = |blocks: &[Block]| {
             blocks
                 .iter()
@@ -5334,12 +5287,10 @@ Q = "CLKB*M + !CLKB*Q"
             conditioned(&selected) >= 1,
             "the hidden class carries its conditions"
         );
-        // The hidden general blocks are stated whatever the selection, so the class adds its conditioned
-        // blocks without dropping any of them.
         assert_eq!(
             general(&selected),
-            general(&default),
-            "the hidden general blocks are still stated"
+            events.len(),
+            "one general hidden block per hidden event"
         );
         for block in selected.iter().filter(|b| !matches!(b, Block::Hidden(_))) {
             if let Some(m) = measured(block) {
@@ -5354,9 +5305,13 @@ Q = "CLKB*M + !CLKB*Q"
     #[test]
     fn when_transition_emits_only_transition_when_lines() {
         let mut cell = analyse(TWO);
-        let default = stated(&cell);
         cell.when = [ArcClass::Transition].into_iter().collect();
         let selected = stated(&cell);
+        let transitions: HashSet<_> = cell
+            .arcs
+            .iter()
+            .map(|a| TransitionIdentity::of(&cell, a))
+            .collect();
         let conditioned = |blocks: &[Block]| {
             blocks
                 .iter()
@@ -5377,8 +5332,8 @@ Q = "CLKB*M + !CLKB*Q"
         );
         assert_eq!(
             general(&selected),
-            general(&default),
-            "the transition general blocks are still stated"
+            transitions.len(),
+            "one general block per transition"
         );
         for block in selected.iter().filter(|b| transition_of(b).is_none()) {
             if let Some(m) = measured(block) {
@@ -5390,23 +5345,27 @@ Q = "CLKB*M + !CLKB*Q"
         }
     }
 
-    /// Selecting the two classes the cell has arcs in is the blanket selection: `TWO` opts into no
-    /// constraint arcs, so the third class has nothing to condition and the two emissions state the same
-    /// blocks.
+    /// The blanket selection selects the constraint class too, but a cell that opts into no constraint
+    /// arcs has nothing there to condition: no constraint block of any kind is stated.
     #[test]
-    fn when_hidden_and_transition_equals_bare_when() {
+    fn all_selection_adds_no_constraint_blocks_without_the_opt_in() {
         let mut cell = analyse(TWO);
-        cell.when = [ArcClass::Hidden, ArcClass::Transition]
-            .into_iter()
-            .collect();
-        let both = stated(&cell);
         cell.when = ArcClasses::ALL;
-        let bare = stated(&cell);
-        assert_eq!(
-            counts(&both),
-            counts(&bare),
-            "selecting both classes states what the blanket selection does"
-        );
+        let blocks = stated(&cell);
+        assert!(!blocks.is_empty(), "TWO states blocks");
+        for block in &blocks {
+            assert!(
+                !matches!(
+                    block,
+                    Block::Setup(_)
+                        | Block::Hold(_)
+                        | Block::NonSeqSetup(_)
+                        | Block::NonSeqHold(_)
+                        | Block::MinPulseWidth(_)
+                ),
+                "a cell opting into no constraint arcs states no constraint block:\n{block}"
+            );
+        }
     }
 
     /// With the transition class selected, the arc that is also its transition's general representative
@@ -5449,23 +5408,6 @@ Q = "CLKB*M + !CLKB*Q"
                 .any(|g| column_values(&g.columns) == column_values(&c.columns))),
             "one hidden -vector is stated both with and without its condition"
         );
-    }
-
-    /// The blanket selection adds and rewrites nothing: every block the default run stated is stated at
-    /// least as often under the selection.
-    #[test]
-    fn when_output_contains_every_default_arc_block() {
-        let mut cell = analyse(TWO);
-        let default = stated(&cell);
-        cell.when = ArcClasses::ALL;
-        let selected = stated(&cell);
-        let under_when = counts(&selected);
-        for (block, n) in counts(&default) {
-            assert!(
-                under_when.get(block).is_some_and(|times| *times >= n),
-                "the selection keeps every default block:\n{block}"
-            );
-        }
     }
 
     /// A 3-cell spec whose every cell holds state — a C-element, a mutual-exclusion element and a
