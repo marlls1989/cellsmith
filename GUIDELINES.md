@@ -122,10 +122,10 @@ is free, and neither the code nor a test may depend on it.
 
 A correspondence between the parts of one output is a property like any other, and so is a
 relation between two runs where that relation is the specified behaviour. Examples, not the
-list: the pin order a run produced is the same order in its `-pinlist`, its `-vector`'s
-characters and its `-ic`'s columns; a switch documented to change one named thing leaves the
-rest alone. Neither fixes which output the run picks, so both hold for every output the tool
-is free to produce. A test resting on a two-run relation names the delta it permits, and the
+list: Liberate reads a block's `-pinlist`, `-vector` and `-ic` as positional columns of one
+argument, so those three agreeing on the pin order a run produced is the contract with that
+reader; a switch documented to change one named thing leaves the rest alone. Neither fixes
+which output the run picks, so both hold for every output the tool is free to produce. A test resting on a two-run relation names the delta it permits, and the
 content both sides share is pinned by a direct test of its own.
 
 ## Prefer real types to stand-ins
