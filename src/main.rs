@@ -713,6 +713,8 @@ fn write_file(dir: &Path, name: &str, body: &impl fmt::Display) -> io::Result<()
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
     use clap::Parser;
 
@@ -1113,6 +1115,18 @@ Q = "CLK*M + !CLK*Q"
             .trim_start()
     }
 
+    /// Asserts a `lands at` field names `group`, over a set of race alternatives equal to
+    /// `alternatives` — `Hazard::settled`'s alternatives are a set, so the order they render in
+    /// carries nothing and either order is a valid rendering.
+    fn assert_lands_at_set(field: &str, group: &str, alternatives: &[&str]) {
+        let (got_group, landings) = field
+            .split_once(" lands at ")
+            .expect("a landing field names its group");
+        assert_eq!(got_group, group);
+        let got: HashSet<&str> = landings.split(" or ").collect();
+        assert_eq!(got, alternatives.iter().copied().collect());
+    }
+
     /// Every hazard kind names where the machine lands, beside the nodes it attacks. That landing is
     /// `Hazard::settled` — for a race the results of its two orders, alternatives joined by `or`; for a
     /// pulse the two waypoints one wide enough walks through, in causal order and joined by `→`. Each
@@ -1126,25 +1140,27 @@ Q = "CLK*M + !CLK*Q"
         // 0 and the later B↑ cannot lift it; B↑ first co-asserts the pair, which drives Q to 1, and the
         // later A↓ leaves Q holding on B. Either order is a legitimate settling, so the two read as
         // alternatives.
-        assert_eq!(
+        assert_lands_at_set(
             hazard_field(
                 &warnings,
                 r#"cell "C2": too little separation between A↓ and B↑ causes a hazard at {A=1, B=0, Q=0}"#,
                 "indeterminate",
             ),
-            "{Q} lands at {Q=0} or {Q=1}",
+            "{Q}",
+            &["{Q=0}", "{Q=1}"],
         );
 
         // MUT (`Qa = !Qb*A`, `Qb = !Qa*B`) with A↑ and B↑ separated from the idle state: whichever request
         // rises first takes its grant and locks the other out, so the ring settles to one grant or the
         // mirror.
-        assert_eq!(
+        assert_lands_at_set(
             hazard_field(
                 &warnings,
                 r#"cell "MUT": too little separation between A↑ and B↑ causes a hazard at {A=0, B=0, Qa=0, Qb=0}"#,
                 "oscillation",
             ),
-            "{Qa, Qb} lands at {Qa=0, Qb=1} or {Qa=1, Qb=0}",
+            "{Qa, Qb}",
+            &["{Qa=0, Qb=1}", "{Qa=1, Qb=0}"],
         );
 
         // DFF (`M = !CLK*D + CLK*M`, `Q = CLK*M + !CLK*Q`) pulsed low on CLK from `{CLK=1, D=1, Q=0, M=0}`:

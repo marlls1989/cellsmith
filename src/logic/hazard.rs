@@ -95,11 +95,11 @@ pub struct Hazard {
     /// width for a pulse — each state a group-projected minterm (group order).
     ///
     /// How the members relate follows from the cause. A race has a winner, and either winner is a
-    /// legitimate result of honouring the timing, so its members are ALTERNATIVES: their order among
-    /// themselves carries nothing, and they are held sorted only so the report is deterministic. A pulse
-    /// is one signal's two edges, and a transition cannot be a rise and a fall at once, so its members
-    /// cannot be reordered: they are a SEQUENCE in causal order, the machine's landing point as the
-    /// pulse widens. A `Vec` carries order either way, so the two readings share the type.
+    /// legitimate result of honouring the timing, so its members are ALTERNATIVES: a set — their order
+    /// among themselves carries nothing, and two orders settling to the same projection are one member.
+    /// A pulse is one signal's two edges, and a transition cannot be a rise and a fall at once, so its
+    /// members cannot be reordered: they are a SEQUENCE in causal order, the machine's landing point as
+    /// the pulse widens. A `Vec` carries order either way, so the two readings share the type.
     pub settled: Vec<Minterm<Symbol>>,
     /// The prevector: the input-assignment path that drives every state variable into the probed state
     /// (each node projected onto the inputs).
@@ -116,9 +116,8 @@ pub struct Hazard {
     /// emitted column carries.
     pub state: Minterm<Symbol>,
     /// Index of the probed state in `ex.order` (the sequential BFS exploration order) — the leading
-    /// component of the tie-break between equally dominant observations: the earlier-discovered one is
-    /// kept. The exploration is breadth-first, so this already orders the observations by the length of
-    /// the walk that reaches them.
+    /// component of the key between equally dominant observations. The exploration is breadth-first, so
+    /// this already orders the observations by the length of the walk that reaches them.
     pub(crate) discovered: usize,
 }
 
@@ -145,9 +144,9 @@ impl Hazard {
 
     /// A fixed rank over the (cause, outcome) cells, so that two hazards can be ordered by which cell
     /// they occupy. A lone toggle and a pair race take the same rank: both are inputs failing to
-    /// converge, which is the distinction the rank draws. It is the second component of the
-    /// representative tie-break, after `discovered`: two records read from one probed state still pick
-    /// a representative deterministically.
+    /// converge, which is the distinction the rank draws. It is the second component, after
+    /// `discovered`, of the key by which emission picks the observation a general block is rendered
+    /// from; which of the equals is picked carries nothing.
     pub(crate) fn ordinal(&self) -> u8 {
         let cause = match self.cause {
             Cause::Toggle { .. } | Cause::Race { .. } => 0,

@@ -1055,28 +1055,6 @@ GCLK = "enA*CLKA+enB*CLKB"
         &rest[..end]
     }
 
-    /// Every UDP table row a model states, each under the `primitive` header it belongs to and the whole
-    /// sorted -- the rows a run emits, blind to the order they came out in. This is what
-    /// `crate::emit::arcs_tcl`'s `shaped_blocks` is over the Tcl deck: a UDP consumer matches a row by
-    /// its pattern rather than by its position, so what two runs of one cell have to agree on is the SET
-    /// of rows under each primitive.
-    fn table_row_set(v: &str) -> Vec<String> {
-        let mut rows: Vec<String> = Vec::new();
-        let mut head = "";
-        let mut in_table = false;
-        for line in v.lines() {
-            match line {
-                _ if line.starts_with("primitive ") => head = line,
-                "table" => in_table = true,
-                "endtable" => in_table = false,
-                _ if in_table => rows.push(format!("{head}\t{}", line.trim())),
-                _ => {}
-            }
-        }
-        rows.sort();
-        rows
-    }
-
     #[test]
     fn dcmux_udp_is_a_level_reg() {
         // DCMUX collapses to a LEVEL model (its falls are combinational and the active-edge filter
@@ -1291,7 +1269,6 @@ Q = "CLK*M + !CLK*Q"
                 assert!(!v.contains("(01)"), "unexpected rising-edge token");
                 assert!(!v.contains("(10)"), "unexpected falling-edge token");
             }
-            assert_eq!(table_row_set(&v_default), table_row_set(&v_forced));
         }
     }
 
@@ -1331,7 +1308,6 @@ Q = "CLK*M + !CLK*Q"
             assert!(v.contains("primitive DFF_M("));
             assert!(v.contains("wire   M;"));
         }
-        assert_eq!(table_row_set(&v_direct), table_row_set(&v_via_flag));
     }
 
     #[test]

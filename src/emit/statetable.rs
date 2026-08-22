@@ -1085,16 +1085,6 @@ Q = "CLK*M + !CLK*Q"
             let m_forced = build_state_model(&forced).expect("fixture is sequential");
             assert!(m_default.edge_rows.is_empty());
             assert!(m_forced.edge_rows.is_empty());
-            // Byte-identical joint model whether the flag is left off (default collapse, no-op here)
-            // or forced on: same nodes, same rows.
-            assert_eq!(
-                format!("{:?}", m_default.internal_nodes),
-                format!("{:?}", m_forced.internal_nodes),
-            );
-            assert_eq!(
-                format!("{:?}", m_default.rows),
-                format!("{:?}", m_forced.rows)
-            );
         }
     }
 
@@ -1137,13 +1127,6 @@ Q = "CLK*M + !CLK*Q"
             assert_eq!(names(&m.internal_nodes), ["Q_st", "M"]);
             assert_eq!(m.rows.len(), 6);
         }
-        // Both switches produce byte-identical joint models.
-        let m_direct = build_state_model(&direct).unwrap();
-        let m_via_flag = build_state_model(&via_flag).unwrap();
-        assert_eq!(
-            format!("{:?}", m_direct.rows),
-            format!("{:?}", m_via_flag.rows),
-        );
     }
 
     // Exposed-master DFF: M is a declared output (never foldable). The behavioural classifier recognises

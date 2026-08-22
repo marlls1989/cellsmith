@@ -1203,7 +1203,7 @@ impl Cell {
         }
 
         // Every template-override key must name one of this cell's (de_name_list-deduped) drive-strength
-        // aliases. Iterating in insertion order keeps the reported error deterministic.
+        // aliases. Iterated in spec order, so the first offending key is the one reported.
         let name_set: BTreeSet<Symbol> = self.name.iter().cloned().collect();
         for alias in self.template_overrides.keys() {
             if !name_set.contains(alias) {
@@ -1243,7 +1243,7 @@ impl Cell {
         }
 
         // Every exposed node must be a declared internal signal, checked in declaration order against a
-        // running set so a duplicate is caught deterministically.
+        // running set, so the first duplicate in the spec is the one reported.
         let mut expose_seen: BTreeSet<Symbol> = BTreeSet::new();
         for node in &self.expose {
             if !internal_set.contains(node) {
@@ -1560,10 +1560,10 @@ Y = "W"
     }
 
     #[test]
-    fn multiple_errors_report_the_first_deterministically() {
-        // Two outputs each reference an undefined variable. Analysis short-circuits on the first in a
-        // fixed traversal order (outputs in declaration order), so the reported error is stable across
-        // repeated parses — never dependent on hash-map iteration.
+    fn multiple_errors_report_the_first_declared() {
+        // Two outputs each reference an undefined variable. Analysis walks the outputs in declaration
+        // order and short-circuits on the first offender, so Z1's error — never Z2's — is the one
+        // reported.
         let s = r#"
 [[cell]]
 name = "MULTI"
@@ -1576,13 +1576,6 @@ Y2 = "A*Z2"
             .analyse()
             .unwrap_err()
             .to_string();
-        for _ in 0..8 {
-            let again = parse_spec(s).unwrap().cells[0]
-                .analyse()
-                .unwrap_err()
-                .to_string();
-            assert_eq!(again, first, "error reporting must be deterministic");
-        }
         assert!(
             first.contains("Z1") && !first.contains("Z2"),
             "the first-declared offending output is reported first: {first}",

@@ -30,7 +30,7 @@
 //! `classify` is a **post-exploration** read-only pass over the shared [`Machine`]: it re-walks the
 //! exploration with `machine::toggle`/`machine::settle`, mirroring [`super::arcs::derive`]'s
 //! per-node walk, and only ADDS an edge annotation. It never re-derives the exploration, the
-//! prevectors or the hazards — those stay byte-identical whether the annotation is on or off.
+//! prevectors or the hazards — those are the same records whether the annotation is on or off.
 //!
 //! # The mechanism
 //!
