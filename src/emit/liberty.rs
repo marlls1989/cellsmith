@@ -1187,6 +1187,37 @@ Q = "CLK*M + !CLK*Q"
     }
 
     #[test]
+    fn no_edge_collapse_flips_dff_liberty_between_edge_and_level_forms() {
+        // `analyse_both` re-analyses the same DFF spec with `no_edge_collapse` forced true -- the
+        // same code path the `--no-edge-collapse` CLI flag exercises -- so the flip between the
+        // collapsed edge-register Liberty form (a `R` token statetable row, no `pin (M)`) and the
+        // two-latch level form (`pin (M)` with `internal_node : "M"`, no edge token) needs no
+        // process run.
+        const DFF: &str = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+        let AnalysedPair { default, forced } = analyse_both(DFF);
+
+        let frag_default = fragment(&default);
+        assert!(frag_default.contains("statetable (\"CLK D\", \"Q_st\")"));
+        assert!(frag_default.split_whitespace().any(|t| t == "R"));
+        assert!(!frag_default.contains("pin (M)"));
+
+        let frag_forced = fragment(&forced);
+        assert!(frag_forced.contains("statetable (\"CLK D\", \"Q_st M\")"));
+        assert!(frag_forced.contains("pin (M)"));
+        assert!(frag_forced.contains("internal_node : \"M\";"));
+        assert!(!frag_forced.split_whitespace().any(|t| t == "R"));
+    }
+
+    #[test]
     fn dff_opt_out_restores_pin_m_internal_node_via_either_switch() {
         // The two-latch DFF, opted out directly (`no_edge_collapse = true` in the TOML) versus opted
         // out via the CLI-flag-equivalent blanket mutation over the whole spec: both switches restore

@@ -1296,9 +1296,11 @@ mod tests {
     use std::collections::{BTreeSet, HashSet};
 
     use super::*;
-    use crate::emit::block::Description;
+    use crate::emit::block::{Description, Transition};
     use crate::emit::tcl::tests::{AwkwardVoltage, AWKWARD_VOLTAGES};
-    use crate::model::{analyse_both, analyse_one as analyse, AnalysedPair};
+    use crate::model::{
+        analyse_both, analyse_one as analyse, parse_spec, AnalysedPair, ArcClasses,
+    };
 
     /// A cell's deck as the text the sink writes: the cell is rendered, then its blocks written in
     /// turn.
@@ -5122,5 +5124,481 @@ Q = "CLKB*M + !CLKB*Q"
             distinct.len(),
             "a cell states each block once:\n{tcl}"
         );
+    }
+
+    // ---- Class selection at the value level: which blocks carry a condition, and which stay put ----
+
+    /// What a `-when` assertion reads off one MEASURED block — a `define_arc` under any of its nine
+    /// `-type`s: the condition the block was characterised under, and the columns it drives. A
+    /// `define_leakage` measures nothing and its condition is the whole of what it states rather than an
+    /// option on top, so it has no reading here.
+    struct Measured<'a> {
+        when: Option<&'a BoolExpr>,
+        columns: &'a [Column],
+    }
+
+    /// The measured reading of `block`, or `None` for a `define_leakage` in either of its two forms.
+    fn measured(block: &Block) -> Option<Measured<'_>> {
+        match block {
+            Block::Async(t) | Block::Edge(t) | Block::Combinational(t) => Some(Measured {
+                when: t.when.as_ref(),
+                columns: &t.columns,
+            }),
+            Block::Hidden(t) => Some(Measured {
+                when: t.when.as_ref(),
+                columns: &t.columns,
+            }),
+            Block::Setup(s) | Block::Hold(s) | Block::NonSeqSetup(s) | Block::NonSeqHold(s) => {
+                Some(Measured {
+                    when: s.when.as_ref(),
+                    columns: &s.columns,
+                })
+            }
+            Block::MinPulseWidth(p) => Some(Measured {
+                when: p.when.as_ref(),
+                columns: &p.columns,
+            }),
+            Block::LeakageHeld(_) | Block::LeakageResting(_) => None,
+        }
+    }
+
+    /// The transition `block` measures, or `None` where it measures none — a hidden toggle, a constraint
+    /// or a rest state.
+    fn transition_of(block: &Block) -> Option<&Transition> {
+        match block {
+            Block::Async(t) | Block::Edge(t) | Block::Combinational(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// How many times each block was stated. Two emissions of one cell are compared as MULTISETS of
+    /// blocks, the order they come out in carrying no meaning; a block stated twice — once bare, once
+    /// carrying its condition — counts twice.
+    fn counts<'a>(blocks: impl IntoIterator<Item = &'a Block>) -> HashMap<&'a Block, usize> {
+        let mut stated: HashMap<&Block, usize> = HashMap::new();
+        for block in blocks {
+            *stated.entry(block).or_default() += 1;
+        }
+        stated
+    }
+
+    /// The blocks `cell` states at the emitter's defaults, under whatever class selection its own `when`
+    /// set carries. Re-emitting ONE analysed cell under several selections is what the tests below
+    /// compare: `cell_arcs` is deterministic given one [`AnalysedCell`], so a full-block comparison
+    /// across those emissions holds, where two separate analyses may legitimately pick different
+    /// representatives.
+    fn stated(cell: &AnalysedCell) -> Vec<Block> {
+        cell_arcs(cell, ArcsTclOptions::default()).blocks
+    }
+
+    /// The pin edge `name` makes, for reading a block's `related`/`output` against.
+    fn pin_edge(name: &str, edge: Edge) -> PinEdge {
+        PinEdge {
+            pin: Symbol::from(name),
+            edge,
+        }
+    }
+
+    /// The values `columns` drive, in `-pinlist` order — the `-vector` as the block holds it.
+    fn column_values(columns: &[Column]) -> Vec<VectorValue> {
+        columns.iter().map(|c| c.value).collect()
+    }
+
+    /// The column a measured block carries for `name`.
+    fn column_named<'a>(block: &'a Block, name: &str) -> &'a Column {
+        measured(block)
+            .unwrap_or_else(|| panic!("a measured block carries columns:\n{block}"))
+            .columns
+            .iter()
+            .find(|c| c.name.as_str() == name)
+            .unwrap_or_else(|| panic!("the block carries a {name} column:\n{block}"))
+    }
+
+    /// The default run states ONE unconditioned block per transition — a related pin's edge driving an
+    /// output pin's edge under one `-type` — however many side-input contexts the transition was measured
+    /// from. `OA22` fires its `A`-rise → `Y`-rise transition from three of them; one block comes out.
+    #[test]
+    fn default_run_emits_one_general_block_per_transition() {
+        /// One transition a block states: the variant it came out under — Liberate's `-type`, which the
+        /// variant IS — and the two pin edges the measurement runs between. Two blocks agreeing on all
+        /// three are one transition stated twice.
+        #[derive(PartialEq, Eq, Hash)]
+        struct EmittedTransition {
+            kind: std::mem::Discriminant<Block>,
+            related: PinEdge,
+            output: PinEdge,
+        }
+
+        let cell = analyse(OA22);
+        let blocks = stated(&cell);
+        for block in blocks.iter().filter(|b| !matches!(b, Block::Hidden(_))) {
+            if let Some(m) = measured(block) {
+                assert!(
+                    m.when.is_none(),
+                    "the default run conditions nothing:\n{block}"
+                );
+            }
+        }
+
+        let mut seen: HashSet<EmittedTransition> = HashSet::new();
+        for block in &blocks {
+            let Some(t) = transition_of(block) else {
+                continue;
+            };
+            assert!(
+                seen.insert(EmittedTransition {
+                    kind: std::mem::discriminant(block),
+                    related: t.related.clone(),
+                    output: t.output.clone(),
+                }),
+                "a transition is stated twice:\n{block}"
+            );
+        }
+        assert!(!seen.is_empty(), "OA22 states transition arcs");
+        assert!(
+            blocks.iter().any(|b| matches!(b, Block::Combinational(t)
+                if t.related == pin_edge("A", Edge::Rise) && t.output == pin_edge("Y", Edge::Rise))),
+            "the A-rise → Y-rise transition is stated"
+        );
+    }
+
+    #[test]
+    fn default_run_emits_no_arc_when_lines() {
+        let mut cell = analyse(TWO);
+        let default = stated(&cell);
+        for block in &default {
+            if let Some(m) = measured(block) {
+                assert!(
+                    m.when.is_none(),
+                    "the default run conditions nothing:\n{block}"
+                );
+            }
+        }
+        // The conditioned blocks are added ON TOP of the always-stated general arcs, so selecting every
+        // class states strictly more blocks than the default run.
+        cell.when = ArcClasses::ALL;
+        let selected = stated(&cell);
+        assert!(
+            selected.len() > default.len(),
+            "selecting every class adds blocks: {} not > {}",
+            selected.len(),
+            default.len()
+        );
+    }
+
+    #[test]
+    fn bare_when_emits_arc_when_lines() {
+        let mut cell = analyse(TWO);
+        let default = stated(&cell);
+        cell.when = ArcClasses::ALL;
+        let selected = stated(&cell);
+        assert!(
+            selected
+                .iter()
+                .filter_map(measured)
+                .any(|m| m.when.is_some()),
+            "selecting every class conditions some block"
+        );
+        // The general arcs stay put: what carries no condition under the selection is, block for block,
+        // what the default run stated.
+        assert_eq!(
+            counts(
+                selected
+                    .iter()
+                    .filter(|b| measured(b).is_some_and(|m| m.when.is_none()))
+            ),
+            counts(default.iter().filter(|b| measured(b).is_some())),
+            "the general arcs are the default run's, block for block"
+        );
+    }
+
+    #[test]
+    fn when_hidden_emits_only_hidden_when_lines() {
+        let mut cell = analyse(TWO);
+        let default = stated(&cell);
+        cell.when = [ArcClass::Hidden].into_iter().collect();
+        let selected = stated(&cell);
+        let conditioned = |blocks: &[Block]| {
+            blocks
+                .iter()
+                .filter(|b| matches!(b, Block::Hidden(t) if t.when.is_some()))
+                .count()
+        };
+        let general = |blocks: &[Block]| {
+            blocks
+                .iter()
+                .filter(|b| matches!(b, Block::Hidden(t) if t.when.is_none()))
+                .count()
+        };
+        assert!(
+            conditioned(&selected) >= 1,
+            "the hidden class carries its conditions"
+        );
+        // The hidden general blocks are stated whatever the selection, so the class adds its conditioned
+        // blocks without dropping any of them.
+        assert_eq!(
+            general(&selected),
+            general(&default),
+            "the hidden general blocks are still stated"
+        );
+        for block in selected.iter().filter(|b| !matches!(b, Block::Hidden(_))) {
+            if let Some(m) = measured(block) {
+                assert!(
+                    m.when.is_none(),
+                    "only the selected class is conditioned:\n{block}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn when_transition_emits_only_transition_when_lines() {
+        let mut cell = analyse(TWO);
+        let default = stated(&cell);
+        cell.when = [ArcClass::Transition].into_iter().collect();
+        let selected = stated(&cell);
+        let conditioned = |blocks: &[Block]| {
+            blocks
+                .iter()
+                .filter_map(transition_of)
+                .filter(|t| t.when.is_some())
+                .count()
+        };
+        let general = |blocks: &[Block]| {
+            blocks
+                .iter()
+                .filter_map(transition_of)
+                .filter(|t| t.when.is_none())
+                .count()
+        };
+        assert!(
+            conditioned(&selected) >= 1,
+            "the transition class carries its conditions"
+        );
+        assert_eq!(
+            general(&selected),
+            general(&default),
+            "the transition general blocks are still stated"
+        );
+        for block in selected.iter().filter(|b| transition_of(b).is_none()) {
+            if let Some(m) = measured(block) {
+                assert!(
+                    m.when.is_none(),
+                    "only the selected class is conditioned:\n{block}"
+                );
+            }
+        }
+    }
+
+    /// Selecting the two classes the cell has arcs in is the blanket selection: `TWO` opts into no
+    /// constraint arcs, so the third class has nothing to condition and the two emissions state the same
+    /// blocks.
+    #[test]
+    fn when_hidden_and_transition_equals_bare_when() {
+        let mut cell = analyse(TWO);
+        cell.when = [ArcClass::Hidden, ArcClass::Transition]
+            .into_iter()
+            .collect();
+        let both = stated(&cell);
+        cell.when = ArcClasses::ALL;
+        let bare = stated(&cell);
+        assert_eq!(
+            counts(&both),
+            counts(&bare),
+            "selecting both classes states what the blanket selection does"
+        );
+    }
+
+    /// With the transition class selected, the arc that is also its transition's general representative
+    /// is stated twice — once bare, once carrying its own condition — so one `-vector` comes out under
+    /// two blocks. `TWO`'s related pin is not its only input, so that representative renders a condition
+    /// rather than being skipped for want of one.
+    #[test]
+    fn when_transition_duplicates_a_vector_with_and_without_when() {
+        let mut cell = analyse(TWO);
+        cell.when = [ArcClass::Transition].into_iter().collect();
+        let blocks = stated(&cell);
+        let (conditioned, general): (Vec<&Transition>, Vec<&Transition>) = blocks
+            .iter()
+            .filter_map(transition_of)
+            .partition(|t| t.when.is_some());
+        assert!(
+            conditioned.iter().any(|c| general
+                .iter()
+                .any(|g| column_values(&g.columns) == column_values(&c.columns))),
+            "one transition -vector is stated both with and without its condition"
+        );
+    }
+
+    /// [`when_transition_duplicates_a_vector_with_and_without_when`] for the hidden class.
+    #[test]
+    fn when_hidden_duplicates_a_vector_with_and_without_when() {
+        let mut cell = analyse(TWO);
+        cell.when = [ArcClass::Hidden].into_iter().collect();
+        let blocks = stated(&cell);
+        let (conditioned, general): (Vec<&Toggle>, Vec<&Toggle>) = blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::Hidden(t) => Some(t),
+                _ => None,
+            })
+            .partition(|t| t.when.is_some());
+        assert!(
+            conditioned.iter().any(|c| general
+                .iter()
+                .any(|g| column_values(&g.columns) == column_values(&c.columns))),
+            "one hidden -vector is stated both with and without its condition"
+        );
+    }
+
+    /// The blanket selection adds and rewrites nothing: every block the default run stated is stated at
+    /// least as often under the selection.
+    #[test]
+    fn when_output_contains_every_default_arc_block() {
+        let mut cell = analyse(TWO);
+        let default = stated(&cell);
+        cell.when = ArcClasses::ALL;
+        let selected = stated(&cell);
+        let under_when = counts(&selected);
+        for (block, n) in counts(&default) {
+            assert!(
+                under_when.get(block).is_some_and(|times| *times >= n),
+                "the selection keeps every default block:\n{block}"
+            );
+        }
+    }
+
+    /// A 3-cell spec whose every cell holds state — a C-element, a mutual-exclusion element and a
+    /// master-slave DFF — each naming the voltages its `-ic` columns start at and opting into constraint
+    /// arcs, so one spec reaches every `-ic` emission site under overridden levels. A level is a Tcl
+    /// value fragment written verbatim, so `$VDDH` reaches Liberate as a variable reference.
+    const MULTI_LEVELS: &str = r#"
+[[cell]]
+name = "C2"
+inputs = ["A", "B"]
+constraint_arcs = true
+logic_low = "GND"
+logic_high = "$VDDH"
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+
+[[cell]]
+name = "MUT"
+inputs = ["A", "B"]
+constraint_arcs = true
+logic_low = "GND"
+logic_high = "$VDDH"
+[cell.outputs]
+Qa = "!Qb * A"
+Qb = "!Qa * B"
+
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+constraint_arcs = true
+logic_low = "GND"
+logic_high = "$VDDH"
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+
+    #[test]
+    fn logic_level_overrides_reach_the_ic_lines() {
+        // Every cell of the spec holds state, so every column of every measured block states the voltage
+        // it starts at, and the two overrides are the only levels it can hold.
+        for spec in &parse_spec(MULTI_LEVELS).unwrap().cells {
+            let cell = spec.analyse().unwrap();
+            let blocks = stated(&cell);
+            let mut columns = 0;
+            for block in &blocks {
+                let Some(m) = measured(block) else { continue };
+                for column in m.columns {
+                    let Some(IcColumn(level)) = &column.ic else {
+                        panic!("a state-holding cell states every column's start voltage:\n{block}")
+                    };
+                    assert!(
+                        level == "GND" || level == "$VDDH",
+                        "the overrides are the only start voltages, got {level:?} in:\n{block}"
+                    );
+                    columns += 1;
+                }
+            }
+            assert!(columns > 0, "the cell states measured blocks");
+        }
+    }
+
+    /// The worked C-element written around its internal node — `QN = !(A*B + Q*(A+B))`, `Q = !QN` — with
+    /// `QN` exposed and whatever cell-level keys `extra` adds. `QN` is no pin of the cell, so the arcs
+    /// are the only place its behaviour is stated: a `-pinlist` column of its own, the voltage `-ic`
+    /// starts it at, and the value `-vector` leaves it at.
+    fn exposed(extra: &str) -> String {
+        format!(
+            r#"
+[[cell]]
+name = "C2EXP"
+inputs = ["A", "B"]
+expose = ["QN"]
+{extra}[cell.internal]
+QN = "!(A*B + Q*(A+B))"
+[cell.outputs]
+Q = "!QN"
+"#
+        )
+    }
+
+    /// The `B`-rise → `Q`-rise block of [`exposed`], whichever emission it is read from.
+    fn b_rise_to_q_rise(blocks: &[Block]) -> &Block {
+        blocks
+            .iter()
+            .find(|b| {
+                matches!(b, Block::Combinational(t)
+                if t.related == pin_edge("B", Edge::Rise) && t.output == pin_edge("Q", Edge::Rise))
+            })
+            .expect("the B-rise → Q-rise block is stated")
+    }
+
+    #[test]
+    fn an_exposed_internal_node_reaches_the_pinlist_vector_and_ic() {
+        let cell = analyse(&exposed(""));
+        let blocks = stated(&cell);
+        assert!(!blocks.is_empty(), "the spec states blocks");
+        for block in &blocks {
+            let Some(m) = measured(block) else { continue };
+            let names: Vec<&str> = m.columns.iter().map(|c| c.name.as_str()).collect();
+            assert_eq!(
+                names,
+                ["A", "B", "QN", "Q"],
+                "the exposed node takes a column between the inputs and the outputs:\n{block}"
+            );
+        }
+
+        // `B` rising out of `{A=1, B=0}` drives `Q` up and takes `QN` down with it in the cell — but the
+        // vector never forces a node the cell drives, so `QN`'s column is left unstated and `-ic` gives
+        // it its own start voltage.
+        let qn = column_named(b_rise_to_q_rise(&blocks), "QN");
+        assert_eq!(qn.value, VectorValue::Unstated);
+        assert_eq!(qn.ic, Some(IcColumn("$VDD".to_owned())));
+
+        // `logic_high` renames the high level, and the exposed column's start condition is written in the
+        // new name like every other column's.
+        let overridden = analyse(&exposed("logic_high = \"$VDDH\"\n"));
+        let blocks = stated(&overridden);
+        assert_eq!(
+            column_named(b_rise_to_q_rise(&blocks), "QN").ic,
+            Some(IcColumn("$VDDH".to_owned()))
+        );
+        for block in &blocks {
+            let Some(m) = measured(block) else { continue };
+            for column in m.columns {
+                assert_ne!(
+                    column.ic,
+                    Some(IcColumn("$VDD".to_owned())),
+                    "the override is the only high level stated:\n{block}"
+                );
+            }
+        }
     }
 }

@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, Parser};
 use espresso_logic::{Minterm, Symbol};
-use liberty_parser::liberty::Group;
+use liberty_parser::liberty::{Group, Liberty};
 use rayon::prelude::*;
 
 use cellsmith::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, CellArcs, Deck};
@@ -23,7 +23,7 @@ use cellsmith::emit::verilog::{cell_verilog, Item, Verilog};
 use cellsmith::logic::arcs::PinEdge;
 use cellsmith::logic::hazard::{Cause, Hazard, Outcome};
 use cellsmith::logic::machine::ExplorationBudget;
-use cellsmith::model::{parse_spec, AnalysedCell, ArcClass, ArcClasses, ConstraintPins};
+use cellsmith::model::{parse_spec, AnalysedCell, ArcClass, ArcClasses, ConstraintPins, Spec};
 use cellsmith::report::{self, Commas, State};
 
 /// Generate Cadence Liberate transition arcs, a behavioural Verilog model and a
@@ -176,6 +176,62 @@ fn main() {
 fn run(cli: Cli) -> io::Result<()> {
     let src = read_spec(&cli.spec)?;
     let mut spec = parse_spec(&src)?;
+    apply_overrides(&mut spec, &cli);
+    let budget = ExplorationBudget {
+        candidates: cli.max_candidates,
+        states: cli.max_states,
+    };
+    // A cell whose exploration stopped at a budget ceiling has no arcs, hazards, leakage states or
+    // constraints — emitting its artifacts anyway would present that silence as the cell's behaviour —
+    // so the analysis fails at an over-budget cell, whichever the parallel analysis reaches, and
+    // nothing is written.
+    let cells: Vec<AnalysedCell> = spec.analyse_with(&budget)?;
+
+    let base = cli.name.unwrap_or_else(|| base_name(&cli.spec));
+    let arc_opts = ArcsTclOptions {
+        emit_internal: !cli.no_internal,
+        emit_leakage: !cli.no_leakage,
+    };
+    // Rendered before the diagnostics, because one of them reports what the rendering could not say.
+    let artifacts = artifacts(&cells, &base, arc_opts);
+
+    // Buffered, because a warning reaches the handle as the many small writes composing it makes rather
+    // than as one string, and stderr itself is unbuffered.
+    let mut err = io::BufWriter::new(io::stderr().lock());
+    diagnostics(&mut err, &cells, &artifacts.rendered)?;
+    // The report is complete: flush it and release the handle before the artifacts are written, each of
+    // which reports its path on this same stream.
+    err.flush()?;
+    drop(err);
+
+    // Constraints avoid a hazard already reported by the warnings above, so the constraint arcs are
+    // emitted (below, gated by the per-cell opt-in) without a separate diagnostic.
+
+    // Where the artifacts go: one file per artifact under a directory, or all of them to standard
+    // output behind banners. `--stdout` names the destination outright, so a directory given beside it
+    // has nothing left to say.
+    let destination = if cli.stdout {
+        PathArg::StdStream
+    } else {
+        PathArg::File(cli.outdir)
+    };
+    match destination {
+        PathArg::StdStream => {
+            // Buffered, because an artifact reaches the handle as the many small writes its own
+            // `Display` makes rather than as one string.
+            let mut out = io::BufWriter::new(io::stdout().lock());
+            emit_stdout(&mut out, &artifacts, cli.no_cells)?;
+            out.flush()?;
+        }
+        PathArg::File(dir) => emit_files(&dir, &base, &artifacts, cli.no_cells)?,
+    }
+    Ok(())
+}
+
+/// Fold the command line's cell-level options into every cell of `spec`. Each is the CLI face of a key
+/// the spec writes per cell, and folding them in here leaves one selection per cell for the analysis and
+/// the emitters to read.
+fn apply_overrides(spec: &mut Spec, cli: &Cli) {
     // `--constraints` is a blanket opt-in: it asks every cell for constraint arcs on every input pin,
     // exactly as if each had declared `constraint_arcs = true`. Which pins one cell wants is the spec's
     // `constraint_arcs` to say, and the flag subsumes any such selection rather than narrowing it.
@@ -210,28 +266,47 @@ fn run(cli: Cli) -> io::Result<()> {
             c.logic_high.get_or_insert_with(|| v.clone());
         }
     }
-    let budget = ExplorationBudget {
-        candidates: cli.max_candidates,
-        states: cli.max_states,
-    };
-    // A cell whose exploration stopped at a budget ceiling has no arcs, hazards, leakage states or
-    // constraints — emitting its artifacts anyway would present that silence as the cell's behaviour —
-    // so the analysis fails at an over-budget cell, whichever the parallel analysis reaches, and
-    // nothing is written.
-    let cells: Vec<AnalysedCell> = spec.analyse_with(&budget)?;
+}
 
-    // Rendered before the diagnostics, because one of them reports what the rendering could not say.
-    let arc_opts = ArcsTclOptions {
-        emit_internal: !cli.no_internal,
-        emit_leakage: !cli.no_leakage,
-    };
-    let rendered: Vec<CellArcs> = cells.par_iter().map(|c| cell_arcs(c, arc_opts)).collect();
+/// Everything one run emits, rendered as values in cell order.
+struct Artifacts<'a> {
+    rendered: Vec<CellArcs>,
+    model: Vec<Item<'a>>,
+    liberty: Liberty,
+    declarations: Vec<DefineCell>,
+}
 
-    // Each warning is one contiguous block of lines (a header plus its indented detail fields), written
-    // as it is composed into the one locked handle; a blank line before every warning but the first
-    // keeps the blocks reading as units. Buffered, because a warning reaches the handle as the many
-    // small writes composing it makes rather than as one string, and stderr itself is unbuffered.
-    let mut err = io::BufWriter::new(io::stderr().lock());
+/// Render a run's artifacts from the analysed cells, under the arc emitter's `opts` and with `base`
+/// naming the Liberty library. Nothing is written here: each artifact is the values it is made of, and
+/// the text is composed at the writer it goes out on.
+fn artifacts<'a>(cells: &'a [AnalysedCell], base: &str, opts: ArcsTclOptions) -> Artifacts<'a> {
+    // Each artifact's values are stated for all the cells at once and flattened in cell order.
+    let rendered: Vec<CellArcs> = cells.par_iter().map(|c| cell_arcs(c, opts)).collect();
+    let model: Vec<Item> = cells.par_iter().flat_map_iter(cell_verilog).collect();
+    let groups: Vec<Group> = cells.par_iter().flat_map_iter(cell_liberty).collect();
+    // A Liberty document ends at the library group's closing brace, so the newline that ends the last
+    // line of the artifact is the writer's: each sink states it alongside the document.
+    let liberty = library_liberty(base, groups);
+    let declarations: Vec<DefineCell> = cells.par_iter().flat_map_iter(cell_define_cell).collect();
+    Artifacts {
+        rendered,
+        model,
+        liberty,
+        declarations,
+    }
+}
+
+/// Report what the analysis found and what the rendering could not state, as the warnings a run writes
+/// into `w`.
+///
+/// Each warning is one contiguous block of lines (a header plus its indented detail fields), written as
+/// it is composed into the one handle; a blank line before every warning but the first keeps the blocks
+/// reading as units.
+fn diagnostics(
+    w: &mut impl io::Write,
+    cells: &[AnalysedCell],
+    rendered: &[CellArcs],
+) -> io::Result<()> {
     let mut warned = false;
 
     // Diagnose the cell's detected hazards, one warning per OCCASION — one cause, which is a transition
@@ -240,16 +315,16 @@ fn run(cli: Cli) -> io::Result<()> {
     // names each outcome beside the nodes it puts at risk. The pass reads the ARC VIEW, the same
     // analysis `cell_arcs` renders: it is that view's hazards the emitted constraint arcs come from, so
     // reporting the other view's would describe arcs the run never wrote.
-    for c in &cells {
+    for c in cells {
         let mut occasions: HashMap<Occasion, Vec<&Hazard>> = HashMap::new();
         for a in &c.arc_view().hazards {
             occasions.entry(Occasion::of(a)).or_default().push(a);
         }
         for (occasion, records) in &occasions {
             if std::mem::replace(&mut warned, true) {
-                writeln!(err)?;
+                writeln!(w)?;
             }
-            hazard_warning(&mut err, c, occasion, records)?;
+            hazard_warning(w, c, occasion, records)?;
         }
     }
 
@@ -257,15 +332,15 @@ fn run(cli: Cli) -> io::Result<()> {
     // measures from, and its columns reach exactly its `-pinlist`, so a firing that differs only in an
     // internal node with no column renders a block already emitted. Exposing those nodes is the remedy,
     // which is why the warning names the state as well as the block.
-    for (c, r) in cells.iter().zip(&rendered) {
+    for (c, r) in cells.iter().zip(rendered) {
         if r.conflations.is_empty() {
             continue;
         }
         if std::mem::replace(&mut warned, true) {
-            writeln!(err)?;
+            writeln!(w)?;
         }
         writeln!(
-            err,
+            w,
             "cellsmith: warning: cell {:?}: {} block(s) conflate {} measurements: too few nodes exposed to express the cell state",
             c.repr_name(),
             r.conflations.len(),
@@ -284,60 +359,39 @@ fn run(cli: Cli) -> io::Result<()> {
                 label: "cell state",
                 value: s,
             }));
-            subblock(&mut err, "  - ", &fields)?;
+            subblock(w, "  - ", &fields)?;
         }
     }
-    // The report is complete: flush it and release the handle before the artifacts are written, each of
-    // which reports its path on this same stream.
-    err.flush()?;
-    drop(err);
+    Ok(())
+}
 
-    // Constraints avoid a hazard already reported by the warnings above, so the constraint arcs are
-    // emitted (below, gated by the per-cell opt-in) without a separate diagnostic.
+/// Write every artifact into `out` behind its own section banner, the whole run on the one stream.
+fn emit_stdout(out: &mut impl io::Write, a: &Artifacts, no_cells: bool) -> io::Result<()> {
+    banner(out, "arcs.tcl", &Deck(&a.rendered))?;
+    banner(out, "verilog", &Verilog(&a.model))?;
+    banner(out, "liberty", &format_args!("{}\n", a.liberty))?;
+    if !no_cells {
+        banner(out, "cells.tcl", &Declarations(&a.declarations))?;
+    }
+    Ok(())
+}
 
-    let base = cli.name.unwrap_or_else(|| base_name(&cli.spec));
-    // Each artifact's values are stated for all the cells at once and flattened in cell order; the text
-    // is made of them below, at the writer each artifact goes out on.
-    let arcs = Deck(&rendered);
-    let model: Vec<Item> = cells.par_iter().flat_map_iter(cell_verilog).collect();
-    let verilog = Verilog(&model);
-    let groups: Vec<Group> = cells.par_iter().flat_map_iter(cell_liberty).collect();
-    // A Liberty document ends at the library group's closing brace, so the newline that ends the last
-    // line of the artifact is the writer's: each sink below states it alongside the document.
-    let liberty = library_liberty(&base, groups);
-    let blocks: Vec<DefineCell> = cells.par_iter().flat_map_iter(cell_define_cell).collect();
-    let cells_tcl = Declarations(&blocks);
-
-    // Where the artifacts go: one file per artifact under a directory, or all of them to standard
-    // output behind banners. `--stdout` names the destination outright, so a directory given beside it
-    // has nothing left to say.
-    let destination = if cli.stdout {
-        PathArg::StdStream
-    } else {
-        PathArg::File(cli.outdir)
-    };
-    match destination {
-        PathArg::StdStream => {
-            // Buffered, because an artifact reaches the handle as the many small writes its own
-            // `Display` makes rather than as one string.
-            let mut out = io::BufWriter::new(io::stdout().lock());
-            banner(&mut out, "arcs.tcl", &arcs)?;
-            banner(&mut out, "verilog", &verilog)?;
-            banner(&mut out, "liberty", &format_args!("{liberty}\n"))?;
-            if !cli.no_cells {
-                banner(&mut out, "cells.tcl", &cells_tcl)?;
-            }
-            out.flush()?;
-        }
-        PathArg::File(dir) => {
-            fs::create_dir_all(&dir)?;
-            write_file(&dir, &format!("{base}_arcs.tcl"), &arcs)?;
-            write_file(&dir, &format!("{base}.v"), &verilog)?;
-            write_file(&dir, &format!("{base}.lib"), &format_args!("{liberty}\n"))?;
-            if !cli.no_cells {
-                write_file(&dir, &format!("{base}_cells.tcl"), &cells_tcl)?;
-            }
-        }
+/// Write every artifact into a file of its own under `dir`, each named from `base`.
+fn emit_files(dir: &Path, base: &str, a: &Artifacts, no_cells: bool) -> io::Result<()> {
+    fs::create_dir_all(dir)?;
+    write_file(dir, &format!("{base}_arcs.tcl"), &Deck(&a.rendered))?;
+    write_file(dir, &format!("{base}.v"), &Verilog(&a.model))?;
+    write_file(
+        dir,
+        &format!("{base}.lib"),
+        &format_args!("{}\n", a.liberty),
+    )?;
+    if !no_cells {
+        write_file(
+            dir,
+            &format!("{base}_cells.tcl"),
+            &Declarations(&a.declarations),
+        )?;
     }
     Ok(())
 }
@@ -662,6 +716,8 @@ mod tests {
     use super::*;
     use clap::Parser;
 
+    use cellsmith::emit::block::Block;
+
     /// The classes `args` select, parsed through the real CLI.
     fn when_classes(args: &[&str]) -> ArcClasses {
         let mut argv = vec!["cellsmith"];
@@ -743,6 +799,15 @@ mod tests {
         assert!(Cli::try_parse_from(["cellsmith", "--constraints", "D", "s.toml"]).is_err());
     }
 
+    /// `-` as the spec argument names the standard stream, which is where `read_spec` then reads the
+    /// source from. The routing is what is stated here; the read itself is `io::stdin`'s, and the file
+    /// arm is covered at [`read_spec_reads_a_file`].
+    #[test]
+    fn dash_names_the_standard_stream() {
+        let cli = Cli::try_parse_from(["cellsmith", "--stdout", "-"]).unwrap();
+        assert_eq!(cli.spec, PathArg::StdStream);
+    }
+
     #[test]
     fn cli_constraints_selects_every_pin_over_the_cells_own() {
         let mut spec = parse_spec(
@@ -757,11 +822,7 @@ Y = "A*B"
         )
         .unwrap();
         let cli = Cli::try_parse_from(["cellsmith", "--constraints", "s.toml"]).unwrap();
-        if cli.constraints {
-            for c in &mut spec.cells {
-                c.constraint_arcs = ConstraintPins::All;
-            }
-        }
+        apply_overrides(&mut spec, &cli);
         assert_eq!(
             spec.cells[0].constraint_arcs,
             ConstraintPins::All,
@@ -783,12 +844,34 @@ Y = "A"
         )
         .unwrap();
         let cli = Cli::try_parse_from(["cellsmith", "--logic-high=$VDD", "s.toml"]).unwrap();
-        if let Some(v) = &cli.logic_high {
-            for c in &mut spec.cells {
-                c.logic_high.get_or_insert_with(|| v.clone());
-            }
-        }
+        apply_overrides(&mut spec, &cli);
         assert_eq!(spec.cells[0].logic_high.as_deref(), Some("$VDDH"));
+    }
+
+    #[test]
+    fn cli_when_unions_into_each_cells_own() {
+        let mut spec = parse_spec(
+            r#"
+[[cell]]
+name = "X"
+inputs = ["A", "B"]
+when = "transition"
+[cell.outputs]
+Y = "A*B"
+"#,
+        )
+        .unwrap();
+        let cli = Cli::try_parse_from(["cellsmith", "--when=hidden", "s.toml"]).unwrap();
+        apply_overrides(&mut spec, &cli);
+        let when = spec.cells[0].when;
+        assert!(
+            when.contains(ArcClass::Transition),
+            "the cell keeps the class it selected itself",
+        );
+        assert!(
+            when.contains(ArcClass::Hidden),
+            "the CLI class is added to it",
+        );
     }
 
     #[test]
@@ -823,5 +906,363 @@ Y = "A"
     #[test]
     fn read_spec_errors_on_a_missing_path() {
         assert!(read_spec(&PathArg::File("/no/such/cellsmith/spec.toml".into())).is_err());
+    }
+
+    const C2: &str = r#"
+[[cell]]
+name = "C2"
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+"#;
+
+    /// A unique scratch directory for one test, removed by the caller.
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("cellsmith_cli_{tag}_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn stdout_mode_emits_all_four_banners() {
+        let cells = parse_spec(C2)
+            .unwrap()
+            .analyse_with(&ExplorationBudget::default())
+            .unwrap();
+        let a = artifacts(&cells, "cells", ArcsTclOptions::default());
+
+        let mut out = Vec::new();
+        emit_stdout(&mut out, &a, false).unwrap();
+        let stdout = String::from_utf8(out).unwrap();
+
+        assert!(stdout.contains("// ===== cellsmith arcs.tcl ====="));
+        assert!(stdout.contains("// ===== cellsmith verilog ====="));
+        assert!(stdout.contains("// ===== cellsmith liberty ====="));
+        assert!(stdout.contains("// ===== cellsmith cells.tcl ====="));
+        assert!(stdout.contains("define_arc"));
+    }
+
+    #[test]
+    fn file_mode_writes_the_four_artifacts() {
+        let dir = scratch_dir("file");
+        let spec = dir.join("cells.toml");
+        fs::write(&spec, C2).unwrap();
+        let outdir = dir.join("out");
+
+        let cli = Cli::try_parse_from([
+            "cellsmith",
+            "--outdir",
+            outdir.to_str().unwrap(),
+            "--name",
+            "cli",
+            spec.to_str().unwrap(),
+        ])
+        .unwrap();
+        assert!(run(cli).is_ok());
+        assert!(outdir.join("cli_arcs.tcl").is_file());
+        assert!(outdir.join("cli.v").is_file());
+        assert!(outdir.join("cli.lib").is_file());
+        assert!(outdir.join("cli_cells.tcl").is_file());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    const MULTI: &str = r#"
+[[cell]]
+name = "C2"
+inputs = ["A", "B"]
+[cell.outputs]
+Q = "A*B + Q*(A+B)"
+
+[[cell]]
+name = "MUT"
+inputs = ["A", "B"]
+[cell.outputs]
+Qa = "!Qb * A"
+Qb = "!Qa * B"
+
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+
+    /// A 3-cell spec (C2, MUT, DFF) exercises the whole pipeline at once: every cell's three artifacts
+    /// land in the stdout stream, and both hazard classes (MUT's oscillation, C2/DFF's order-dependent
+    /// race) are diagnosed on the warning stream. Order-insensitive `contains` checks only — no
+    /// full-output compare.
+    #[test]
+    fn multi_cell_spec_covers_all_cells() {
+        let mut spec = parse_spec(MULTI).unwrap();
+        let cli =
+            Cli::try_parse_from(["cellsmith", "--constraints", "--stdout", "s.toml"]).unwrap();
+        apply_overrides(&mut spec, &cli);
+        let cells = spec.analyse_with(&ExplorationBudget::default()).unwrap();
+        let a = artifacts(&cells, "cells", ArcsTclOptions::default());
+
+        let mut warnings = Vec::new();
+        diagnostics(&mut warnings, &cells, &a.rendered).unwrap();
+        let warnings = String::from_utf8(warnings).unwrap();
+
+        let mut out = Vec::new();
+        emit_stdout(&mut out, &a, false).unwrap();
+        let stdout = String::from_utf8(out).unwrap();
+
+        assert!(stdout.contains("// ===== cellsmith arcs.tcl ====="));
+        assert!(stdout.contains("// ===== cellsmith verilog ====="));
+        assert!(stdout.contains("// ===== cellsmith liberty ====="));
+        assert!(stdout.contains("define_arc"));
+        assert!(stdout.contains("library ("));
+        for cell in ["C2", "MUT", "DFF"] {
+            assert!(stdout.contains(cell), "cell {cell} missing from stdout");
+        }
+
+        // A warning's header names the timing that causes the hazard, and its body one field per outcome
+        // observed there — so a race reads as too little separation between its two edges, a pulse-width
+        // hazard as a short pulse, and an oscillation is named where it was detected.
+        assert!(
+            warnings.contains("oscillation"),
+            "no oscillation warning:\n{warnings}"
+        );
+        assert!(
+            warnings.contains("too little separation between"),
+            "no race warning:\n{warnings}"
+        );
+        assert!(
+            warnings.contains("a short pulse on"),
+            "no width-dependent hazard warning:\n{warnings}"
+        );
+
+        assert!(
+            a.rendered
+                .iter()
+                .flat_map(|c| &c.blocks)
+                .any(|b| matches!(b, Block::MinPulseWidth(_))),
+            "no min_pulse_width constraint arcs",
+        );
+    }
+
+    /// The warnings a run of `spec` reports: every cell analysed under the default budget and its blocks
+    /// rendered, which is all the diagnostics read.
+    fn diagnosed(spec: &str) -> String {
+        let cells = parse_spec(spec)
+            .unwrap()
+            .analyse_with(&ExplorationBudget::default())
+            .unwrap();
+        let rendered: Vec<CellArcs> = cells
+            .iter()
+            .map(|c| cell_arcs(c, ArcsTclOptions::default()))
+            .collect();
+        let mut out = Vec::new();
+        diagnostics(&mut out, &cells, &rendered).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    /// One cause showing both outcomes is one warning entry. A mutex pulsed on `A↓` from `A*B` both
+    /// settles indeterminately and rings, and detection files a record per outcome, so the two reach the
+    /// report as a single entry whose body gives each outcome a field of its own, naming the nodes that
+    /// reading puts at risk and where it leaves them.
+    #[test]
+    fn both_outcomes_at_one_cause_are_one_entry() {
+        let warnings = diagnosed(MULTI);
+
+        // Warnings are separated by a blank line, so one block is one entry.
+        let entries: Vec<&str> = warnings
+            .split("\n\n")
+            .filter(|e| e.contains("cell \"MUT\"") && e.contains("a short pulse on A↓"))
+            .collect();
+        assert_eq!(entries.len(), 1, "MUT's A↓ pulse is one entry:\n{warnings}");
+        let entry = entries[0];
+        // Each outcome is a field of its own, over the nodes THAT reading decides: the mutex's coupled
+        // grants both ways round.
+        for outcome in ["indeterminate", "oscillation"] {
+            assert!(
+                entry
+                    .lines()
+                    .any(|l| l.trim_start().starts_with(&format!("{outcome}:"))
+                        && l.contains("{Qa, Qb}")),
+                "the entry names its {outcome} outcome over the nodes it decides:\n{entry}"
+            );
+        }
+        // The header states the cause and the state it acts from; the nodes belong to the outcomes, which
+        // need not agree on them.
+        let header = entry.lines().next().expect("an entry has a header");
+        assert!(
+            !header.contains("nodes"),
+            "the header carries no node set:\n{entry}"
+        );
+    }
+
+    /// The value of the `label:` field in the one hazard entry whose header contains `header`. Warnings
+    /// are separated by a blank line, so an entry is one block of the split.
+    fn hazard_field<'a>(warnings: &'a str, header: &str, label: &str) -> &'a str {
+        let entries: Vec<&str> = warnings
+            .split("\n\n")
+            .filter(|e| e.contains(header))
+            .collect();
+        assert_eq!(entries.len(), 1, "{header} names one entry:\n{warnings}");
+        let prefix = format!("{label}:");
+        entries[0]
+            .lines()
+            .find_map(|l| l.trim_start().strip_prefix(&prefix))
+            .unwrap_or_else(|| panic!("no {label} field:\n{}", entries[0]))
+            .trim_start()
+    }
+
+    /// Every hazard kind names where the machine lands, beside the nodes it attacks. That landing is
+    /// `Hazard::settled` — for a race the results of its two orders, alternatives joined by `or`; for a
+    /// pulse the two waypoints one wide enough walks through, in causal order and joined by `→`. Each
+    /// expectation below is derived from the cell's own equations, and all four kinds are covered:
+    /// race→indeterminate, race→oscillation, pulse→indeterminate and pulse→oscillation.
+    #[test]
+    fn every_hazard_kind_names_where_the_machine_lands() {
+        let warnings = diagnosed(MULTI);
+
+        // C2 (`Q = A*B + Q*(A+B)`) raced from `{A=1, B=0, Q=0}`: A↓ first leaves both inputs low, so Q stays
+        // 0 and the later B↑ cannot lift it; B↑ first co-asserts the pair, which drives Q to 1, and the
+        // later A↓ leaves Q holding on B. Either order is a legitimate settling, so the two read as
+        // alternatives.
+        assert_eq!(
+            hazard_field(
+                &warnings,
+                r#"cell "C2": too little separation between A↓ and B↑ causes a hazard at {A=1, B=0, Q=0}"#,
+                "indeterminate",
+            ),
+            "{Q} lands at {Q=0} or {Q=1}",
+        );
+
+        // MUT (`Qa = !Qb*A`, `Qb = !Qa*B`) with A↑ and B↑ separated from the idle state: whichever request
+        // rises first takes its grant and locks the other out, so the ring settles to one grant or the
+        // mirror.
+        assert_eq!(
+            hazard_field(
+                &warnings,
+                r#"cell "MUT": too little separation between A↑ and B↑ causes a hazard at {A=0, B=0, Qa=0, Qb=0}"#,
+                "oscillation",
+            ),
+            "{Qa, Qb} lands at {Qa=0, Qb=1} or {Qa=1, Qb=0}",
+        );
+
+        // DFF (`M = !CLK*D + CLK*M`, `Q = CLK*M + !CLK*Q`) pulsed low on CLK from `{CLK=1, D=1, Q=0, M=0}`:
+        // the opening CLK↓ opens the master and it takes D, resting at `{Q=0, M=1}`; the closing CLK↑ then
+        // hands that to the slave, leaving `{Q=1, M=1}`. The two waypoints differ, and the pulse walks the
+        // first to reach the second.
+        assert_eq!(
+            hazard_field(
+                &warnings,
+                r#"cell "DFF": a short pulse on CLK↓ causes a hazard at {CLK=1, D=1, Q=0, M=0}"#,
+                "indeterminate",
+            ),
+            "{Q, M} lands at {Q=0, M=1} → {Q=1, M=1}",
+        );
+
+        // MUT pulsed low on A from `{A=1, B=1, Qa=1, Qb=0}`: A↓ drops A's grant and B's, waiting, takes it;
+        // A↑ back finds B holding, so the machine is already where the closing edge leaves it and the two
+        // waypoints name one landing. Both outcomes are observed here and both state it.
+        for outcome in ["indeterminate", "oscillation"] {
+            assert_eq!(
+                hazard_field(
+                    &warnings,
+                    r#"cell "MUT": a short pulse on A↓ causes a hazard at {A=1, B=1, Qa=1, Qb=0}"#,
+                    outcome,
+                ),
+                "{Qa, Qb} lands at {Qa=0, Qb=1}",
+                "the {outcome} outcome states where a wide enough pulse lands",
+            );
+        }
+    }
+
+    /// A cell whose forced covers expand past the candidate ceiling: 10 inputs put 2^9 seed minterms in
+    /// each of Y's two cover cubes, so `--max-candidates 512` stops the exploration and a raised ceiling
+    /// lets the same cell through.
+    const WIDE: &str = r#"
+[[cell]]
+name = "WIDE"
+inputs = ["I0", "I1", "I2", "I3", "I4", "I5", "I6", "I7", "I8", "I9"]
+[cell.outputs]
+Y = "I0"
+"#;
+
+    #[test]
+    fn candidate_budget_overrun_errors_and_writes_nothing() {
+        let dir = scratch_dir("budget");
+        let spec = dir.join("wide.toml");
+        fs::write(&spec, WIDE).unwrap();
+        let outdir = dir.join("out");
+
+        let cli = Cli::try_parse_from([
+            "cellsmith",
+            "--outdir",
+            outdir.to_str().unwrap(),
+            "--max-candidates",
+            "512",
+            spec.to_str().unwrap(),
+        ])
+        .unwrap();
+        let err =
+            run(cli).expect_err("an exploration stopped at a budget is an error, not a warning");
+        assert!(
+            err.to_string().contains(
+                "cell \"WIDE\": exploration stopped at the candidate budget \
+                 (512 seed minterms) — raise it with --max-candidates"
+            ),
+            "missing the budget diagnostic:\n{err}"
+        );
+        // Nothing is emitted for a spec that could not be analysed: an arc-free artifact would read as
+        // the cell's behaviour.
+        let written: Vec<_> = fs::read_dir(&outdir)
+            .map(|d| d.map(|e| e.unwrap().path()).collect())
+            .unwrap_or_default();
+        assert!(written.is_empty(), "artifacts written anyway: {written:?}");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn raising_the_candidate_budget_analyses_the_same_cell() {
+        let dir = scratch_dir("budget_raised");
+        let spec = dir.join("wide.toml");
+        fs::write(&spec, WIDE).unwrap();
+        let outdir = dir.join("out");
+
+        let cli = Cli::try_parse_from([
+            "cellsmith",
+            "--outdir",
+            outdir.to_str().unwrap(),
+            "--max-candidates",
+            "4096",
+            spec.to_str().unwrap(),
+        ])
+        .unwrap();
+        assert!(run(cli).is_ok());
+        let arcs = fs::read_to_string(outdir.join("wide_arcs.tcl")).unwrap();
+        assert!(arcs.contains("WIDE"), "cell missing from the arcs:\n{arcs}");
+        assert!(
+            arcs.contains("define_arc"),
+            "the raised ceiling must let the arcs be derived:\n{arcs}"
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_bad_spec_is_an_error() {
+        let dir = scratch_dir("bad");
+        let spec = dir.join("bad.toml");
+        // Undefined variable Z in the output function: a hard analysis error.
+        fs::write(
+            &spec,
+            "[[cell]]\nname = \"X\"\ninputs = [\"A\"]\n[cell.outputs]\nY = \"A*Z\"\n",
+        )
+        .unwrap();
+
+        let cli = Cli::try_parse_from(["cellsmith", "--stdout", spec.to_str().unwrap()]).unwrap();
+        assert!(run(cli).is_err());
+
+        fs::remove_dir_all(&dir).ok();
     }
 }
