@@ -111,10 +111,10 @@ from the input the test controls.
 
 Where the parts of one output must correspond, that correspondence is itself a property and
 is asserted as one. The pin order a run produced is the same order in its `-pinlist`, its
-`-vector`'s characters and its `-ic`'s columns; Liberty's statetable rows are matched
-first-to-last. Neither fixes which order the run picks — the claim is that the parts agree
-with each other — so it holds for every output the tool is free to produce, and it needs no
-second run to state.
+`-vector`'s characters and its `-ic`'s columns; a Liberty statetable's rows carry their
+values in the order that table's own header declares its pin columns. Neither fixes which
+order the run picks — the claim is that the parts agree with each other — so it holds for
+every output the tool is free to produce, and it needs no second run to state.
 
 One relation between two runs does survive, because there the relation is the documented
 behaviour: where a switch is specified to change one named thing and nothing else, or two
