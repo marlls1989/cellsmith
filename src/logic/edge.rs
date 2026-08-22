@@ -3536,15 +3536,16 @@ GCLK = "CLK*EL"
     }
 
     /// PERMANENT guard on the CRITICAL INVARIANT: behavioural edge classification re-expresses
-    /// already-explored behaviour and must change ONLY `edge` — every other `AnalysedCell` field (the
-    /// exploration, prevector/vector and hazard outputs) is byte-for-byte identical whether classification
-    /// is on or off.
+    /// already-explored behaviour and must change ONLY `edge` — every other `AnalysedCell` field holds the
+    /// same records whether classification is on or off, compared by what identifies each record — the
+    /// state a record was measured at (`start`/`end`/`prevector`/`levels`) is a walk's own free
+    /// representative and is excluded, as each comparison below states.
     ///
     /// The invariant holds BY CONSTRUCTION: `classify` takes `&Machine` read-only, mutates nothing, and the
     /// annotation may carry emission-time derived registers (the read-gate factorisation) that are
     /// functions of already-explored state, never new state variables. This test additionally proves the
     /// flag-gating is PURE — when opted out (`no_edge_collapse`) the classify() call is skipped and the
-    /// annotation is the byte-identical Default, with every other field untouched. `BDET`/`DETP` exercise
+    /// annotation is the plain `Default`, with every other field untouched. `BDET`/`DETP` exercise
     /// the factorisation path: only `edge` differs there too.
     #[test]
     fn edge_classification_changes_only_the_edge_annotation() {
@@ -3552,25 +3553,47 @@ GCLK = "CLK*EL"
             let off = analyse_toggled(src, true); // classification suppressed
             let on = analyse_toggled(src, false); // classification active
 
-            // Every exploration-derived field is identical (Debug-string equality across all of them
-            // except `edge`).
-            macro_rules! unchanged {
-                ($field:ident) => {
+            assert_eq!(
+                off.name, on.name,
+                "edge classification changed AnalysedCell::name"
+            );
+            assert_eq!(
+                off.inputs, on.inputs,
+                "edge classification changed AnalysedCell::inputs"
+            );
+            // `AnalysedOutput` carries no `PartialEq`, so a signal list is compared signal for signal
+            // over the fields that carry its function, as the exposure-pair check in `model.rs` does.
+            let same_signals = |a: &[crate::model::AnalysedOutput],
+                                b: &[crate::model::AnalysedOutput],
+                                field: &str| {
+                assert_eq!(
+                    a.len(),
+                    b.len(),
+                    "edge classification changed how many signals AnalysedCell::{field} holds"
+                );
+                for (x, y) in a.iter().zip(b) {
+                    let name = &x.name;
+                    assert_eq!(x.name, y.name, "edge classification changed a {field} name");
                     assert_eq!(
-                        format!("{:?}", off.$field),
-                        format!("{:?}", on.$field),
-                        concat!(
-                            "edge classification changed AnalysedCell::",
-                            stringify!($field)
-                        ),
+                        x.expr, y.expr,
+                        "edge classification changed {field} {name}'s expression"
                     );
-                };
-            }
-            unchanged!(name);
-            unchanged!(inputs);
-            unchanged!(outputs);
-            unchanged!(internals);
-            unchanged!(async_pins);
+                    assert_eq!(
+                        x.vars, y.vars,
+                        "edge classification changed {field} {name}'s support"
+                    );
+                    assert_eq!(
+                        x.feedback, y.feedback,
+                        "edge classification changed {field} {name}'s feedback"
+                    );
+                }
+            };
+            same_signals(&off.outputs, &on.outputs, "outputs");
+            same_signals(&off.internals, &on.internals, "internals");
+            assert_eq!(
+                off.async_pins, on.async_pins,
+                "edge classification changed AnalysedCell::async_pins"
+            );
             // Arcs and hidden arcs by what they characterise — the pins and the direction — rather
             // than by the state the run measured them at. `start`, `end`, `prevector` and `levels`
             // name a representative of that arc's context, and a walk that claims a level in parallel
@@ -3632,19 +3655,19 @@ GCLK = "CLK*EL"
             // sampled at the probed state and name the same free representative the arcs do, and
             // `condition` is a FULL input assignment, so it carries the inputs outside the race at
             // whatever the probed state held them — the racing pins and their edges are what the
-            // hazard is. `settled` is a group-projected set the detector sorts, so it stays. Input-cause
-            // hazards only, a lone toggle's as much as a pair's: this equivalence check has never
-            // compared pulse-cause ones.
+            // hazard is. `settled` is a set of alternatives, canonicalised here before the compare.
+            // Input-cause hazards only, a lone toggle's as much as a pair's: this equivalence check has
+            // never compared pulse-cause ones.
             let hazard_shapes = |c: &crate::model::AnalysedCell| {
                 let mut v: Vec<String> = c
                     .hazards
                     .iter()
                     .filter(|h| matches!(h.cause, Cause::Toggle { .. } | Cause::Race { .. }))
                     .map(|h| {
-                        format!(
-                            "{:?} {:?} {:?} {:?}",
-                            h.cause, h.outcome, h.group, h.settled
-                        )
+                        let mut landed: Vec<String> =
+                            h.settled.iter().map(|m| format!("{m:?}")).collect();
+                        landed.sort();
+                        format!("{:?} {:?} {:?} {landed:?}", h.cause, h.outcome, h.group)
                     })
                     .collect();
                 v.sort();
@@ -3668,14 +3691,50 @@ GCLK = "CLK*EL"
                 hazard_shapes(&on),
                 "edge classification changed AnalysedCell::hazards",
             );
-            unchanged!(clock_pins);
+            assert_eq!(
+                off.clock_pins, on.clock_pins,
+                "edge classification changed AnalysedCell::clock_pins"
+            );
             assert_eq!(
                 constraint_shapes(&off),
                 constraint_shapes(&on),
                 "edge classification changed AnalysedCell::constraints",
             );
-            unchanged!(constraint_arcs_declared);
-            unchanged!(regions);
+            assert_eq!(
+                off.constraint_arcs_declared, on.constraint_arcs_declared,
+                "edge classification changed AnalysedCell::constraint_arcs_declared"
+            );
+            // `StateRegions` carries no `PartialEq` either, so its regions are compared field by field.
+            // The three `*_cover` fields are represented by their cube lists: `on`, `off` and `hold` are
+            // read from those very covers, per the struct's own doc, so the cubes are the covers'
+            // comparison.
+            assert_eq!(
+                off.regions.len(),
+                on.regions.len(),
+                "edge classification changed how many signals AnalysedCell::regions holds"
+            );
+            for (a, b) in off.regions.iter().zip(&on.regions) {
+                assert_eq!(
+                    a.cols, b.cols,
+                    "edge classification changed a signal's columns"
+                );
+                assert_eq!(
+                    a.on, b.on,
+                    "edge classification changed a signal's on region"
+                );
+                assert_eq!(
+                    a.off, b.off,
+                    "edge classification changed a signal's off region"
+                );
+                assert_eq!(
+                    a.hold, b.hold,
+                    "edge classification changed a signal's hold region"
+                );
+                assert_eq!(
+                    a.hysteretic, b.hysteretic,
+                    "edge classification changed whether a signal is hysteretic"
+                );
+            }
 
             // The guard has teeth: classification is a no-op when suppressed and does recognise captures
             // on these fixtures when active.

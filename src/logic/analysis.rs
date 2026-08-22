@@ -607,7 +607,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
     #[test]
     fn exposure_leaves_the_exploration_untouched() {
         // Exposed nodes are read to sample levels and never seed the exploration, so the same cell
-        // explores the same states in the same order whether or not it exposes its master — and an
+        // explores the same states whether or not it exposes its master — and an
         // exposure-free cell carries no exposed nodes and no δ for them at all.
         let dff = |expose: &str| {
             format!(
