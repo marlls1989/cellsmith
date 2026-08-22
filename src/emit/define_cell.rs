@@ -5,7 +5,7 @@
 //! characterisation templates the cell carries (`-delay`/`-power`/`-constraint`). Clock and async pins
 //! are split out of `-input` into their own flags but still appear verbatim in `-pinlist`; any flag
 //! whose pin set is empty is omitted. The drive-strength aliases are bundled by their resolved
-//! `TemplateSpec` — each alias inherits the cell-wide `template` unless its `template_overrides` entry
+//! [`TemplateSpec`] — each alias inherits the cell-wide `template` unless its `template_overrides` entry
 //! supplies a field — so aliases resolving to the same template emit as one block, in first-appearance
 //! order.
 //!
