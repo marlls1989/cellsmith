@@ -20,6 +20,20 @@ the NCL ancestry. The `[lib]` target exists only so the benchmarks can link agai
 crate — it is not a public API, so version and reason about the tool from its CLI and
 config surface, not from library-level compatibility.
 
+## Efficiency and correctness come first
+
+Every rule below is a way of serving those two here; none is an end in itself. Where a rule and
+one of these appear to conflict, the conflict is a defect in the rule — raise it and fix it here
+rather than working around it.
+
+Code that compromises efficiency to keep an order is wrong: the order has to earn what it costs.
+And a test that checks the output matches a reference is not establishing correctness — the test
+has to reason about why that output is right.
+
+Read each rule for what it protects. A legitimate, strong and verifiable reason outranks the
+letter of a rule that did not anticipate it; a weak one does not, and "the rule does not quite
+cover my case" is not a reason at all.
+
 ## Language and style
 
 - British spelling everywhere it is written by us — identifiers, comments and user-facing
@@ -76,11 +90,10 @@ is free to pick any equally-good representative where a choice is arbitrary.
 
 The one place ordering *is* real is where a format the output feeds gives a position
 meaning — a `-vector`'s characters line up with the `-pinlist`, and Liberty's statetable
-rows are matched first-to-last. Those are external constraints and must be preserved. The
-test for any ordering rule you meet is: does the consuming format impose it, or did
-we impose it on ourselves to make a check easier? Only the former survives. Given a choice
-between clearer or faster code that reorders output and more awkward code that keeps the
-order stable, take the former.
+rows are matched first-to-last. Those are external constraints and must be preserved. An
+order kept for any other reason answers to "Tests assert properties" below, which states
+what a motivation has to look like. Given a choice between clearer or faster code that
+reorders output and more awkward code that keeps the order stable, take the former.
 
 ## Correctness means semantic equivalence, not identical bytes
 
@@ -109,16 +122,31 @@ rendered text, values, counts or multisets — and byte-identity or whole-text c
 this defect in its plainest form. State instead what the output must contain, and derive it
 from the input the test controls.
 
+Making a test cheaper is never a reason for anything. A test runs once and must be
+comprehensive, so the economies that justify a design choice in the code justify nothing here.
+And a test resting on equality often asserts no property at all — it asserts immutability, that
+the output has not changed since someone last looked. Immutability is a fact about the previous
+run, not about the thing under test. Checking that the output matches a reference does not
+establish correctness; the test has to reason about why that output is right.
+
 The property a test asserts is one the code or its documentation states. Where neither states
 it, the claim belongs there first — otherwise the test pins something nothing promised, which
 is how a test comes to fail on an output that was always valid.
 
-An order is where this bites hardest, so a justification for keeping one must not be
-self-referential: it names what outside this crate requires the order, as part of a contract
-with that reader. "Held sorted so the report is stable", "ordered so the fold is
-well-defined", "sorted so the comparison passes" each justify the order by our own use of it
-and answer to nothing; they are not reasons. Where no external reader requires it, the order
-is free, and neither the code nor a test may depend on it.
+An order is where this bites hardest. Keeping one needs a motivation stated where the order
+is, and that motivation has to be checkable and checked — a comment on its own settles
+nothing. Two kinds qualify. A reader outside this crate requires the position: a consuming
+format, a tool that parses by column. Or the order makes the algorithm cheaper than the
+unordered one would be — sorting to dedup, so equality walks two sequences instead of
+comparing every element against every other, is a reason by itself.
+
+What does not qualify is an order bought only for its own stability. "Held sorted so the
+report is stable", "ordered so the fold is well-defined", "sorted so the comparison passes"
+each justify the order by our own use of it and answer to nothing. Where nothing outside
+reads it and nothing cheaper comes of it, the order is free and nothing may depend on it. The
+same reasoning runs the other way: where determinism is not required, take the cheaper
+variant — an unstable sort over a stable one. What this rule protects is the freedom not to
+pay for determinism nobody needs.
 
 A correspondence between the parts of one output is a property like any other, and so is a
 relation between two runs where that relation is the specified behaviour. Examples, not the
