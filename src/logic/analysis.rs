@@ -313,7 +313,7 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     // already-existing names and mutates nothing (the exploration-unchanged invariant holds BY
     // CONSTRUCTION). The derived `arcs` are its label domain: every timing arc it labels is one of the
     // pipeline's own delay arcs. The opt-out (`collapse == false`) SKIPS the classify() call entirely
-    // rather than discarding its result: a real bypass, byte-identical to the Default annotation.
+    // rather than discarding its result: a real bypass, leaving the annotation at its plain `Default`.
     let edge = if collapse {
         crate::logic::edge::classify(&m, &arcs)
     } else {

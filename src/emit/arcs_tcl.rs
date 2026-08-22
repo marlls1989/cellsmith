@@ -4843,7 +4843,7 @@ M = "!CLK*D + CLK*M"
 
     /// RDFF: a both-latch clear `R` that is ALSO declared a clock pin. R's assert arcs are a LEVEL
     /// action — `R=1` alone pins Q low, not a transition that holds independently of R's level — so R's
-    /// arcs stay `-type combinational`, byte-for-byte the classification `SYNCR` (the same cell with R
+    /// arcs stay `-type combinational`, the same classification `SYNCR` (the same cell with R
     /// undeclared) gets. Declaring a level-acting pin a clock must never conjure an edge arc that isn't
     /// there.
     #[test]
