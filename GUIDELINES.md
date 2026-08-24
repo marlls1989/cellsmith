@@ -171,6 +171,35 @@ name in a `String` and holding an assignment in a `BTreeMap` are the same error,
   values keyed by variable, and a variable it does not define is **by definition** a don't-care. A
   partial assignment therefore needs no separate type and no absent-key convention: the partial
   case is what a `Minterm` already is.
+- **A set of tri-state rows over a shared header is a `Cover`.** Not a vector of rows beside a
+  vector of column names — a row's header travels with the row, and splitting the two is what
+  forces every reader downstream to re-pair them by position.
+
+## Use the library's operations, not your own
+
+The Boolean data model here is espresso-logic's, and its operations come verified. A hand-rolled
+equivalent is a second implementation of the same thing that nobody tests, so it is a defect whether
+or not it currently works.
+
+Before writing a loop over cubes, rows, variables or literals, find the operation in the library.
+**Where no single call does the job, look for the composition of two before concluding there isn't
+one** — that step is where this goes wrong. The hand-rolled code in this crate was not written in
+ignorance of the library; it was written after failing to find one method that did the whole job,
+when the answer was two calls: wrap a minterm in a one-cube cover and build it; take the
+disagreement and project it.
+
+Some the crate has needed, so the loop is never written again: `Minterm::value_of` to read one
+variable, absent meaning don't-care; `project_to` / `project_to_labels` to re-home onto another
+variable set — silently, so it also deletes any check that a variable was defined; `disagreement`,
+`is_subset_of`, `is_superset_of`, `is_disjoint_with`, `hamming_distance` and the Kleene `&`, `|`,
+`^`, `!` operators to compare and combine two rows; `Cube::expand_to` to expand don't-cares into
+full assignments; `BddBuilder::build_cover` to build a BDD from cubes, a single minterm included by
+way of a one-cube cover; `Cover::to_expr_by_index` to render a cover as an expression;
+`Cover::merge` and `Cover::extend` to assemble a multi-output cover.
+
+Rendering positionally at the sink is not this defect. Liberty's `statetable` and the Verilog UDP
+are columnar formats, so projecting a row onto its columns as it is written is the format's demand.
+Carrying that projection back up the pipeline as the way the data is held is the defect.
 
 ## Prefer real types to stand-ins
 
