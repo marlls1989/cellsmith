@@ -767,14 +767,9 @@ Y = "K + S*L"
         starts: impl Iterator<Item = &'a Minterm<Symbol>>,
         at: &[(&str, bool)],
     ) -> BTreeSet<bool> {
-        use crate::logic::assignment;
         starts
-            .map(assignment)
-            .filter(|a| {
-                at.iter()
-                    .all(|(pin, v)| a.iter().any(|(s, b)| s == pin && b == v))
-            })
-            .filter_map(|a| a.iter().find(|(s, _)| s.as_str() == "L").map(|(_, b)| *b))
+            .filter(|m| at.iter().all(|(pin, v)| m.value_of(*pin) == Some(*v)))
+            .filter_map(|m| m.value_of("L"))
             .collect()
     }
 
@@ -968,12 +963,11 @@ Q = "CLK*M + !CLK*Q"
         }
         // Establishing the master requires driving D high somewhere along the prevector (Q rises only
         // if the captured master value is 1) — inputs alone set the internal state.
-        use crate::logic::assignment;
         assert!(
             clk_rise
                 .prevector
                 .iter()
-                .any(|m| *assignment(m).get("D").unwrap_or(&false)),
+                .any(|m| m.value_of("D").unwrap_or(false)),
             "prevector must drive D high to load the master before the CLK edge"
         );
     }

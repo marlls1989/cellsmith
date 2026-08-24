@@ -332,24 +332,6 @@ struct LatchPhase {
     level: bool,
 }
 
-/// How one pin forces one node: the pin level at which the forcing applies.
-#[derive(Debug, Clone)]
-struct Forcing {
-    /// The pin level that forces the node.
-    asserted: bool,
-}
-
-/// One read-gate pin on a register output: a forcing pin whose toggling never moves any state variable
-/// in the output's cone, so it READS the held content rather than overwriting it. `pass_level` is the
-/// level at which it does so — the pin's un-asserted level.
-#[derive(Debug, Clone)]
-struct ReadGatePin {
-    /// The forcing pin.
-    pin: Symbol,
-    /// The pin's un-asserted level, at which the gate passes the held content through.
-    pass_level: bool,
-}
-
 /// Discover each node's edge arcs from the cell's toggle-and-settle behaviour and label the cell's
 /// delay arcs per arc. Read-only over the shared [`Machine`]: it re-walks the exploration and only ADDS
 /// an annotation, mirroring [`super::arcs::derive`] — whose derived arcs are also the SOURCE of the
@@ -473,7 +455,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // decides the fold-eligible internals the drop-loop prefers to shed — is settled first. Forcing plays
     // no part in typing; it is consumed only by off-edge synthesis and the forcing exemption in
     // `retain_active_edges`.
-    let forcing_of: Vec<BTreeMap<Symbol, Forcing>> = candidates
+    let forcing_of: Vec<Minterm<Symbol>> = candidates
         .iter()
         .zip(&aggs)
         .map(|(name, agg)| scan.forcing_pins(name, &agg.moves))
@@ -843,32 +825,28 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
             let cone = cone_of(y.as_str());
             // A forcing pin is a READ-GATE iff toggling it never moves any state variable in the output's
             // cone (its pass level is the pin's un-asserted level).
-            let mut gate_pass: Vec<ReadGatePin> = Vec::new();
-            for (pin, forcing) in &forcing_of[iy] {
-                let changes_cone = cone.iter().any(|w| {
+            let changes_cone = |pin: &Symbol| {
+                cone.iter().any(|w| {
                     index_of
                         .get(w.as_str())
                         .is_some_and(|&iw| aggs[iw].moves.iter().any(|mv| &mv.pin == pin))
-                });
-                if !changes_cone {
-                    gate_pass.push(ReadGatePin {
-                        pin: pin.clone(),
-                        pass_level: !forcing.asserted,
-                    });
-                }
-            }
-            if gate_pass.is_empty() {
+                })
+            };
+            let node_forcing = &forcing_of[iy];
+            let read_gates: Vec<Symbol> = node_forcing
+                .vars()
+                .iter()
+                .zip(node_forcing.iter())
+                .filter(|&(pin, asserted)| asserted.is_some() && !changes_cone(pin))
+                .map(|(pin, _)| pin.clone())
+                .collect();
+            if read_gates.is_empty() {
                 continue; // an ordinary register: its forcing pins all change the held state
             }
 
-            // The register content the output reads: δ_Y cofactored at the read-gates' pass levels.
-            let pass_min = Minterm::with_labels(
-                &gate_pass
-                    .iter()
-                    .map(|g| (g.pin.as_str(), Some(g.pass_level)))
-                    .collect::<Vec<_>>(),
-            )
-            .expect("distinct read-gate pins");
+            // The register content the output reads: δ_Y cofactored at the read-gates' pass levels — the
+            // pins' forcing row, complemented.
+            let pass_min = !node_forcing.project_to_labels(read_gates);
             let content_bdd = dy.restrict_to(&pass_min);
             // The read function's columns: the register node plus every non-clock input the output reads.
             let gate_cols: Vec<Symbol> = inputs
@@ -1167,13 +1145,15 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
     fn retain_active_edges(
         &self,
         node: &str,
-        node_forcing: &BTreeMap<Symbol, Forcing>,
+        node_forcing: &Minterm<Symbol>,
         s: &mut BTreeSet<ActiveEdge>,
     ) {
         let is_forced = |st: &Minterm<Symbol>| {
             node_forcing
+                .vars()
                 .iter()
-                .any(|(p, f)| st.value_of(p.as_str()) == Some(f.asserted))
+                .zip(node_forcing.iter())
+                .any(|(p, asserted)| asserted.is_some_and(|a| st.value_of(p.as_str()) == Some(a)))
         };
         loop {
             let mut to_remove: Option<ActiveEdge> = None;
@@ -1208,7 +1188,7 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
                             Some(dv) if dv != v => {}
                             _ => continue, // the node did not move (or is undefined) here
                         }
-                        if node_forcing.contains_key(x) {
+                        if node_forcing.value_of(x.as_str()).is_some() {
                             continue; // a forcing pin's assertion is a coexisting combinational arc
                         }
                         // Is the toggle of `x` itself an active edge of the node's current set?
@@ -1243,10 +1223,14 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
     /// destination level of the pin — a set or clear, whatever the pin's declared class. Stratified:
     /// moves whose source or destination lie under an already-established forcing pin's asserted level
     /// are discounted before re-classifying (a clear pulsing the node inside a preset's region is still
-    /// a clear). A pin dragging the node BOTH ways (a tracked data pin) never classifies. Returns each
-    /// forcing pin with the level that asserts it and the value it forces the node to.
-    fn forcing_pins(&self, node: &Symbol, moves: &[Move]) -> BTreeMap<Symbol, Forcing> {
+    /// a clear). A pin dragging the node BOTH ways (a tracked data pin) never classifies. A pin the
+    /// returned minterm defines is forcing, asserted at the level it is defined with; a pin the minterm
+    /// leaves undefined is not forcing.
+    fn forcing_pins(&self, node: &Symbol, moves: &[Move]) -> Minterm<Symbol> {
         let inputs = &self.m.cell.inputs;
+        // The pins classified so far, each paired with the level that asserts it: the row the returned
+        // minterm is built from, and what both stages below read back while they accumulate it.
+        let mut forcing: Vec<(Symbol, Option<bool>)> = Vec::new();
         // Clause 2 - GLOBAL CONSTANT-PINNING: exactly one level of the pin holds the node at one constant
         // across ALL reachable stable states (an async override whose release re-acquires, like a toggle
         // flop's reset). No tracked data pin satisfies this: its tracking is confined to a clock-phase
@@ -1254,7 +1238,6 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
         // the node to a constant either (the node carries content in both phases), so declaration plays no
         // part — a level-forcing reset is a forcing pin whether or not it was declared a clock, which is how
         // `RDFF`'s clock-declared `R` is handled here.
-        let mut pinning: BTreeMap<Symbol, Forcing> = BTreeMap::new();
         for x in inputs {
             let pinned_value = |level: bool| -> Option<bool> {
                 let mut seen: Option<bool> = None;
@@ -1275,21 +1258,16 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
             };
             match (pinned_value(false), pinned_value(true)) {
                 (Some(_), Some(_)) | (None, None) => {} // both levels pin to a constant (degenerate) or neither
-                (Some(_), None) => {
-                    pinning.insert(x.clone(), Forcing { asserted: false });
-                }
-                (None, Some(_)) => {
-                    pinning.insert(x.clone(), Forcing { asserted: true });
-                }
+                (Some(_), None) => forcing.push((x.clone(), Some(false))),
+                (None, Some(_)) => forcing.push((x.clone(), Some(true))),
             }
         }
         // Monotone accumulation: established forcing pins are never re-litigated, so each round can only
         // ADD pins and the loop terminates within `inputs.len()` rounds.
-        let mut forcing: BTreeMap<Symbol, Forcing> = pinning;
         loop {
             let mut added = false;
             for x in inputs {
-                if forcing.contains_key(x) {
+                if forcing.iter().any(|(p, _)| p == x) {
                     continue;
                 }
                 let mut dest_levels: BTreeSet<bool> = BTreeSet::new();
@@ -1300,10 +1278,12 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
                         continue;
                     }
                     any = true;
-                    let discounted = forcing.iter().any(|(p, f)| {
+                    let discounted = forcing.iter().any(|(p, asserted)| {
                         p != x
-                            && (mv.source.value_of(p.as_str()) == Some(f.asserted)
-                                || mv.dest.value_of(p.as_str()) == Some(f.asserted))
+                            && asserted.is_some_and(|a| {
+                                mv.source.value_of(p.as_str()) == Some(a)
+                                    || mv.dest.value_of(p.as_str()) == Some(a)
+                            })
                     });
                     if discounted {
                         continue;
@@ -1314,17 +1294,12 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
                     posts.insert(mv.post);
                 }
                 if any && dest_levels.len() == 1 && posts.len() == 1 {
-                    forcing.insert(
-                        x.clone(),
-                        Forcing {
-                            asserted: dest_levels.into_iter().next().unwrap(),
-                        },
-                    );
+                    forcing.push((x.clone(), Some(dest_levels.into_iter().next().unwrap())));
                     added = true;
                 }
             }
             if !added {
-                return forcing;
+                return Minterm::labeled(&forcing).expect("distinct forcing pins");
             }
         }
     }

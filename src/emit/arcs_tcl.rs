@@ -62,7 +62,6 @@ use crate::emit::tcl::{IcColumn, VectorValue};
 // `Edge` and `PinEdge` come from their own module, not through `block`: block.rs keeps its `use`
 // of them private, so `crate::logic::arcs` stays the one path every consumer reaches them by.
 use crate::logic::arcs::{Arc, ArcLevels, Edge, ExposedLevel, HeldLevel, HiddenArc, PinEdge};
-use crate::logic::assignment;
 use crate::logic::constraint::{Constraint, ConstraintKind, VictimNode};
 use crate::logic::edge::EdgeLabel;
 use crate::logic::leakage::LeakageState;
@@ -851,8 +850,8 @@ struct ConstraintColumns {
     /// The cell's exposures, then one column per victim node that had none — each under both namings.
     exposed: Vec<ExposedColumn>,
     /// The level a victim node that earned a column holds at the probed state, read as `-ic` renders
-    /// that column.
-    probed: HashMap<Symbol, bool>,
+    /// that column. A node the row does not define earned no column of its own.
+    probed: Minterm<Symbol>,
     /// The `-probe` line's nodes: every victim node of the constraint under the group's netlist names,
     /// the ones that earned a column of their own and the ones that did not alike.
     probe: Vec<Symbol>,
@@ -868,7 +867,7 @@ impl ConstraintColumns {
     /// only the rest are added.
     fn of(cell: &AnalysedCell, group: &Group, nodes: &[VictimNode]) -> Self {
         let mut exposed = exposed_columns(cell, group);
-        let mut probed: HashMap<Symbol, bool> = HashMap::new();
+        let mut levels: Vec<(Symbol, Option<bool>)> = Vec::new();
         for p in nodes {
             if cell.exposed.contains(&p.node) || cell.outputs.iter().any(|o| o.name == p.node) {
                 continue;
@@ -877,8 +876,11 @@ impl ConstraintColumns {
                 model: p.node.clone(),
                 listed: group.probed_name(&p.node),
             });
-            probed.insert(p.node.clone(), p.level);
+            levels.push((p.node.clone(), Some(p.level)));
         }
+        let probed = Minterm::labeled(&levels).expect(
+            "a constraint's victims are the distinct nodes of one group, so each names one column",
+        );
         let probe = nodes.iter().map(|p| group.probed_name(&p.node)).collect();
         Self {
             exposed,
@@ -909,27 +911,25 @@ fn start_voltage(cell: &AnalysedCell, level: bool) -> Option<IcColumn> {
 /// columns are the reason it can establish an internal one at all, an internal node having no pin to
 /// drive it through.
 fn transition_columns(cell: &AnalysedCell, group: &Group, arc: &Arc) -> Vec<Column> {
-    let held = assignment(
-        arc.prevector
-            .last()
-            .expect("path_to seeds its chain with the probed node itself"),
-    );
-    let end = assignment(&arc.end);
+    let held = arc
+        .prevector
+        .last()
+        .expect("path_to seeds its chain with the probed node itself");
     let start = levels_by_name(&arc.levels.outputs);
     let exposed_start = exposed_levels(&arc.levels);
     columns(
         cell,
         &exposed_columns(cell, group),
         |pin| {
-            let value = *end
-                .get(pin)
+            let value = arc
+                .end
+                .value_of(pin)
                 .expect("every input is assigned in the arc's end state");
             Column {
                 name: pin.clone(),
                 ic: start_voltage(
                     cell,
-                    *held
-                        .get(pin)
+                    held.value_of(pin)
                         .expect("every input has a held value in the arc's prevector"),
                 ),
                 value: if *pin == arc.related {
@@ -972,12 +972,10 @@ fn transition_columns(cell: &AnalysedCell, group: &Group, arc: &Arc) -> Vec<Colu
 /// — a hidden arc measures no output transition). An exposed node reads `X` for the same reason as in
 /// [`transition_columns`], its start level reaching Liberate through `-ic` instead.
 fn hidden_columns(cell: &AnalysedCell, group: &Group, h: &HiddenArc) -> Vec<Column> {
-    let held = assignment(
-        h.prevector
-            .last()
-            .expect("path_to seeds its chain with the probed node itself"),
-    );
-    let end = assignment(&h.end);
+    let held = h
+        .prevector
+        .last()
+        .expect("path_to seeds its chain with the probed node itself");
     let outputs = levels_by_name(&h.levels.outputs);
     let exposed_start = exposed_levels(&h.levels);
     columns(
@@ -987,15 +985,15 @@ fn hidden_columns(cell: &AnalysedCell, group: &Group, h: &HiddenArc) -> Vec<Colu
             name: pin.clone(),
             ic: start_voltage(
                 cell,
-                *held
-                    .get(pin)
+                held.value_of(pin)
                     .expect("every input has a held value in the arc's prevector"),
             ),
             value: if *pin == h.pin.pin {
                 VectorValue::from(h.pin.edge)
             } else {
                 VectorValue::from(
-                    *end.get(pin)
+                    h.end
+                        .value_of(pin)
                         .expect("every input is assigned in the hidden arc's end state"),
                 )
             },
@@ -1038,19 +1036,18 @@ fn constraint_columns(
     pins: &RacingPins,
     c: &Constraint,
 ) -> Vec<Column> {
-    let held = assignment(
-        c.prevector
-            .last()
-            .expect("path_to seeds its chain with the probed node itself"),
-    );
+    let held = c
+        .prevector
+        .last()
+        .expect("path_to seeds its chain with the probed node itself");
     let start = levels_by_name(&c.levels.outputs);
     let exposed_start = exposed_levels(&c.levels);
     columns(
         cell,
         &cols.exposed,
         |pin| {
-            let level = *held
-                .get(pin)
+            let level = held
+                .value_of(pin)
                 .expect("every input has a held value in the constraint prevector");
             Column {
                 name: pin.clone(),
@@ -1067,8 +1064,8 @@ fn constraint_columns(
             // exposures, so its level comes with it rather than from the sampled exposures.
             ic: start_voltage(
                 cell,
-                match cols.probed.get(&node.model) {
-                    Some(level) => *level,
+                match cols.probed.value_of(&node.model) {
+                    Some(level) => level,
                     None => {
                         exposed_start
                             .get(node.model.as_str())
@@ -1097,7 +1094,6 @@ fn constraint_columns(
 /// cell whose state variable is its own output the output column is the only one separating the two hold
 /// states.
 fn leakage_columns(cell: &AnalysedCell, group: &Group, l: &LeakageState) -> Vec<LevelColumn> {
-    let inputs = assignment(&l.inputs);
     let exposed = levels_by_name(&l.levels.exposed);
     let outputs = levels_by_name(&l.levels.outputs);
     columns(
@@ -1105,8 +1101,9 @@ fn leakage_columns(cell: &AnalysedCell, group: &Group, l: &LeakageState) -> Vec<
         &exposed_columns(cell, group),
         |pin| LevelColumn {
             name: pin.clone(),
-            level: *inputs
-                .get(pin)
+            level: l
+                .inputs
+                .value_of(pin)
                 .expect("every input is assigned in a leakage state"),
         },
         |node| LevelColumn {
@@ -1190,8 +1187,8 @@ fn levels_by_name(levels: &[HeldLevel]) -> BTreeMap<&str, bool> {
 /// same pipeline arcs.
 fn related_edge(arc: &Arc) -> Edge {
     Edge::from_settled_level(
-        *assignment(&arc.end)
-            .get(&arc.related)
+        arc.end
+            .value_of(&arc.related)
             .expect("the arc's related clock pin is assigned in its end state"),
     )
 }
@@ -1204,10 +1201,17 @@ fn related_edge(arc: &Arc) -> Edge {
 /// naming the same literals one condition — and the block a firing renders is what tells two firings
 /// apart ([`Blocks::state`]).
 fn when(end: &espresso_logic::Minterm<espresso_logic::Symbol>, exclude: &str) -> Option<BoolExpr> {
-    let mut lits: Vec<Literal> = assignment(end)
-        .into_iter()
-        .filter(|(k, _)| *k != exclude)
-        .map(|(var, positive)| Literal { var, positive })
+    let mut lits: Vec<Literal> = end
+        .vars()
+        .iter()
+        .zip(end.iter())
+        .filter(|&(var, _)| *var != exclude)
+        .filter_map(|(var, val)| {
+            val.map(|positive| Literal {
+                var: var.clone(),
+                positive,
+            })
+        })
         .collect();
     if lits.is_empty() {
         return None;
@@ -1221,10 +1225,18 @@ fn when(end: &espresso_logic::Minterm<espresso_logic::Symbol>, exclude: &str) ->
 /// the distinct stored-value contexts of a state-holding cell that share one input vector. `None` when
 /// no literal is fixed.
 fn hidden_when(h: &HiddenArc) -> Option<BoolExpr> {
-    let mut lits: Vec<Literal> = assignment(&h.end)
-        .into_iter()
-        .filter(|(k, _)| *k != h.pin.pin.as_str())
-        .map(|(var, positive)| Literal { var, positive })
+    let mut lits: Vec<Literal> = h
+        .end
+        .vars()
+        .iter()
+        .zip(h.end.iter())
+        .filter(|&(var, _)| *var != h.pin.pin.as_str())
+        .filter_map(|(var, val)| {
+            val.map(|positive| Literal {
+                var: var.clone(),
+                positive,
+            })
+        })
         .collect();
     lits.extend(h.levels.outputs.iter().map(|lvl| Literal {
         var: lvl.node.clone(),
@@ -1256,10 +1268,17 @@ fn constraint_when(c: &Constraint) -> Option<BoolExpr> {
         .prevector
         .last()
         .expect("path_to seeds its chain with the probed node itself");
-    let mut lits: Vec<Literal> = assignment(held)
-        .into_iter()
-        .filter(|(k, _)| pins.edge_of(k.as_str()).is_none())
-        .map(|(var, positive)| Literal { var, positive })
+    let mut lits: Vec<Literal> = held
+        .vars()
+        .iter()
+        .zip(held.iter())
+        .filter(|&(var, _)| pins.edge_of(var.as_str()).is_none())
+        .filter_map(|(var, val)| {
+            val.map(|positive| Literal {
+                var: var.clone(),
+                positive,
+            })
+        })
         .collect();
     lits.extend(c.levels.outputs.iter().map(|lvl| Literal {
         var: lvl.node.clone(),
@@ -1278,9 +1297,17 @@ fn constraint_when(c: &Constraint) -> Option<BoolExpr> {
 /// The condition is the whole of what the bare form states, so it is always written: a cell with no
 /// input and no output fixes no literal, and the block then rests under the tautology `1`.
 fn leakage_when(l: &LeakageState) -> BoolExpr {
-    let mut lits: Vec<Literal> = assignment(&l.inputs)
-        .into_iter()
-        .map(|(var, positive)| Literal { var, positive })
+    let mut lits: Vec<Literal> = l
+        .inputs
+        .vars()
+        .iter()
+        .zip(l.inputs.iter())
+        .filter_map(|(var, val)| {
+            val.map(|positive| Literal {
+                var: var.clone(),
+                positive,
+            })
+        })
         .collect();
     lits.extend(l.levels.outputs.iter().map(|lvl| Literal {
         var: lvl.node.clone(),

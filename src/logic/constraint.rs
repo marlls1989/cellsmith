@@ -44,7 +44,7 @@
 //! characterise.
 
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use espresso_logic::{Minterm, Symbol};
 
@@ -214,13 +214,13 @@ fn separation(x: &PinEdge, y: &PinEdge, clock_pins: &[Symbol]) -> Separation {
 
 /// The nodes a hazard attacks, each with the level the observation sampled for it. A record samples its
 /// levels for its own group, at the state it was probed from, so every entry is there.
-fn victims(group: &[Symbol], levels: &BTreeMap<Symbol, bool>) -> Vec<VictimNode> {
+fn victims(group: &[Symbol], levels: &Minterm<Symbol>) -> Vec<VictimNode> {
     group
         .iter()
         .map(|node| VictimNode {
             node: node.clone(),
-            level: *levels
-                .get(node)
+            level: levels
+                .value_of(node)
                 .expect("a hazard observation samples every node of its own group"),
         })
         .collect()

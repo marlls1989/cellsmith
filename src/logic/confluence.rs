@@ -77,16 +77,18 @@ use crate::logic::machine;
 /// coordinates, and a probed state is fully initialised, so every one of them is defined there.
 ///
 /// Shared with [`super::width`], which samples its pulses' nodes at the pre-pulse state through it.
-pub(super) fn node_levels_at(state: &Minterm<Symbol>, group: &[Symbol]) -> BTreeMap<Symbol, bool> {
-    group
+pub(super) fn node_levels_at(state: &Minterm<Symbol>, group: &[Symbol]) -> Minterm<Symbol> {
+    let levels: Vec<(Symbol, Option<bool>)> = group
         .iter()
         .map(|w| {
             let level = state
                 .value_of(w.as_str())
                 .expect("a hazard's group node is defined at the fully-initialised probed state");
-            (w.clone(), level)
+            (w.clone(), Some(level))
         })
-        .collect()
+        .collect();
+    Minterm::labeled(&levels)
+        .expect("a hazard's group selects from the declared state variables, so no node repeats")
 }
 
 /// The direction `name` toggles from its current value at `node`. Explored nodes carry a complete input

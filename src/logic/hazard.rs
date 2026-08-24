@@ -45,8 +45,6 @@
 //! and with `Hazard::ordinal` it forms the `(discovered, ordinal)` key that settles the choice between
 //! observations dominating equally. See `hazard-detection.md` for the concept.
 
-use std::collections::BTreeMap;
-
 use espresso_logic::{BoolExpr, Minterm, Symbol};
 
 use crate::logic::arcs::{ArcLevels, PinEdge};
@@ -110,7 +108,7 @@ pub struct Hazard {
     /// The level each node the hazard names holds at the PROBED state, by name. Sampled at the same
     /// state as `prevector` and `levels`, and covering every entry of the hazard's `group`, so the
     /// constraint generated from this observation can state the start level of each node it probes.
-    pub(crate) node_levels: BTreeMap<Symbol, bool>,
+    pub(crate) node_levels: Minterm<Symbol>,
     /// The probed state itself: every input and state variable at the level it holds there. The
     /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
     /// emitted column carries.

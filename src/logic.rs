@@ -13,19 +13,7 @@ pub mod regions;
 pub(crate) mod resolve;
 pub mod width;
 
-use std::collections::BTreeMap;
-
 use espresso_logic::{BoolExpr, Minterm, Symbol};
-
-/// The fixed (non-don't-care) assignments of a minterm as a `name -> value` map. Used by the arcs
-/// emitter to read an arc's input vectors.
-pub(crate) fn assignment(m: &Minterm<Symbol>) -> BTreeMap<Symbol, bool> {
-    m.vars()
-        .iter()
-        .zip(m.iter())
-        .filter_map(|(var, val)| val.map(|b| (var.clone(), b)))
-        .collect()
-}
 
 /// A minterm's fixed values as a product of literals, in the minterm's variable order: `A & B`,
 /// `!R & S`. No fixed value ⇒ the tautology `1`.
@@ -92,22 +80,4 @@ pub(crate) fn product(lits: &[Literal]) -> BoolExpr {
             .reduce(|acc, lit| acc & lit)
             .unwrap_or_else(|| b.constant(true))
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use espresso_logic::bdd_builder;
-
-    #[test]
-    fn assignment_reads_fixed_values() {
-        // A single full minterm over A,B from a maximal cover.
-        let builder = bdd_builder!();
-        let f = builder.parse("A*!B").unwrap();
-        let cover = f.maximize();
-        let m = cover.cubes().next().unwrap().inputs().clone();
-        let a = assignment(&m);
-        assert_eq!(a.get("A"), Some(&true));
-        assert_eq!(a.get("B"), Some(&false));
-    }
 }
