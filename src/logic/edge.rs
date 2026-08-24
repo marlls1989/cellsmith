@@ -83,7 +83,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
-use espresso_logic::{Cover, CoverType, CubeType, Minimizable, Minterm, Symbol};
+use espresso_logic::{
+    Anonymous, Cover, CoverType, Cube, CubeType, Minimizable, Minterm, OutputSet, Symbol,
+};
 use rayon::prelude::*;
 
 use crate::logic::analysis::Machine;
@@ -1476,21 +1478,20 @@ fn phase_class(vals: &[bool]) -> Option<Phase> {
     }
 }
 
-/// Build the BDD of a fully/partly-fixed minterm as a cube (AND of its fixed literals; don't-cares
-/// skipped). Mirrors the `regions.rs` reconstruction idiom.
-fn cube_bdd<B: Brand, C: ManagerCell>(
+/// The BDD of a set of sampled points, each point an ON-set cube of one cover that
+/// [`BddBuilder::build_cover`] then builds in a single call: a point fixing no variable is the
+/// constant `true`, and no points at all is `false` — a region nothing witnessed is empty.
+fn points_bdd<B: Brand, C: ManagerCell>(
     builder: &BddBuilder<B, C>,
-    m: &Minterm<Symbol>,
+    points: impl IntoIterator<Item = Minterm<Symbol>>,
 ) -> Bdd<B, C> {
-    let mut p = builder.constant(true);
-    for (v, val) in m.vars().iter().zip(m.iter()) {
-        match val {
-            Some(true) => p = p.and(&builder.var(v.as_str())),
-            Some(false) => p = p.and(&!&builder.var(v.as_str())),
-            None => {}
-        }
-    }
-    p
+    let cover: Cover<Symbol, Anonymous> = Cover::from_cubes(
+        CoverType::F,
+        points
+            .into_iter()
+            .map(|p| Cube::new(p, OutputSet::anonymous(&[true]), CubeType::F)),
+    );
+    builder.build_cover(&cover)
 }
 
 /// The support of the given BDDs, restricted to and ordered by `header` (mirrors `regions.rs`'s
@@ -1525,21 +1526,18 @@ fn regions_from<B: Brand, C: ManagerCell>(
     header: &[Symbol],
 ) -> StateRegions {
     let cols = support_in_header(&[on_bdd, off_bdd], header);
-    let on_cover = regions::minimise(regions::f_side(
+    let on = regions::minimise(regions::f_side(
         &on_bdd.cover_over_fr(cols.iter().map(Symbol::as_str)),
     ));
-    let off_cover = regions::minimise(regions::f_side(
+    let off = regions::minimise(regions::f_side(
         &off_bdd.cover_over_fr(cols.iter().map(Symbol::as_str)),
     ));
-    let hold_cover = regions::minimise_bdd(hold_bdd);
+    let hold = regions::minimise_bdd(hold_bdd);
     StateRegions {
-        on: regions::region_cubes(&on_cover, &cols),
-        off: regions::region_cubes(&off_cover, &cols),
-        hold: regions::region_cubes(&hold_cover, &cols),
         cols,
-        on_cover,
-        off_cover,
-        hold_cover,
+        on,
+        off,
+        hold,
         hysteretic: true,
     }
 }
@@ -1553,7 +1551,7 @@ fn cofactor_capture<B: Brand, C: ManagerCell>(
     sr: &StateRegions,
     pass: &Minterm<Symbol>,
 ) -> StateRegions {
-    let on = builder.build_cover(&sr.on_cover).restrict_to(pass);
+    let on = builder.build_cover(&sr.on).restrict_to(pass);
     let off = !&on;
     let hold = builder.constant(false);
     let header: Vec<Symbol> = sr
@@ -1573,8 +1571,8 @@ fn cofactor_off_edge<B: Brand, C: ManagerCell>(
     sr: &StateRegions,
     pass: &Minterm<Symbol>,
 ) -> StateRegions {
-    let on = builder.build_cover(&sr.on_cover).restrict_to(pass);
-    let off = builder.build_cover(&sr.off_cover).restrict_to(pass);
+    let on = builder.build_cover(&sr.on).restrict_to(pass);
+    let off = builder.build_cover(&sr.off).restrict_to(pass);
     let hold = !&on.or(&off);
     let header: Vec<Symbol> = sr
         .cols
@@ -1599,19 +1597,9 @@ fn synth_capture<B: Brand, C: ManagerCell>(
     header: &[Symbol],
     samples: &[Sample],
 ) -> Option<StateRegions> {
-    let mut on_pts = builder.constant(false);
-    let mut off_pts = builder.constant(false);
-    for sample in samples {
-        let cube = cube_bdd(
-            builder,
-            &sample.state.project_to(header.iter().map(Symbol::as_str)),
-        );
-        if sample.value {
-            on_pts = on_pts.or(&cube);
-        } else {
-            off_pts = off_pts.or(&cube);
-        }
-    }
+    let point = |s: &Sample| s.state.project_to(header.iter().map(Symbol::as_str));
+    let on_pts = points_bdd(builder, samples.iter().filter(|s| s.value).map(point));
+    let off_pts = points_bdd(builder, samples.iter().filter(|s| !s.value).map(point));
     if !on_pts.and(&off_pts).is_contradiction() {
         return None; // a projection is both on and off under this header
     }
@@ -1697,19 +1685,19 @@ fn synth_off_edge<B: Brand, C: ManagerCell>(
             .push(sample.value);
     }
 
-    let mut on_pts = builder.constant(false);
-    let mut off_pts = builder.constant(false);
+    let mut on_proj: Vec<Minterm<Symbol>> = Vec::new();
+    let mut off_proj: Vec<Minterm<Symbol>> = Vec::new();
     for (proj, phases) in &groups {
         // The header names the clocks, so a projection carries exactly one phase vector — the classes
         // cannot disagree, and a mixed projection is held.
-        let agreed = phases.values().find_map(|vals| phase_class(vals));
-        let cube = cube_bdd(builder, proj);
-        match agreed {
-            Some(Phase::Forced1) => on_pts = on_pts.or(&cube),
-            Some(Phase::Forced0) => off_pts = off_pts.or(&cube),
+        match phases.values().find_map(|vals| phase_class(vals)) {
+            Some(Phase::Forced1) => on_proj.push(proj.clone()),
+            Some(Phase::Forced0) => off_proj.push(proj.clone()),
             _ => {} // held or unobserved ⇒ hold
         }
     }
+    let on_pts = points_bdd(builder, on_proj);
+    let off_pts = points_bdd(builder, off_proj);
 
     let hold = !&on_pts.or(&off_pts);
     regions_from(&on_pts, &off_pts, &hold, header_off)
@@ -1780,6 +1768,14 @@ mod tests {
 
     fn cols_of(sr: &StateRegions) -> Vec<&str> {
         sr.cols.iter().map(Symbol::as_str).collect()
+    }
+
+    /// The distinct levels a region cover's cubes pin `var` to, read by name — a cube that leaves `var`
+    /// unconstrained reads as `None`. How many cubes espresso's minimisation lands on, and in what
+    /// order, is its own choice, so a region over a single column is stated as the set of levels its
+    /// cubes fix that column at.
+    fn pinned(cover: &Cover<Symbol, Anonymous>, var: &str) -> BTreeSet<Option<bool>> {
+        cover.cubes().map(|c| c.inputs().value_of(var)).collect()
     }
 
     fn clocks_of(er: &EdgeCaptures) -> Vec<&str> {
@@ -1888,7 +1884,7 @@ mod tests {
                 .first()
                 .expect("a derived register carries its reading output");
             let out = &reveal.output;
-            let read = b.build_cover(&reveal.function.on_cover);
+            let read = b.build_cover(&reveal.function.on);
             let sensitive = read
                 .cofactor(d.name.as_str(), true)
                 .xor(&read.cofactor(d.name.as_str(), false));
@@ -1920,7 +1916,7 @@ mod tests {
             // the machine either way, so nothing downstream would notice. Sensitivity must therefore BE
             // this cube: non-empty, and revealing the register nowhere outside it.
             assert!(
-                !gates.is_empty() && sensitive.equivalent_to(&cube_bdd(&b, &released)),
+                !gates.is_empty() && sensitive.equivalent_to(&points_bdd(&b, [released.clone()])),
                 "the read function of {out} must reveal {} on a cube of released gate levels and \
                  nowhere else, released {released:?}",
                 d.name
@@ -2042,12 +2038,12 @@ mod tests {
                         ActiveEdge {
                             clock: c.clock.clone(),
                         },
-                        builder.build_cover(&c.regions.on_cover),
+                        builder.build_cover(&c.regions.on),
                     )
                 })
                 .collect();
-            let forced_on = builder.build_cover(&r.off_edge.on_cover);
-            let forced_off = builder.build_cover(&r.off_edge.off_cover);
+            let forced_on = builder.build_cover(&r.off_edge.on);
+            let forced_off = builder.build_cover(&r.off_edge.off);
             let forced = |s: &Minterm<Symbol>| {
                 if forced_on.evaluate_fast(s) == Some(true) {
                     Some(true)
@@ -2306,7 +2302,7 @@ mod tests {
                 function: sr,
             } in &d.reads
             {
-                let read = b.build_cover(&sr.on_cover);
+                let read = b.build_cover(&sr.on);
                 let mut exercised = false;
                 for s in &m.explored.order {
                     let (Some(rv), Some(yv)) = (reg_value(s), m.output_value(o.as_str(), s)) else {
@@ -2370,7 +2366,7 @@ GCLK = "enA*CLKA+enB*CLKB"
 
     #[test]
     fn edge_dff_floor() {
-        with_machine!(DFF_TOML, |_b, _a, _m2, m| {
+        with_machine!(DFF_TOML, |b, _a, _m2, m| {
             let es = classify(&m);
             assert_captures_faithful(&m, &es);
             assert_eq!(node_list(&es), ["Q"], "only Q is a register");
@@ -2382,14 +2378,19 @@ GCLK = "enA*CLKA+enB*CLKB"
             assert_eq!(capture.clock.pin, "CLK");
             assert_eq!(capture.clock.edge, Edge::Rise);
             assert_eq!(cols_of(cap), ["D"]);
-            assert_eq!(cap.on, vec![vec![Some(true)]]);
-            assert_eq!(cap.off, vec![vec![Some(false)]]);
-            assert!(cap.hold.is_empty(), "capture is total, empty hold");
-            // off_edge: empty cols, universal hold.
+            // Over that single column the capture IS D: every on cube pins D high, every off cube pins
+            // D low, and a total capture leaves no gap between the two.
+            assert_eq!(pinned(&cap.on, "D"), BTreeSet::from([Some(true)]));
+            assert_eq!(pinned(&cap.off, "D"), BTreeSet::from([Some(false)]));
+            assert_eq!(cap.hold.num_cubes(), 0, "capture is total, empty hold");
+            // off_edge: no column, nothing set and nothing cleared, so the hold is every assignment.
             assert!(q.off_edge.cols.is_empty());
-            assert!(q.off_edge.on.is_empty());
-            assert!(q.off_edge.off.is_empty());
-            assert_eq!(q.off_edge.hold, vec![vec![]], "universal hold");
+            assert_eq!(q.off_edge.on.num_cubes(), 0);
+            assert_eq!(q.off_edge.off.num_cubes(), 0);
+            assert!(
+                b.build_cover(&q.off_edge.hold).is_tautology(),
+                "the off-edge hold is universal — between two rising edges Q holds whatever D does"
+            );
             assert_eq!(q.cols.iter().map(Symbol::as_str).collect::<Vec<_>>(), ["D"]);
             assert_eq!(folded_list(&es), ["M"], "master M folded");
         });
@@ -2586,7 +2587,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
                 assert_eq!(clocks_of(q), ["CLK"], "{label}");
                 assert_eq!(q.captures.len(), 1, "{label}: rise only");
                 assert_eq!(q.captures[0].clock.edge, Edge::Rise, "{label}");
-                let off = builder.build_cover(&q.off_edge.off_cover);
+                let off = builder.build_cover(&q.off_edge.off);
                 let want = builder.var("CLK").and(&builder.var("R"));
                 assert!(
                     off.equivalent_to(&want),
@@ -2604,7 +2605,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
             assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             // off_edge.off is forced-0 exactly where R is asserted.
-            let off = builder.build_cover(&q.off_edge.off_cover);
+            let off = builder.build_cover(&q.off_edge.off);
             let r = builder.var("R");
             assert!(off.equivalent_to(&r), "off_edge.off must cover R");
         });
@@ -2622,7 +2623,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
             assert_eq!(q.captures[0].clock.edge, Edge::Rise);
             let cap = &q.captures[0].regions;
             // capture == !D, recorded verbatim (no special-casing).
-            let on = builder.build_cover(&cap.on_cover);
+            let on = builder.build_cover(&cap.on);
             assert!(on.equivalent_to(&!&builder.var("D")), "capture must be !D");
             assert_eq!(folded_list(&es), ["M"]);
         });
@@ -2649,18 +2650,15 @@ Q = "!R*(CLK*M + !CLK*Q)"
                 "the capture prefers input D"
             );
             // Over the CLK=0 (capture) domain of the reachable states, the cover (D) equals the master M.
-            let mut reach0 = builder.constant(false);
-            for state in m
-                .explored
-                .order
-                .iter()
-                .filter(|s| s.value_of("CLK") == Some(false))
-            {
-                reach0 = reach0.or(&super::cube_bdd(&builder, state));
-            }
-            let on = builder
-                .build_cover(&q.captures[0].regions.on_cover)
-                .and(&reach0);
+            let reach0 = super::points_bdd(
+                &builder,
+                m.explored
+                    .order
+                    .iter()
+                    .filter(|s| s.value_of("CLK") == Some(false))
+                    .cloned(),
+            );
+            let on = builder.build_cover(&q.captures[0].regions.on).and(&reach0);
             let want = builder.var("M").and(&reach0);
             assert!(
                 on.equivalent_to(&want),
@@ -2718,7 +2716,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
             // Q's rising capture is the toggle !R*!Q over cols [R, Q] (the self-referential ring closes on
             // Q, not the folded/dropped master).
             assert_eq!(cols_of(&q.captures[0].regions), ["R", "Q"]);
-            let q_on = builder.build_cover(&q.captures[0].regions.on_cover);
+            let q_on = builder.build_cover(&q.captures[0].regions.on);
             assert!(
                 q_on.equivalent_to(&want),
                 "Q captures !R*!Q (the toggle ring)"
@@ -2727,7 +2725,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
             // M equals Q, so capturing !M is capturing !Q.
             let mcap = &mm.captures[0].regions;
             assert_eq!(cols_of(mcap), ["R", "Q"]);
-            let m_on = builder.build_cover(&mcap.on_cover);
+            let m_on = builder.build_cover(&mcap.on);
             assert!(
                 m_on.equivalent_to(&want),
                 "M captures !R*!Q (=!R*!M at the pre-fall states), inverting, no special-casing"
@@ -2765,8 +2763,8 @@ Qn = "!( !(!M*CLK) * Q )"
             let qn = reg(&es, "Qn");
             assert_eq!(q.captures[0].clock.edge, Edge::Rise);
             assert_eq!(qn.captures[0].clock.edge, Edge::Rise);
-            let q_on = builder.build_cover(&q.captures[0].regions.on_cover);
-            let qn_on = builder.build_cover(&qn.captures[0].regions.on_cover);
+            let q_on = builder.build_cover(&q.captures[0].regions.on);
+            let qn_on = builder.build_cover(&qn.captures[0].regions.on);
             assert!(q_on.equivalent_to(&builder.var("D")), "Q captures D");
             assert!(qn_on.equivalent_to(&!&builder.var("D")), "Qn captures !D");
             assert_eq!(folded_list(&es), ["M"], "shared master M folded once");
@@ -2797,7 +2795,7 @@ Q = "CLK*L1 + !CLK*L2"
             assert_eq!(q.captures[0].clock.edge, Edge::Rise);
             assert_eq!(q.captures[1].clock.edge, Edge::Fall);
             for capture in &q.captures {
-                let on = builder.build_cover(&capture.regions.on_cover);
+                let on = builder.build_cover(&capture.regions.on);
                 assert!(on.equivalent_to(&builder.var("D")), "each edge captures D");
             }
             let mut folded = folded_list(&es);
@@ -2921,9 +2919,7 @@ Y = "!(T*A)"
             let nd = !&builder.var("D");
             for capture in &yst.captures {
                 assert!(
-                    builder
-                        .build_cover(&capture.regions.on_cover)
-                        .equivalent_to(&nd),
+                    builder.build_cover(&capture.regions.on).equivalent_to(&nd),
                     "each edge captures !D"
                 );
             }
@@ -2994,9 +2990,7 @@ Y = "!((CLK*L1 + !CLK*L2)*A) + B"
             let nd = !&builder.var("D");
             for capture in &yst.captures {
                 assert!(
-                    builder
-                        .build_cover(&capture.regions.on_cover)
-                        .equivalent_to(&nd),
+                    builder.build_cover(&capture.regions.on).equivalent_to(&nd),
                     "each edge captures !D"
                 );
             }
@@ -3014,7 +3008,7 @@ Y = "!((CLK*L1 + !CLK*L2)*A) + B"
             let gate_a = builder.var("A");
             let gate_b = builder.var("B");
             let expected_read = builder.var("Y_st").or(&!&gate_a).or(&gate_b);
-            let read = builder.build_cover(&es.derived[0].reads[0].function.on_cover);
+            let read = builder.build_cover(&es.derived[0].reads[0].function.on);
             assert!(read.equivalent_to(&expected_read), "Y reads Y_st + !A + B");
 
             // Both gates are released — the cube is `A*!B` — so the register resolves to `!M`.
@@ -3124,7 +3118,7 @@ Y = "!(Q*A)"
             assert_no_dropped_references(&m, &es);
 
             let q = reg(&es, "Q");
-            let off = builder.build_cover(&q.off_edge.off_cover);
+            let off = builder.build_cover(&q.off_edge.off);
             assert!(
                 off.equivalent_to(&builder.var("R")),
                 "Q keeps its off-edge R clear"
@@ -3174,8 +3168,8 @@ Y = "!(Q*A)"
                 .iter_mut()
                 .find(|ec| ec.node == name)
                 .expect("the minted register carries edge captures");
-            let good = builder.build_cover(&er.captures[0].regions.on_cover);
-            er.captures[0].regions.on_cover = regions::minimise_bdd(&!&good);
+            let good = builder.build_cover(&er.captures[0].regions.on);
+            er.captures[0].regions.on = regions::minimise_bdd(&!&good);
             assert!(
                 fails(|| assert_captures_faithful(&m, &es)),
                 "corrupting a derived register's capture cover must make the replay harness fail"
@@ -3187,8 +3181,8 @@ Y = "!(Q*A)"
         with_machine!(BDET_TOML, |builder, _a, _m2, m| {
             let mut es = classify(&m);
             let sr = &mut es.derived[0].reads[0].function;
-            let good = builder.build_cover(&sr.on_cover);
-            sr.on_cover = regions::minimise_bdd(&!&good);
+            let good = builder.build_cover(&sr.on);
+            sr.on = regions::minimise_bdd(&!&good);
             assert!(
                 fails(|| assert_reads_faithful(&m, &es)),
                 "corrupting a derived register's read function must make the read harness fail"
@@ -3203,8 +3197,7 @@ Y = "!(Q*A)"
         with_machine!(BDET_TOML, |builder, _a, _m2, m| {
             let mut es = classify(&m);
             let name = es.derived[0].name.clone();
-            es.derived[0].reads[0].function.on_cover =
-                regions::minimise_bdd(&builder.var(name.as_str()));
+            es.derived[0].reads[0].function.on = regions::minimise_bdd(&builder.var(name.as_str()));
             assert!(
                 fails(|| {
                     derived_values(&m, &es);
@@ -3322,7 +3315,7 @@ Q = "!(R*G)*(CLK*M + !CLK*Q)"
             let q = reg(&es, "Q");
             assert_eq!(clocks_of(q), ["CLK"]);
             // The conjunctive clear is carried faithfully: off_edge.off is forced-0 exactly where R*G.
-            let off = builder.build_cover(&q.off_edge.off_cover);
+            let off = builder.build_cover(&q.off_edge.off);
             let rg = builder.var("R").and(&builder.var("G"));
             assert!(off.equivalent_to(&rg), "off_edge.off must cover R*G");
             // D (captured value) and the clear's R, G all survive as register columns.
@@ -3381,14 +3374,14 @@ Q = "!R*(CLK*M + !CLK*Q)"
             assert_eq!(clocks_of(q), ["CLK"]);
             assert_eq!(q.captures.len(), 1);
             assert_eq!(q.captures[0].clock.edge, Edge::Rise);
-            let off = builder.build_cover(&q.off_edge.off_cover);
+            let off = builder.build_cover(&q.off_edge.off);
             let r = builder.var("R");
             assert!(off.equivalent_to(&r), "off_edge.off must cover R");
             // The transparent master M is a latch on CLK — no edge arc — and folds, exactly as in
             // MOR: declaring R a clock changes nothing behavioural. Q's capture generalises past
             // the folded master to !R*D.
             assert!(folded_list(&es).contains(&"M"), "the master folds");
-            let on = builder.build_cover(&q.captures[0].regions.on_cover);
+            let on = builder.build_cover(&q.captures[0].regions.on);
             let want = (!&r).and(&builder.var("D"));
             assert!(on.equivalent_to(&want), "capture is !R*D");
             let cols = q.cols.iter().map(Symbol::as_str).collect::<Vec<_>>();
@@ -3680,9 +3673,8 @@ GCLK = "CLK*EL"
                 "edge classification changed AnalysedCell::constraint_arcs_declared"
             );
             // `StateRegions` carries no `PartialEq` either, so its regions are compared field by field.
-            // The three `*_cover` fields are represented by their cube lists: `on`, `off` and `hold` are
-            // read from those very covers, per the struct's own doc, so the cubes are the covers'
-            // comparison.
+            // `Cover` does carry one — same header, same cubes — so each of the three regions compares
+            // as itself.
             assert_eq!(
                 off.regions.len(),
                 on.regions.len(),
@@ -3799,8 +3791,8 @@ Q = "!R*(B + CLK*M + !CLK*Q)"
             assert_eq!(q.captures[0].clock.edge, Edge::Rise);
             // The combinational set B is a Forced1 off-edge column (only while not cleared); the async
             // clear R is a Forced0 column. Edge and combinational arcs coexist on the one output.
-            let on = builder.build_cover(&q.off_edge.on_cover);
-            let off = builder.build_cover(&q.off_edge.off_cover);
+            let on = builder.build_cover(&q.off_edge.on);
+            let off = builder.build_cover(&q.off_edge.off);
             let b = builder.var("B");
             let r = builder.var("R");
             assert!(
@@ -3867,8 +3859,8 @@ Q = "!CLR*(PRE + CLK*M + !CLK*Q)"
             assert_eq!(clocks_of(q), ["CLK"]);
             assert_eq!(q.captures[0].clock.edge, Edge::Rise);
             // The async set/clear off-edge covers: PRE forces 1 (only while not cleared), CLR forces 0.
-            let on = builder.build_cover(&q.off_edge.on_cover);
-            let off = builder.build_cover(&q.off_edge.off_cover);
+            let on = builder.build_cover(&q.off_edge.on);
+            let off = builder.build_cover(&q.off_edge.off);
             let pre = builder.var("PRE");
             let clr = builder.var("CLR");
             assert!(
@@ -3926,7 +3918,7 @@ Q = "!CLKB*M2 + CLKB*Q"
                 .find(|c| c.clock.pin == "CLKA" && c.clock.edge == Edge::Rise)
                 .unwrap()
                 .regions;
-            let on = builder.build_cover(&cap_a.on_cover);
+            let on = builder.build_cover(&cap_a.on);
             let clkb = builder.var("CLKB");
             let want = clkb
                 .and(&builder.var("Q"))
@@ -3943,7 +3935,7 @@ Q = "!CLKB*M2 + CLKB*Q"
                 .unwrap()
                 .regions;
             assert_eq!(cols_of(cap_b), ["M2"], "CLKB fall reveals M2");
-            let on_b = builder.build_cover(&cap_b.on_cover);
+            let on_b = builder.build_cover(&cap_b.on);
             assert!(
                 on_b.equivalent_to(&builder.var("M2")),
                 "CLKB fall captures M2"
@@ -4042,16 +4034,14 @@ Q = "!( !(M2*!CLKB) * Qn )"
         builder: &BddBuilder<B, C>,
         m: &Machine<B, C>,
     ) -> Bdd<B, C> {
-        let mut reach = builder.constant(false);
-        for state in m
-            .explored
-            .order
-            .iter()
-            .filter(|s| s.vars().iter().all(|v| s.value_of(v.as_str()).is_some()))
-        {
-            reach = reach.or(&super::cube_bdd(builder, state));
-        }
-        reach
+        super::points_bdd(
+            builder,
+            m.explored
+                .order
+                .iter()
+                .filter(|s| s.vars().iter().all(|v| s.value_of(v.as_str()).is_some()))
+                .cloned(),
+        )
     }
 
     #[test]
@@ -4102,8 +4092,8 @@ Q = "!( !(M2*!CLKB) * Qn )"
             assert_eq!(cap.off, dff.captures[0].regions.off);
             assert_eq!(cap.hold, dff.captures[0].regions.hold);
             assert_eq!(q.off_edge.hold, dff.off_edge.hold, "universal hold");
-            assert!(q.off_edge.on.is_empty() && q.off_edge.off.is_empty());
-            let on = builder.build_cover(&cap.on_cover);
+            assert!(q.off_edge.on.num_cubes() == 0 && q.off_edge.off.num_cubes() == 0);
+            let on = builder.build_cover(&cap.on);
             assert!(on.equivalent_to(&builder.var("D")), "Q captures D exactly");
             // The complement carries the same edge capturing !D.
             let qn = reg(&es, "Qn");
@@ -4111,7 +4101,7 @@ Q = "!( !(M2*!CLKB) * Qn )"
                 (qn.captures[0].clock.pin.as_str(), qn.captures[0].clock.edge),
                 ("CLK", Edge::Rise)
             );
-            let qn_on = builder.build_cover(&qn.captures[0].regions.on_cover);
+            let qn_on = builder.build_cover(&qn.captures[0].regions.on);
             assert!(qn_on.equivalent_to(&!&builder.var("D")), "Qn captures !D");
 
             // The pass DFF folds its lone master M; the NAND master pair M/Mn is captureless and
@@ -4168,7 +4158,7 @@ Q = "!( !(M2*!CLKB) * Qn )"
                 .find(|c| c.clock.pin == "CLKA" && c.clock.edge == Edge::Rise)
                 .unwrap()
                 .regions;
-            let on = builder.build_cover(&cap_a.on_cover).and(&reach);
+            let on = builder.build_cover(&cap_a.on).and(&reach);
             let clkb = builder.var("CLKB");
             let want = clkb
                 .and(&!&qn_var)
@@ -4528,7 +4518,7 @@ Y = "CLK + !CLK*!R*Y"
                 [pin("CLK", Edge::Rise)],
                 "the rise types edge — a live delivered phase"
             );
-            let off = builder.build_cover(&y.off_edge.off_cover);
+            let off = builder.build_cover(&y.off_edge.off);
             assert!(
                 off.equivalent_to(&builder.var("R")),
                 "off_edge.off is the async clear R"

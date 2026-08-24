@@ -19,12 +19,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use espresso_logic::Symbol;
+use espresso_logic::{Anonymous, BoolExpr, Cover, ExprNode, Minterm, Symbol};
 
 use crate::emit::RegionAction;
 use crate::logic::arcs::{Edge, PinEdge};
 use crate::logic::edge::EdgeCaptures;
-use crate::logic::regions::{StateCube, StateRegions};
+use crate::logic::regions::StateRegions;
 use crate::model::AnalysedCell;
 use crate::text::Joined;
 
@@ -159,11 +159,12 @@ impl fmt::Display for PrimName<'_> {
 /// One level-sensitive signal's declaration: a constant function is a plain `module` with a continuous
 /// assignment, anything else the sequential UDP whose table encodes on (`1`), off (`0`) and hold (`-`).
 fn signal_item<'a>(name: PrimName<'a>, sr: &'a StateRegions) -> Item<'a> {
-    // Constant pin: no hold and one region empty ⇒ a tautology / contradiction.
-    if sr.hold.is_empty() && sr.off.is_empty() {
+    // Constant pin: no hold and one region empty ⇒ a tautology / contradiction. A region states nothing
+    // exactly where its cover holds no cube.
+    if sr.hold.num_cubes() == 0 && sr.off.num_cubes() == 0 {
         return Item::Constant(Constant { name, value: true });
     }
-    if sr.hold.is_empty() && sr.on.is_empty() {
+    if sr.hold.num_cubes() == 0 && sr.on.num_cubes() == 0 {
         return Item::Constant(Constant { name, value: false });
     }
     Item::Primitive(Primitive { name, regions: sr })
@@ -234,7 +235,11 @@ fn table_rows(sr: &StateRegions) -> Vec<TableRow<'_>> {
             action: Next::Hold,
         },
     ] {
-        rows.extend(cubes.iter().map(|cube| TableRow { cube, next: action }));
+        rows.extend(cubes.cubes().map(|cube| TableRow {
+            row: cube.inputs(),
+            next: action,
+            cols: &sr.cols,
+        }));
     }
     // IEEE 1364 matches a UDP row by its pattern and resolves an overlap by rule, never by a row's
     // position, so a consumer reads the table as a set of rows. This order over the row values is the
@@ -243,18 +248,28 @@ fn table_rows(sr: &StateRegions) -> Vec<TableRow<'_>> {
     rows
 }
 
-/// One row of a level-sensitive UDP table: the region cube it matches over the signal's columns and the
-/// state the pin takes there. The current-state (`reg`) field is `?` — a level row matches on the input
-/// columns alone, and a hold row is what carries the pin's prior state forward.
+/// One row of a level-sensitive UDP table: the region cube it matches, as the row of tri-state values
+/// that cube states over the signal's columns, and the state the pin takes there. The current-state
+/// (`reg`) field is `?` — a level row matches on the input columns alone, and a hold row is what carries
+/// the pin's prior state forward.
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 struct TableRow<'a> {
-    cube: &'a StateCube,
+    /// The cube's input pattern: the value it fixes at each column it constrains, every other column
+    /// being don't-care by the row not naming it.
+    row: &'a Minterm<Symbol>,
     next: Next,
+    /// The signal's columns, which the row is projected onto as the line is written — the UDP being a
+    /// columnar format, its columns are what the row has to be laid out over.
+    cols: &'a [Symbol],
 }
 
 impl fmt::Display for TableRow<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} : ? : {};", Pattern(self.cube), self.next)
+        let pattern = Pattern {
+            row: self.row,
+            cols: self.cols,
+        };
+        write!(f, "{pattern} : ? : {};", self.next)
     }
 }
 
@@ -276,12 +291,16 @@ impl fmt::Display for Next {
     }
 }
 
-/// A cube as space-separated UDP table columns, one [`Level`] per column of the header order.
-struct Pattern<'a>(&'a StateCube);
+/// A cube as space-separated UDP table columns: the row's value at each column, in header order. A
+/// column the row does not name is absent from it and so reads as don't-care.
+struct Pattern<'a> {
+    row: &'a Minterm<Symbol>,
+    cols: &'a [Symbol],
+}
 
 impl fmt::Display for Pattern<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Joined::new(self.0.iter(), " ", |val: &Option<bool>| Level(*val)).fmt(f)
+        Joined::new(self.cols.iter(), " ", |col| Level(self.row.value_of(col))).fmt(f)
     }
 }
 
@@ -398,14 +417,13 @@ fn edge_table_rows(er: &EdgeCaptures) -> Vec<EdgeRow> {
                 action: Next::Off,
             },
         ] {
-            rows.extend(cubes.iter().map(|cube| {
+            rows.extend(cubes.cubes().map(|cube| {
                 region_row(
                     er,
                     &cols,
                     &clocks,
                     Some(&capture.clock),
-                    &regions.cols,
-                    cube,
+                    cube.inputs(),
                     action,
                 )
             }));
@@ -426,8 +444,8 @@ fn edge_table_rows(er: &EdgeCaptures) -> Vec<EdgeRow> {
     ] {
         rows.extend(
             cubes
-                .iter()
-                .map(|cube| region_row(er, &cols, &clocks, None, &er.off_edge.cols, cube, action)),
+                .cubes()
+                .map(|cube| region_row(er, &cols, &clocks, None, cube.inputs(), action)),
         );
     }
 
@@ -477,37 +495,35 @@ fn edge_table_rows(er: &EdgeCaptures) -> Vec<EdgeRow> {
     rows
 }
 
-/// One region row of an edge-register table: the data columns (`cols`, self and clocks excluded) filled
-/// from `cube` by column name against `region_cols`, then the clock columns (`clocks`, in order), the
-/// current-state (`reg`) field and the `next` action. When `active` names a clock edge, that clock's
-/// column carries the edge and every OTHER clock column carries its level
-/// from `cube` (a conditioned capture references the other clock's level); when `active` is `None` (a
-/// clock-independent level row) every clock column reads its `cube` level, which is `?` for an off-edge
-/// region since it never references a clock. A data or clock column the cube does not constrain (or absent
-/// from `region_cols`) reads `?`. The `reg` field is `?` unless the register is self-referencing (its own
-/// symbol in `er.cols`), in which case it carries that node's literal from `cube` — the capture's
-/// dependence on the register's own prior state.
+/// One region row of an edge-register table: the data columns (`cols`, self and clocks excluded) read
+/// out of `row` by name, then the clock columns (`clocks`, in order), the current-state (`reg`) field
+/// and the `next` action. When `active` names a clock edge, that clock's column carries the edge and
+/// every OTHER clock column carries its level from `row` (a conditioned capture references the other
+/// clock's level); when `active` is `None` (a clock-independent level row) every clock column reads its
+/// `row` level, which is `?` for an off-edge region since it never references a clock. A data or clock
+/// column the row does not name is a don't-care in it and reads `?`. The `reg` field is `?` unless the
+/// register is self-referencing (its own symbol in `er.cols`), in which case it carries that node's
+/// literal from `row` — the capture's dependence on the register's own prior state.
 fn region_row(
     er: &EdgeCaptures,
     cols: &[&Symbol],
     clocks: &[&Symbol],
     active: Option<&PinEdge>,
-    region_cols: &[Symbol],
-    cube: &StateCube,
+    row: &Minterm<Symbol>,
     next: Next,
 ) -> EdgeRow {
     let mut cells: Vec<EdgeColumn> = cols
         .iter()
-        .map(|&c| EdgeColumn::Level(level_at(c, region_cols, cube)))
+        .map(|&c| EdgeColumn::Level(Level(row.value_of(c))))
         .collect();
     // Clock columns LAST, in clocks() order: the capturing clock carries its edge indicator, every other
-    // clock its conditioning level from the cube.
+    // clock its conditioning level from the row.
     cells.extend(clocks.iter().map(|&clock| match active {
         Some(active) if clock == &active.pin => EdgeColumn::Edge(active.edge),
-        _ => EdgeColumn::Level(level_at(clock, region_cols, cube)),
+        _ => EdgeColumn::Level(Level(row.value_of(clock))),
     }));
     let reg = if er.cols.contains(&er.node) {
-        level_at(&er.node, region_cols, cube)
+        Level(row.value_of(&er.node))
     } else {
         Level(None)
     };
@@ -568,17 +584,6 @@ impl fmt::Display for EdgeColumn {
             EdgeColumn::Change => f.write_str("(??)"),
         }
     }
-}
-
-/// The level of column `col` in `cube`, looked up by name against `region_cols` (a subset of the
-/// register's columns). Absent — the region does not constrain this column — is the any-value `?`.
-fn level_at(col: &Symbol, region_cols: &[Symbol], cube: &StateCube) -> Level {
-    Level(
-        region_cols
-            .iter()
-            .position(|c| c == col)
-            .and_then(|i| cube[i]),
-    )
 }
 
 /// The `celldefine`d wrapper module: the cell's ports, an internal `wire` per surviving state node, a
@@ -643,7 +648,7 @@ fn wrapper<'a>(
                 .chain(data_cols(er))
                 .chain(er.clocks())
                 .collect()
-        } else if sr.hold.is_empty() && (sr.on.is_empty() || sr.off.is_empty()) {
+        } else if sr.hold.num_cubes() == 0 && (sr.on.num_cubes() == 0 || sr.off.num_cubes() == 0) {
             vec![&sig.name]
         } else {
             std::iter::once(&sig.name).chain(sr.cols.iter()).collect()
@@ -672,9 +677,9 @@ fn wrapper<'a>(
     let assigns: Vec<Assign> = cell
         .signal_regions()
         .filter_map(|(sig, _)| {
-            read_of.get(sig.name.as_str()).map(|&function| Assign {
+            read_of.get(sig.name.as_str()).map(|&reads| Assign {
                 pin: &sig.name,
-                function,
+                function: on_expr(&reads.on),
             })
         })
         .collect();
@@ -744,78 +749,85 @@ impl fmt::Display for Instance<'_> {
     }
 }
 
-/// One read-gated output's continuous assignment: the output pin and the read function it takes over the
-/// factored register and its gate pins.
+/// One read-gated output's continuous assignment: the output pin and the Boolean function it reads off
+/// the factored register and its gate pins.
 struct Assign<'a> {
     pin: &'a Symbol,
-    function: &'a StateRegions,
+    function: BoolExpr,
 }
 
 impl fmt::Display for Assign<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "assign {} = {};", self.pin, Sop(self.function))
+        write!(f, "assign {} = {};", self.pin, VerilogExpr(&self.function))
     }
 }
 
-/// A read function's on-region as a Verilog sum-of-products expression over its columns: literals joined
-/// by `&`, product terms by `|`, negation `~`. An empty on-set is `1'b0`; an on-set holding a cube that
-/// constrains no column is a tautology, so the whole expression is `1'b1`.
-struct Sop<'a>(&'a StateRegions);
-
-impl fmt::Display for Sop<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let sr = self.0;
-        if sr.on.is_empty() {
-            return f.write_str("1'b0");
-        }
-        if sr.on.iter().any(|cube| literals(sr, cube).next().is_none()) {
-            return f.write_str("1'b1");
-        }
-        Joined::new(sr.on.iter(), " | ", |cube| Product { regions: sr, cube }).fmt(f)
+/// The function a region's on-set states, lowered from the minimised cover that holds it. A cover with
+/// no cube has no output to lower and is the constant `false` (`BddBuilder::build_cover`: "an empty
+/// cover is `false`").
+fn on_expr(cover: &Cover<Symbol, Anonymous>) -> BoolExpr {
+    if cover.num_cubes() == 0 {
+        return BoolExpr::constant(false);
     }
+    cover
+        .to_expr_by_index(0)
+        .expect("a region cover carries its single anonymous output")
 }
 
-/// One product term of a [`Sop`]: the cube's literals, `&`-joined inside parentheses.
-struct Product<'a> {
-    regions: &'a StateRegions,
-    cube: &'a StateCube,
+/// A Boolean expression in Verilog's spelling: `~` for negation, `&`, `|` and `^` for the binary
+/// operators, and the sized literals `1'b1`/`1'b0` for the constants. Only the spelling differs from the
+/// expression layer's own `Display`, so the structure is what travels here and the text is made once, in
+/// this sink.
+struct VerilogExpr<'a>(&'a BoolExpr);
+
+/// How tightly a Verilog operator binds, loosest first. Verilog orders these `|` looser than `^` looser
+/// than `&` looser than `~`, which is the order the expression layer parses with, so a subterm needs
+/// parentheses exactly where it binds looser than the position holding it.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Binding {
+    Or,
+    Xor,
+    And,
+    Unary,
 }
 
-impl fmt::Display for Product<'_> {
+impl fmt::Display for VerilogExpr<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let literals = Joined::new(
-            literals(self.regions, self.cube),
-            " & ",
-            std::convert::identity,
+        let text = self.0.fold_with_context(
+            // The root sits in no operator, so nothing there can bind too loosely.
+            Binding::Or,
+            // Descending, each operand takes the binding of the operator holding it; the fold never
+            // descends into a leaf.
+            |node, _| {
+                let operand = match node {
+                    ExprNode::Or(..) => Binding::Or,
+                    ExprNode::Xor(..) => Binding::Xor,
+                    ExprNode::And(..) => Binding::And,
+                    _ => Binding::Unary,
+                };
+                (operand, operand)
+            },
+            // Coming back up, a node writes its operator over its rendered operands and parenthesises
+            // itself where the position it sits in binds tighter than it does.
+            |node, position| {
+                let bracket = |binding, text: String| {
+                    if binding < position {
+                        format!("({text})")
+                    } else {
+                        text
+                    }
+                };
+                match node {
+                    ExprNode::Variable(name) => name.to_owned(),
+                    ExprNode::Constant(value) => if value { "1'b1" } else { "1'b0" }.to_owned(),
+                    ExprNode::Not(inner) => bracket(Binding::Unary, format!("~{inner}")),
+                    ExprNode::And(l, r) => bracket(Binding::And, format!("{l} & {r}")),
+                    ExprNode::Xor(l, r) => bracket(Binding::Xor, format!("{l} ^ {r}")),
+                    ExprNode::Or(l, r) => bracket(Binding::Or, format!("{l} | {r}")),
+                }
+            },
         );
-        write!(f, "({literals})")
-    }
-}
-
-/// The literals `cube` states over `sr`'s columns, in column order. A column the cube leaves
-/// unconstrained states none.
-fn literals<'a>(
-    sr: &'a StateRegions,
-    cube: &'a StateCube,
-) -> impl Iterator<Item = CubeLiteral<'a>> + Clone {
-    sr.cols
-        .iter()
-        .zip(cube.iter())
-        .filter_map(|(col, &value)| value.map(|level| CubeLiteral { col, level }))
-}
-
-/// One literal of a Verilog expression: the column, negated (`~`) where the cube holds it low.
-struct CubeLiteral<'a> {
-    col: &'a Symbol,
-    level: bool,
-}
-
-impl fmt::Display for CubeLiteral<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if !self.level {
-            f.write_str("~")?;
-        }
-        write!(f, "{}", self.col)
+        f.write_str(&text)
     }
 }
 
@@ -823,6 +835,7 @@ impl fmt::Display for CubeLiteral<'_> {
 mod tests {
     use super::*;
     use crate::model::{analyse_both, analyse_one as analyse, AnalysedPair};
+    use espresso_logic::bdd_builder;
 
     /// A cell's model as the text the sink writes: its declarations, each written in turn.
     fn emit(cell: &AnalysedCell) -> String {
@@ -973,6 +986,58 @@ Y = "!((CLK*L1 + !CLK*L2)*A)"
         assert!(v.contains("BDET_Y_st u_BDET_Y_st (Y_st, D, CLK);"));
         assert!(v.contains("module BDET(Y, CLK, D, A);"));
         assert!(!v.contains("BDET_L1") && !v.contains("BDET_L2"));
+    }
+
+    #[test]
+    fn verilog_expression_brackets_only_what_binds_too_loosely() {
+        // `|` binds looser than `&`, so a disjunction under a conjunction takes brackets, and `^` looser
+        // than `~`, so does a negated exclusive-or. The conjunction is the root and sits under no
+        // operator, so it takes none.
+        let nested = BoolExpr::parse("(a | b) & ~(c ^ a)").expect("the fixture expression parses");
+        assert_eq!(VerilogExpr(&nested).to_string(), "(a | b) & ~(c ^ a)");
+        // The same operators the other way up: `&` and `~` bind tighter than the `|` holding them, so
+        // neither needs brackets.
+        let flat = BoolExpr::parse("a & b | ~c").expect("the fixture expression parses");
+        assert_eq!(VerilogExpr(&flat).to_string(), "a & b | ~c");
+        // The constants are Verilog's sized literals, not the bare `1`/`0` the expression layer prints.
+        assert_eq!(VerilogExpr(&BoolExpr::constant(true)).to_string(), "1'b1");
+        assert_eq!(VerilogExpr(&BoolExpr::constant(false)).to_string(), "1'b0");
+    }
+
+    #[test]
+    fn read_gate_assign_states_the_read_function_over_its_columns() {
+        // BDET again: the factored register `Y_st` captures `!D`, so the read gate `Y = !(X * A)` over
+        // the register's own value `X = !Y_st` is `Y_st + !A`. Reading the emitted expression back and
+        // comparing the two functions in one manager checks the text denotes that, whichever equivalent
+        // form the cover lowers to.
+        let cell = analyse(
+            r#"
+[[cell]]
+name = "BDET"
+inputs = ["CLK", "D", "A"]
+clock = ["CLK"]
+[cell.internal]
+L1 = "!CLK*D + CLK*L1"
+L2 = "CLK*D + !CLK*L2"
+[cell.outputs]
+Y = "!((CLK*L1 + !CLK*L2)*A)"
+"#,
+        );
+        let v = emit(&cell);
+        let line = v
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("assign Y = "))
+            .expect("the read-gated output emits a continuous assign");
+        let emitted = line.strip_suffix(';').expect("the assign is terminated");
+        let builder = bdd_builder!();
+        let expected = builder.parse("Y_st + !A").expect("the reference parses");
+        let actual = builder
+            .parse(emitted)
+            .expect("the emitted expression parses");
+        assert!(
+            actual.equivalent_to(&expected),
+            "emitted `{emitted}` must denote Y_st + !A"
+        );
     }
 
     #[test]

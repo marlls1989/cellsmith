@@ -48,9 +48,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use espresso_logic::{Anonymous, Cover, Minimizable, Minterm, Symbol};
 
-use crate::emit::RegionAction;
 use crate::logic::arcs::Edge;
-use crate::logic::regions::{StateCube, StateRegions};
+use crate::logic::regions::StateRegions;
 use crate::model::AnalysedCell;
 
 /// A single state node's next-state action in a joint row.
@@ -299,15 +298,15 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     let passes: [CoverPass; 3] = [
         CoverPass {
             action: Next::High,
-            pick: |sr| &sr.on_cover,
+            pick: |sr| &sr.on,
         },
         CoverPass {
             action: Next::Low,
-            pick: |sr| &sr.off_cover,
+            pick: |sr| &sr.off,
         },
         CoverPass {
             action: Next::Hold,
-            pick: |sr| &sr.hold_cover,
+            pick: |sr| &sr.hold,
         },
     ];
 
@@ -347,7 +346,7 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
         for cube in minimised.cubes() {
             let slots = row_map
                 .entry(cube.inputs().clone())
-                .or_insert_with(|| vec![None; cols_layout.n_nodes]);
+                .or_insert_with(|| vec![None; cols_layout.nodes.len()]);
             for (out, asserted) in cube.outputs().vars().iter().zip(cube.outputs().iter()) {
                 if !asserted {
                     continue;
@@ -389,28 +388,27 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     for er in edge_regs {
         let reg = cols_layout.node_index[&er.node];
         let single = er.captures.len() == 1;
-        let mut push =
-            |clock: &Symbol, token: EdgeTok, action: Next, cube: &StateCube, cols: &[Symbol]| {
-                edge_rows.push(cols_layout.edge_row(clock, token, reg, action, cube, cols));
-            };
+        let mut push = |clock: &Symbol, token: EdgeTok, action: Next, cube: &Minterm<Symbol>| {
+            edge_rows.push(cols_layout.edge_row(clock, token, reg, action, cube));
+        };
         for capture in &er.captures {
             let active = match capture.clock.edge {
                 Edge::Rise => EdgeTok::Rise,
                 Edge::Fall => EdgeTok::Fall,
             };
             let regions = &capture.regions;
-            for RegionAction { cubes, action } in [
-                RegionAction {
-                    cubes: &regions.on,
+            for CoverPass { action, pick } in [
+                CoverPass {
                     action: Next::High,
+                    pick: |sr| &sr.on,
                 },
-                RegionAction {
-                    cubes: &regions.off,
+                CoverPass {
                     action: Next::Low,
+                    pick: |sr| &sr.off,
                 },
             ] {
-                for cube in cubes {
-                    push(&capture.clock.pin, active, action, cube, &regions.cols);
+                for cube in pick(regions).cubes() {
+                    push(&capture.clock.pin, active, action, cube.inputs());
                 }
             }
         }
@@ -430,22 +428,22 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
         let off_clock = er.clocks();
         let off_clock = off_clock[0];
         let off = &er.off_edge;
-        for RegionAction { cubes, action } in [
-            RegionAction {
-                cubes: &off.on,
+        for CoverPass { action, pick } in [
+            CoverPass {
                 action: Next::High,
+                pick: |sr| &sr.on,
             },
-            RegionAction {
-                cubes: &off.off,
+            CoverPass {
                 action: Next::Low,
+                pick: |sr| &sr.off,
             },
-            RegionAction {
-                cubes: &off.hold,
+            CoverPass {
                 action: Next::Hold,
+                pick: |sr| &sr.hold,
             },
         ] {
-            for cube in cubes {
-                push(off_clock, off_token, action, cube, &off.cols);
+            for cube in pick(off).cubes() {
+                push(off_clock, off_token, action, cube.inputs());
             }
         }
     }
@@ -470,51 +468,54 @@ struct LevelSignal<'a> {
     regions: &'a StateRegions,
 }
 
-/// How a cover pass reaches the cover it stacks: one of the three cached region covers of a signal's
+/// How a pass reaches the cover it reads: one of the three cached region covers of a signal's
 /// [`StateRegions`].
 type Pick = fn(&StateRegions) -> &Cover<Symbol, Anonymous>;
 
-/// One pass of the cover-algebra fold: the region cover it takes from each level signal, and the action
-/// every asserted output column of that cover's cubes stamps into a row slot.
+/// One region of a node's behaviour paired with the next-state action its cubes stamp. The level fold
+/// stacks the picked cover of every level signal into one multi-output cover per pass; an edge register
+/// walks the picked cover of one capture, or of its off-edge, cube by cube.
 struct CoverPass {
     /// The next-state action this pass writes.
     action: Next,
-    /// The cover it reads for that action — `on_cover` for `High`, `off_cover` for `Low`, `hold_cover`
-    /// for `Hold`.
+    /// The cover it reads for that action — the region's `on` for `High`, `off` for `Low`, `hold` for
+    /// `Hold`.
     pick: Pick,
 }
 
-/// Column layout shared by every [`EdgeRow`] built for one cell: each input/state node's original name
-/// mapped to its slot index in the row vectors, plus the two widths, so `edge_row` doesn't rebuild these
-/// loop-invariant maps per row.
+/// The two column headers a row of this cell is written over — the input nodes and the state nodes under
+/// their ORIGINAL signal names — plus each state node's slot index, which the level fold and the edge
+/// pass both need to stamp a next action by node name.
 struct ColumnLayout<'a> {
-    input_index: HashMap<&'a Symbol, usize>,
+    /// The input-node header: what a row's `inputs` field is aligned to.
+    inputs: &'a [Symbol],
+    /// The state-node header in node order: what a row's `current` and `next` fields are aligned to.
+    nodes: &'a [Symbol],
+    /// Each state node's slot in `nodes`, built once rather than rescanned per cube.
     node_index: HashMap<&'a Symbol, usize>,
-    n_inputs: usize,
-    n_nodes: usize,
 }
 
 impl<'a> ColumnLayout<'a> {
-    /// Index `inputs` and `nodes` by name into their slot positions.
+    /// Hold the two headers and index `nodes` by name into its slot positions.
     fn new(inputs: &'a [Symbol], nodes: &'a [Symbol]) -> Self {
-        let input_index: HashMap<&'a Symbol, usize> =
-            inputs.iter().enumerate().map(|(i, n)| (n, i)).collect();
         let node_index: HashMap<&'a Symbol, usize> =
             nodes.iter().enumerate().map(|(i, n)| (n, i)).collect();
-        debug_assert_eq!(input_index.len(), inputs.len());
         debug_assert_eq!(node_index.len(), nodes.len());
+        // A repeat in either header would be deduplicated by `project_to_labels` — which names a SET of
+        // variables — and the projection would then be one column short of the header it is read against.
+        debug_assert_eq!(inputs.iter().collect::<BTreeSet<_>>().len(), inputs.len());
         ColumnLayout {
-            n_inputs: inputs.len(),
-            n_nodes: nodes.len(),
-            input_index,
+            inputs,
+            nodes,
             node_index,
         }
     }
 
-    /// Assemble one [`EdgeRow`] from a region cube, splitting each set literal by name into an input
-    /// column (aligned to `input_nodes` via `input_index`) or a current-state column (aligned to
-    /// `internal_nodes` via `node_index`). A capture cofactor never references the register's clock, so
-    /// that column keeps its `None` placeholder and the renderer prints the edge token there; an off-edge
+    /// Assemble one [`EdgeRow`] from a region cube's input pattern, re-homed onto each header in turn:
+    /// `Minterm::project_to_labels` keeps the variables the header names, brings in the rest as
+    /// don't-care and drops the ones it does not name, so the input columns and the current-state columns
+    /// each read straight off their own projection. A capture cofactor never references the register's
+    /// clock, so that column arrives as `None` and the renderer prints the edge token there; an off-edge
     /// forcing cover MAY pin the clock (a phase-conditioned `CLK*R` clear), and that level lands in
     /// `inputs` so the renderer prints the clock literal instead. Only the register's own next slot
     /// carries `action`.
@@ -524,28 +525,21 @@ impl<'a> ColumnLayout<'a> {
         token: EdgeTok,
         reg: usize,
         action: Next,
-        cube: &StateCube,
-        cols: &[Symbol],
+        cube: &Minterm<Symbol>,
     ) -> EdgeRow {
-        let mut inputs = vec![None; self.n_inputs];
-        let mut current = vec![None; self.n_nodes];
-        for (col, val) in cols.iter().zip(cube.iter()) {
-            if val.is_none() {
-                continue;
-            }
-            if let Some(&i) = self.input_index.get(&col) {
-                inputs[i] = *val;
-            } else if let Some(&i) = self.node_index.get(&col) {
-                current[i] = *val;
-            }
-        }
-        let mut next = vec![None; self.n_nodes];
+        let mut next = vec![None; self.nodes.len()];
         next[reg] = Some(action);
         EdgeRow {
             clock: clock.clone(),
             token,
-            inputs,
-            current,
+            inputs: cube
+                .project_to_labels(self.inputs.iter().cloned())
+                .iter()
+                .collect(),
+            current: cube
+                .project_to_labels(self.nodes.iter().cloned())
+                .iter()
+                .collect(),
             next,
         }
     }
@@ -557,7 +551,7 @@ mod tests {
     use crate::logic::regions::StateRegions;
     use crate::model::{analyse_both, analyse_one as analyse, AnalysedOutput, AnalysedPair};
     use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
-    use espresso_logic::{bdd_builder, sync_bdd_builder};
+    use espresso_logic::{bdd_builder, sync_bdd_builder, CoverType, Cube, CubeType, OutputSet};
 
     const T: Option<bool> = Some(true);
     const F: Option<bool> = Some(false);
@@ -891,9 +885,11 @@ Y = "!(A*B)"
         assert!(build_state_model(&cell).is_none());
     }
 
-    /// Rebuild a BDD from the emitted rows selecting one per-node action: OR of the selected rows, each
-    /// the AND of its fixed input/current literals over the joint header (input nodes ++ state-signal
-    /// original names). The reconstruct idiom mirrors `regions.rs`'s equivalence test.
+    /// Rebuild a BDD from the emitted rows selecting one per-node action: the ON-set of the cover whose
+    /// cubes are exactly those rows, each re-paired with the joint header (input nodes ++ state-signal
+    /// original names) it was written positionally over. A row that fixes no column is the all-don't-care
+    /// cube, and no selected row at all is the empty cover, which `build_cover` reads as `true` and
+    /// `false` respectively.
     fn reconstruct_action<B: Brand, C: ManagerCell>(
         builder: &BddBuilder<B, C>,
         input_nodes: &[Symbol],
@@ -902,26 +898,20 @@ Y = "!(A*B)"
         node: usize,
         want: Next,
     ) -> Bdd<B, C> {
-        let mut cover = builder.constant(false);
-        for r in rows.iter().filter(|r| r.next[node] == Some(want)) {
-            let mut product = builder.constant(true);
-            for (col, val) in input_nodes.iter().zip(r.inputs.iter()) {
-                match val {
-                    Some(true) => product = product.and(&builder.var(col.as_str())),
-                    Some(false) => product = product.and(&!builder.var(col.as_str())),
-                    None => {}
-                }
-            }
-            for (col, val) in state_orig.iter().zip(r.current.iter()) {
-                match val {
-                    Some(true) => product = product.and(&builder.var(col.as_str())),
-                    Some(false) => product = product.and(&!builder.var(col.as_str())),
-                    None => {}
-                }
-            }
-            cover = cover.or(&product);
-        }
-        cover
+        let cubes = rows.iter().filter(|r| r.next[node] == Some(want)).map(|r| {
+            let literals: Vec<(Symbol, Option<bool>)> = input_nodes
+                .iter()
+                .zip(r.inputs.iter())
+                .chain(state_orig.iter().zip(r.current.iter()))
+                .map(|(col, val)| (col.clone(), *val))
+                .collect();
+            Cube::new(
+                Minterm::labeled(&literals).expect("the joint header names each column once"),
+                OutputSet::anonymous(&[true]),
+                CubeType::F,
+            )
+        });
+        builder.build_cover(&Cover::from_cubes(CoverType::F, cubes))
     }
 
     /// The crux of the cover construction: for every state signal of every fixture, the BDD
@@ -1725,8 +1715,8 @@ Q = "!R*(CLK*M + !CLK*Q)"
                 (
                     er.node.as_str(),
                     (
-                        builder.build_cover(&er.off_edge.on_cover),
-                        builder.build_cover(&er.off_edge.off_cover),
+                        builder.build_cover(&er.off_edge.on),
+                        builder.build_cover(&er.off_edge.off),
                     ),
                 )
             })

@@ -38,10 +38,6 @@
 use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
 use espresso_logic::{Anonymous, Cover, CoverType, CubeType, Minimizable, Symbol};
 
-/// One cube over the state-table/UDP column set: `Some(true)`/`Some(false)` for a fixed column,
-/// `None` for a don't-care. Aligned position-by-position to [`StateRegions::cols`].
-pub(crate) type StateCube = Vec<Option<bool>>;
-
 /// The regions of a signal as they appear in a **state table / sequential UDP**.
 ///
 /// Each region is a set of don't-care cubes (from the BDD's prime paths), so a variable a cube does
@@ -51,19 +47,20 @@ pub struct StateRegions {
     /// Input columns: the pin function's BDD support minus its own self-feedback, in BDD variable
     /// order. Every other signal the function references (another output or an internal node) that it
     /// actually depends on appears here; inputs the function ignores do not.
+    ///
+    /// This is the header shared by all three regions, and it is wider than any one of them: a region
+    /// cover carries only the variables its own cubes constrain (`Cover::input_labels`), so `hold`
+    /// drops every column the gap does not depend on and an empty region carries no header at all. The
+    /// UDP port list and the joint state table are written over the union, so they read this.
     pub(crate) cols: Vec<Symbol>,
-    pub(crate) on: Vec<StateCube>,
-    pub(crate) off: Vec<StateCube>,
-    pub(crate) hold: Vec<StateCube>,
-    /// The minimised on-region as a single-output F cover over `cols` (the same cover the `on` cubes
-    /// are read from). Kept so the joint state-table build can re-base and stack it into a
-    /// multi-output cover without rebuilding any BDD.
-    pub(crate) on_cover: Cover<Symbol, Anonymous>,
-    /// The minimised off-region cover, twin of [`on_cover`](Self::on_cover).
-    pub(crate) off_cover: Cover<Symbol, Anonymous>,
-    /// The minimised hold-region cover, twin of [`on_cover`](Self::on_cover). Empty for a signal with
-    /// no self-hold gap (cross-coupled emergent memory).
-    pub(crate) hold_cover: Cover<Symbol, Anonymous>,
+    /// The minimised on-region as a single-output F cover. The joint state-table build re-bases and
+    /// stacks it into a multi-output cover without rebuilding any BDD.
+    pub(crate) on: Cover<Symbol, Anonymous>,
+    /// The minimised off-region cover.
+    pub(crate) off: Cover<Symbol, Anonymous>,
+    /// The minimised hold-region cover. Empty for a signal with no self-hold gap (cross-coupled
+    /// emergent memory).
+    pub(crate) hold: Cover<Symbol, Anonymous>,
     /// The signal is a state variable — it lies on a dependency cycle (a direct self-hold or a larger
     /// coupling cycle, as classified by [`super::resolve::state_variables`]) — and so must emit a
     /// `statetable`, never a combinational `function`. This is independent of whether the signal has a
@@ -98,22 +95,17 @@ pub(crate) fn state_regions<B: Brand, C: ManagerCell>(
     // Minimise each region independently, keeping the minimised covers. This is safe precisely because
     // each is its own onset with no don't-care set: Espresso reproduces that exact region and cannot
     // bleed the hold gap into on/off.
-    let on_cover = minimise(f_side(&f.cover_over_fr(&cols)));
-    let off_cover = minimise(f_side(&(!f).cover_over_fr(&cols)));
+    let on = minimise(f_side(&f.cover_over_fr(&cols)));
+    let off = minimise(f_side(&(!f).cover_over_fr(&cols)));
 
     // The hold set is the undef gap = complement of (onset ∪ offset), reconstructed from the two region
     // covers as its own function so it, too, can be minimised as an independent onset. The shared per-cell
     // builder that minted `f` mints these too.
     let builder = f.builder();
-    let on_bdd = builder.build_cover(&on_cover);
-    let off_bdd = builder.build_cover(&off_cover);
+    let on_bdd = builder.build_cover(&on);
+    let off_bdd = builder.build_cover(&off);
     let hold_bdd = !(on_bdd.or(&off_bdd));
-    let hold_cover = minimise_bdd(&hold_bdd);
-
-    // Derive the `StateCube` views from the SAME minimised covers, so cube output is bit-identical.
-    let on = region_cubes(&on_cover, &cols);
-    let off = region_cubes(&off_cover, &cols);
-    let hold = region_cubes(&hold_cover, &cols);
+    let hold = minimise_bdd(&hold_bdd);
 
     let hysteretic = is_state;
 
@@ -122,9 +114,6 @@ pub(crate) fn state_regions<B: Brand, C: ManagerCell>(
         on,
         off,
         hold,
-        on_cover,
-        off_cover,
-        hold_cover,
         hysteretic,
     }
 }
@@ -147,16 +136,6 @@ pub(crate) fn minimise(cover: Cover<Symbol, Anonymous>) -> Cover<Symbol, Anonymo
 /// Espresso-minimise a region given as a BDD (the hold gap), as an F cover.
 pub(crate) fn minimise_bdd<B: Brand, C: ManagerCell>(bdd: &Bdd<B, C>) -> Cover<Symbol, Anonymous> {
     bdd.minimize().unwrap_or_else(|_| bdd.cover())
-}
-
-/// Read each cube of a region cover as a [`StateCube`] aligned to `cols` by variable name: a column
-/// the cube does not constrain (absent from its support) reads as `None` (don't-care). Reading by name
-/// with [`Minterm::value_of`] is order-independent, so no re-homing/projection of the cube is needed.
-pub(crate) fn region_cubes(cover: &Cover<Symbol, Anonymous>, cols: &[Symbol]) -> Vec<StateCube> {
-    cover
-        .cubes()
-        .map(|cube| cols.iter().map(|v| cube.inputs().value_of(v)).collect())
-        .collect()
 }
 
 #[cfg(test)]
@@ -196,9 +175,13 @@ Q = "A*B + Q*(A+B)"
             sr.cols.iter().map(Symbol::as_str).collect::<Vec<_>>(),
             ["A", "B"]
         );
-        assert_eq!(sr.on, vec![vec![Some(true), Some(true)]]); // A*B
-        assert_eq!(sr.off, vec![vec![Some(false), Some(false)]]); // !A*!B
-        assert_eq!(sr.hold.len(), 2); // A xor B
+        // Q is forced high only on A*B and low only on !A*!B, and holds across the gap the two leave,
+        // A xor B. One builder for all three so the covers and the expected functions share a manager.
+        let b = bdd_builder!();
+        let (a, bb) = (b.var("A"), b.var("B"));
+        assert!(b.build_cover(&sr.on).equivalent_to(&a.and(&bb)));
+        assert!(b.build_cover(&sr.off).equivalent_to(&(!&a).and(&!&bb)));
+        assert!(b.build_cover(&sr.hold).equivalent_to(&a.xor(&bb)));
     }
 
     #[test]
@@ -253,31 +236,6 @@ Q = "CLK*M + !CLK*Q"
     /// function even though the cube set changed.
     #[test]
     fn minimised_regions_are_equivalent_to_functions() {
-        use espresso_logic::bdd::BddBuilder;
-
-        // Rebuild a region BDD from its emitted cubes: OR of cubes, each cube the AND of its fixed
-        // literals. An empty cube list is the constant `false`; a cube with no fixed literal (all
-        // don't-care) is the constant `true`.
-        fn reconstruct<B: Brand, C: ManagerCell>(
-            builder: &BddBuilder<B, C>,
-            cols: &[Symbol],
-            cubes: &[StateCube],
-        ) -> Bdd<B, C> {
-            let mut cover = builder.constant(false);
-            for cube in cubes {
-                let mut product = builder.constant(true);
-                for (col, val) in cols.iter().zip(cube.iter()) {
-                    match val {
-                        Some(true) => product = product.and(&builder.var(col.as_str())),
-                        Some(false) => product = product.and(&!builder.var(col.as_str())),
-                        None => {}
-                    }
-                }
-                cover = cover.or(&product);
-            }
-            cover
-        }
-
         let cells = [
             r#"
 [[cell]]
@@ -340,19 +298,19 @@ Q = "(P1*P2*C+Q*(M1+M2+C))*!R"
                 let hold_bdd = !on_bdd.or(&off_bdd);
 
                 assert!(
-                    reconstruct(&builder, &sr.cols, &sr.on).equivalent_to(&on_bdd),
+                    builder.build_cover(&sr.on).equivalent_to(&on_bdd),
                     "on region mismatch for {}.{}",
                     cell.repr_name(),
                     sig.name
                 );
                 assert!(
-                    reconstruct(&builder, &sr.cols, &sr.off).equivalent_to(&off_bdd),
+                    builder.build_cover(&sr.off).equivalent_to(&off_bdd),
                     "off region mismatch for {}.{}",
                     cell.repr_name(),
                     sig.name
                 );
                 assert!(
-                    reconstruct(&builder, &sr.cols, &sr.hold).equivalent_to(&hold_bdd),
+                    builder.build_cover(&sr.hold).equivalent_to(&hold_bdd),
                     "hold region mismatch for {}.{}",
                     cell.repr_name(),
                     sig.name
@@ -374,8 +332,8 @@ Y = "!(A*B)"
         );
         let sr = regions_of(&cell, &cell.outputs[0]);
         assert!(!sr.hysteretic);
-        assert!(sr.hold.is_empty());
-        assert!(!sr.on.is_empty());
+        assert_eq!(sr.hold.num_cubes(), 0);
+        assert_ne!(sr.on.num_cubes(), 0);
     }
 
     #[test]
@@ -397,8 +355,8 @@ Qb = "!Qa * B"
         let qb = regions_of(&cell, &cell.outputs[1]);
         assert!(qa.hysteretic);
         assert!(qb.hysteretic);
-        assert!(qa.hold.is_empty());
-        assert!(qb.hold.is_empty());
+        assert_eq!(qa.hold.num_cubes(), 0);
+        assert_eq!(qb.hold.num_cubes(), 0);
     }
 
     #[test]

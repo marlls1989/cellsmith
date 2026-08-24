@@ -485,7 +485,7 @@ Q = "A + Q"
         assert_eq!(cell.regions.len(), 1);
         let q = &cell.regions[0];
         assert!(q.hysteretic, "a single-input keeper holds its own state");
-        assert!(!q.on.is_empty(), "Q is forced high when A is high");
+        assert_ne!(q.on.num_cubes(), 0, "Q is forced high when A is high");
         // No measured arc: the only rise leaves the uninitialised state, which is not characterised.
         assert!(
             cell.arcs.is_empty(),

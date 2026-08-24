@@ -933,7 +933,7 @@ library (sequentials) {
     }
     pin (GCLK) {
       direction : output;
-      state_function : "enB*CLKB + enA*CLKA";
+      state_function : "CLKB*enB + CLKA*enA";
     }
     pin (enA) {
       direction : internal;

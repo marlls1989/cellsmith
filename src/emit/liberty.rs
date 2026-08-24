@@ -23,12 +23,12 @@
 //! 'Sequential' is a property of an OUTPUT, not of the cell: each output pin is classified per output
 //! (Liberty UG Vol.1 pp.5-31..5-33), and each classification names NODES, never ports:
 //! - (A) an output that IS a state variable reads the node it minted: `state_function : "<node>"`;
-//! - (B) an output whose regions reference a state node carries `state_function : "<sop>"` over those
+//! - (B) an output whose regions reference a state node carries `state_function : "<expr>"` over those
 //!   nodes — including a former feedthrough or inverter of a single state node, rendered by the ordinary
-//!   SOP renderer as a plain or negated literal (e.g. `!Q_st`) (Liberty UG Vol.1 p.5-31, and the
+//!   function renderer as a plain or negated literal (e.g. `!Q_st`) (Liberty UG Vol.1 p.5-31, and the
 //!   `pin(QNZ){state_function:"QN"}` / feedthrough `pin(Y){state_function:"A"}` examples on p.5-33).
-//!   (A) is the special case of this where the SOP is the bare node, and the two emit identically;
-//! - (C) an output over primary inputs only carries a plain `function : "<sop>"`, EVEN inside a cell
+//!   (A) is the special case of this where the expression is the bare node, and the two emit identically;
+//! - (C) an output over primary inputs only carries a plain `function : "<expr>"`, EVEN inside a cell
 //!   that has a statetable.
 //!
 //! `cell_liberty` builds one cell's `cell (...) { ... }` groups; `library_liberty` states the whole run —
@@ -45,7 +45,7 @@ use liberty_parser::{
 use std::collections::BTreeMap;
 use std::fmt;
 
-use espresso_logic::Symbol;
+use espresso_logic::{Anonymous, BoolExpr, Cover, ExprNode, Symbol};
 
 use crate::emit::statetable::{build_state_model, EdgeRow, EdgeTok, Next, StateModel};
 use crate::logic::regions::StateRegions;
@@ -110,7 +110,7 @@ fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
             for (sig, sr) in cell.signal_regions().take(n_out) {
                 group.subgroups.push(logic_pin(
                     sig.name.as_str(),
-                    PinLogic::Function(function_sop(sr, None)),
+                    PinLogic::Function(function_expr(sr, None)),
                 ));
             }
         }
@@ -135,7 +135,7 @@ fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
                         // PIN ports — the register's internal pin and the gate pins — never a folded
                         // master.
                         Some(reads) => {
-                            PinLogic::StateFunction(function_sop(reads, Some(&model.node_of)))
+                            PinLogic::StateFunction(function_expr(reads, Some(&model.node_of)))
                         }
                         None => classify_output(&sig.name, sr, &model),
                     };
@@ -172,12 +172,12 @@ fn input_pin(name: &str) -> Group {
 /// Pairing the direction with the attribute here is what keeps the two from drifting apart: an
 /// output's logic can never be emitted on an internal pin, nor a node binding as an output's function.
 enum PinLogic {
-    /// `direction : output; function : "<sop>"` — a combinational output over primary inputs.
-    Function(String),
+    /// `direction : output; function : "<expr>"` — a combinational output over primary inputs.
+    Function(BoolExpr),
     /// `direction : output; state_function : "<expr>"` — an output's value as an expression over the
     /// statetable's nodes and input pins. A state output reads its own minted node; a dependent output
     /// reads the nodes it is a function of.
-    StateFunction(String),
+    StateFunction(BoolExpr),
     /// `direction : internal; internal_node : "<node>"` — a state-table node with no external pin,
     /// anchoring its column to a port (Liberty UG Vol.1 `pin(n1)` example). Both a genuine internal
     /// state node and the node minted for a state output take this form.
@@ -185,11 +185,16 @@ enum PinLogic {
 }
 
 /// `pin (<name>) { direction : <dir>; <attr> : "<value>"; }` — the one constructor for every pin that
-/// carries logic, with [`PinLogic`] fixing `<dir>` and `<attr>` together.
+/// carries logic, with [`PinLogic`] fixing `<dir>` and `<attr>` together. This is where a pin's logic
+/// becomes text: an expression is written in Liberty's own operator spelling by [`LibertyFunction`].
 fn logic_pin(name: &str, logic: PinLogic) -> Group {
     let (dir, attr, value) = match logic {
-        PinLogic::Function(sop) => ("output", "function", sop),
-        PinLogic::StateFunction(expr) => ("output", "state_function", expr),
+        PinLogic::Function(expr) => ("output", "function", LibertyFunction(&expr).to_string()),
+        PinLogic::StateFunction(expr) => (
+            "output",
+            "state_function",
+            LibertyFunction(&expr).to_string(),
+        ),
         PinLogic::InternalNode(node) => ("internal", "internal_node", node.as_str().to_owned()),
     };
     let mut pin = Group::new("pin", name);
@@ -208,15 +213,15 @@ fn classify_output(name: &Symbol, sr: &StateRegions, model: &StateModel) -> PinL
         // (A) This output IS a state variable: `state_function` states the pin's output logic — the
         // bare node it minted, which the output's own internal pin anchors. (Its cols may reference
         // other nodes, so this must be checked before the state-dependence predicate below.)
-        PinLogic::StateFunction(node.as_str().to_owned())
+        PinLogic::StateFunction(BoolExpr::var(node))
     } else if sr.cols.iter().any(|c| model.node_of.contains_key(c)) {
         // (B) This output DEPENDS on a state node — a state_function over the table's nodes.
-        PinLogic::StateFunction(function_sop(sr, Some(&model.node_of)))
+        PinLogic::StateFunction(function_expr(sr, Some(&model.node_of)))
     } else {
         // (C) Combinational output over primary inputs only — a plain `function`. By minimise
         // invariant I3 a surviving combinational output's support is inputs + state nodes only, so
         // 'no node_of column' == 'no transitive state dependence' (ref statetable.rs:112-122).
-        PinLogic::Function(function_sop(sr, Some(&model.node_of)))
+        PinLogic::Function(function_expr(sr, Some(&model.node_of)))
     }
 }
 
@@ -373,49 +378,135 @@ impl fmt::Display for Level {
     }
 }
 
-/// Render the on-region as a Liberty function string: a sum (`+`) of product (`*`) cubes, each a
-/// product of literals (`!` for negation) over the column header. A single empty cube is the
-/// tautology `"1"`; no cubes is the contradiction `"0"`.
+/// The on-region as the one expression a pin's `function` / `state_function` states: espresso rebuilds
+/// it from the minimised on-cover ([`Cover::to_expr_by_index`]), factoring out a literal several cubes
+/// share, so the result is a multi-level expression rather than always a flat sum of products. An
+/// empty on-region — a signal that never drives high — is the constant `0`, which the cover states by
+/// carrying no output at all and so is answered here.
 ///
 /// A region's columns are SIGNAL names, but a `state_function` must name the statetable's NODES, which
 /// for a state output is its minted `_st` node rather than the output's own name. `node_of` supplies
-/// that mapping; a column absent from it (a primary input) renders under its own name. Pass `None`
-/// only where the cell has no statetable at all and every column is therefore a primary input.
-fn function_sop(sr: &StateRegions, node_of: Option<&BTreeMap<Symbol, Symbol>>) -> String {
-    if sr.on.is_empty() {
-        return "0".to_owned();
+/// that mapping, applied to the cover's own input labels so the expression is rebuilt over the node
+/// names directly; a column absent from it (a primary input) keeps its own name. Pass `None` only
+/// where the cell has no statetable at all and every column is therefore a primary input.
+fn function_expr(sr: &StateRegions, node_of: Option<&BTreeMap<Symbol, Symbol>>) -> BoolExpr {
+    if sr.on.num_cubes() == 0 {
+        return BoolExpr::constant(false);
     }
-    let node_name = |col: &Symbol| -> String {
-        node_of
-            .and_then(|m| m.get(col))
-            .map_or_else(|| col.to_string(), |n| n.to_string())
-    };
-    let products: Vec<String> = sr
+    let nodes = sr
         .on
+        .input_labels()
         .iter()
-        .map(|cube| {
-            let lits: Vec<String> = sr
-                .cols
-                .iter()
-                .zip(cube.iter())
-                .filter_map(|(col, val)| match val {
-                    Some(true) => Some(node_name(col)),
-                    Some(false) => Some(format!("!{}", node_name(col))),
-                    None => None,
-                })
-                .collect();
-            if lits.is_empty() {
-                "1".to_owned()
-            } else {
-                lits.join("*")
-            }
-        })
-        .collect();
-    // If any product is the constant "1" the whole function is a tautology.
-    if products.iter().any(|p| p == "1") {
-        "1".to_owned()
-    } else {
-        products.join(" + ")
+        .map(|col| node_of.and_then(|m| m.get(col)).unwrap_or(col).clone());
+    let over_nodes: Cover<Symbol, Anonymous> = sr.on.clone().rename_inputs(nodes).expect(
+        "every column has a node of its own: `mint_state_node` escalates past a name in use",
+    );
+    over_nodes
+        .to_expr_by_index(0)
+        .expect("a region cover with cubes carries the single anonymous output they assert")
+}
+
+/// How tightly a Liberty operator binds, loosest first. Liberty gives a function expression's
+/// precedence as "left to right, with inversion performed first, then XOR, then AND, then OR" (Liberty
+/// Reference Manual, the `function` simple attribute), so the derived order IS that precedence and
+/// comparing two bindings settles whether an operand needs parentheses. `Atom` is a variable or a
+/// constant, which binds tighter than every operator and so never needs them.
+///
+/// Liberty's order is not the one `BoolExpr`'s own `Display` renders under, which binds AND tighter
+/// than XOR.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Binding {
+    Or,
+    And,
+    Xor,
+    Not,
+    Atom,
+}
+
+/// One rendered subexpression on its way up [`LibertyFunction`]'s fold, carrying the binding of its own
+/// top-level operator: that is what the enclosing operator needs in order to decide whether to
+/// parenthesise it.
+struct Rendered {
+    text: String,
+    binding: Binding,
+}
+
+impl Rendered {
+    /// A variable or a constant: it binds tighter than every operator, so nothing ever parenthesises it.
+    fn atom(text: String) -> Self {
+        Rendered {
+            text,
+            binding: Binding::Atom,
+        }
+    }
+
+    /// This subexpression as the operand of `!`, or as the LEFT operand of a binary operator binding at
+    /// `need`: parenthesised only where it binds strictly more loosely. Liberty's operators associate
+    /// left to right, so an equally-tight left operand re-parses into the same tree without them.
+    fn left_of(&self, need: Binding) -> String {
+        self.wrapped(self.binding < need)
+    }
+
+    /// This subexpression as the RIGHT operand of a binary operator binding at `need`: parenthesised
+    /// also where the two bind equally tightly, which unparenthesised would re-parse as the left-nested
+    /// tree instead.
+    fn right_of(&self, need: Binding) -> String {
+        self.wrapped(self.binding <= need)
+    }
+
+    fn wrapped(&self, parenthesise: bool) -> String {
+        if parenthesise {
+            format!("({})", self.text)
+        } else {
+            self.text.clone()
+        }
+    }
+}
+
+/// An expression as the text of a Liberty `function` or `state_function` attribute: `*` for AND, `+`
+/// for OR, `^` for XOR, `!` for NOT and `1`/`0` for the constants (Liberty Reference Manual, the
+/// `function` simple attribute's valid Boolean operators), parenthesised only where [`Binding`] says
+/// the text would otherwise re-parse into a different expression. Every pin logic attribute reaches
+/// the output through this, so the Liberty spelling of an operator is stated in one place.
+struct LibertyFunction<'a>(&'a BoolExpr);
+
+impl fmt::Display for LibertyFunction<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // `fold` walks the expression's own token stream iteratively, so a deeply nested function
+        // cannot overflow the stack.
+        let rendered = self.0.fold(|node: ExprNode<'_, Rendered>| match node {
+            ExprNode::Variable(name) => Rendered::atom(name.to_owned()),
+            ExprNode::Constant(value) => Rendered::atom(if value { "1" } else { "0" }.to_owned()),
+            ExprNode::Not(inner) => Rendered {
+                text: format!("!{}", inner.left_of(Binding::Not)),
+                binding: Binding::Not,
+            },
+            ExprNode::And(left, right) => Rendered {
+                text: format!(
+                    "{}*{}",
+                    left.left_of(Binding::And),
+                    right.right_of(Binding::And)
+                ),
+                binding: Binding::And,
+            },
+            ExprNode::Xor(left, right) => Rendered {
+                text: format!(
+                    "{}^{}",
+                    left.left_of(Binding::Xor),
+                    right.right_of(Binding::Xor)
+                ),
+                binding: Binding::Xor,
+            },
+            ExprNode::Or(left, right) => Rendered {
+                text: format!(
+                    "{} + {}",
+                    left.left_of(Binding::Or),
+                    right.right_of(Binding::Or)
+                ),
+                binding: Binding::Or,
+            },
+        });
+        f.write_str(&rendered.text)
     }
 }
 
@@ -423,6 +514,7 @@ fn function_sop(sr: &StateRegions, node_of: Option<&BTreeMap<Symbol, Symbol>>) -
 mod tests {
     use super::*;
     use crate::model::{analyse_both, analyse_one as analyse, AnalysedPair};
+    use std::collections::{BTreeSet, HashSet};
 
     /// The text one cell renders as inside the library: the groups [`cell_liberty`] builds of it,
     /// newline-terminated so [`parse_frag`]'s closing brace lands on a line of its own.
@@ -925,7 +1017,7 @@ Y = "!(A*B)"
     }
 
     #[test]
-    fn function_sop_renders_literals() {
+    fn function_expr_renders_the_regions_cubes() {
         let cell = analyse(
             r#"
 [[cell]]
@@ -936,10 +1028,19 @@ Y = "A*B + !C"
 "#,
         );
         let sr = &cell.regions[0];
-        let f = function_sop(sr, None);
-        // Must be a valid product-of-literals sum mentioning the pins.
-        assert!(f.contains('+') || f.contains('*') || f.contains('!'));
-        assert!(f.contains('A') || f.contains('C'));
+        let f = LibertyFunction(&function_expr(sr, None)).to_string();
+        // `A*B + !C` has exactly two prime implicants, `A*B` and `!C`, and both are essential — so the
+        // minimised on-region this renders is that one cover, whichever order the cubes and their
+        // literals come out in.
+        let products: BTreeSet<BTreeSet<&str>> = f
+            .split(" + ")
+            .map(|product| product.split('*').collect())
+            .collect();
+        assert_eq!(
+            products,
+            BTreeSet::from([BTreeSet::from(["A", "B"]), BTreeSet::from(["!C"])]),
+            "AOI renders its two essential primes: {f}"
+        );
     }
 
     #[test]
@@ -972,22 +1073,21 @@ Y = "!A"
             .find(|g| g.name == "INVX2")
             .expect("INVX2 cell present");
         /// A pin's declared direction, over Liberty's closed keyword set.
-        #[derive(Debug, PartialEq, Eq)]
+        #[derive(Debug, PartialEq, Eq, Hash)]
         enum Direction {
             Input,
             Output,
             Inout,
             Internal,
         }
-        /// One pin's identity in the comparison below: its name and its declared direction, `None` where
-        /// the pin carries no `direction` attribute.
-        #[derive(Debug, PartialEq, Eq)]
+        /// One pin's identity in the comparisons below: its name and its declared direction, `None`
+        /// where the pin carries no `direction` attribute.
+        #[derive(Debug, PartialEq, Eq, Hash)]
         struct PinSignature {
             name: Symbol,
             direction: Option<Direction>,
         }
-        // Identical pin sets: same pin names and directions, differing only in the group name.
-        let pins = |g: &&Group| -> Vec<PinSignature> {
+        let pins = |g: &&Group| -> HashSet<PinSignature> {
             g.subgroups
                 .iter()
                 .filter(|p| p.type_ == "pin")
@@ -1008,6 +1108,20 @@ Y = "!A"
                 })
                 .collect()
         };
+        // The cell declares one input and one combinational output, so each group carries exactly those
+        // two pins: the input `A` and the output `Y`. No state node, so no internal pin.
+        let declared = HashSet::from([
+            PinSignature {
+                name: Symbol::from("A"),
+                direction: Some(Direction::Input),
+            },
+            PinSignature {
+                name: Symbol::from("Y"),
+                direction: Some(Direction::Output),
+            },
+        ]);
+        assert_eq!(pins(invx1), declared);
+        // Identical pin sets: same pin names and directions, differing only in the group name.
         assert_eq!(pins(invx1), pins(invx2));
     }
 
