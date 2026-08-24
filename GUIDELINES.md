@@ -22,9 +22,10 @@ config surface, not from library-level compatibility.
 
 ## Efficiency and correctness come first
 
-Every rule below is a way of serving those two here; none is an end in itself. Where a rule and
-one of these appear to conflict, the conflict is a defect in the rule — raise it and fix it here
-rather than working around it.
+Every rule below about how the code is shaped and tested is a way of serving those two here; none
+is an end in itself. Where such a rule and one of these appear to conflict, the conflict is a defect
+in the rule — raise it and fix it here rather than working around it. The settled conventions —
+British spelling, and the Git section — are choices rather than trade-offs and stand outside this.
 
 Code that compromises efficiency to keep an order is wrong: the order has to earn what it costs.
 And a test that checks the output matches a reference is not establishing correctness — the test
@@ -32,13 +33,13 @@ has to reason about why that output is right.
 
 Read each rule for what it protects. A legitimate, strong and verifiable reason outranks the
 letter of a rule that did not anticipate it; a weak one does not, and "the rule does not quite
-cover my case" is not a reason at all.
+cover my case" is not a reason at all. Where such a reason holds, amend the rule here in the same
+change: outranking a rule's letter and fixing the rule are one act, not a licence to proceed alone.
 
 ## Language and style
 
 - British spelling everywhere it is written by us — identifiers, comments and user-facing
   output (`analyse`, `serialise`, `behaviour`, `optimisation`).
-- Name fields carry `espresso_logic::Symbol`, not `String`.
 
 ## Writing comments, docs and messages
 
@@ -122,23 +123,22 @@ rendered text, values, counts or multisets — and byte-identity or whole-text c
 this defect in its plainest form. State instead what the output must contain, and derive it
 from the input the test controls.
 
-Making a test cheaper is never a reason for anything. A test runs once and must be
-comprehensive, so the economies that justify a design choice in the code justify nothing here.
-And a test resting on equality often asserts no property at all — it asserts immutability, that
-the output has not changed since someone last looked. Immutability is a fact about the previous
-run, not about the thing under test. Checking that the output matches a reference does not
-establish correctness; the test has to reason about why that output is right.
+Making a test cheaper is never a reason to assert less; the economies that justify a design choice
+in the code justify nothing here. And a test resting on equality often asserts no property at all —
+it asserts immutability, that the output has not changed since someone last looked. Immutability is
+a fact about the previous run, not about the thing under test. Checking that the output matches a
+reference does not establish correctness; the test has to reason about why that output is right.
 
 The property a test asserts is one the code or its documentation states. Where neither states
 it, the claim belongs there first — otherwise the test pins something nothing promised, which
 is how a test comes to fail on an output that was always valid.
 
-An order is where this bites hardest. Keeping one needs a motivation stated where the order
-is, and that motivation has to be checkable and checked — a comment on its own settles
-nothing. Two kinds qualify. A reader outside this crate requires the position: a consuming
-format, a tool that parses by column. Or the order makes the algorithm cheaper than the
-unordered one would be — sorting to dedup, so equality walks two sequences instead of
-comparing every element against every other, is a reason by itself.
+An order is where this bites hardest. Keeping one needs a motivation stated where the order is,
+and that motivation has to be checkable — a reason nobody could test settles nothing. Two kinds
+qualify. A reader outside this crate requires the position: a consuming format, a tool that parses
+by column. Or the order makes the algorithm cheaper than the unordered one would be — sorting to
+dedup, so equality walks two sequences instead of comparing every element against every other, is
+a reason by itself.
 
 What does not qualify is an order bought only for its own stability. "Held sorted so the
 report is stable", "ordered so the fold is well-defined", "sorted so the comparison passes"
@@ -153,8 +153,24 @@ relation between two runs where that relation is the specified behaviour. Exampl
 list: Liberate reads a block's `-pinlist`, `-vector` and `-ic` as positional columns of one
 argument, so those three agreeing on the pin order a run produced is the contract with that
 reader; a switch documented to change one named thing leaves the rest alone. Neither fixes
-which output the run picks, so both hold for every output the tool is free to produce. A test resting on a two-run relation names the delta it permits, and the
-content both sides share is pinned by a direct test of its own.
+which output the run picks, so both hold for every output the tool is free to produce. A test
+resting on a two-run relation names the delta it permits, and the content both sides share is
+pinned by a direct test of its own.
+
+## Proper use of support types
+
+The libraries we build on already model the things this tool reasons about. Reaching for a general
+container where a library type says the same thing is one mistake whichever type it is: holding a
+name in a `String` and holding an assignment in a `BTreeMap` are the same error, not two.
+
+- **A name is an `espresso_logic::Symbol`, not a `String`.** Every name field — pins, nodes, cells,
+  templates.
+- **A mapping from a name to a Boolean value is an `espresso_logic::Minterm<Symbol>`, not a
+  `BTreeMap<Symbol, bool>` or a `HashMap<Symbol, bool>`** — and not a map over a struct whose only
+  field is a `bool`, which is the same shape wearing a name. A `Minterm` is a row of tri-state
+  values keyed by variable, and a variable it does not define is **by definition** a don't-care. A
+  partial assignment therefore needs no separate type and no absent-key convention: the partial
+  case is what a `Minterm` already is.
 
 ## Prefer real types to stand-ins
 
@@ -187,12 +203,20 @@ content both sides share is pinned by a direct test of its own.
   disagree about, takes a name however local it is. A buffer whose shape a foreign signature
   dictates carries nothing of ours and cannot drift; leave it.
 - Choose each collection for how it is used: a hash map or set where the access is
-  membership, lookup or grouping; an ordered map only where the iteration order is claimed by
-  an external format (see above). Don't reach for an ordered container just for its
-  iteration order when nothing reads that order, and don't hold a field at a weaker type
+  membership, lookup or grouping; an ordered container only where its order has one of the two
+  motivations "Tests assert properties" sets out above. Don't reach for an ordered container just
+  for its iteration order when nothing reads that order, and don't hold a field at a weaker type
   because a better one would sort differently.
 - Negation is an ordinary Boolean function. Don't give inversion a special case — no
   dedicated flag, guard or branch for it.
+
+## Structure is held until the edge
+
+A value stays structured until the moment it is written. `Display` is how a thing reaches the
+output; a function that returns rendered text has handed its caller a string to parse instead of
+the value it was holding. Build the expression, the record or the block, and let the sink render
+it — that is what keeps a rendering decision in one place and lets everything upstream of the sink
+still reason about the value.
 
 ## Lints point at missing design
 
