@@ -19,7 +19,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use espresso_logic::{Anonymous, BoolExpr, Cover, ExprNode, Minterm, Symbol};
+use espresso_logic::{Anonymous, BoolExpr, Cover, Minterm, Symbol};
 
 use crate::emit::RegionAction;
 use crate::logic::arcs::{Edge, PinEdge};
@@ -758,7 +758,7 @@ struct Assign<'a> {
 
 impl fmt::Display for Assign<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "assign {} = {};", self.pin, VerilogExpr(&self.function))
+        write!(f, "assign {} = {};", self.pin, self.function)
     }
 }
 
@@ -774,68 +774,11 @@ fn on_expr(cover: &Cover<Symbol, Anonymous>) -> BoolExpr {
         .expect("a region cover carries its single anonymous output")
 }
 
-/// A Boolean expression in Verilog's spelling: `~` for negation, `&`, `|` and `^` for the binary
-/// operators, and the sized literals `1'b1`/`1'b0` for the constants. Only the spelling differs from the
-/// expression layer's own `Display`, so the structure is what travels here and the text is made once, in
-/// this sink.
-struct VerilogExpr<'a>(&'a BoolExpr);
-
-/// How tightly a Verilog operator binds, loosest first. Verilog orders these `|` looser than `^` looser
-/// than `&` looser than `~`, which is the order the expression layer parses with, so a subterm needs
-/// parentheses exactly where it binds looser than the position holding it.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Binding {
-    Or,
-    Xor,
-    And,
-    Unary,
-}
-
-impl fmt::Display for VerilogExpr<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let text = self.0.fold_with_context(
-            // The root sits in no operator, so nothing there can bind too loosely.
-            Binding::Or,
-            // Descending, each operand takes the binding of the operator holding it; the fold never
-            // descends into a leaf.
-            |node, _| {
-                let operand = match node {
-                    ExprNode::Or(..) => Binding::Or,
-                    ExprNode::Xor(..) => Binding::Xor,
-                    ExprNode::And(..) => Binding::And,
-                    _ => Binding::Unary,
-                };
-                (operand, operand)
-            },
-            // Coming back up, a node writes its operator over its rendered operands and parenthesises
-            // itself where the position it sits in binds tighter than it does.
-            |node, position| {
-                let bracket = |binding, text: String| {
-                    if binding < position {
-                        format!("({text})")
-                    } else {
-                        text
-                    }
-                };
-                match node {
-                    ExprNode::Variable(name) => name.to_owned(),
-                    ExprNode::Constant(value) => if value { "1'b1" } else { "1'b0" }.to_owned(),
-                    ExprNode::Not(inner) => bracket(Binding::Unary, format!("~{inner}")),
-                    ExprNode::And(l, r) => bracket(Binding::And, format!("{l} & {r}")),
-                    ExprNode::Xor(l, r) => bracket(Binding::Xor, format!("{l} ^ {r}")),
-                    ExprNode::Or(l, r) => bracket(Binding::Or, format!("{l} | {r}")),
-                }
-            },
-        );
-        f.write_str(&text)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::{analyse_both, analyse_one as analyse, AnalysedPair};
-    use espresso_logic::bdd_builder;
+    use espresso_logic::{bdd_builder, ExprNode};
 
     /// A cell's model as the text the sink writes: its declarations, each written in turn.
     fn emit(cell: &AnalysedCell) -> String {
@@ -988,20 +931,45 @@ Y = "!((CLK*L1 + !CLK*L2)*A)"
         assert!(!v.contains("BDET_L1") && !v.contains("BDET_L2"));
     }
 
+    /// Whether an expression is in sum-of-products form: built from variables, constants, negation,
+    /// conjunction and disjunction, with no exclusive-or. Factoring a shared literal out of two products
+    /// keeps that form and so does negating a whole block, so this accepts `A & (B | C)` and `!(A | B)`
+    /// as readily as `A & B | A & C`, and says nothing about which the lowering picks.
+    fn is_sop(expr: &BoolExpr) -> bool {
+        expr.fold(|node: ExprNode<'_, bool>| match node {
+            ExprNode::Variable(_) | ExprNode::Constant(_) => true,
+            ExprNode::Not(inner) => inner,
+            ExprNode::And(left, right) | ExprNode::Or(left, right) => left && right,
+            ExprNode::Xor(..) => false,
+        })
+    }
+
     #[test]
-    fn verilog_expression_brackets_only_what_binds_too_loosely() {
-        // `|` binds looser than `&`, so a disjunction under a conjunction takes brackets, and `^` looser
-        // than `~`, so does a negated exclusive-or. The conjunction is the root and sits under no
-        // operator, so it takes none.
-        let nested = BoolExpr::parse("(a | b) & ~(c ^ a)").expect("the fixture expression parses");
-        assert_eq!(VerilogExpr(&nested).to_string(), "(a | b) & ~(c ^ a)");
-        // The same operators the other way up: `&` and `~` bind tighter than the `|` holding them, so
-        // neither needs brackets.
-        let flat = BoolExpr::parse("a & b | ~c").expect("the fixture expression parses");
-        assert_eq!(VerilogExpr(&flat).to_string(), "a & b | ~c");
-        // The constants are Verilog's sized literals, not the bare `1`/`0` the expression layer prints.
-        assert_eq!(VerilogExpr(&BoolExpr::constant(true)).to_string(), "1'b1");
-        assert_eq!(VerilogExpr(&BoolExpr::constant(false)).to_string(), "1'b0");
+    fn a_lowered_region_is_a_sum_of_products() {
+        // The emitter states a pin's logic as whatever `Cover::to_expr_by_index` lowers its on-region to,
+        // so nothing here fixes the text. What it must not stop being is a sum of products — an XOR would
+        // be a change in the upstream rendering rather than in this cell, and the point of asserting the
+        // form rather than the text is to catch that without pinning a rendering the tool is free to
+        // change.
+        //
+        // Two regions, one that cannot factor and one that must be free to: AOI2's primes `A*B` and `!C`
+        // share no literal, while AOA's `A*B` and `A*C` share `A`. Both are sums of products either way.
+        for (name, function) in [("AOI2", "A*B + !C"), ("AOA", "A*B + A*C")] {
+            let cell = analyse(&format!(
+                r#"
+[[cell]]
+name = "{name}"
+inputs = ["A", "B", "C"]
+[cell.outputs]
+Y = "{function}"
+"#
+            ));
+            let expr = on_expr(&cell.regions[0].on);
+            assert!(
+                is_sop(&expr),
+                "{name}: `{function}` lowers to a sum of products, got `{expr}`"
+            );
+        }
     }
 
     #[test]

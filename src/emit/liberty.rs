@@ -45,7 +45,7 @@ use liberty_parser::{
 use std::collections::BTreeMap;
 use std::fmt;
 
-use espresso_logic::{Anonymous, BoolExpr, Cover, ExprNode, Symbol};
+use espresso_logic::{Anonymous, BoolExpr, Cover, Symbol};
 
 use crate::emit::statetable::{build_state_model, EdgeRow, EdgeTok, Next, StateModel};
 use crate::logic::regions::StateRegions;
@@ -186,15 +186,11 @@ enum PinLogic {
 
 /// `pin (<name>) { direction : <dir>; <attr> : "<value>"; }` — the one constructor for every pin that
 /// carries logic, with [`PinLogic`] fixing `<dir>` and `<attr>` together. This is where a pin's logic
-/// becomes text: an expression is written in Liberty's own operator spelling by [`LibertyFunction`].
+/// becomes text: an expression writes itself, `BoolExpr`'s own rendering being Liberty's spelling.
 fn logic_pin(name: &str, logic: PinLogic) -> Group {
     let (dir, attr, value) = match logic {
-        PinLogic::Function(expr) => ("output", "function", LibertyFunction(&expr).to_string()),
-        PinLogic::StateFunction(expr) => (
-            "output",
-            "state_function",
-            LibertyFunction(&expr).to_string(),
-        ),
+        PinLogic::Function(expr) => ("output", "function", expr.to_string()),
+        PinLogic::StateFunction(expr) => ("output", "state_function", expr.to_string()),
         PinLogic::InternalNode(node) => ("internal", "internal_node", node.as_str().to_owned()),
     };
     let mut pin = Group::new("pin", name);
@@ -404,110 +400,6 @@ fn function_expr(sr: &StateRegions, node_of: Option<&BTreeMap<Symbol, Symbol>>) 
     over_nodes
         .to_expr_by_index(0)
         .expect("a region cover with cubes carries the single anonymous output they assert")
-}
-
-/// How tightly a Liberty operator binds, loosest first. Liberty gives a function expression's
-/// precedence as "left to right, with inversion performed first, then XOR, then AND, then OR" (Liberty
-/// Reference Manual, the `function` simple attribute), so the derived order IS that precedence and
-/// comparing two bindings settles whether an operand needs parentheses. `Atom` is a variable or a
-/// constant, which binds tighter than every operator and so never needs them.
-///
-/// Liberty's order is not the one `BoolExpr`'s own `Display` renders under, which binds AND tighter
-/// than XOR.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Binding {
-    Or,
-    And,
-    Xor,
-    Not,
-    Atom,
-}
-
-/// One rendered subexpression on its way up [`LibertyFunction`]'s fold, carrying the binding of its own
-/// top-level operator: that is what the enclosing operator needs in order to decide whether to
-/// parenthesise it.
-struct Rendered {
-    text: String,
-    binding: Binding,
-}
-
-impl Rendered {
-    /// A variable or a constant: it binds tighter than every operator, so nothing ever parenthesises it.
-    fn atom(text: String) -> Self {
-        Rendered {
-            text,
-            binding: Binding::Atom,
-        }
-    }
-
-    /// This subexpression as the operand of `!`, or as the LEFT operand of a binary operator binding at
-    /// `need`: parenthesised only where it binds strictly more loosely. Liberty's operators associate
-    /// left to right, so an equally-tight left operand re-parses into the same tree without them.
-    fn left_of(&self, need: Binding) -> String {
-        self.wrapped(self.binding < need)
-    }
-
-    /// This subexpression as the RIGHT operand of a binary operator binding at `need`: parenthesised
-    /// also where the two bind equally tightly, which unparenthesised would re-parse as the left-nested
-    /// tree instead.
-    fn right_of(&self, need: Binding) -> String {
-        self.wrapped(self.binding <= need)
-    }
-
-    fn wrapped(&self, parenthesise: bool) -> String {
-        if parenthesise {
-            format!("({})", self.text)
-        } else {
-            self.text.clone()
-        }
-    }
-}
-
-/// An expression as the text of a Liberty `function` or `state_function` attribute: `*` for AND, `+`
-/// for OR, `^` for XOR, `!` for NOT and `1`/`0` for the constants (Liberty Reference Manual, the
-/// `function` simple attribute's valid Boolean operators), parenthesised only where [`Binding`] says
-/// the text would otherwise re-parse into a different expression. Every pin logic attribute reaches
-/// the output through this, so the Liberty spelling of an operator is stated in one place.
-struct LibertyFunction<'a>(&'a BoolExpr);
-
-impl fmt::Display for LibertyFunction<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // `fold` walks the expression's own token stream iteratively, so a deeply nested function
-        // cannot overflow the stack.
-        let rendered = self.0.fold(|node: ExprNode<'_, Rendered>| match node {
-            ExprNode::Variable(name) => Rendered::atom(name.to_owned()),
-            ExprNode::Constant(value) => Rendered::atom(if value { "1" } else { "0" }.to_owned()),
-            ExprNode::Not(inner) => Rendered {
-                text: format!("!{}", inner.left_of(Binding::Not)),
-                binding: Binding::Not,
-            },
-            ExprNode::And(left, right) => Rendered {
-                text: format!(
-                    "{}*{}",
-                    left.left_of(Binding::And),
-                    right.right_of(Binding::And)
-                ),
-                binding: Binding::And,
-            },
-            ExprNode::Xor(left, right) => Rendered {
-                text: format!(
-                    "{}^{}",
-                    left.left_of(Binding::Xor),
-                    right.right_of(Binding::Xor)
-                ),
-                binding: Binding::Xor,
-            },
-            ExprNode::Or(left, right) => Rendered {
-                text: format!(
-                    "{} + {}",
-                    left.left_of(Binding::Or),
-                    right.right_of(Binding::Or)
-                ),
-                binding: Binding::Or,
-            },
-        });
-        f.write_str(&rendered.text)
-    }
 }
 
 #[cfg(test)]
@@ -783,7 +675,7 @@ Y = "A*D"
         // The genuine output is untouched.
         let y = find_pin(cellg, "Y");
         assert_eq!(attr_expr(y, "direction").as_deref(), Some("output"));
-        assert_eq!(attr_string(y, "function").as_deref(), Some("A*D"));
+        assert_eq!(attr_string(y, "function").as_deref(), Some("A & D"));
     }
 
     #[test]
@@ -911,7 +803,7 @@ Y = "!((CLK*L1 + !CLK*L2)*A)"
         // internal_node, never a folded master.
         let y = find_pin(cellg, "Y");
         let sf = attr_string(y, "state_function").expect("Y prints a state_function");
-        assert_eq!(sf, "Y_st + !A", "Y reads Y_st and A: {sf}");
+        assert_eq!(sf, "Y_st | !A", "Y reads Y_st and A: {sf}");
         assert!(!y.attributes.contains_key("internal_node"));
 
         // `Y_st` is a first-class internal-node pin.
@@ -1011,8 +903,8 @@ Y = "!(A*B)"
         assert!(lib.contains("cell (ND2)"));
         assert!(!lib.contains("statetable"));
         assert!(lib.contains("pin (Y)"));
-        // NAND on-set = !(A*B), Espresso-minimised to the two-cube SOP !B + !A.
-        assert!(lib.contains("function : \"!B + !A\";"));
+        // NAND on-set = !(A*B), Espresso-minimised to the two cubes !B and !A.
+        assert!(lib.contains("function : \"!B | !A\";"));
         assert!(lib.contains("direction : output;"));
     }
 
@@ -1028,13 +920,13 @@ Y = "A*B + !C"
 "#,
         );
         let sr = &cell.regions[0];
-        let f = LibertyFunction(&function_expr(sr, None)).to_string();
+        let f = function_expr(sr, None).to_string();
         // `A*B + !C` has exactly two prime implicants, `A*B` and `!C`, and both are essential — so the
         // minimised on-region this renders is that one cover, whichever order the cubes and their
         // literals come out in.
         let products: BTreeSet<BTreeSet<&str>> = f
-            .split(" + ")
-            .map(|product| product.split('*').collect())
+            .split(" | ")
+            .map(|product| product.split(" & ").collect())
             .collect();
         assert_eq!(
             products,
@@ -1148,7 +1040,7 @@ Z = "A*B"
 
         // Z is combinational over inputs only: plain `function`, exactly `A*B`, nothing sequential.
         let z = find_pin(cellg, "Z");
-        assert_eq!(attr_string(z, "function").as_deref(), Some("A*B"));
+        assert_eq!(attr_string(z, "function").as_deref(), Some("A & B"));
         assert!(!z.attributes.contains_key("state_function"));
         assert!(!z.attributes.contains_key("internal_node"));
 
