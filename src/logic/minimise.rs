@@ -300,6 +300,14 @@ fn alias_target<B: Brand, C: ManagerCell>(
 /// `state-space-minimisation.md`) and is bounded at
 /// `2 * order.len() + 2` outer iterations — a `debug_assert` backstop against a runaway loop, not a
 /// behavioural limit reached in practice.
+///
+/// The result does not depend on which BDD builder instance produced the inputs: the same
+/// definitions minted in another [`BddBuilder`](espresso_logic::bdd::BddBuilder) reduce to the same
+/// [`Minimised`] and, signal by signal, to an equivalent function. Every decision the passes take
+/// reads a name — the scan `order`, `p`, and the signal-name supports — or plain equality between
+/// two handles of the one map, which within a manager is canonical and so answers the same whatever
+/// variable ordering that manager happens to hold. The ordering itself is never read, so it cannot
+/// reach an outcome.
 pub fn minimise_state_space<B: Brand, C: ManagerCell>(
     bdds: &mut BTreeMap<Symbol, Bdd<B, C>>,
     order: &[Symbol],
@@ -633,7 +641,7 @@ mod tests {
     use espresso_logic::bdd::BddBuilder;
     use espresso_logic::bdd_builder;
 
-    /// One signal's definition in a fixture table: the name the signal is stored under and the expression text parsed into its BDD.
+    /// One signal's definition in a fixture or expectation table: the name the signal is stored under and the expression text parsed into its BDD.
     struct SignalDef {
         name: &'static str,
         expr: &'static str,
@@ -935,11 +943,17 @@ mod tests {
     }
 
     #[test]
-    fn minimisation_is_deterministic() {
-        // Two independent builder instances must fold each cell to equivalent results. The two runs
-        // carry different brands, so we compare the BDDs by their builder-independent `Cover`: rebuild
-        // the second run's function in the first run's builder and use `equivalent_to` — a real BDD
-        // equivalence, never a stringified cover.
+    fn minimisation_is_independent_of_the_builder_instance() {
+        // Each fixture is minimised twice, in two builder instances, each run over its own map, scan
+        // order and preserved set. Every run is pinned on its own by the answer its fixture forces —
+        // the names it purges and the definition each survivor is left holding — so the two runs
+        // agreeing adds the builder-independence [`minimise_state_space`] documents rather than
+        // carrying the test. The delta the pair may show is none at all: same `Minimised`, and
+        // signal-by-signal equivalent functions.
+        //
+        // The two runs carry different brands, so their handles cannot be compared directly: rebuild
+        // the second run's function in the first run's builder from its `Cover` and use
+        // `equivalent_to` — a real BDD equivalence, never a stringified cover.
         fn assert_runs_agree<B1: Brand, C1: ManagerCell, B2: Brand, C2: ManagerCell>(
             a: &BTreeMap<Symbol, Bdd<B1, C1>>,
             b: &BTreeMap<Symbol, Bdd<B2, C2>>,
@@ -954,7 +968,36 @@ mod tests {
             }
         }
 
-        // C-element.
+        /// Check one run against the answer its fixture forces: exactly `purged` removed, exactly the
+        /// `surviving` names left, and each survivor equivalent to its stated definition — parsed in
+        /// the run's own builder, so the expectation never crosses a brand.
+        fn assert_folds_to<B: Brand, C: ManagerCell>(
+            sys: &System<B, C>,
+            min: &Minimised,
+            purged: &[&str],
+            surviving: &[SignalDef],
+        ) {
+            assert_eq!(
+                min.purged,
+                purged.iter().copied().map(Symbol::from).collect()
+            );
+            assert_eq!(
+                sys.bdds.keys().cloned().collect::<BTreeSet<Symbol>>(),
+                surviving.iter().map(|d| Symbol::from(d.name)).collect()
+            );
+            for d in surviving {
+                let f = &sys.bdds[&Symbol::from(d.name)];
+                assert!(
+                    f.equivalent_to(&sys.builder.parse(d.expr).unwrap()),
+                    "signal {} is not {}",
+                    d.name,
+                    d.expr
+                );
+            }
+        }
+
+        // C-element chain Q → IQ → QN with QN the definer: both internals purge and the one coordinate
+        // lands on the sole output pin.
         let mut a = system! {
             outputs: ["Q"],
             "Q" = "IQ",
@@ -967,13 +1010,20 @@ mod tests {
             "IQ" = "!QN",
             "QN" = "!(A*B + IQ*(A+B))",
         };
-        assert_eq!(
-            minimise(&mut a.bdds, &a.order, &a.preserved),
-            minimise(&mut b.bdds, &a.order, &a.preserved)
-        );
+        let folded = [SignalDef {
+            name: "Q",
+            expr: "A*B + Q*(A+B)",
+        }];
+        let min_a = minimise(&mut a.bdds, &a.order, &a.preserved);
+        let min_b = minimise(&mut b.bdds, &b.order, &b.preserved);
+        assert_folds_to(&a, &min_a, &["IQ", "QN"], &folded);
+        assert_folds_to(&b, &min_b, &["IQ", "QN"], &folded);
+        assert_eq!(min_a, min_b);
         assert_runs_agree(&a.bdds, &b.bdds);
 
-        // ICM.
+        // ICM: the two combinational selects are relays into synchroniser latches that already
+        // self-hold, so each is composed into its one consumer and purged; the six latches and the
+        // output GCLK survive, GCLK as a preserved signal nothing consumes.
         let mut a = system! {
             outputs: ["GCLK"],
             "sela" = "!enB*!S",
@@ -998,13 +1048,45 @@ mod tests {
             "enB" = "!RB*(!CLKB*selb2+CLKB*enB)",
             "GCLK" = "enA*CLKA+enB*CLKB",
         };
-        assert_eq!(
-            minimise(&mut a.bdds, &a.order, &a.preserved),
-            minimise(&mut b.bdds, &a.order, &a.preserved)
-        );
+        let folded = [
+            SignalDef {
+                name: "sela1",
+                expr: "!RA*(!CLKA*(!enB*!S)+CLKA*sela1)",
+            },
+            SignalDef {
+                name: "sela2",
+                expr: "!RA*(CLKA*sela1+!CLKA*sela2)",
+            },
+            SignalDef {
+                name: "enA",
+                expr: "!RA*(!CLKA*sela2+CLKA*enA)",
+            },
+            SignalDef {
+                name: "selb1",
+                expr: "!RB*(!CLKB*(!enA*S)+CLKB*selb1)",
+            },
+            SignalDef {
+                name: "selb2",
+                expr: "!RB*(CLKB*selb1+!CLKB*selb2)",
+            },
+            SignalDef {
+                name: "enB",
+                expr: "!RB*(!CLKB*selb2+CLKB*enB)",
+            },
+            SignalDef {
+                name: "GCLK",
+                expr: "enA*CLKA+enB*CLKB",
+            },
+        ];
+        let min_a = minimise(&mut a.bdds, &a.order, &a.preserved);
+        let min_b = minimise(&mut b.bdds, &b.order, &b.preserved);
+        assert_folds_to(&a, &min_a, &["sela", "selb"], &folded);
+        assert_folds_to(&b, &min_b, &["sela", "selb"], &folded);
+        assert_eq!(min_a, min_b);
         assert_runs_agree(&a.bdds, &b.bdds);
 
-        // Buffered C-element: dedup of the {Q, IQ} duplicate followed by the output-alias fold.
+        // Buffered C-element: dedup retires the {Q, IQ} duplicate, then the output-alias fold lands the
+        // coordinate on Q and purges QN.
         let mut a = system! {
             outputs: ["Q"],
             "Q" = "!QN",
@@ -1017,10 +1099,15 @@ mod tests {
             "IQ" = "!QN",
             "QN" = "!(A*B + IQ*(A+B))",
         };
-        assert_eq!(
-            minimise(&mut a.bdds, &a.order, &a.preserved),
-            minimise(&mut b.bdds, &a.order, &a.preserved)
-        );
+        let folded = [SignalDef {
+            name: "Q",
+            expr: "A*B + Q*(A+B)",
+        }];
+        let min_a = minimise(&mut a.bdds, &a.order, &a.preserved);
+        let min_b = minimise(&mut b.bdds, &b.order, &b.preserved);
+        assert_folds_to(&a, &min_a, &["IQ", "QN"], &folded);
+        assert_folds_to(&b, &min_b, &["IQ", "QN"], &folded);
+        assert_eq!(min_a, min_b);
         assert_runs_agree(&a.bdds, &b.bdds);
     }
 

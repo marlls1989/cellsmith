@@ -56,7 +56,7 @@ use espresso_logic::{BoolExpr, Minterm, Symbol};
 use indexmap::IndexMap;
 
 use crate::emit::block::{
-    self, Block, Column, Held, LevelColumn, Pulse, RacingPins, Resting, Separation, Toggle,
+    Block, Column, Held, LevelColumn, Pulse, RacingPins, Resting, Separation, Toggle, Transition,
 };
 use crate::emit::tcl::{IcColumn, VectorValue};
 // `Edge` and `PinEdge` come from their own module, not through `block`: block.rs keeps its `use`
@@ -280,10 +280,18 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
 /// its columns and their `-ic` and `-vector`, its `-when` and the pins it relates — so two firings
 /// rendering the same block are one measurement, however they differ in the model.
 ///
-/// The BLOCK ITSELF is the key. Everything a block states is a field of it and nothing else is, so two
-/// firings collide here exactly when the text they would write is the same — the conditions among those
-/// fields being built from sorted literals, and `BoolExpr`'s equality being structural over its token
-/// stream.
+/// The BLOCK ITSELF is the key. Everything a block states is a field of it, so two firings that collide
+/// here write the same text — the conditions among those fields being built from sorted literals, and
+/// `BoolExpr`'s equality being structural over its token stream.
+///
+/// The other direction is not the type's to give: a [`PinEdge`] field is compared whole while the text
+/// names its pin alone, so nothing in [`Block`] itself stops two firings differing in an edge from
+/// writing one text and being stated twice. What rules that out is the column list. A pin the block
+/// switches always carries a column of its own, and that column's [`VectorValue`] IS the edge — `R` for
+/// a rise, `F` for a fall — under a measured transition's related pin and output
+/// ([`transition_columns`]), a hidden arc's toggled pin ([`hidden_columns`]) and both pins a constraint
+/// holds apart ([`constraint_columns`], through [`RacingPins::edge_of`]). Two firings whose text agrees
+/// therefore agree on the `-vector` beneath the pins that text names, and so on the edges themselves.
 struct Blocks {
     /// Insertion-ordered, which is the order the cell states its blocks in.
     stated: IndexMap<Block, Vec<Minterm<Symbol>>>,
@@ -399,13 +407,13 @@ fn generalised<T, K: Hash + Eq>(
 /// however many contexts it was measured from, and every one of those contexts returns as its own
 /// conditioned block under `--when`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct Transition {
+struct TransitionEvent {
     output: PinEdge,
     related: PinEdge,
 }
 
 /// A transition arc's identity. The variant IS Liberate's `-type` taxonomy for a measured transition,
-/// and it carries the [`Transition`] event the arc measures.
+/// and it carries the [`TransitionEvent`] the arc measures.
 ///
 /// The kind is part of the identity because `-type` declares the arc's nature to Liberate and is decided
 /// per firing, from the full machine start state (see [`TransitionIdentity::of`]): a transition that
@@ -413,9 +421,9 @@ struct Transition {
 /// delete one of them from the output.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum TransitionIdentity {
-    Async(Transition),
-    Edge(Transition),
-    Combinational(Transition),
+    Async(TransitionEvent),
+    Edge(TransitionEvent),
+    Combinational(TransitionEvent),
 }
 
 impl TransitionIdentity {
@@ -432,7 +440,7 @@ impl TransitionIdentity {
     /// so a kind exists only once the whole list does.
     fn of(cell: &AnalysedCell, arc: &Arc) -> Self {
         let related_edge = related_edge(arc);
-        let transition = Transition {
+        let transition = TransitionEvent {
             output: arc.output.clone(),
             related: PinEdge {
                 pin: arc.related.clone(),
@@ -455,7 +463,7 @@ impl TransitionIdentity {
 
 /// A hidden arc's identity: the toggled [`PinEdge`]. That pin with its edge IS the event; the other
 /// inputs' held levels and the held outputs are its condition and ride in [`hidden_when`], so they
-/// are absent here for the same reason as in [`Transition`]. A hidden arc is one kind of block, so
+/// are absent here for the same reason as in [`TransitionEvent`]. A hidden arc is one kind of block, so
 /// nothing here classifies — a toggle no output follows structurally holds no related pin either.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct HiddenIdentity {
@@ -483,7 +491,7 @@ fn transition_block(
     arc: &Arc,
     when: Option<BoolExpr>,
 ) -> Block {
-    let transition = block::Transition {
+    let transition = Transition {
         columns: transition_columns(cell, group, arc),
         when,
         related: PinEdge {
@@ -633,7 +641,7 @@ fn constraint_blocks(
     when: Option<BoolExpr>,
 ) -> Vec<Block> {
     let pins = switching_pins(c);
-    let cols = ConstraintColumns::of(cell, group, &c.nodes);
+    let cols = ConstraintColumns::of(cell, group, c);
     let columns = constraint_columns(cell, &cols, &pins, c);
     let probe = cols.probe;
     match &c.kind {
@@ -858,30 +866,39 @@ struct ConstraintColumns {
 }
 
 impl ConstraintColumns {
-    /// The columns a block over `group` carries for the victim `nodes` of its constraint: the cell's
-    /// exposures first, then one per victim node that has no column yet.
+    /// The columns a block over `group` carries for the victim nodes of `c`: the cell's exposures
+    /// first, then one per victim node that has no column yet.
     ///
     /// The victim nodes are measured, so each needs a column: one `-probe` names them all, and the
     /// columns are what `-ic` initialises them through. A node already has a column when the cell
     /// exposes it or when it is an output pin, and a second would misalign every column after it, so
     /// only the rest are added.
-    fn of(cell: &AnalysedCell, group: &Group, nodes: &Minterm<Symbol>) -> Self {
+    ///
+    /// [`Constraint::victim_names`] states the victim order ONCE, and the three parts below are three
+    /// reads of that one list: the `-probe` line, the columns the block mints, and the level each of
+    /// those columns starts at. The level is looked up by name ([`Minterm::value_of`]) rather than
+    /// walked alongside the row, so how `c.nodes` happens to store its header reaches none of them —
+    /// a variable the row leaves undefined answers `None`, which is the don't-care level and needs no
+    /// case of its own.
+    fn of(cell: &AnalysedCell, group: &Group, c: &Constraint) -> Self {
         let mut exposed = exposed_columns(cell, group);
         let mut levels: Vec<(Symbol, Option<bool>)> = Vec::new();
-        for (node, level) in nodes.vars().iter().zip(nodes.iter()) {
+        let mut probe: Vec<Symbol> = Vec::new();
+        for node in c.victim_names() {
+            let column = ExposedColumn {
+                model: node.clone(),
+                listed: group.probed_name(node),
+            };
+            probe.push(column.listed.clone());
             if cell.exposed.contains(node) || cell.outputs.iter().any(|o| o.name == *node) {
                 continue;
             }
-            exposed.push(ExposedColumn {
-                model: node.clone(),
-                listed: group.probed_name(node),
-            });
-            levels.push((node.clone(), level));
+            levels.push((column.model.clone(), c.nodes.value_of(node)));
+            exposed.push(column);
         }
         let probed = Minterm::labeled(&levels).expect(
             "a constraint's victims are the distinct nodes of one group, so each names one column",
         );
-        let probe = nodes.vars().iter().map(|n| group.probed_name(n)).collect();
         Self {
             exposed,
             probed,
@@ -1138,6 +1155,10 @@ pub(crate) fn pinlist(cell: &AnalysedCell) -> Vec<Symbol> {
 /// [`LevelColumn`] for a rest state — and the walk is the same either way, which is what makes the
 /// positions line up.
 ///
+/// A constraint block's `-probe` names its victim nodes instead of listing a column apiece, so Liberate
+/// resolves it by name; every node it names still holds exactly one column of this walk, which is the
+/// column that node's `-ic` level reaches it through ([`ConstraintColumns::of`]).
+///
 /// An exposed node is listed under the name its netlist holds it on ([`ExposedColumn`]), which is what
 /// Liberate has to be handed; the pins keep the cell's own names, which the netlist shares. Every other
 /// artifact reads the spec's names throughout. A `-vector` cannot address a node with no column and an
@@ -1203,7 +1224,7 @@ fn when(end: &Minterm<Symbol>, exclude: &str) -> Option<BoolExpr> {
     if lits.is_empty() {
         return None;
     }
-    lits.sort();
+    lits.sort_unstable();
     Some(crate::logic::product(&lits))
 }
 
@@ -1219,7 +1240,7 @@ fn hidden_when(h: &HiddenArc) -> Option<BoolExpr> {
     if lits.is_empty() {
         return None;
     }
-    lits.sort();
+    lits.sort_unstable();
     Some(crate::logic::product(&lits))
 }
 
@@ -1249,7 +1270,7 @@ fn constraint_when(c: &Constraint) -> Option<BoolExpr> {
     if lits.is_empty() {
         return None;
     }
-    lits.sort();
+    lits.sort_unstable();
     Some(crate::logic::product(&lits))
 }
 
@@ -1262,7 +1283,7 @@ fn leakage_when(l: &LeakageState) -> BoolExpr {
     let mut lits: Vec<Literal> = literals(&l.inputs)
         .chain(literals(&l.levels.outputs))
         .collect();
-    lits.sort();
+    lits.sort_unstable();
     crate::logic::product(&lits)
 }
 
@@ -1271,7 +1292,7 @@ mod tests {
     use std::collections::{BTreeSet, HashSet};
 
     use super::*;
-    use crate::emit::block::{Description, Transition};
+    use crate::emit::block::Description;
     use crate::emit::tcl::tests::{AwkwardVoltage, AWKWARD_VOLTAGES};
     use crate::model::{
         analyse_both, analyse_one as analyse, parse_spec, AnalysedPair, ArcClasses,
@@ -2652,8 +2673,10 @@ Y = "!A"
 
     #[test]
     fn ic_is_the_only_line_the_gate_adds() {
-        // `-ic` is purely additive: dropping the `-ic` lines from a state-holding cell's blocks yields
-        // exactly what the same cell renders with the gate clear, line for line.
+        // `-ic` is purely additive: the `-ic` line is the whole of the delta the gate permits, so a
+        // state-holding cell's blocks with those lines dropped are the blocks the same cell states with
+        // the gate clear. The two decks are read as multisets of blocks -- which order a deck states
+        // them in is free, and nothing here may rest on it.
         let mut cell = analyse(IC_DFF);
         let gated = emit(&cell, ArcsTclOptions::default());
         // The gate reads the cached regions, so clearing every signal's `hysteretic` is how the cell is
@@ -2664,12 +2687,25 @@ Y = "!A"
         let ungated = emit(&cell, ArcsTclOptions::default());
         assert!(gated.contains("-ic \""));
         assert!(!ungated.contains("-ic"));
-        let stripped: String = gated
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("-ic "))
-            .map(|l| format!("{l}\n"))
-            .collect();
-        assert_eq!(stripped, ungated);
+        /// Every block of a deck -- `define_arc` and `define_leakage` alike, the blank line between two
+        /// blocks separating them -- stripped of its `-ic` line and sorted: the deck as a multiset of
+        /// blocks, so emission order does not enter the comparison.
+        fn stripped_blocks(tcl: &str) -> Vec<String> {
+            let mut stripped: Vec<String> = tcl
+                .split("\n\n")
+                .map(str::trim)
+                .filter(|b| !b.is_empty())
+                .map(|b| {
+                    b.lines()
+                        .filter(|l| !l.trim_start().starts_with("-ic "))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .collect();
+            stripped.sort();
+            stripped
+        }
+        assert_eq!(stripped_blocks(&gated), stripped_blocks(&ungated));
     }
 
     #[test]
@@ -3151,6 +3187,64 @@ Y = "!W"
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn a_constraint_block_agrees_with_itself_on_the_column_order_it_states() {
+        // The parts of a constraint block are read against ONE column order: Liberate takes `-vector`
+        // and `-ic` positionally against the `-pinlist`, and resolves each `-probe` name against the
+        // columns that same list declares. So whatever order a run produces, the four parts state that
+        // one order — a symbol and a voltage per column, and every probed victim holding a column of
+        // its own that carries what a victim is given: no stimulus in the `-vector`, a constraint block
+        // measuring nothing the cell does in response, and in the `-ic` the level the node starts from.
+        // Which order the run picked is asserted nowhere: nothing outside the block reads it.
+        //
+        // Both cases a victim column comes from are covered — `IC_DFF` mints one for a master latch
+        // that is neither pin nor exposure, while `C2_EXPOSED` and `DFF_EXPOSED_MASTER` probe a node
+        // the cell already exposes.
+        for src in [IC_DFF, C2_EXPOSED, DFF_EXPOSED_MASTER] {
+            let cell = analyse(src);
+            assert!(
+                cell.state_holding(),
+                "the fixture holds state, so its blocks carry the -ic a victim starts from"
+            );
+            let starts = [cell.voltages.of(false), cell.voltages.of(true)];
+            let tcl = emit(&cell, ArcsTclOptions::default());
+            eprintln!("{tcl}");
+            let mut probed = 0;
+            for block in blocks(&tcl) {
+                let Some(probe) = braced(&block, "-probe") else {
+                    continue;
+                };
+                let pins = pinlist_of(&block);
+                assert_eq!(
+                    vector_values(&block).len(),
+                    pins.len(),
+                    "one -vector symbol per column:\n{block}"
+                );
+                let ic = ic_values(&block).expect("a state-holding cell's block carries an -ic");
+                assert_eq!(ic.len(), pins.len(), "one -ic voltage per column:\n{block}");
+                for node in probe.split_whitespace() {
+                    assert_eq!(
+                        pins.iter().filter(|p| **p == node).count(),
+                        1,
+                        "the probed {node} holds one column of the pinlist:\n{block}"
+                    );
+                    let column = column_of(&block, node);
+                    assert_eq!(
+                        vector_values(&block)[column],
+                        "X",
+                        "the probed {node}'s own column states no stimulus:\n{block}"
+                    );
+                    assert!(
+                        starts.contains(&ic[column]),
+                        "the probed {node}'s own column starts at a stated level:\n{block}"
+                    );
+                    probed += 1;
+                }
+            }
+            assert!(probed > 0, "the fixture probes victim nodes:\n{tcl}");
         }
     }
 
@@ -4908,7 +5002,7 @@ Q = "CLK*M + !CLK*Q"
             spec.cells.remove(0).analyse().unwrap()
         };
         let via_flag = {
-            // Mirrors main.rs:82-88's blanket application of `--no-edge-collapse` over every cell.
+            // Mirrors apply_overrides's blanket application of `--no-edge-collapse` over every cell.
             let mut spec = crate::model::parse_spec(DFF).unwrap();
             for c in &mut spec.cells {
                 c.no_edge_collapse = true;

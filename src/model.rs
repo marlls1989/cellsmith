@@ -1463,8 +1463,8 @@ pub(crate) struct AnalysedPair {
 }
 
 /// Parse the single-cell `src` and analyse it twice: once as written, once with
-/// `no_edge_collapse` forced true on every cell -- the same blanket mutation the
-/// `--no-edge-collapse` CLI flag applies (main.rs:82-88). Proves the per-cell TOML switch and
+/// `no_edge_collapse` forced true on every cell -- the same blanket mutation `apply_overrides`
+/// applies for the `--no-edge-collapse` CLI flag. Proves the per-cell TOML switch and
 /// the CLI flag are the identical code path, not two independently-tested mechanisms.
 #[cfg(test)]
 pub(crate) fn analyse_both(src: &str) -> AnalysedPair {

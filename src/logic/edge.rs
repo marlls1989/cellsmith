@@ -1296,7 +1296,15 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
                     posts.insert(mv.post);
                 }
                 if any && dest_levels.len() == 1 && posts.len() == 1 {
-                    forcing.push((x.clone(), Some(dest_levels.into_iter().next().unwrap())));
+                    forcing.push((
+                        x.clone(),
+                        Some(
+                            dest_levels
+                                .into_iter()
+                                .next()
+                                .expect("dest_levels.len() == 1 was just checked"),
+                        ),
+                    ));
                     added = true;
                 }
             }

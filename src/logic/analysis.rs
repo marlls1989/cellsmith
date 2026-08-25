@@ -409,7 +409,8 @@ mod tests {
         // past the ceiling. That keeps the fixture cheap as well as over budget: a cube charged past the
         // ceiling is never expanded.
         let src = format!(
-            "[[cell]]\nname = \"WIDEX\"\nconstraint_arcs = true\nexpose = [\"M\"]\ninputs = [{list}]\n[cell.internal]\nM = \"I0\"\n[cell.outputs]\nY = \"M\"\n"
+            "[[cell]]\nname = \"WIDEX\"\nconstraint_arcs = true\nexpose = [\"M\"]\n\
+             inputs = [{list}]\n[cell.internal]\nM = \"I0\"\n[cell.outputs]\nY = \"M\"\n"
         );
         assert_eq!(
             budget_verdict(&src),

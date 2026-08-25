@@ -291,9 +291,7 @@ The exploration both discovers the start states and runs the BFS:
 1. **Start candidates — never an assumed all-zero state.** For each seed function (each state variable's
    δ plus the combinational outputs' δ) it takes the forced on/off cover over the inputs: input
    assignments that force the signal *regardless of* the undefined power-on state. These input minterms
-   are pooled, then **ranked by how many state variables they settle** — the state variables alone, since
-   what the ranking measures is how much of the cell's memory a candidate resolves (ties broken toward
-   state nearest the inputs). Each candidate input is widened onto the full `[inputs…, coordinates…]`
+   are pooled. Each candidate input is widened onto the full `[inputs…, coordinates…]`
    columns — every coordinate column arrives **absent**, and settling is what first gives a combinational
    one its value — and settled. A state-holding cell whose reset is an input *sequence*
    rather than a level is therefore initialised by the sequence that actually resolves it, not by an
@@ -406,7 +404,7 @@ them, the edge-register classification, and the leakage states.
 Two exploration budgets gate the whole shared pass, each charged against work the pass actually performs
 rather than the cell's declared shape (a cell is not turned away for having many inputs or many state
 variables): the **candidate** budget bounds the seed minterms the candidate pool expands the signals'
-forced on/off covers into, before ranking and seeding the BFS; the **state** budget bounds the reachable
+forced on/off covers into, seeding the BFS; the **state** budget bounds the reachable
 stable states the BFS records in `Explored::order`. Exceeding either fails the analysis at that cell —
 without an exploration its arcs *and* hazards would both be empty — and is reported as a hard error
 naming the cell; each budget is raised for a run with its own flag, `--max-candidates` or

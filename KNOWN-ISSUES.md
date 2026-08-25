@@ -9,7 +9,16 @@ Remove an entry when it is resolved, or when it becomes a pull request of its ow
 
 ## The conflation warning is silent for general arcs
 
-`-ic` and `-vector` reach exactly a block's `-pinlist`, so a block cannot state an internal node the cell does not `expose`. The warning that reports this counts the firings that collide on one emitted block, and for the measured classes the general pass has already chosen ONE representative firing per transition before the block sink sees it, so a general block always arrives carrying a single firing and never counts as a conflation. Leakage states one block per rest state with no such choice, which is why it is the only class that conflates in a run without `--when`: the ICM cell from examples/cells.toml with its `expose` list removed and `constraint_arcs = true` reports 38 conflated leakage blocks over 118 measurements and nothing else, while the same run under `--when` reports 330 blocks over 898 measurements — 40 combinational, 158 hidden, 10 setup, 10 hold, 74 min_pulse_width and the same 38 leakage.
+`-ic` and `-vector` reach exactly a block's `-pinlist`, so a block cannot state an internal node
+the cell does not `expose`. The warning that reports this counts the firings that collide on one
+emitted block, and for the measured classes the general pass has already chosen ONE representative
+firing per transition before the block sink sees it, so a general block always arrives carrying a
+single firing and never counts as a conflation. Leakage states one block per rest state with no
+such choice, which is why it is the only class that conflates in a run without `--when`: the ICM
+cell from examples/cells.toml with its `expose` list removed and `constraint_arcs = true` reports
+38 conflated leakage blocks over 118 measurements and nothing else, while the same run under
+`--when` reports 330 blocks over 898 measurements — 40 combinational, 158 hidden, 10 setup, 10
+hold, 74 min_pulse_width and the same 38 leakage.
 
 ## Seed settling runs sequentially, and no longer has a reason to
 
@@ -38,9 +47,18 @@ receives whichever block is written, and detection files a record for every obse
 the key is not a determinism guarantee owed to anyone. It is the mechanism of a free choice, and a pick
 needs some rule.
 
+What the key settles is the pick within one analysis, not across runs. The candidate pool the
+exploration seeds from is a `HashSet` (`machine.rs:415`), so the order the candidates are settled in is
+schedule-dependent, and with it the seed order, the `Explored::order` indices and the `discovered` each
+hazard carries. Two runs over one cell can therefore read the same observations under different indices
+and promote a different one of the equally dominant to the general block. Within one analysis the
+indices are the one set, which is what `ic_is_the_only_line_the_gate_adds` rests on: it emits a single
+analysis twice.
+
 The judgement, should the key be revisited: deleting it does not remove the choice, it changes who
 makes it. The pick becomes schedule-dependent rather than fixed per emission, which reaches
-`ic_is_the_only_line_the_gate_adds` — that test emits one analysis twice and compares after stripping
-`-ic`, so it relies on the two emissions agreeing on the representative — and it reaches `Constraint`'s
-own `discovered`/`ordinal` fields and the merge code at `constraint.rs:306`. Those are the sites a
+`ic_is_the_only_line_the_gate_adds` — that test emits one analysis twice and compares the two decks as
+multisets of `-ic`-stripped blocks, so it relies on the two emissions agreeing on the representative,
+and on nothing about the order they state their blocks in — and it reaches `Constraint`'s
+own `discovered`/`ordinal` fields and the merge code in `merged_victims`. Those are the sites a
 removal has to answer for; the key itself carries no meaning worth preserving.

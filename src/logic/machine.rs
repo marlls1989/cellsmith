@@ -41,7 +41,7 @@
 //!   [`super::confluence::detect`] at O(|order| · inputs²), so a machine that explores unboundedly many
 //!   states is one whose hazard detection does not finish.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -385,7 +385,7 @@ pub(crate) fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     // `charged` before a single minterm is packed: the pool is measured whether or not it is affordable.
     // The charge is saturating, so a cube whose expansion exceeds `usize` still reads as over budget.
     let charged = AtomicUsize::new(0);
-    let cover_inputs = |f: &Bdd<B, C>| -> BTreeSet<Minterm<Symbol>> {
+    let cover_inputs = |f: &Bdd<B, C>| -> HashSet<Minterm<Symbol>> {
         f.cover_over_fr(input_names)
             .cubes()
             .flat_map(|c| {
@@ -412,7 +412,7 @@ pub(crate) fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     // built in parallel across seed functions — set semantics make the union order-free.
     // ¬f's FR cover is f's with the F/R sides swapped, and `cover_inputs` pools `.cubes()`
     // type-blind, so `cover_inputs(&!f) == cover_inputs(f)` as a minterm set — no complement call.
-    let pool: BTreeSet<Minterm<Symbol>> =
+    let pool: HashSet<Minterm<Symbol>> =
         seed_funcs.par_iter().flat_map_iter(cover_inputs).collect();
     if charged.load(Ordering::Relaxed) > budget.candidates {
         return Err(ExplorationLimit::Candidates(budget.candidates));

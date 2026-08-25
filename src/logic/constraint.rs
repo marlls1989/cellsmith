@@ -71,6 +71,12 @@ pub(crate) enum ConstraintKind {
 
 /// One constraint generated to remove a detected hazard, rendered by the arcs emitter as the
 /// `define_arc` block(s) its kind calls for.
+///
+/// ONE PROBED STATE, as on the [`Hazard`] the views are inherited from: `prevector` walks to `state`,
+/// `levels` are the pin levels read there and `nodes` the victim levels read there, so the block's
+/// `-vector` and its `-ic` describe one and the same starting point. A situation keys on that state, so
+/// the readings it merges were all measured at it — which is why [`merged_victims`] can name the victims
+/// of every reading and still read each of their levels off the one state.
 #[derive(Debug, Clone)]
 pub(crate) struct Constraint {
     pub(crate) kind: ConstraintKind,
@@ -158,12 +164,23 @@ pub(crate) fn constrain(hazards: &[Hazard], clock_pins: &[Symbol]) -> Vec<Constr
 
 /// The constraint that removes `hazard`, or `None` where its cause states no timing to constrain — a
 /// lone toggle, which names one edge and so no separation.
+///
+/// The views the constraint inherits are the hazard's samples of its one probed state (see [`Hazard`]),
+/// and this is where they are copied onward, so it is where the part of that a record can check without
+/// a machine is checked: the prevector's last step is the probed state's input projection, so the state
+/// fixes every input that step names and fixes it the same way — set-wise, the state's assignments are
+/// contained in the step's. The pin levels cannot be checked here: an output that is no state variable
+/// is no coordinate of the state, and re-reading it would need the machine detection ran on.
 fn remedy(hazard: &Hazard, clock_pins: &[Symbol]) -> Option<Constraint> {
-    let Separation { kind, pin } = match &hazard.cause {
+    debug_assert!(
+        hazard.state.is_subset_of(hazard.pre_state()),
+        "a hazard's prevector must end at the state it was probed from",
+    );
+    let SeparationRole { kind, pin } = match &hazard.cause {
         // A separation states that two edges stay apart, and one edge has nothing to be separated from.
         Cause::Toggle { .. } => return None,
         Cause::Race { pins: [x, y] } => separation(x, y, clock_pins),
-        Cause::Pulse { pin } => Separation {
+        Cause::Pulse { pin } => SeparationRole {
             kind: ConstraintKind::MinPulseWidth,
             pin: pin.clone(),
         },
@@ -173,32 +190,33 @@ fn remedy(hazard: &Hazard, clock_pins: &[Symbol]) -> Option<Constraint> {
         pin,
         prevector: hazard.prevector.clone(),
         levels: hazard.levels.clone(),
-        nodes: hazard.node_levels.clone(),
+        nodes: hazard.node_levels(),
         state: hazard.state.clone(),
         discovered: hazard.discovered,
         ordinal: hazard.ordinal(),
     })
 }
 
-/// The kind of separation that holds two racing pins apart, and the pin it constrains: a directed
-/// setup/hold when exactly one of the pair is a declared clock — the other pin being the data the clock
-/// is constrained against — else a symmetric non_seq of the two as they were probed.
-struct Separation {
+/// The role a pair of racing pins takes in the separation that holds them apart: the [`ConstraintKind`]
+/// it becomes, and the pin that becomes the constrained one — a directed setup/hold when exactly one of
+/// the pair is a declared clock, with the other pin the data that clock is constrained against, else a
+/// symmetric non_seq of the two as they were probed.
+struct SeparationRole {
     kind: ConstraintKind,
     pin: PinEdge,
 }
 
-/// The separation that holds two racing pins apart. See [`Separation`].
-fn separation(x: &PinEdge, y: &PinEdge, clock_pins: &[Symbol]) -> Separation {
+/// The role two racing pins take in the separation that holds them apart. See [`SeparationRole`].
+fn separation(x: &PinEdge, y: &PinEdge, clock_pins: &[Symbol]) -> SeparationRole {
     let is_clock = |r: &PinEdge| clock_pins.contains(&r.pin);
     if is_clock(x) ^ is_clock(y) {
         let (clk, data) = if is_clock(x) { (x, y) } else { (y, x) };
-        Separation {
+        SeparationRole {
             kind: ConstraintKind::SetupHold { clock: clk.clone() },
             pin: data.clone(),
         }
     } else {
-        Separation {
+        SeparationRole {
             kind: ConstraintKind::NonSeq { other: x.clone() },
             pin: y.clone(),
         }

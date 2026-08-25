@@ -41,7 +41,11 @@ fn transitive_closure(edges: &BTreeMap<Symbol, Vec<Symbol>>) -> BTreeMap<Symbol,
         for u in reach.keys().cloned().collect::<Vec<_>>() {
             for v in reach[&u].iter().cloned().collect::<Vec<_>>() {
                 for w in reach.get(&v).cloned().unwrap_or_default() {
-                    if reach.get_mut(&u).unwrap().insert(w) {
+                    if reach
+                        .get_mut(&u)
+                        .expect("u was drawn from reach's own keys, so it is still present")
+                        .insert(w)
+                    {
                         changed = true;
                     }
                 }

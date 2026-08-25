@@ -3,7 +3,7 @@
 //! behavioural Verilog model (sequential UDP + wrapper), and a minimal Liberty fragment (`statetable`
 //! for hysteretic outputs, plain `function` for combinational ones).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fmt;
 use std::fs;
@@ -376,24 +376,132 @@ fn emit_stdout(out: &mut impl io::Write, a: &Artifacts, no_cells: bool) -> io::R
     Ok(())
 }
 
-/// Write every artifact into a file of its own under `dir`, each named from `base`.
+/// A failed file operation and the path it was made on. An `io::Error` states what went wrong and
+/// nothing about where, and the path is the piece of context this layer holds: a run that cannot read
+/// its spec or write an artifact says which file it meant.
+#[derive(Debug)]
+struct PathError {
+    /// The path the operation was given.
+    path: PathBuf,
+    /// What the operation reported.
+    source: io::Error,
+}
+
+impl PathError {
+    /// The failure `source` reports, on `path`.
+    fn at(path: &Path, source: io::Error) -> Self {
+        Self {
+            path: path.to_owned(),
+            source,
+        }
+    }
+}
+
+impl fmt::Display for PathError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.path.display(), self.source)
+    }
+}
+
+impl std::error::Error for PathError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+impl From<PathError> for io::Error {
+    fn from(err: PathError) -> Self {
+        // Naming the path says nothing new about what went wrong, so the leaf error's kind is the
+        // wrapper's: a caller matching on `NotFound` still sees it.
+        io::Error::new(err.source.kind(), err)
+    }
+}
+
+/// One artifact on its way to disk: the file its text is written to, and the path it takes once every
+/// artifact of the run has been written.
+struct Staged {
+    /// Where the text was written.
+    temporary: PathBuf,
+    /// The name the artifact is known by, which the temporary is renamed onto.
+    artifact: PathBuf,
+}
+
+/// A run's artifacts on their way to disk. Each is written to a temporary file beside the artifact it
+/// becomes and only renamed onto it once they all exist, so the directory holds one run's artifacts or
+/// the run before's, never a mixture — a Liberate run reading a directory a half-finished run left
+/// behind has no way to tell which artifact belongs to which. A staging dropped before it is committed
+/// removes the files it wrote.
+#[derive(Default)]
+struct Staging {
+    written: Vec<Staged>,
+}
+
+impl Staging {
+    /// Write one artifact, destined for `name` under `dir`, into a temporary of its own. The artifact
+    /// renders itself into that file's writer, buffered because it arrives as the many small writes its
+    /// `Display` makes.
+    fn write(&mut self, dir: &Path, name: &str, body: &impl fmt::Display) -> io::Result<()> {
+        // A sibling of the artifact, so the rename that follows stays inside the one directory, and
+        // hidden, so nothing reading the directory meanwhile takes a part-written file for an artifact.
+        let temporary = dir.join(format!(".{name}.tmp"));
+        let file = fs::File::create(&temporary).map_err(|e| PathError::at(&temporary, e))?;
+        // Staged from the moment the file exists: whatever fails below, the drop has the path to remove.
+        self.written.push(Staged {
+            temporary: temporary.clone(),
+            artifact: dir.join(name),
+        });
+        let mut out = io::BufWriter::new(file);
+        write!(out, "{body}").map_err(|e| PathError::at(&temporary, e))?;
+        out.flush().map_err(|e| PathError::at(&temporary, e))?;
+        Ok(())
+    }
+
+    /// Rename every staged file onto the artifact it was written for, reporting each path as it lands.
+    fn commit(mut self) -> io::Result<()> {
+        for Staged {
+            temporary,
+            artifact,
+        } in &self.written
+        {
+            fs::rename(temporary, artifact).map_err(|e| PathError::at(artifact, e))?;
+            eprintln!("wrote {}", artifact.display());
+        }
+        // The artifacts are in place and the temporaries are gone with them; nothing is left to clean up.
+        self.written.clear();
+        Ok(())
+    }
+}
+
+impl Drop for Staging {
+    fn drop(&mut self) {
+        // A staging still holding files is one whose run failed, and the failure is what gets reported:
+        // removing what it wrote is best-effort, and a temporary already renamed away is simply absent.
+        for Staged { temporary, .. } in &self.written {
+            let _ = fs::remove_file(temporary);
+        }
+    }
+}
+
+/// Write every artifact into a file of its own under `dir`, each named from `base`, and rename them
+/// into place together once they are all written.
 fn emit_files(dir: &Path, base: &str, a: &Artifacts, no_cells: bool) -> io::Result<()> {
-    fs::create_dir_all(dir)?;
-    write_file(dir, &format!("{base}_arcs.tcl"), &Deck(&a.rendered))?;
-    write_file(dir, &format!("{base}.v"), &Verilog(&a.model))?;
-    write_file(
+    fs::create_dir_all(dir).map_err(|e| PathError::at(dir, e))?;
+    let mut staging = Staging::default();
+    staging.write(dir, &format!("{base}_arcs.tcl"), &Deck(&a.rendered))?;
+    staging.write(dir, &format!("{base}.v"), &Verilog(&a.model))?;
+    staging.write(
         dir,
         &format!("{base}.lib"),
         &format_args!("{}\n", a.liberty),
     )?;
     if !no_cells {
-        write_file(
+        staging.write(
             dir,
             &format!("{base}_cells.tcl"),
             &Declarations(&a.declarations),
         )?;
     }
-    Ok(())
+    staging.commit()
 }
 
 /// Read the spec's source text from wherever the argument named.
@@ -404,7 +512,7 @@ fn read_spec(spec: &PathArg) -> io::Result<String> {
             io::stdin().read_to_string(&mut buf)?;
             Ok(buf)
         }
-        PathArg::File(path) => fs::read_to_string(path),
+        PathArg::File(path) => fs::read_to_string(path).map_err(|e| PathError::at(path, e).into()),
     }
 }
 
@@ -482,9 +590,7 @@ fn hazard_warning<'a>(
         .first()
         .expect("an occasion is only entered by a record");
     // One entry per outcome, over the nodes and landing states every record of that outcome names.
-    // `Outcome`'s own order sets the order the fields come out in, so a warning reads the same however
-    // detection filed them.
-    let mut effects: BTreeMap<Outcome, Effect<'a>> = BTreeMap::new();
+    let mut effects: HashMap<Outcome, Effect<'a>> = HashMap::new();
     for h in records {
         let effect = effects.entry(h.outcome).or_default();
         for n in &h.group {
@@ -705,17 +811,6 @@ fn base_name(spec: &PathArg) -> String {
     }
 }
 
-/// Write one artifact file into `dir`, reporting the path. The artifact renders itself into the file's
-/// own writer, buffered because it arrives as the many small writes its `Display` makes.
-fn write_file(dir: &Path, name: &str, body: &impl fmt::Display) -> io::Result<()> {
-    let path = dir.join(name);
-    let mut out = io::BufWriter::new(fs::File::create(&path)?);
-    write!(out, "{body}")?;
-    out.flush()?;
-    eprintln!("wrote {}", path.display());
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -910,9 +1005,18 @@ Y = "A*B"
         fs::remove_file(&path).ok();
     }
 
+    /// A spec that cannot be read fails naming the path it was given: the os error says only what went
+    /// wrong, and which file it was asked for is what the caller needs to act on it.
     #[test]
     fn read_spec_errors_on_a_missing_path() {
-        assert!(read_spec(&PathArg::File("/no/such/cellsmith/spec.toml".into())).is_err());
+        let path = "/no/such/cellsmith/spec.toml";
+        let err = read_spec(&PathArg::File(path.into()))
+            .expect_err("a missing spec has no source text to read");
+        assert!(
+            err.to_string().contains(path),
+            "the error names the path it was given:\n{err}"
+        );
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
     }
 
     const C2: &str = r#"
@@ -966,10 +1070,17 @@ Q = "A*B + Q*(A+B)"
         ])
         .unwrap();
         assert!(run(cli).is_ok());
-        assert!(outdir.join("cli_arcs.tcl").is_file());
-        assert!(outdir.join("cli.v").is_file());
-        assert!(outdir.join("cli.lib").is_file());
-        assert!(outdir.join("cli_cells.tcl").is_file());
+        let artifacts = ["cli_arcs.tcl", "cli.v", "cli.lib", "cli_cells.tcl"];
+        for name in artifacts {
+            assert!(outdir.join(name).is_file(), "{name} was not written");
+        }
+        // Each artifact is renamed into place from a temporary that the run does not outlive, so the
+        // four are the whole of what a completed run leaves behind.
+        let left: HashSet<String> = fs::read_dir(&outdir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, artifacts.iter().map(|n| n.to_string()).collect());
 
         fs::remove_dir_all(&dir).ok();
     }

@@ -134,9 +134,7 @@ fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
                         // A read-gated output reads its factored register combinationally, so it names
                         // PIN ports — the register's internal pin and the gate pins — never a folded
                         // master.
-                        Some(reads) => {
-                            PinLogic::StateFunction(function_expr(reads, Some(&model.node_of)))
-                        }
+                        Some(reads) => PinLogic::StateFunction(function_expr(reads, Some(&model))),
                         None => classify_output(&sig.name, sr, &model),
                     };
                     group.subgroups.push(logic_pin(sig.name.as_str(), logic));
@@ -146,10 +144,10 @@ fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
             // node, a genuine internal state node, and a register factored out of a read-gated output
             // alike. Driving this off the header is what keeps pins and columns in step — a folded
             // master has no column and so gets no pin, without needing to be filtered out here.
-            for node in &model.internal_nodes {
+            for col in &model.state_nodes {
                 group.subgroups.push(logic_pin(
-                    node.as_str(),
-                    PinLogic::InternalNode(node.clone()),
+                    col.node.as_str(),
+                    PinLogic::InternalNode(col.node.clone()),
                 ));
             }
         }
@@ -205,30 +203,28 @@ fn logic_pin(name: &str, logic: PinLogic) -> Group {
 /// - (B) an output that references a state node names those nodes through `state_function`;
 /// - (C) an output over primary inputs only carries a plain `function`.
 fn classify_output(name: &Symbol, sr: &StateRegions, model: &StateModel) -> PinLogic {
-    if let Some(node) = model.node_of.get(name) {
+    if let Some(node) = model.node_of(name) {
         // (A) This output IS a state variable: `state_function` states the pin's output logic — the
         // bare node it minted, which the output's own internal pin anchors. (Its cols may reference
         // other nodes, so this must be checked before the state-dependence predicate below.)
         PinLogic::StateFunction(BoolExpr::var(node))
-    } else if sr.cols.iter().any(|c| model.node_of.contains_key(c)) {
+    } else if sr.cols.iter().any(|c| model.node_of(c).is_some()) {
         // (B) This output DEPENDS on a state node — a state_function over the table's nodes.
-        PinLogic::StateFunction(function_expr(sr, Some(&model.node_of)))
+        PinLogic::StateFunction(function_expr(sr, Some(model)))
     } else {
         // (C) Combinational output over primary inputs only — a plain `function`. By minimise
         // invariant I3 a surviving combinational output's support is inputs + state nodes only, so
-        // 'no node_of column' == 'no transitive state dependence' (ref statetable.rs:112-122).
-        PinLogic::Function(function_expr(sr, Some(&model.node_of)))
+        // 'no column with a state node of its own' == 'no transitive state dependence'
+        // (ref statetable.rs:112-122).
+        PinLogic::Function(function_expr(sr, Some(model)))
     }
 }
 
 /// `statetable ("<inputs>", "<nodes>") { table : "<rows>"; }` — the cell's single joint next-state
 /// table. Node values are space-separated within a field; rows are comma-separated.
 fn statetable_group(model: &StateModel) -> Group {
-    let header = format!(
-        "\"{}\", \"{}\"",
-        Words(&model.input_nodes),
-        Words(&model.internal_nodes),
-    );
+    let nodes: Vec<&Symbol> = model.state_nodes.iter().map(|col| &col.node).collect();
+    let header = format!("\"{}\", \"{}\"", Words(&model.input_nodes), Words(&nodes));
     let mut st = Group::new("statetable", &header);
     set_attr(&mut st, "table", Value::String(Table(model).to_string()));
     st
@@ -381,11 +377,12 @@ impl fmt::Display for Level {
 /// carrying no output at all and so is answered here.
 ///
 /// A region's columns are SIGNAL names, but a `state_function` must name the statetable's NODES, which
-/// for a state output is its minted `_st` node rather than the output's own name. `node_of` supplies
-/// that mapping, applied to the cover's own input labels so the expression is rebuilt over the node
-/// names directly; a column absent from it (a primary input) keeps its own name. Pass `None` only
-/// where the cell has no statetable at all and every column is therefore a primary input.
-fn function_expr(sr: &StateRegions, node_of: Option<&BTreeMap<Symbol, Symbol>>) -> BoolExpr {
+/// for a state output is its minted `_st` node rather than the output's own name.
+/// [`StateModel::node_of`] supplies that mapping, applied to the cover's own input labels so the
+/// expression is rebuilt over the node names directly; a column the table has no node for (a primary
+/// input) keeps its own name. Pass `None` only where the cell has no statetable at all and every column
+/// is therefore a primary input.
+fn function_expr(sr: &StateRegions, model: Option<&StateModel>) -> BoolExpr {
     if sr.on.num_cubes() == 0 {
         return BoolExpr::constant(false);
     }
@@ -393,7 +390,7 @@ fn function_expr(sr: &StateRegions, node_of: Option<&BTreeMap<Symbol, Symbol>>) 
         .on
         .input_labels()
         .iter()
-        .map(|col| node_of.and_then(|m| m.get(col)).unwrap_or(col).clone());
+        .map(|col| model.and_then(|m| m.node_of(col)).unwrap_or(col).clone());
     let over_nodes: Cover<Symbol, Anonymous> = sr.on.clone().rename_inputs(nodes).expect(
         "every column has a node of its own: `mint_state_node` escalates past a name in use",
     );
@@ -1068,9 +1065,9 @@ Z = "A*B"
 
     #[test]
     fn transitive_state_dependence_survives_fold() {
-        // Internal latch L self-holds; internal relay W = C*L merely feeds Z2 = W + E. minimise folds
-        // the relay W into its consumer Z2 (model.rs:163-165, minimise.rs:456-474), so Z2's cols
-        // contain the state node L directly — the transitive case collapses to the direct predicate.
+        // Internal latch L self-holds; internal relay W = C*L merely feeds Z2 = W + E. minimise's
+        // fold_pass folds the relay W into its consumer Z2, so Z2's cols contain the state node L
+        // directly — the transitive case collapses to the direct predicate.
         let cell = analyse(
             r#"
 [[cell]]
@@ -1097,7 +1094,7 @@ Z2 = "W + E"
     #[test]
     fn projection_outputs_render_bare_state_literals() {
         // C-element output Q self-holds (a state node); projection outputs Qc = Q and Qn = !Q are
-        // aliases of that single node. Outputs are never purged (model.rs:417), so both survive.
+        // aliases of that single node. Outputs are never purged (Preserved::outputs), so both survive.
         let cell = analyse(
             r#"
 [[cell]]
@@ -1242,7 +1239,8 @@ Q = "CLK*M + !CLK*Q"
             spec.cells.remove(0).analyse().unwrap()
         };
         let via_flag = {
-            // Mirrors main.rs:82-88's blanket application of `--no-edge-collapse` over every cell.
+            // The same blanket mutation `apply_overrides` applies over every cell for the
+            // `--no-edge-collapse` CLI flag.
             let mut spec = crate::model::parse_spec(DFF).unwrap();
             for c in &mut spec.cells {
                 c.no_edge_collapse = true;

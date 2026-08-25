@@ -77,6 +77,16 @@ pub enum Outcome {
 
 /// One detected hazard: a [`Cause`], the [`Outcome`] it produces, and the observation the generated
 /// constraint is built from.
+///
+/// ONE PROBED STATE. Every view of the machine a record carries is a sample of `state`, the state the
+/// probe acted from: `prevector` is the walk that reaches it, `condition` and [`Hazard::pre_state`] are
+/// its input projection, `levels` are the pin levels read there, and `node_levels` the levels of the
+/// nodes `group` names. A view that `state` determines is recomputed from it rather than stored;
+/// the two that are stored need what the record does not hold — the exploration for the walk, the
+/// machine's BDDs for the level of an output that is no coordinate of the state — so sampling either
+/// anywhere but `state` would leave the record stating a timing at one state with the initial conditions
+/// of another. `super::constraint`'s generation pass checks the part of that which is checkable without
+/// a machine, where the views are copied onward.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hazard {
     pub cause: Cause,
@@ -100,15 +110,14 @@ pub struct Hazard {
     /// the pulse widens. A `Vec` carries order either way, so the two readings share the type.
     pub settled: Vec<Minterm<Symbol>>,
     /// The prevector: the input-assignment path that drives every state variable into the probed state
-    /// (each node projected onto the inputs).
+    /// (each node projected onto the inputs). Its last step is the probed state's own input projection —
+    /// [`Explored::path_to`](crate::logic::machine::Explored::path_to) seeds the chain with the state
+    /// itself — so the path ends where the probe acts.
     pub(crate) prevector: Vec<Minterm<Symbol>>,
-    /// The levels the cell's outputs hold at the probed state — sampled at the SAME state as
-    /// `prevector`, so the pair the constraint carries is consistent.
+    /// The levels the cell's outputs and exposed nodes hold at the probed state, which the constraint
+    /// arc states as its initial condition. An output that is no state variable is no coordinate of
+    /// `state`, so reading its level takes the machine that detection ran on.
     pub(crate) levels: ArcLevels,
-    /// The level each node the hazard names holds at the PROBED state, by name. Sampled at the same
-    /// state as `prevector` and `levels`, and covering every entry of the hazard's `group`, so the
-    /// constraint generated from this observation can state the start level of each node it probes.
-    pub(crate) node_levels: Minterm<Symbol>,
     /// The probed state itself: every input and state variable at the level it holds there. The
     /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
     /// emitted column carries.
@@ -138,6 +147,28 @@ impl Hazard {
         self.prevector
             .last()
             .expect("path_to seeds its chain with the probed node itself")
+    }
+
+    /// The level each node this hazard names holds at the probed state — what the constraint generated
+    /// from it states as the start condition of each victim node its block probes, one column per entry
+    /// of `group` in that order.
+    ///
+    /// A group node is a state variable, hence a coordinate of the probed state, and detection probes
+    /// only fully-initialised states, so every one of them is defined there.
+    pub(crate) fn node_levels(&self) -> Minterm<Symbol> {
+        let levels: Vec<(Symbol, Option<bool>)> = self
+            .group
+            .iter()
+            .map(|node| {
+                let level = self.state.value_of(node.as_str()).expect(
+                    "a hazard's group node is defined at the fully-initialised probed state",
+                );
+                (node.clone(), Some(level))
+            })
+            .collect();
+        Minterm::labeled(&levels).expect(
+            "a hazard's group selects from the declared state variables, so no node repeats",
+        )
     }
 
     /// A fixed rank over the (cause, outcome) cells, so that two hazards can be ordered by which cell

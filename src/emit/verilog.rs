@@ -1307,10 +1307,12 @@ Q = "CLK*M + !CLK*Q"
 
     #[test]
     fn dff_opt_out_restores_master_primitive_via_either_switch() {
-        // The two-latch DFF, opted out directly (`no_edge_collapse = true` in the TOML) versus opted
-        // out via the CLI-flag-equivalent blanket mutation over the whole spec: both switches restore
-        // the SAME two-latch model -- a `DFF_M` primitive and wire, absent under default collapse, over
-        // the same UDP table rows.
+        // The two-latch DFF, opted out directly (`no_edge_collapse = true` in the TOML) and opted out
+        // via the CLI-flag-equivalent blanket mutation over the whole spec. Each run states the
+        // two-latch model the spec writes: a `DFF_M` master transparent while CLK is low and holding
+        // while it is high, a `DFF_Q` slave keyed off M -- holding while CLK is low and transparent
+        // while it is high -- M an internal wire rather than a module port, and no edge row anywhere,
+        // the collapse being off.
         const DFF: &str = r#"
 [[cell]]
 name = "DFF"
@@ -1327,7 +1329,7 @@ Q = "CLK*M + !CLK*Q"
             spec.cells.remove(0).analyse().unwrap()
         };
         let via_flag = {
-            // Mirrors main.rs:82-88's blanket application of `--no-edge-collapse` over every cell.
+            // Mirrors apply_overrides's blanket application of `--no-edge-collapse` over every cell.
             let mut spec = crate::model::parse_spec(DFF).unwrap();
             for c in &mut spec.cells {
                 c.no_edge_collapse = true;
@@ -1338,8 +1340,28 @@ Q = "CLK*M + !CLK*Q"
         let v_direct = emit(&direct);
         let v_via_flag = emit(&via_flag);
         for v in [&v_direct, &v_via_flag] {
-            assert!(v.contains("primitive DFF_M("));
+            eprintln!("{v}");
+            // The master is the negative-level latch the spec writes: it passes D while CLK is low and
+            // holds while CLK is high. Its rows read against the port list the same run wrote, the UDP
+            // being a columnar format.
+            assert!(v.contains("primitive DFF_M(M, CLK, D);"));
+            let m = prim_block(v, "primitive DFF_M(");
+            assert!(m.contains("0 0 : ? : 0;"));
+            assert!(m.contains("0 1 : ? : 1;"));
+            assert!(m.contains("1 ? : ? : -;"));
+            // The slave is the positive-level latch, and it keys off M rather than D -- which is what
+            // the opt-out preserves: a collapsed Q would capture D on the clock edge instead.
+            assert!(v.contains("primitive DFF_Q(Q, CLK, M);"));
+            let q = prim_block(v, "primitive DFF_Q(");
+            assert!(q.contains("0 ? : ? : -;"));
+            assert!(q.contains("1 0 : ? : 0;"));
+            assert!(q.contains("1 1 : ? : 1;"));
+            // M is the cell's internal node, so it is a wire the master drives, not a module port.
+            assert!(v.contains("module DFF(Q, CLK, D);"));
             assert!(v.contains("wire   M;"));
+            // Neither UDP carries an edge row: nothing collapsed.
+            assert!(!v.contains("(01)"), "unexpected rising-edge token");
+            assert!(!v.contains("(10)"), "unexpected falling-edge token");
         }
     }
 

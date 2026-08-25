@@ -51,7 +51,8 @@ pub(crate) fn mint_state_node(base: &str, taken: impl Fn(&Symbol) -> bool) -> Sy
 }
 
 /// One literal of a product: a variable and whether it appears positive (`k`) or negated (`!k`).
-/// The derived order exists so a caller may sort a slice of literals: two conditions naming the same literal set then sort to the same sequence and compare structurally equal.
+/// The derived order exists so a caller may sort a slice of literals: two conditions naming the
+/// same literal set then sort to the same sequence and compare structurally equal.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Literal {
     pub(crate) var: Symbol,

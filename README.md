@@ -364,11 +364,16 @@ Options:
 ```
 
 Exceeding either exploration ceiling is a hard error: the analysis stops at a cell whose exploration
-was stopped there, naming it, and cellsmith exits without writing any artifacts, rather than
-presenting an unexplored cell's absent arcs and hazards as if that were its behaviour. Cells are
-analysed in parallel, so where several pass a ceiling the one reported is whichever the parallel
-analysis reached, not whichever failed first.
+was stopped there and names it, rather than presenting an unexplored cell's absent arcs and hazards as
+if that were its behaviour. Cells are analysed in parallel, so where several pass a ceiling the one
+reported is whichever the parallel analysis reached, not whichever failed first.
 Raise a ceiling for a run with `--max-candidates`/`--max-states`.
+
+A run's artifacts are written all together or not at all: each goes to a temporary file beside the
+artifact it becomes, and they are renamed into place once every one of them has been written. A run
+that fails — at an exploration ceiling, on a spec it cannot read, or part-way through writing — leaves
+the output directory as it stands, so the artifacts a downstream Liberate run finds there are always
+one cellsmith run's.
 
 Examples:
 
@@ -450,7 +455,8 @@ Two targets, each a profile of a different thing, both driven off the 9 cells in
   `whole_run` (the full 9-cell run: `analyse` plus all three emitters and `library_liberty`).
 
 Every target is measured at the thread counts `CELLSMITH_BENCH_THREADS` names, as a comma-separated
-list of widths, where `max` stands for the width the global pool was built with. A width is a point on one axis rather than a mode, so the single-threaded measurement is the
+list of widths, where `max` stands for the width the global pool was built with. A width is a
+point on one axis rather than a mode, so the single-threaded measurement is the
 `n=1` point of a sweep and is asked for the same way as any other. With the variable unset each target
 is measured once with nothing pinned, on the global pool at whatever width it was configured with —
 which is how the tool itself runs. The list reaches the benchmarks through the environment because

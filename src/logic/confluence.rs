@@ -72,25 +72,6 @@ use crate::logic::arcs::{ArcLevels, Edge, PinEdge};
 use crate::logic::hazard::{Cause, Hazard, Outcome};
 use crate::logic::machine;
 
-/// The level each of `group`'s nodes holds at the probed state — what a constraint block states as the
-/// start condition of each victim node it probes. A hazard's group holds state variables, which are machine
-/// coordinates, and a probed state is fully initialised, so every one of them is defined there.
-///
-/// Shared with [`super::width`], which samples its pulses' nodes at the pre-pulse state through it.
-pub(super) fn node_levels_at(state: &Minterm<Symbol>, group: &[Symbol]) -> Minterm<Symbol> {
-    let levels: Vec<(Symbol, Option<bool>)> = group
-        .iter()
-        .map(|w| {
-            let level = state
-                .value_of(w.as_str())
-                .expect("a hazard's group node is defined at the fully-initialised probed state");
-            (w.clone(), Some(level))
-        })
-        .collect();
-    Minterm::labeled(&levels)
-        .expect("a hazard's group selects from the declared state variables, so no node repeats")
-}
-
 /// The direction `name` toggles from its current value at `node`. Explored nodes carry a complete input
 /// assignment, so an input's value is always fixed there.
 ///
@@ -227,7 +208,6 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
         for (i, r) in single.iter().enumerate() {
             if let Err(cycle) = r {
                 let group = oscillating_group(cycle, state_vars);
-                let node_levels = node_levels_at(s, &group);
                 detected.push(Hazard {
                     cause: Cause::Toggle {
                         pin: racer(s, &inputs[i]),
@@ -238,7 +218,6 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
                     settled: Vec::new(),
                     prevector: prevector_s.clone(),
                     levels: levels_s.clone(),
-                    node_levels,
                     state: s.clone(),
                     discovered,
                 });
@@ -290,7 +269,6 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
                     // constraint generated from it needs. This is what supplies an oscillating pair's
                     // (e.g. a mutex's) constraint, standing in for the divergence-derived one the
                     // combinational-neighbourhood filter below discards for it.
-                    let node_levels = node_levels_at(s, &group);
                     detected.push(Hazard {
                         cause: Cause::Race {
                             pins: [racer(s, x), racer(s, y)],
@@ -301,7 +279,6 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
                         settled: settled_set.into_iter().collect(),
                         prevector: prevector_s.clone(),
                         levels: levels_s.clone(),
-                        node_levels,
                         state: s.clone(),
                         discovered,
                     });
@@ -344,7 +321,6 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
                 // the cell rather than of the declaration.
                 let group: Vec<Symbol> =
                     state_vars.iter().filter(|w| diverges(w)).cloned().collect();
-                let node_levels = node_levels_at(s, &group);
                 let mut settled_set: BTreeSet<Minterm<Symbol>> = BTreeSet::new();
                 settled_set.insert(s_xy.project_to(&group));
                 settled_set.insert(s_yx.project_to(&group));
@@ -358,7 +334,6 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
                     settled: settled_set.into_iter().collect(),
                     prevector: prevector_s.clone(),
                     levels: levels_s.clone(),
-                    node_levels,
                     state: s.clone(),
                     discovered,
                 });
