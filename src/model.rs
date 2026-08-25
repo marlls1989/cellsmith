@@ -1481,7 +1481,7 @@ pub(crate) fn analyse_both(src: &str) -> AnalysedPair {
 mod tests {
     use super::*;
     use crate::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, Deck};
-    use crate::logic::arcs::{HeldLevel, PinEdge};
+    use crate::logic::arcs::PinEdge;
     use crate::logic::constraint::ConstraintKind;
     use crate::logic::hazard::{Cause, Outcome};
     use espresso_logic::{bdd_builder, expr, Minterm};
@@ -2636,7 +2636,7 @@ Q = "CLK*M + !CLK*Q"
     #[derive(Debug, PartialEq, Eq)]
     struct LeakageRecord {
         inputs: Minterm<Symbol>,
-        outputs: Vec<HeldLevel>,
+        outputs: Minterm<Symbol>,
     }
 
     /// One generated constraint by its identity: the pin it constrains with the edge that pin makes,
@@ -2720,7 +2720,7 @@ Q = "CLK*M + !CLK*Q"
                 .map(|c| ConstraintRecord {
                     kind: c.kind.clone(),
                     pin: c.pin.clone(),
-                    nodes: c.victim_names(),
+                    nodes: c.victim_names().to_vec(),
                 })
                 .collect(),
             hazards: cell

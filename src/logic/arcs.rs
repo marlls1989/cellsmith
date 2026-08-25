@@ -87,38 +87,30 @@ impl fmt::Display for PinEdge {
     }
 }
 
-/// One exposed internal node across a measured arc: the level it holds before the measured edge and the
-/// level it holds after. Equal levels render the held `0`/`1`; a change renders `R`/`F`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ExposedLevel {
-    pub(crate) node: Symbol,
-    pub(crate) start: bool,
-    pub(crate) end: bool,
-}
-
-/// One node and the level it holds at the state being stated: an output pin's held value across a
-/// measured arc, or a rest state's settled value.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct HeldLevel {
-    pub(crate) node: Symbol,
-    pub(crate) level: bool,
-}
-
 /// What the cell's non-input columns hold across a measured arc: each output pin's level at the arc's
-/// start state, in `cell.outputs` order, and each exposed internal node's levels at both ends of the
-/// measurement, in the machine's exposure order. Liberate reads the start levels as the arc's `-ic`
-/// initial condition — the voltage each column starts the measured vector at — while an exposed node,
-/// which the measurement observes as well as initialises, needs its end level too: it can move across an
-/// arc whose outputs all hold.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// start state, and each exposed internal node's levels at both ends of the measurement. Liberate reads
+/// the start levels as the arc's `-ic` initial condition — the voltage each column starts the measured
+/// vector at — while an exposed node, which the measurement observes as well as initialises, needs its
+/// end level too: it can move across an arc whose outputs all hold.
+///
+/// Each field is one row of levels keyed by node name, read back with
+/// [`Minterm::value_of`](espresso_logic::Minterm::value_of). The exposed nodes take two rows rather than
+/// one because they carry two mappings over the one node set: a row holds a single value per variable,
+/// and a measurement has two ends.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ArcLevels {
-    pub(crate) outputs: Vec<HeldLevel>,
-    pub(crate) exposed: Vec<ExposedLevel>,
+    /// Every output pin's level at the arc's start state.
+    pub(crate) outputs: Minterm<Symbol>,
+    /// Every exposed internal node's level at the arc's start state.
+    pub(crate) exposed_start: Minterm<Symbol>,
+    /// Every exposed internal node's level at the state the measurement settles in. A node holding its
+    /// start level renders the held `0`/`1`; one that moved renders `R`/`F`.
+    pub(crate) exposed_end: Minterm<Symbol>,
 }
 
 impl ArcLevels {
     /// The levels every output and exposed node of `m`'s cell holds at `node`: the sample of a single
-    /// state, so every exposed level has `start == end`. That is the whole of what the hazard probes in
+    /// state, so the two exposed rows are the same row. That is the whole of what the hazard probes in
     /// [`super::confluence::detect`] characterise, and it is also the start half of every measurement made
     /// from `node` — none of it depends on which input then moves — which [`Self::ending_at`] completes
     /// into the levels across one such measurement.
@@ -136,35 +128,35 @@ impl ArcLevels {
         m: &Machine<B, C>,
         node: &Minterm<Symbol>,
     ) -> ArcLevels {
+        let outputs: Vec<(Symbol, Option<bool>)> = m
+            .cell
+            .outputs
+            .iter()
+            .map(|o| {
+                let v = m
+                    .output_value(&o.name, node)
+                    .expect("every output is defined at a fully-initialised probed state");
+                (o.name.clone(), Some(v))
+            })
+            .collect();
+        let exposed: Vec<(Symbol, Option<bool>)> = m
+            .exposed
+            .iter()
+            .map(|exposed| {
+                let level = m
+                    .exposed_value(exposed.as_str(), node)
+                    .expect("every exposed node is defined at a fully-initialised probed state");
+                (exposed.clone(), Some(level))
+            })
+            .collect();
+        // A single state samples one level per exposed node, so both ends of the sample are that row.
+        let exposed = Minterm::labeled(&exposed)
+            .expect("the spec rejects a repeated exposure, so no exposed node repeats");
         ArcLevels {
-            outputs: m
-                .cell
-                .outputs
-                .iter()
-                .map(|o| {
-                    let v = m
-                        .output_value(&o.name, node)
-                        .expect("every output is defined at a fully-initialised probed state");
-                    HeldLevel {
-                        node: o.name.clone(),
-                        level: v,
-                    }
-                })
-                .collect(),
-            exposed: m
-                .exposed
-                .iter()
-                .map(|exposed| {
-                    let level = m.exposed_value(exposed.as_str(), node).expect(
-                        "every exposed node is defined at a fully-initialised probed state",
-                    );
-                    ExposedLevel {
-                        node: exposed.clone(),
-                        start: level,
-                        end: level,
-                    }
-                })
-                .collect(),
+            outputs: Minterm::labeled(&outputs)
+                .expect("a cell's outputs are keyed by name, so no output repeats"),
+            exposed_start: exposed.clone(),
+            exposed_end: exposed,
         }
     }
 
@@ -179,19 +171,23 @@ impl ArcLevels {
         m: &Machine<B, C>,
         settled: &Minterm<Symbol>,
     ) -> ArcLevels {
+        let ends: Vec<(Symbol, Option<bool>)> = self
+            .exposed_start
+            .vars()
+            .iter()
+            .map(|node| {
+                let level = m
+                    .exposed_value(node.as_str(), settled)
+                    .expect("every exposed node is defined at a fully-initialised probed state");
+                (node.clone(), Some(level))
+            })
+            .collect();
         ArcLevels {
             outputs: self.outputs.clone(),
-            exposed: self
-                .exposed
-                .iter()
-                .map(|e| ExposedLevel {
-                    node: e.node.clone(),
-                    start: e.start,
-                    end: m.exposed_value(e.node.as_str(), settled).expect(
-                        "every exposed node is defined at a fully-initialised probed state",
-                    ),
-                })
-                .collect(),
+            exposed_start: self.exposed_start.clone(),
+            // The end levels are read over the start row's own header, which names each variable once.
+            exposed_end: Minterm::labeled(&ends)
+                .expect("a minterm's header names each variable once"),
         }
     }
 }
@@ -242,7 +238,7 @@ pub struct DerivedArcs {
 }
 
 /// One output across a single input toggle: the level it holds at the state the toggle starts from and
-/// the level it holds once the toggle has settled — the same two ends [`ExposedLevel`] states for an
+/// the level it holds once the toggle has settled — the same two ends [`ArcLevels`] states for an
 /// exposed internal node, and `None` at an end the output is not defined at. A pair that moves is a
 /// transition arc, whose direction is the `end` level; a toggle whose pairs all hold is a hidden arc.
 struct OutputLevels<'a> {
@@ -488,20 +484,13 @@ QN = "!Q"
             ),
         )
         .expect("fixture is explored");
-        let names: Vec<&str> = cell.outputs.iter().map(|o| o.name.as_str()).collect();
+        let names: BTreeSet<&Symbol> = cell.outputs.iter().map(|o| &o.name).collect();
         let mut eligible = 0;
         for node in m.explored.order.iter().filter(|n| m.arc_eligible(n)) {
             let levels = ArcLevels::at(&m, node);
-            assert_eq!(
-                levels
-                    .outputs
-                    .iter()
-                    .map(|h| h.node.as_str())
-                    .collect::<Vec<_>>(),
-                names
-            );
-            for h in &levels.outputs {
-                assert_eq!(Some(h.level), m.output_value(&h.node, node));
+            assert_eq!(levels.outputs.vars().iter().collect::<BTreeSet<_>>(), names);
+            for var in levels.outputs.vars() {
+                assert_eq!(levels.outputs.value_of(var), m.output_value(var, node));
             }
             eligible += 1;
         }
@@ -538,13 +527,14 @@ Q = "CLK*M + !CLK*Q"
             .map(|a| &a.levels)
             .chain(cell.hidden_arcs.iter().map(|h| &h.levels))
         {
-            assert_eq!(levels.exposed.len(), 1);
-            assert_eq!(levels.exposed[0].node, "M");
+            assert_eq!(levels.exposed_start.vars(), [Symbol::from("M")]);
+            assert_eq!(levels.exposed_end.vars(), [Symbol::from("M")]);
         }
+        // The two rows are total over the one node set, so they differ exactly where a node moved.
         let moved: Vec<&HiddenArc> = cell
             .hidden_arcs
             .iter()
-            .filter(|h| h.levels.exposed.iter().any(|e| e.start != e.end))
+            .filter(|h| h.levels.exposed_start != h.levels.exposed_end)
             .collect();
         assert!(
             moved.iter().any(|h| h.pin.pin == "D"),
@@ -609,8 +599,8 @@ Y = "!(W + C)"
                 node.value_of(pin)
                     .expect("every input is fixed in an explored state")
             };
-            assert_eq!(levels.exposed[0].start, of("A") && of("B"));
-            assert_eq!(levels.exposed[0].start, levels.exposed[0].end);
+            assert_eq!(levels.exposed_start.value_of("W"), Some(of("A") && of("B")));
+            assert_eq!(levels.exposed_start, levels.exposed_end);
             sampled += 1;
         }
         assert!(sampled > 0, "the fixture explores at least one state");
@@ -619,7 +609,7 @@ Y = "!(W + C)"
         let arcs = derive(&m).arcs;
         assert!(
             arcs.iter()
-                .any(|a| a.levels.exposed[0].start != a.levels.exposed[0].end),
+                .any(|a| a.levels.exposed_start != a.levels.exposed_end),
             "an A or B edge that flips Y moves the exposed W with it",
         );
     }
@@ -642,11 +632,10 @@ Q = "A*B + Q*(A+B)"
             let level = a
                 .levels
                 .outputs
-                .iter()
-                .find(|lvl| lvl.node == a.output.pin)
+                .value_of(&a.output.pin)
                 .expect("the measured output carries a level");
             assert_eq!(
-                level.level,
+                level,
                 a.output.edge == Edge::Fall,
                 "{} {:?} must start at its pre-edge value",
                 a.output.pin,
@@ -692,15 +681,15 @@ Y = "A*B"
 "#,
         );
         assert!(!cell.hidden_arcs.is_empty());
+        let y_low = Minterm::<Symbol>::with_labels(&[("Y", Some(false))]).unwrap();
         assert!(cell.hidden_arcs.iter().any(|h| {
-            h.pin.pin.as_str() == "A"
-                && h.pin.edge == Edge::Fall
-                && h.levels.outputs.len() == 1
-                && h.levels.outputs[0].node.as_str() == "Y"
-                && !h.levels.outputs[0].level
+            h.pin.pin.as_str() == "A" && h.pin.edge == Edge::Fall && h.levels.outputs == y_low
         }));
         // Single-output cell: every hidden arc holds exactly one output value.
-        assert!(cell.hidden_arcs.iter().all(|h| h.levels.outputs.len() == 1));
+        assert!(cell
+            .hidden_arcs
+            .iter()
+            .all(|h| h.levels.outputs.num_vars() == 1));
         // Every hidden arc's prevector is a real single-step walk into its start state, projected onto
         // the inputs.
         for h in &cell.hidden_arcs {
@@ -735,13 +724,7 @@ Q = "E*D + !E*Q"
             "expected >=2 D-rise hidden arcs, got {}",
             d_rise.len()
         );
-        let q_val = |h: &HiddenArc| {
-            h.levels
-                .outputs
-                .iter()
-                .find(|lvl| lvl.node.as_str() == "Q")
-                .map(|lvl| lvl.level)
-        };
+        let q_val = |h: &HiddenArc| h.levels.outputs.value_of("Q");
         assert!(d_rise.iter().any(|h| q_val(h) == Some(false)));
         assert!(d_rise.iter().any(|h| q_val(h) == Some(true)));
     }
@@ -801,12 +784,8 @@ Y = "K + S*L"
         // so two hidden arcs, though their input vectors and held output values coincide.
         let cell = analyse(MASKED_PAIR);
         let at = [("E", false), ("D", true), ("S", false), ("C", false)];
-        let held_low = |h: &HiddenArc| {
-            h.levels
-                .outputs
-                .iter()
-                .all(|lvl| lvl.node == "Y" && !lvl.level)
-        };
+        let y_low = Minterm::<Symbol>::with_labels(&[("Y", Some(false))]).unwrap();
+        let held_low = |h: &HiddenArc| h.levels.outputs == y_low;
         let contexts = masked_values(
             cell.hidden_arcs
                 .iter()

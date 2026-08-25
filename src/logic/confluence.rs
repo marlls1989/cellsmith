@@ -314,12 +314,14 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
                     continue; // confluent at this state — no hazard
                 }
 
-                // Does `w` hold a different value in the two settle orders? Both are total (see
-                // `DETERMINATE`), so this is a comparison of values, not of definedness.
-                let diverges = |w: &Symbol| {
-                    s_xy.value_of(w.as_str()).expect(DETERMINATE)
-                        != s_yx.value_of(w.as_str()).expect(DETERMINATE)
-                };
+                // Where the two settle orders part: the Kleene XOR of the two rows, aligned by variable
+                // identity, holds 1 at every variable they fix differently and 0 at every variable they
+                // agree on. A variable either order left undefined comes through as `-` (`- ^ x = -`)
+                // rather than as agreement, so the read below raises `DETERMINATE` on it exactly as the
+                // two reads it replaces did. Taken over the whole row like `support` above — only ever
+                // read at a state key, so the input and combinational columns sit unread.
+                let divergence = s_xy ^ s_yx;
+                let diverges = |w: &Symbol| divergence.value_of(w.as_str()).expect(DETERMINATE);
 
                 // Global divergence is not enough: it must interact with {x, y} in the immediate
                 // combinational neighbourhood — some state variable that actually diverges between the
@@ -636,7 +638,7 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
         let mut endangered: Vec<Vec<&str>> = separations(&cell)
             .into_iter()
             .filter(|c| related(c).pin == "CLKB" && c.pin.pin.as_str() == "DB")
-            .map(|c| c.nodes.iter().map(|p| p.node.as_str()).collect())
+            .map(|c| c.victim_names().iter().map(|n| n.as_str()).collect())
             .collect();
         endangered.sort();
         endangered.dedup();
@@ -721,14 +723,15 @@ Q = "CLK*M + !CLK*Q"
         );
         let cons = separations(&cell);
         assert!(!cons.is_empty());
-        let outputs: Vec<Symbol> = cell.outputs.iter().map(|o| o.name.clone()).collect();
+        let outputs: BTreeSet<Symbol> = cell.outputs.iter().map(|o| o.name.clone()).collect();
         for c in &cons {
             assert_eq!(
                 c.levels
                     .outputs
+                    .vars()
                     .iter()
-                    .map(|h| h.node.clone())
-                    .collect::<Vec<_>>(),
+                    .cloned()
+                    .collect::<BTreeSet<_>>(),
                 outputs
             );
             assert!(

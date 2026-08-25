@@ -86,7 +86,8 @@ pub struct Machine<'c, B: Brand, C: ManagerCell> {
     /// addresses them by name; each is a node column of its own, stepped with the state variables.
     pub(crate) combinational: Vec<machine::Delta<B, C>>,
     /// The cell's exposed internal nodes — the internals the spec lists in `expose`, in declared order,
-    /// which is the order [`super::arcs::ArcLevels`] fills its exposed levels in.
+    /// which is the order the emitted blocks give them columns in. [`super::arcs::ArcLevels`] samples
+    /// the same nodes, keyed by name rather than by position.
     ///
     /// Exposure is read only to SAMPLE levels: these names are absent from the exploration's
     /// `seed_funcs` below, so exposing a node cannot change which states are reached. That is what makes
@@ -848,7 +849,7 @@ Q = "W + Q*(A+B)"
             }
             ConstraintKind::MinPulseWidth => format!("min_pulse_width {}", end(&c.pin)),
         };
-        let nodes: Vec<String> = c.nodes.iter().map(|v| v.node.to_string()).collect();
+        let nodes: Vec<String> = c.victim_names().iter().map(|n| n.to_string()).collect();
         format!("{head} over {}", nodes.join(","))
     }
 

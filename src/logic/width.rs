@@ -148,17 +148,17 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
                 })
                 .collect();
 
-            // Does some candidate leave `w` where the reference does not? Every state read here is
-            // total (see `DETERMINATE`), so this is a comparison of values, not of definedness.
-            let diverges = |w: &Symbol| {
-                let level = |x: &Minterm<Symbol>| x.value_of(w.as_str()).expect(DETERMINATE);
-                let settles_to = level(&reference);
-                level(s) != settles_to
-                    || candidates
-                        .iter()
-                        .filter_map(|out| out.as_ref().ok())
-                        .any(|out| level(out) != settles_to)
-            };
+            // Where some close leaves the machine other than the reference does: each close's Kleene XOR
+            // against the reference marks the variables the two fix differently, and the Kleene OR folds
+            // those rows into one, seeded with cut 0 — the zero-width close, whose outcome is `s` itself.
+            // An undefined variable stays `-` through both tables (`- ^ x = -`, `0 | - = -`) instead of
+            // reading as agreement, so the read below raises `DETERMINATE` on it wherever no other close
+            // parts from the reference there.
+            let divergence = candidates
+                .iter()
+                .filter_map(|out| out.as_ref().ok())
+                .fold(s ^ &reference, |parted, out| parted | (out ^ &reference));
+            let diverges = |w: &Symbol| divergence.value_of(w.as_str()).expect(DETERMINATE);
             let diverging: Vec<Symbol> = m
                 .state_vars
                 .iter()
@@ -976,7 +976,7 @@ B = "!CLK*(!SEL*D + SEL*B) + CLK*B"
             .into_iter()
             .map(|c| ConstraintKey {
                 pin: c.pin.clone(),
-                nodes: c.nodes.iter().map(|n| n.node.clone()).collect(),
+                nodes: c.victim_names().to_vec(),
             })
             .collect()
     }

@@ -69,17 +69,6 @@ pub(crate) enum ConstraintKind {
     MinPulseWidth,
 }
 
-/// One node a hazard attacks: a state variable whose settled value it puts at risk — a flop's master
-/// latch, under the race between its clock and its data — and the level that node holds at the probed
-/// state.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct VictimNode {
-    /// The state variable itself, which the emitted block names in its `-probe`.
-    pub(crate) node: Symbol,
-    /// The level it holds at the probed state, which the block's `-ic` initialises its column to.
-    pub(crate) level: bool,
-}
-
 /// One constraint generated to remove a detected hazard, rendered by the arcs emitter as the
 /// `define_arc` block(s) its kind calls for.
 #[derive(Debug, Clone)]
@@ -95,10 +84,14 @@ pub(crate) struct Constraint {
     /// The levels the cell's outputs hold in that state — the constraint arc's `-ic` initial condition,
     /// sampled at the same probed state as `prevector`.
     pub(crate) levels: ArcLevels,
-    /// The nodes the constrained cause attacks, in signal declaration order: the union of the victims
-    /// every outcome of that cause named. The emitted block gives each a column of its own and names them
-    /// all in one Liberate `-probe`, so the characterisation measures every node the cause puts at risk.
-    pub(crate) nodes: Vec<VictimNode>,
+    /// The nodes the constrained cause attacks — each a state variable whose settled value it puts at
+    /// risk, a flop's master latch under the race between its clock and its data — at the level it holds
+    /// at the probed state. The row's variables ARE the victims: the union of the victims every outcome
+    /// of that cause named, in signal declaration order, which is the order the hazard's group sampled
+    /// them in. The emitted block gives each a column of its own and names them all in one Liberate
+    /// `-probe`, so the characterisation measures every node the cause puts at risk, and `-ic`
+    /// initialises each of those columns to the level standing beside its name here.
+    pub(crate) nodes: Minterm<Symbol>,
     /// The probed state itself: every input and state variable at the level it holds there. The
     /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
     /// emitted column carries.
@@ -124,8 +117,8 @@ impl Constraint {
     /// observations of the same constraint carry the same names holding whatever their own states hold.
     /// Whatever identifies a constraint therefore reads the names, and the levels stay here, with the
     /// state they were sampled at.
-    pub(crate) fn victim_names(&self) -> Vec<Symbol> {
-        self.nodes.iter().map(|v| v.node.clone()).collect()
+    pub(crate) fn victim_names(&self) -> &[Symbol] {
+        self.nodes.vars()
     }
 
     /// Does `selection` ask for this constraint? The pins that reach it are the ones its KIND gives a
@@ -180,7 +173,7 @@ fn remedy(hazard: &Hazard, clock_pins: &[Symbol]) -> Option<Constraint> {
         pin,
         prevector: hazard.prevector.clone(),
         levels: hazard.levels.clone(),
-        nodes: victims(&hazard.group, &hazard.node_levels),
+        nodes: hazard.node_levels.clone(),
         state: hazard.state.clone(),
         discovered: hazard.discovered,
         ordinal: hazard.ordinal(),
@@ -210,20 +203,6 @@ fn separation(x: &PinEdge, y: &PinEdge, clock_pins: &[Symbol]) -> Separation {
             pin: y.clone(),
         }
     }
-}
-
-/// The nodes a hazard attacks, each with the level the observation sampled for it. A record samples its
-/// levels for its own group, at the state it was probed from, so every entry is there.
-fn victims(group: &[Symbol], levels: &Minterm<Symbol>) -> Vec<VictimNode> {
-    group
-        .iter()
-        .map(|node| VictimNode {
-            node: node.clone(),
-            level: levels
-                .value_of(node)
-                .expect("a hazard observation samples every node of its own group"),
-        })
-        .collect()
 }
 
 /// The pins one situation is about, each with the edge it makes: a constraint's kind carrying EVERY pin
@@ -313,28 +292,26 @@ fn record(found: &mut HashMap<Situation, Constraint>, c: Constraint) {
 
 /// The victims of two readings of one situation, merged: every node either names, in the probed state's
 /// own column order — which for a state variable is signal declaration order, the order each reading's
-/// own list is already in.
+/// own row is already in.
 ///
-/// Both readings were measured at `state`, since the situation keys on it, so a node they share holds one
-/// level and the merge cannot disagree with itself.
+/// Both readings were measured at `state`, since the situation keys on it, so every node either names
+/// holds one level there and the merge cannot disagree with itself. Each level comes from that state:
+/// [`Minterm::or`] states WHICH nodes the union names — a variable defined in either row is a column of
+/// the result — and combines their values as TRUTH values, so its Kleene table reads a node only one of
+/// the two names as `0 | -`, the don't-care. A victim node is a `-probe` column, and `-ic` has to
+/// initialise that column to a level.
 fn merged_victims(
-    kept: &[VictimNode],
-    other: &[VictimNode],
+    kept: &Minterm<Symbol>,
+    other: &Minterm<Symbol>,
     state: &Minterm<Symbol>,
-) -> Vec<VictimNode> {
-    let levels: HashMap<&Symbol, bool> = kept
-        .iter()
-        .chain(other)
-        .map(|v| (&v.node, v.level))
-        .collect();
-    state
-        .vars()
-        .iter()
-        .filter_map(|node| {
-            levels.get(node).map(|level| VictimNode {
-                node: node.clone(),
-                level: *level,
-            })
-        })
-        .collect()
+) -> Minterm<Symbol> {
+    let both = kept.or(other);
+    let named = both.vars();
+    state.project_to_labels(
+        state
+            .vars()
+            .iter()
+            .filter(|&node| named.contains(node))
+            .cloned(),
+    )
 }

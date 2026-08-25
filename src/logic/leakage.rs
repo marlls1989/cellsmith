@@ -21,18 +21,17 @@ use espresso_logic::bdd::{Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::analysis::Machine;
-use crate::logic::arcs::HeldLevel;
 
-/// The levels one rest state holds, keyed by name: every output pin's level in `cell.outputs` order,
-/// then every exposed internal node's level in the machine's exposure order.
+/// The levels one rest state holds: every output pin's level, and every exposed internal node's. Each is
+/// one row keyed by node name, read back with [`Minterm::value_of`].
 ///
 /// A rest state is a single settled point of the machine — the block stating it measures no transition —
 /// so a node holds ONE level there, and the type carries one. There is no second end for a level to be
 /// read at.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RestLevels {
-    pub(crate) outputs: Vec<HeldLevel>,
-    pub(crate) exposed: Vec<HeldLevel>,
+    pub(crate) outputs: Minterm<Symbol>,
+    pub(crate) exposed: Minterm<Symbol>,
 }
 
 impl RestLevels {
@@ -47,34 +46,32 @@ impl RestLevels {
         m: &Machine<B, C>,
         node: &Minterm<Symbol>,
     ) -> RestLevels {
+        let outputs: Vec<(Symbol, Option<bool>)> = m
+            .cell
+            .outputs
+            .iter()
+            .map(|o| {
+                let level = m
+                    .output_value(&o.name, node)
+                    .expect("every output is defined at a fully-initialised rest state");
+                (o.name.clone(), Some(level))
+            })
+            .collect();
+        let exposed: Vec<(Symbol, Option<bool>)> = m
+            .exposed
+            .iter()
+            .map(|exposed| {
+                let level = m
+                    .exposed_value(exposed.as_str(), node)
+                    .expect("every exposed node is defined at a fully-initialised rest state");
+                (exposed.clone(), Some(level))
+            })
+            .collect();
         RestLevels {
-            outputs: m
-                .cell
-                .outputs
-                .iter()
-                .map(|o| {
-                    let level = m
-                        .output_value(&o.name, node)
-                        .expect("every output is defined at a fully-initialised rest state");
-                    HeldLevel {
-                        node: o.name.clone(),
-                        level,
-                    }
-                })
-                .collect(),
-            exposed: m
-                .exposed
-                .iter()
-                .map(|exposed| {
-                    let level = m
-                        .exposed_value(exposed.as_str(), node)
-                        .expect("every exposed node is defined at a fully-initialised rest state");
-                    HeldLevel {
-                        node: exposed.clone(),
-                        level,
-                    }
-                })
-                .collect(),
+            outputs: Minterm::labeled(&outputs)
+                .expect("a cell's outputs are keyed by name, so no output repeats"),
+            exposed: Minterm::labeled(&exposed)
+                .expect("the spec rejects a repeated exposure, so no exposed node repeats"),
         }
     }
 }
@@ -138,10 +135,9 @@ pub fn derive<B: Brand, C: ManagerCell>(m: &Machine<B, C>) -> Vec<LeakageState> 
 mod tests {
     use std::collections::BTreeMap;
 
-    use espresso_logic::Symbol;
+    use espresso_logic::{Minterm, Symbol};
 
     use super::{LeakageState, RestLevels};
-    use crate::logic::arcs::HeldLevel;
     use crate::model::analyse_one as analyse;
 
     /// A rest state a cell's leakage states record: the A and B inputs it fixes, and the Q level the
@@ -163,10 +159,8 @@ mod tests {
                 b: l.inputs.value_of("B").expect("B fixed at a rest state"),
                 q: l.levels
                     .outputs
-                    .iter()
-                    .find(|h| h.node.as_str() == "Q")
-                    .expect("Q resolved at a rest state")
-                    .level,
+                    .value_of("Q")
+                    .expect("Q resolved at a rest state"),
             })
             .collect();
         v.sort();
@@ -226,17 +220,14 @@ Q = "A*B + Q*(A+B)"
         );
 
         // Each hold state is primed by a prevector that walks in from the forcing input it kept.
+        let q_high = Minterm::<Symbol>::with_labels(&[("Q", Some(true))]).unwrap();
         let held_high = cell
             .leakage
             .iter()
             .find(|l| {
                 l.inputs.value_of("A") == Some(true)
                     && l.inputs.value_of("B") == Some(false)
-                    && l.levels.outputs
-                        == vec![HeldLevel {
-                            node: Symbol::from("Q"),
-                            level: true,
-                        }]
+                    && l.levels.outputs == q_high
             })
             .expect("A=1,B=0 holding Q=1");
         assert!(
@@ -268,11 +259,10 @@ Y = "A*B"
         for l in leak {
             let a = l.inputs.value_of("A").expect("A fixed at a rest state");
             let b = l.inputs.value_of("B").expect("B fixed at a rest state");
-            assert_eq!(l.levels.outputs.len(), 1, "AND2 has a single output");
-            assert_eq!(l.levels.outputs[0].node.as_str(), "Y");
+            assert_eq!(l.levels.outputs.num_vars(), 1, "AND2 has a single output");
             assert_eq!(
-                l.levels.outputs[0].level,
-                a && b,
+                l.levels.outputs.value_of("Y"),
+                Some(a && b),
                 "Y == A&&B at every rest state"
             );
             // A combinational cell holds nothing, so the inputs alone drive it into every one of its
@@ -303,11 +293,11 @@ Q = "CLK*M + !CLK*Q"
             // Q is the only output and it always resolves: no state is emitted partially, and the
             // internal master M is never named among the outputs.
             assert_eq!(
-                l.levels.outputs.len(),
+                l.levels.outputs.num_vars(),
                 1,
                 "every output resolves at a rest state: {l:?}"
             );
-            assert_eq!(l.levels.outputs[0].node.as_str(), "Q");
+            assert!(l.levels.outputs.value_of("Q").is_some());
             assert!(
                 l.inputs.value_of("CLK").is_some() && l.inputs.value_of("D").is_some(),
                 "inputs are fully fixed at a rest state: {l:?}"
@@ -341,10 +331,7 @@ Q = "CLK*M + !CLK*Q"
             let levels: &RestLevels = &l.levels;
             assert_eq!(
                 levels.exposed,
-                vec![HeldLevel {
-                    node: Symbol::from("M"),
-                    level: m,
-                }],
+                Minterm::<Symbol>::with_labels(&[("M", Some(m))]).unwrap(),
                 "the exposed master is measured at the level the state fixes: {l:?}",
             );
         }
@@ -456,20 +443,8 @@ Qb = "!Qa*B"
             "A=1,B=1 rests in both outcomes, got {both_high:?}",
         );
         for l in &both_high {
-            let qa = l
-                .levels
-                .outputs
-                .iter()
-                .find(|h| h.node.as_str() == "Qa")
-                .expect("Qa resolved")
-                .level;
-            let qb = l
-                .levels
-                .outputs
-                .iter()
-                .find(|h| h.node.as_str() == "Qb")
-                .expect("Qb resolved")
-                .level;
+            let qa = l.levels.outputs.value_of("Qa").expect("Qa resolved");
+            let qb = l.levels.outputs.value_of("Qb").expect("Qb resolved");
             assert!(qa ^ qb, "an arbitrated rest state is one-hot: {l:?}");
         }
         // The two share an input assignment and differ only in what the cell holds, so the prevector

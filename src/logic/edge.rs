@@ -1508,9 +1508,9 @@ fn support_in_header<B: Brand, C: ManagerCell>(
         .collect()
 }
 
-/// Assemble a [`StateRegions`] from an on/off region-BDD pair over `header`, reusing the `regions.rs`
-/// cover pipeline so the emitted cubes are byte-compatible. `hold_bdd` is the quiescent gap (empty for a
-/// total capture).
+/// Assemble a [`StateRegions`] from an on/off region-BDD pair over `header`, going through the same
+/// `regions.rs` cover pipeline a signal's regions go through, so a capture's regions are derived the same
+/// way as a signal's. `hold_bdd` is the quiescent gap (empty for a total capture).
 ///
 /// [`StateRegions::hysteretic`] is `true` by construction. Every region set assembled here is a capture
 /// or an off-edge of an edge register — a node whose active-edge set is non-empty, or a register the
