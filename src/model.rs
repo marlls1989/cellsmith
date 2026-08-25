@@ -3,20 +3,21 @@
 //! function is the delayed/feedback value of that output).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+use std::io;
 
 use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
 use espresso_logic::{sync_bdd_builder, BoolExpr, Symbol};
 use indexmap::IndexMap;
 use rayon::prelude::*;
 use serde::Deserialize;
-use thiserror::Error;
 
-use crate::logic::analysis::Exploration;
+use crate::logic::analysis::{Derivations, Exploration};
 use crate::logic::arcs::{Arc, HiddenArc};
 use crate::logic::constraint::Constraint;
 use crate::logic::hazard::Hazard;
 use crate::logic::leakage::LeakageState;
-use crate::logic::machine::{ExplorationBudget, Explored};
+use crate::logic::machine::{ExplorationBudget, ExplorationLimit, Explored};
 
 /// The whole input file: a list of `[[cell]]` tables.
 #[derive(Debug, Deserialize)]
@@ -146,9 +147,9 @@ impl NodeNames {
 /// The characterisation-template references for a cell (or a drive-strength alias override): the
 /// `delay`, `power` and `constraint` template names the `define_cell` emitter attaches. Structural
 /// only — each name is taken verbatim from the spec, never generated; an absent field is `None`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct TemplateSpec {
+pub struct TemplateSpec {
     #[serde(default, deserialize_with = "de_opt_symbol")]
     pub(crate) delay: Option<Symbol>,
     #[serde(default, deserialize_with = "de_opt_symbol")]
@@ -525,54 +526,260 @@ fn de_constraint_pins<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Constrai
     })
 }
 
-#[derive(Debug, Error)]
+/// Why a spec could not be turned into analysed cells.
+///
+/// Every variant but [`Spec`](Self::Spec) reports a rule the cell model imposes on top of what TOML
+/// can express — a name used twice, a pin referenced that was never declared — and names the cell it
+/// was checking, so a spec holding many cells says which one is at fault.
+// `Clone` and `#[non_exhaustive]` follow the espresso-logic error idiom this crate's errors are written
+// in — `CoverError` and its siblings carry the same pair. Nothing in cellsmith clones a `ModelError` or
+// matches one from outside the crate; the derives are here so the two crates' errors present one shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ModelError {
-    #[error("cannot parse spec: {0}")]
-    Spec(#[from] toml::de::Error),
-    #[error("cell name list must be non-empty")]
+    /// The source text is not well-formed TOML, or does not deserialise into the spec's shape.
+    Spec(toml::de::Error),
+    /// A cell's `name` list is empty, so the cell has no name to be reported or emitted under.
     EmptyName,
-    #[error("duplicate cell name {name:?} used by more than one cell")]
-    DuplicateCellName { name: Symbol },
-    #[error("cell {cell:?}: duplicate input pin {pin:?}")]
-    DuplicateInput { cell: Symbol, pin: Symbol },
-    #[error("cell {cell:?}: pin {pin:?} is both an input and an output")]
-    InputOutputClash { cell: Symbol, pin: Symbol },
-    #[error("cell {cell:?}: internal signal {pin:?} clashes with a declared input or output name")]
-    InternalClash { cell: Symbol, pin: Symbol },
-    #[error("cell {cell:?}, output {output:?}: variable {var:?} is neither a declared input nor an output of this cell")]
-    UnknownVar {
+    /// One name is claimed by two cells. Names — the drive-strength aliases beyond the first included
+    /// — are unique across the whole spec, each standing for one cell in the emitted artifacts.
+    DuplicateCellName {
+        /// The name claimed twice.
+        name: Symbol,
+    },
+    /// A cell lists the same input pin twice.
+    DuplicateInput {
+        /// The cell being validated.
         cell: Symbol,
+        /// The pin repeated in the input list.
+        pin: Symbol,
+    },
+    /// A name is declared as both an input pin and an output, leaving a reference to it ambiguous.
+    InputOutputClash {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The name declared on both sides.
+        pin: Symbol,
+    },
+    /// An internal signal reuses a declared input or output name. Internals share the one namespace
+    /// with the pins, a function referencing all three alike.
+    InternalClash {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The internal signal whose name is already taken.
+        pin: Symbol,
+    },
+    /// A function references a name the cell does not declare. A variable is an input pin, an output
+    /// or an internal signal; anything else has no value to read.
+    UnknownVar {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The signal whose function holds the reference.
         output: Symbol,
+        /// The undeclared variable that was referenced.
         var: Symbol,
     },
-    #[error("cell {cell:?}: async pin {pin:?} is not a declared input")]
-    AsyncNotInput { cell: Symbol, pin: Symbol },
-    #[error("cell {cell:?}: clock pin {pin:?} is not a declared input")]
-    ClockNotInput { cell: Symbol, pin: Symbol },
-    #[error("cell {cell:?}: constraint pin {pin:?} is not a declared input")]
-    ConstraintNotInput { cell: Symbol, pin: Symbol },
-    #[error("cell {cell:?}: template override alias {alias:?} is not a declared cell name")]
-    UnknownTemplateOverride { cell: Symbol, alias: Symbol },
-    #[error("cell {cell:?}: node mapping for {signal:?} is not a declared internal signal")]
-    NodeNotInternal { cell: Symbol, signal: Symbol },
-    #[error("cell {cell:?}: node mapping alias {alias:?} is not a declared cell name")]
-    UnknownNodeAlias { cell: Symbol, alias: Symbol },
-    #[error("cell {cell:?}: two nodes resolve to {node:?} under {alias:?}")]
+    /// The `async` list names a pin that is not a declared input. Asynchronous control arrives on an
+    /// input pin.
+    AsyncNotInput {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The name listed as asynchronous.
+        pin: Symbol,
+    },
+    /// The `clock` list names a pin that is not a declared input.
+    ClockNotInput {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The name listed as a clock.
+        pin: Symbol,
+    },
+    /// `constraint_arcs` selects a pin that is not a declared input. A constraint holds input pins
+    /// apart, so a selection names one.
+    ConstraintNotInput {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The name selected for constraint arcs.
+        pin: Symbol,
+    },
+    /// A per-alias `template` override is keyed on a name the cell does not carry in its `name` list.
+    UnknownTemplateOverride {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The key matching none of the cell's names.
+        alias: Symbol,
+    },
+    /// A `nodes` mapping renames a signal that is not a declared internal. Only an internal stands for
+    /// a netlist node; a pin is addressed by its own name.
+    NodeNotInternal {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The signal the mapping tried to rename.
+        signal: Symbol,
+    },
+    /// A per-alias `nodes` mapping is keyed on a name the cell does not carry in its `name` list.
+    UnknownNodeAlias {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The key matching none of the cell's names.
+        alias: Symbol,
+    },
+    /// Two internal signals map onto one netlist node under an alias, leaving a block that names the
+    /// node unable to say which signal it measures.
     DuplicateNode {
+        /// The cell being validated.
         cell: Symbol,
+        /// The drive-strength alias the mapping belongs to.
         alias: Symbol,
+        /// The netlist node reached from two signals.
         node: Symbol,
     },
-    #[error("cell {cell:?}: a node resolves to the pin {node:?} under {alias:?}")]
+    /// An internal signal maps onto a netlist node bearing a pin's name, which already addresses the
+    /// pin.
     NodeClashesWithPin {
+        /// The cell being validated.
         cell: Symbol,
+        /// The drive-strength alias the mapping belongs to.
         alias: Symbol,
+        /// The netlist node colliding with a pin.
         node: Symbol,
     },
-    #[error("cell {cell:?}: exposed node {node:?} is not a declared internal signal")]
-    ExposeNotInternal { cell: Symbol, node: Symbol },
-    #[error("cell {cell:?}: duplicate exposed node {node:?}")]
-    DuplicateExpose { cell: Symbol, node: Symbol },
+    /// The `expose` list names a signal that is not a declared internal. Exposure preserves an internal
+    /// node as a machine coordinate; an output is already one.
+    ExposeNotInternal {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The name listed for exposure.
+        node: Symbol,
+    },
+    /// The `expose` list names the same internal signal twice.
+    DuplicateExpose {
+        /// The cell being validated.
+        cell: Symbol,
+        /// The node repeated in the expose list.
+        node: Symbol,
+    },
+    /// An exploration budget stopped the cell's machine pass, so the cell has no arcs, hazards,
+    /// leakage states or constraints to emit and the run ends here. The counter and its ceiling are
+    /// the inner error's to state; this layer walks the cells, so it adds the cell's name and the flag
+    /// that raises that ceiling.
+    Exploration {
+        /// The cell whose exploration was stopped.
+        cell: Symbol,
+        /// Which budget stopped it, and at what ceiling.
+        source: ExplorationLimit,
+    },
+}
+
+impl fmt::Display for ModelError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ModelError::Spec(e) => write!(f, "cannot parse spec: {e}"),
+            ModelError::EmptyName => write!(f, "cell name list must be non-empty"),
+            ModelError::DuplicateCellName { name } => {
+                write!(f, "duplicate cell name {name:?} used by more than one cell")
+            }
+            ModelError::DuplicateInput { cell, pin } => {
+                write!(f, "cell {cell:?}: duplicate input pin {pin:?}")
+            }
+            ModelError::InputOutputClash { cell, pin } => {
+                write!(f, "cell {cell:?}: pin {pin:?} is both an input and an output")
+            }
+            ModelError::InternalClash { cell, pin } => write!(
+                f,
+                "cell {cell:?}: internal signal {pin:?} clashes with a declared input or output name"
+            ),
+            ModelError::UnknownVar { cell, output, var } => write!(
+                f,
+                "cell {cell:?}, output {output:?}: variable {var:?} is neither a declared input nor an output of this cell"
+            ),
+            ModelError::AsyncNotInput { cell, pin } => {
+                write!(f, "cell {cell:?}: async pin {pin:?} is not a declared input")
+            }
+            ModelError::ClockNotInput { cell, pin } => {
+                write!(f, "cell {cell:?}: clock pin {pin:?} is not a declared input")
+            }
+            ModelError::ConstraintNotInput { cell, pin } => write!(
+                f,
+                "cell {cell:?}: constraint pin {pin:?} is not a declared input"
+            ),
+            ModelError::UnknownTemplateOverride { cell, alias } => write!(
+                f,
+                "cell {cell:?}: template override alias {alias:?} is not a declared cell name"
+            ),
+            ModelError::NodeNotInternal { cell, signal } => write!(
+                f,
+                "cell {cell:?}: node mapping for {signal:?} is not a declared internal signal"
+            ),
+            ModelError::UnknownNodeAlias { cell, alias } => write!(
+                f,
+                "cell {cell:?}: node mapping alias {alias:?} is not a declared cell name"
+            ),
+            ModelError::DuplicateNode { cell, alias, node } => write!(
+                f,
+                "cell {cell:?}: two nodes resolve to {node:?} under {alias:?}"
+            ),
+            ModelError::NodeClashesWithPin { cell, alias, node } => write!(
+                f,
+                "cell {cell:?}: a node resolves to the pin {node:?} under {alias:?}"
+            ),
+            ModelError::ExposeNotInternal { cell, node } => write!(
+                f,
+                "cell {cell:?}: exposed node {node:?} is not a declared internal signal"
+            ),
+            ModelError::DuplicateExpose { cell, node } => {
+                write!(f, "cell {cell:?}: duplicate exposed node {node:?}")
+            }
+            // Which command-line flag raises the ceiling belongs beside the counter that passed it, and
+            // this is the outermost layer that still knows which counter that was: `main` prints the
+            // error and nothing else. The match is over the crate's own enum, so a third budget cannot
+            // be added without a flag being named for it here.
+            ModelError::Exploration { cell, source } => {
+                let flag = match source {
+                    ExplorationLimit::Candidates(_) => "--max-candidates",
+                    ExplorationLimit::States(_) => "--max-states",
+                };
+                write!(f, "cell {cell:?}: {source} — raise it with {flag}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ModelError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ModelError::Spec(e) => Some(e),
+            ModelError::EmptyName => None,
+            ModelError::DuplicateCellName { .. } => None,
+            ModelError::DuplicateInput { .. } => None,
+            ModelError::InputOutputClash { .. } => None,
+            ModelError::InternalClash { .. } => None,
+            ModelError::UnknownVar { .. } => None,
+            ModelError::AsyncNotInput { .. } => None,
+            ModelError::ClockNotInput { .. } => None,
+            ModelError::ConstraintNotInput { .. } => None,
+            ModelError::UnknownTemplateOverride { .. } => None,
+            ModelError::NodeNotInternal { .. } => None,
+            ModelError::UnknownNodeAlias { .. } => None,
+            ModelError::DuplicateNode { .. } => None,
+            ModelError::NodeClashesWithPin { .. } => None,
+            ModelError::ExposeNotInternal { .. } => None,
+            ModelError::DuplicateExpose { .. } => None,
+            ModelError::Exploration { source, .. } => Some(source),
+        }
+    }
+}
+
+impl From<toml::de::Error> for ModelError {
+    fn from(err: toml::de::Error) -> Self {
+        ModelError::Spec(err)
+    }
+}
+
+impl From<ModelError> for io::Error {
+    fn from(err: ModelError) -> Self {
+        io::Error::new(io::ErrorKind::InvalidData, err)
+    }
 }
 
 /// A signal (output **or** internal) after analysis: its function, the variables it references, and
@@ -642,12 +849,6 @@ pub struct AnalysedCell {
     /// Each signal's state-table regions, precomputed once and cached in `signals()` order (outputs
     /// then internals), so emitters don't rebuild the BDDs per call site.
     pub(crate) regions: Vec<crate::logic::regions::StateRegions>,
-    /// Whether the cell holds state: at least one of its minimised signals is a state variable — a
-    /// signal on a dependency cycle ([`crate::logic::resolve::state_variables`]). The Liberate arc
-    /// emitter gates the `-ic` initial condition on it: no block renders a walk, so `-ic` is the whole
-    /// of how a cell with memory is told what state its measured vector begins in. A combinational cell
-    /// has no state to establish and gets no `-ic`.
-    pub(crate) state_holding: bool,
     /// The cell's behavioural edge classification ([`crate::logic::edge::EdgeArcs`]): the per-node
     /// active-edge sets (`captures`), the per-arc `-type edge` labels (`labels`) — the field the Liberate
     /// arc emitter reads to type each arc — the cell-level set of internal level master nodes folded away
@@ -656,11 +857,6 @@ pub struct AnalysedCell {
     /// internal node. Default (empty) when the cell opted out (`no_edge_collapse`). Computed purely from
     /// the already-explored machine — it never alters the exploration.
     pub(crate) edge: crate::logic::edge::EdgeArcs,
-    /// The exploration budget counter that stopped the machine pass, or `None` when the machine was
-    /// explored in full. Set ⇒ nothing was derived from the machine: `arcs`, `hidden_arcs`, `leakage`,
-    /// `hazards` and `constraints` are all empty and `edge`
-    /// is the default, so the CLI reports the cell instead of emitting arc-free artifacts for it.
-    pub unexplored: Option<crate::logic::machine::ExplorationLimit>,
     /// The cell-wide characterisation-template references (delay/power/constraint) carried verbatim from
     /// the spec for the `define_cell` emitter. `None` when the cell declares no `template`. Raw carry —
     /// analysis never reads or synthesises it.
@@ -680,8 +876,11 @@ pub struct AnalysedCell {
     /// carry — analysis never reads it, like `template`.
     pub(crate) voltages: LogicVoltages,
     /// The arc view of this cell: the same cell analysed with its exposed nodes preserved as model
-    /// coordinates, so an arc can drive one (`-ic`) and observe it (`-vector`). Present only when the
-    /// cell exposes something, and itself never carrying a further view.
+    /// coordinates, so an arc can drive one (`-ic`) and observe it (`-vector`). `None` means the model
+    /// view IS the arc view, which is how [`AnalysedCell::arc_view`] reads it. Presence follows
+    /// exposure: the single write site is the branch of `Cell::analyse` a cell reaches only by exposing
+    /// something, and that branch analyses the view with the exposure already applied, so the view set
+    /// here never carries a further view of its own.
     ///
     /// Exposure is arcs-only. The cell holding this field is the MODEL view — minimised to the outputs
     /// alone, exactly as a cell that exposes nothing — and it is the one the Liberty, Verilog,
@@ -712,6 +911,19 @@ impl AnalysedCell {
     /// Every state-bearing signal: outputs first, then internals, in declaration order.
     pub fn signals(&self) -> impl Iterator<Item = &AnalysedOutput> {
         self.outputs.iter().chain(self.internals.iter())
+    }
+
+    /// Whether the cell holds state: one of its signals is a state variable, a signal on a dependency
+    /// cycle. That classification is already in the `regions` cache — [`crate::logic::regions`] marks a
+    /// signal's region view `hysteretic` exactly when
+    /// [`crate::logic::resolve::state_variables`] names it — and the cache holds one entry per signal,
+    /// so a hysteretic entry exists exactly when that set is non-empty.
+    ///
+    /// The Liberate arc emitter gates the `-ic` initial condition on this: no block renders a walk, so
+    /// `-ic` is the whole of how a cell with memory is told what state its measured vector begins in. A
+    /// combinational cell has no state to establish and gets no `-ic`.
+    pub(crate) fn state_holding(&self) -> bool {
+        self.regions.iter().any(|r| r.hysteretic)
     }
 
     /// The view the Liberate arcs are emitted from: [`AnalysedCell::exposed_view`] where the cell
@@ -775,13 +987,18 @@ impl Cell {
     }
 
     /// [`Cell::analyse`] with an explicit exploration budget: the ceilings bound the machine pass, and
-    /// an exploration stopped by one of them leaves every machine-derived field empty with the counter
-    /// recorded in [`AnalysedCell::unexplored`].
+    /// an exploration stopped by one of them fails the analysis with [`ModelError::Exploration`].
     pub(crate) fn analyse_with(
         &self,
         budget: &ExplorationBudget,
     ) -> Result<AnalysedCell, ModelError> {
         let analysed = self.analyse_signals()?;
+        // `machine::explore` reports which ceiling stopped it and nothing about whose exploration it
+        // was; this is the layer holding the cell, so it names it.
+        let stopped = |source| ModelError::Exploration {
+            cell: self.name[0].clone(),
+            source,
+        };
 
         // One-shot state-space rewrite: mint the cell's single builder, build every signal's BDD once,
         // and run the minimisation (identical-δ dedup + guarded relay/alias fold, alternated until
@@ -808,15 +1025,20 @@ impl Cell {
         if self.expose.is_empty() {
             return Ok(self
                 .finish_view(analysed, &bdds, &min, Exploration::Fresh(budget))
-                .0);
+                .map_err(stopped)?
+                .view);
         }
 
         // The exposed nodes survived the run above, so this view carries them as machine coordinates:
         // the arc view (see `AnalysedCell::exposed_view`). Only plain data — arcs, hazards, regions,
         // the explored states — comes back out of the map, so the map is free to be minimised further
         // beneath it. This is the cell's one exploration; the model view below reads it.
-        let (arc_view, explored) =
-            self.finish_view(analysed, &bdds, &min, Exploration::Fresh(budget));
+        let FinishedView {
+            view: arc_view,
+            explored,
+        } = self
+            .finish_view(analysed, &bdds, &min, Exploration::Fresh(budget))
+            .map_err(stopped)?;
 
         // Release the exposure and carry the SAME map on to the outputs-only minimised model. The
         // composition reaches the reduced system a single outputs-only run reaches, save for which
@@ -832,16 +1054,18 @@ impl Cell {
             &crate::logic::minimise::Preserved::outputs(outputs),
         );
         // The model view reads the arc view's exploration, carried onto its own coordinates rather than
-        // discovered again. A ceiling that stopped that one exploration is mirrored here, so the stopped
-        // verdict reaches both views.
-        let reused = Exploration::Reused(match &explored {
-            Some(e) => Ok(e),
-            None => Err(arc_view.unexplored.expect(
-                "a view that explored and handed nothing back was stopped by a budget ceiling",
-            )),
-        });
-        let (mut model, _) =
-            self.finish_view(self.analyse_signals()?, &bdds, &min.then(released), reused);
+        // discovered again. A ceiling that stopped that one exploration already returned above, so the
+        // states are here to be reused.
+        let reused = Exploration::Reused(
+            explored
+                .as_ref()
+                .expect("a fresh exploration that returned hands its states back"),
+        );
+        let FinishedView {
+            view: mut model, ..
+        } = self
+            .finish_view(self.analyse_signals()?, &bdds, &min.then(released), reused)
+            .map_err(stopped)?;
         debug_assert!(
             arc_view.exposed_view.is_none(),
             "the arc view is analysed with the exposure already applied and never carries a view of its own"
@@ -852,22 +1076,22 @@ impl Cell {
 
     /// Complete one view of the cell over `bdds` — the minimised map `min` reports the rewrite of, back
     /// to `view`'s parse-time functions. Recomputes each surviving signal's metadata, builds the machine
-    /// over `exploration` and copies its derivations in, then caches the region view and the
-    /// state-holding verdict.
+    /// over `exploration` and copies its derivations in, then caches the region view.
     ///
     /// This is everything downstream of the minimisation, and it runs once PER VIEW over that view's own
     /// signals: a cell that exposes internal nodes carries two of them (see
     /// [`AnalysedCell::exposed_view`]), whose machines differ in their coordinates. The exploration
     /// itself is per CELL — the second element of the result is the states this view explored, for the
     /// other view to project onto its own coordinates, and is `None` when this view reused an
-    /// exploration or a budget ceiling stopped one.
+    /// exploration. A budget ceiling that stops the exploration is the error, cell-free: the caller
+    /// names the cell.
     fn finish_view<B: Brand, C: ManagerCell + Send + Sync>(
         &self,
         mut view: AnalysedCell,
         bdds: &BTreeMap<Symbol, Bdd<B, C>>,
         min: &crate::logic::minimise::Minimised,
         exploration: Exploration<'_>,
-    ) -> (AnalysedCell, Option<Explored>) {
+    ) -> Result<FinishedView, ExplorationLimit> {
         recompute_signal_metadata(&mut view, bdds, min);
 
         // Build the cell's state machine once and derive both its transition arcs and its hazards from
@@ -876,28 +1100,34 @@ impl Cell {
         // avoid them. Clock suppression and emission gating are applied downstream.
         // The opt-out (`no_edge_collapse`, also set for every cell by the global `--no-edge-collapse`)
         // gates the classify() call itself, not just its result — no wasted work when collapse is off.
-        let analysis = crate::logic::analysis::analyse_machine(
+        let Derivations {
+            arcs,
+            hidden_arcs,
+            constraints,
+            hazards,
+            leakage,
+            edge,
+            explored,
+        } = crate::logic::analysis::analyse_machine(
             &view,
             bdds,
             !self.no_edge_collapse,
             exploration,
-        );
-        view.arcs = analysis.arcs;
-        view.hidden_arcs = analysis.hidden_arcs;
-        view.leakage = analysis.leakage;
-        view.constraints = analysis.constraints;
-        view.hazards = analysis.hazards;
-        view.edge = analysis.edge;
-        view.unexplored = analysis.unexplored;
-        let explored = analysis.explored;
+        )?;
+        view.arcs = arcs;
+        view.hidden_arcs = hidden_arcs;
+        view.leakage = leakage;
+        view.constraints = constraints;
+        view.hazards = hazards;
+        view.edge = edge;
 
         // Cache each signal's state-table regions once, in `signals()` order, from the shared folded
-        // BDDs, so downstream emitters don't rebuild the BDDs per call site, and record whether the
-        // minimised model holds any state at all — both read the same cyclic classifier.
+        // BDDs, so downstream emitters don't rebuild the BDDs per call site. Whether the minimised model
+        // holds any state at all is read back off this cache by `AnalysedCell::state_holding`, the
+        // regions carrying the same cyclic classifier's verdict per signal.
         view.regions = derive_regions(&view, bdds);
-        view.state_holding = holds_state(&view);
 
-        (view, explored)
+        Ok(FinishedView { view, explored })
     }
 
     /// Validate the cell and parse its functions into the pre-minimise [`AnalysedCell`]: every signal's
@@ -973,7 +1203,7 @@ impl Cell {
         }
 
         // Every template-override key must name one of this cell's (de_name_list-deduped) drive-strength
-        // aliases. Iterating in insertion order keeps the reported error deterministic.
+        // aliases. Iterated in spec order, so the first offending key is the one reported.
         let name_set: BTreeSet<Symbol> = self.name.iter().cloned().collect();
         for alias in self.template_overrides.keys() {
             if !name_set.contains(alias) {
@@ -1013,7 +1243,7 @@ impl Cell {
         }
 
         // Every exposed node must be a declared internal signal, checked in declaration order against a
-        // running set so a duplicate is caught deterministically.
+        // running set, so the first duplicate in the spec is the one reported.
         let mut expose_seen: BTreeSet<Symbol> = BTreeSet::new();
         for node in &self.expose {
             if !internal_set.contains(node) {
@@ -1127,9 +1357,7 @@ impl Cell {
             constraint_arcs_declared: self.constraint_arcs.clone(),
             when: self.when,
             regions: Vec::new(),
-            state_holding: false,
             edge: Default::default(),
-            unexplored: None,
             template: self.template.clone(),
             template_overrides: self.template_overrides.clone(),
             nodes: self.nodes.clone(),
@@ -1138,6 +1366,13 @@ impl Cell {
         };
         Ok(analysed)
     }
+}
+
+/// The result of [`Cell::finish_view`]: the finished view, and the states this view explored for the
+/// other view to project — `None` when it reused an exploration.
+struct FinishedView {
+    view: AnalysedCell,
+    explored: Option<Explored>,
 }
 
 /// Build every signal's BDD once from the shared per-cell `builder`, keyed by signal name in
@@ -1207,14 +1442,6 @@ pub fn derive_regions<B: Brand, C: ManagerCell>(
         .collect()
 }
 
-/// Whether the minimised model holds state: at least one signal is a state variable — one on a
-/// dependency cycle, as classified by [`crate::logic::resolve::state_variables`] over the recomputed
-/// feedback — the same pure-graph classifier [`derive_regions`] reads to mark a region hysteretic.
-fn holds_state(cell: &AnalysedCell) -> bool {
-    let signals: Vec<&AnalysedOutput> = cell.signals().collect();
-    !crate::logic::resolve::state_variables(&signals).is_empty()
-}
-
 /// Parse a TOML spec into a [`Spec`].
 pub fn parse_spec(toml_src: &str) -> Result<Spec, ModelError> {
     Ok(toml::from_str(toml_src)?)
@@ -1227,10 +1454,34 @@ pub(crate) fn analyse_one(src: &str) -> AnalysedCell {
     parse_spec(src).unwrap().cells.remove(0).analyse().unwrap()
 }
 
+/// The two-cell result of [`analyse_both`]: the same cell analysed once as written and once with
+/// `no_edge_collapse` forced on.
+#[cfg(test)]
+pub(crate) struct AnalysedPair {
+    pub(crate) default: AnalysedCell,
+    pub(crate) forced: AnalysedCell,
+}
+
+/// Parse the single-cell `src` and analyse it twice: once as written, once with
+/// `no_edge_collapse` forced true on every cell -- the same blanket mutation `apply_overrides`
+/// applies for the `--no-edge-collapse` CLI flag. Proves the per-cell TOML switch and
+/// the CLI flag are the identical code path, not two independently-tested mechanisms.
+#[cfg(test)]
+pub(crate) fn analyse_both(src: &str) -> AnalysedPair {
+    let default = parse_spec(src).unwrap().cells.remove(0).analyse().unwrap();
+    let mut spec = parse_spec(src).unwrap();
+    for c in &mut spec.cells {
+        c.no_edge_collapse = true;
+    }
+    let forced = spec.cells.remove(0).analyse().unwrap();
+    AnalysedPair { default, forced }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logic::arcs::Edge;
+    use crate::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, Deck};
+    use crate::logic::arcs::PinEdge;
     use crate::logic::constraint::ConstraintKind;
     use crate::logic::hazard::{Cause, Outcome};
     use espresso_logic::{bdd_builder, expr, Minterm};
@@ -1309,10 +1560,10 @@ Y = "W"
     }
 
     #[test]
-    fn multiple_errors_report_the_first_deterministically() {
-        // Two outputs each reference an undefined variable. Analysis short-circuits on the first in a
-        // fixed traversal order (outputs in declaration order), so the reported error is stable across
-        // repeated parses — never dependent on hash-map iteration.
+    fn multiple_errors_report_the_first_declared() {
+        // Two outputs each reference an undefined variable. Analysis walks the outputs in declaration
+        // order and short-circuits on the first offender, so Z1's error — never Z2's — is the one
+        // reported.
         let s = r#"
 [[cell]]
 name = "MULTI"
@@ -1325,13 +1576,6 @@ Y2 = "A*Z2"
             .analyse()
             .unwrap_err()
             .to_string();
-        for _ in 0..8 {
-            let again = parse_spec(s).unwrap().cells[0]
-                .analyse()
-                .unwrap_err()
-                .to_string();
-            assert_eq!(again, first, "error reporting must be deterministic");
-        }
         assert!(
             first.contains("Z1") && !first.contains("Z2"),
             "the first-declared offending output is reported first: {first}",
@@ -1564,10 +1808,10 @@ Q = "CLK*M + !CLK*Q"
         let sig_names: Vec<_> = cell.signals().map(|s| s.name.as_str()).collect();
         assert_eq!(sig_names, ["Q", "M"]);
         // No oscillation hazard (Q→M is a one-way dependency, no mutual cycle).
-        assert!(!cell
-            .hazards
-            .iter()
-            .any(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation));
+        assert!(!cell.hazards.iter().any(|h| {
+            matches!(h.cause, Cause::Toggle { .. } | Cause::Race { .. })
+                && h.outcome == Outcome::Oscillation
+        }));
     }
 
     #[test]
@@ -2038,10 +2282,7 @@ M = "CLK"
         // appears in no other artifact. The behavioural artifacts keep the spec's own name, which is
         // what the model was built and explored in.
         let cell = analyse_one(NODES_SRC);
-        let arcs = crate::emit::arcs_tcl::cell_arcs_tcl(
-            &cell,
-            crate::emit::arcs_tcl::ArcsTclOptions::default(),
-        );
+        let arcs = Deck(&[cell_arcs(&cell, ArcsTclOptions::default())]).to_string();
         assert!(arcs.contains("-pinlist {CLK D XI7/m Q}"), "{arcs}");
         assert!(arcs.contains("-pinlist {CLK D XI4/m Q}"), "{arcs}");
         assert!(
@@ -2050,9 +2291,13 @@ M = "CLK"
         );
 
         for other in [
-            crate::emit::verilog::cell_verilog(&cell),
-            crate::emit::liberty::library_liberty("lib", std::slice::from_ref(&cell)),
-            crate::emit::define_cell::cell_define_cell(&cell),
+            crate::emit::verilog::Verilog(&crate::emit::verilog::cell_verilog(&cell)).to_string(),
+            crate::emit::liberty::library_liberty("lib", crate::emit::liberty::cell_liberty(&cell))
+                .to_string(),
+            crate::emit::define_cell::Declarations(&crate::emit::define_cell::cell_define_cell(
+                &cell,
+            ))
+            .to_string(),
         ] {
             assert!(
                 !other.contains("XI7/m") && !other.contains("XI4/m"),
@@ -2068,10 +2313,7 @@ M = "CLK"
         // exposed column, so it stays one block naming both; a walked one carries the column and fans
         // out by group exactly as a measured block does.
         let cell = analyse_one(NODES_SRC);
-        let arcs = crate::emit::arcs_tcl::cell_arcs_tcl(
-            &cell,
-            crate::emit::arcs_tcl::ArcsTclOptions::default(),
-        );
+        let arcs = Deck(&[cell_arcs(&cell, ArcsTclOptions::default())]).to_string();
         for block in arcs.split("define_arc").skip(1) {
             let block = block.split("\n\n").next().unwrap_or(block);
             let (x1, x4) = (block.contains("XI7/m"), block.contains("XI4/m"));
@@ -2125,10 +2367,7 @@ sela0 = "!CLK*D + CLK*sela0"
 Q = "CLK*sela0 + !CLK*Q"
 "#,
         );
-        let arcs = crate::emit::arcs_tcl::cell_arcs_tcl(
-            &cell,
-            crate::emit::arcs_tcl::ArcsTclOptions::default(),
-        );
+        let arcs = Deck(&[cell_arcs(&cell, ArcsTclOptions::default())]).to_string();
         assert!(arcs.contains("-pinlist {CLK D sela0 Q}"), "{arcs}");
         assert!(!arcs.contains("{ DFFX1 }"), "one group names both:\n{arcs}");
         assert!(arcs.contains("{ DFFX1 DFFX4 }"), "{arcs}");
@@ -2250,8 +2489,8 @@ Q = "!QN"
         // Every arc, hidden arc and constraint of BOTH views must carry a real prevector: non-empty,
         // and ending at the record's own start state projected onto the inputs (the pattern at
         // arcs.rs:618). A rebuilt `prev` that breaks `path_to` either empties the prevector — panicking
-        // the `.expect` the constraint vector reads its held levels through
-        // (`arcs_tcl::constraint_vector_str`) — or misaligns the chain, corrupting the `prevector.len()`
+        // the `.expect` the constraint columns read their held levels through
+        // (`arcs_tcl::constraint_columns`) — or misaligns the chain, corrupting the `prevector.len()`
         // constraint-dedup tie-break in `constraint::record`.
         let cell = analyse_one(&c_element_src(r#"expose = ["QN"]"#));
         for view in [cell.arc_view(), &cell] {
@@ -2296,9 +2535,9 @@ Q = "!QN"
         // exploring for itself, so this also holds that projection to what a plain analysis discovers —
         // across the C-element, where releasing the exposure moves the coordinate from `QN` to `Q`, and
         // the DFF, where the exposed master survives both views.
-        for (with, without, _) in exposure_pairs() {
-            let exposed = analyse_one(&with);
-            let plain = analyse_one(&without);
+        for fixture in exposure_pairs() {
+            let exposed = analyse_one(&fixture.exposing);
+            let plain = analyse_one(&fixture.exposure_free);
             let cell = exposed.repr_name();
 
             let names = |c: &AnalysedCell| c.signals().map(|s| s.name.clone()).collect::<Vec<_>>();
@@ -2317,7 +2556,8 @@ Q = "!QN"
                 );
             }
             assert_eq!(
-                exposed.state_holding, plain.state_holding,
+                exposed.state_holding(),
+                plain.state_holding(),
                 "cell {cell}: state_holding"
             );
             assert_same_cell_records(&exposed, &plain);
@@ -2344,31 +2584,48 @@ Q = "CLK*M + !CLK*Q"
         )
     }
 
+    /// One fixture for the exposure comparison: a TOML source that exposes an internal node, the same
+    /// cell's exposure-free spelling, and the name of the node exposure names. The two sources are
+    /// value fragments of the fixture text, so they stay `String`; the node is a signal name and
+    /// carries `Symbol`.
+    struct ExposureFixture {
+        exposing: String,
+        exposure_free: String,
+        node: Symbol,
+    }
+
     /// The two exposing fixtures paired with their exposure-free spelling, and the node each exposes.
-    fn exposure_pairs() -> Vec<(String, String, &'static str)> {
+    fn exposure_pairs() -> Vec<ExposureFixture> {
         vec![
-            (c_element_src(r#"expose = ["QN"]"#), c_element_src(""), "QN"),
-            (dff_src(r#"expose = ["M"]"#), dff_src(""), "M"),
+            ExposureFixture {
+                exposing: c_element_src(r#"expose = ["QN"]"#),
+                exposure_free: c_element_src(""),
+                node: Symbol::from("QN"),
+            },
+            ExposureFixture {
+                exposing: dff_src(r#"expose = ["M"]"#),
+                exposure_free: dff_src(""),
+                node: Symbol::from("M"),
+            },
         ]
     }
 
-    /// One transition arc reduced to the identity [`crate::logic::arcs::derive`] keys it on. The rest of
-    /// an arc follows from that identity — its end state and levels are read off the start state, and its
-    /// prevector is one path into it.
+    /// One transition arc reduced to the identity [`crate::logic::arcs::derive`] keys it on: the driven
+    /// output with the edge it makes, the related pin — which holds no edge of its own — and the state
+    /// the arc is measured from. The rest of an arc follows from that identity — its end state and levels
+    /// are read off the start state, and its prevector is one path into it.
     #[derive(Debug, PartialEq, Eq)]
     struct ArcRecord {
-        output: Symbol,
+        output: PinEdge,
         related: Symbol,
-        edge: Edge,
         start: Minterm<Symbol>,
     }
 
-    /// One internal-power ('hidden') arc reduced to its identity: the toggled pin, its direction and the
-    /// state the toggle is measured from.
+    /// One internal-power ('hidden') arc reduced to its identity: the toggled pin with the edge it makes,
+    /// and the state the toggle is measured from.
     #[derive(Debug, PartialEq, Eq)]
     struct HiddenArcRecord {
-        pin: Symbol,
-        edge: Edge,
+        pin: PinEdge,
         start: Minterm<Symbol>,
     }
 
@@ -2379,7 +2636,7 @@ Q = "CLK*M + !CLK*Q"
     #[derive(Debug, PartialEq, Eq)]
     struct LeakageRecord {
         inputs: Minterm<Symbol>,
-        outputs: Vec<(Symbol, bool)>,
+        outputs: Minterm<Symbol>,
     }
 
     /// One generated constraint by its identity: the pin it constrains with the edge that pin makes,
@@ -2388,8 +2645,7 @@ Q = "CLK*M + !CLK*Q"
     #[derive(Debug, PartialEq, Eq)]
     struct ConstraintRecord {
         kind: ConstraintKind,
-        pin: Symbol,
-        pin_edge: Edge,
+        pin: PinEdge,
         nodes: Vec<Symbol>,
     }
 
@@ -2439,7 +2695,6 @@ Q = "CLK*M + !CLK*Q"
                 .map(|a| ArcRecord {
                     output: a.output.clone(),
                     related: a.related.clone(),
-                    edge: a.edge,
                     start: a.start.clone(),
                 })
                 .collect(),
@@ -2448,7 +2703,6 @@ Q = "CLK*M + !CLK*Q"
                 .iter()
                 .map(|h| HiddenArcRecord {
                     pin: h.pin.clone(),
-                    edge: h.edge,
                     start: h.start.clone(),
                 })
                 .collect(),
@@ -2466,8 +2720,7 @@ Q = "CLK*M + !CLK*Q"
                 .map(|c| ConstraintRecord {
                     kind: c.kind.clone(),
                     pin: c.pin.clone(),
-                    pin_edge: c.pin_edge,
-                    nodes: c.victim_names(),
+                    nodes: c.victim_names().to_vec(),
                 })
                 .collect(),
             hazards: cell
@@ -2537,10 +2790,11 @@ Q = "CLK*M + !CLK*Q"
         // analyse each fixture twice, once exposing and once not, and the model view every emitter but
         // the arcs one reads emits the same records either way. The arcs are where the difference lands,
         // as the exposed node's own column.
-        for (with, without, node) in exposure_pairs() {
-            let exposed = analyse_one(&with);
-            let plain = analyse_one(&without);
-            assert_eq!(exposed.exposed, [Symbol::from(node)]);
+        for fixture in exposure_pairs() {
+            let exposed = analyse_one(&fixture.exposing);
+            let plain = analyse_one(&fixture.exposure_free);
+            let node = fixture.node;
+            assert_eq!(exposed.exposed, *std::slice::from_ref(&node));
             assert!(plain.exposed.is_empty());
 
             let cell = exposed.repr_name();
@@ -2550,11 +2804,11 @@ Q = "CLK*M + !CLK*Q"
             // among its columns, and no block of the other run does. Leakage is switched off for this
             // comparison and asserted on its own below, where a walked block states the exposed node
             // through its own `-pinlist`.
-            let opts = crate::emit::arcs_tcl::ArcsTclOptions {
+            let opts = ArcsTclOptions {
                 emit_leakage: false,
                 ..Default::default()
             };
-            let arcs = |c| crate::emit::arcs_tcl::cell_arcs_tcl(c, opts);
+            let arcs = |c| Deck(&[cell_arcs(c, opts)]).to_string();
             let pinlists = |tcl: String| -> Vec<String> {
                 tcl.lines()
                     .map(str::trim)
@@ -2580,9 +2834,9 @@ Q = "CLK*M + !CLK*Q"
             // A walked leakage block states the exposed node through its own `-pinlist`, exactly as a
             // measured block does — so it names the node under the exposing run and none does under the
             // exposure-free one. A bare block carries no column under either run.
-            let all = crate::emit::arcs_tcl::ArcsTclOptions::default();
+            let all = ArcsTclOptions::default();
             for (c, expect_named) in [(&exposed, true), (&plain, false)] {
-                let tcl = crate::emit::arcs_tcl::cell_arcs_tcl(c, all);
+                let tcl = Deck(&[cell_arcs(c, all)]).to_string();
                 let leakage: Vec<String> = tcl
                     .split("define_leakage")
                     .skip(1)
@@ -2622,9 +2876,13 @@ Q = "CLK*M + !CLK*Q"
     fn define_cell_never_declares_an_exposed_node() {
         // `define_cell` declares the cell's PINS, and an exposed internal is not one however many arc
         // columns it earns — including the DFF's master, which survives the model view as a signal.
-        for (with, _, node) in exposure_pairs() {
-            let cell = analyse_one(&with);
-            let tcl = crate::emit::define_cell::cell_define_cell(&cell);
+        for fixture in exposure_pairs() {
+            let node = fixture.node;
+            let cell = analyse_one(&fixture.exposing);
+            let tcl = crate::emit::define_cell::Declarations(
+                &crate::emit::define_cell::cell_define_cell(&cell),
+            )
+            .to_string();
             assert!(
                 !tcl.split_whitespace().any(|t| t == node),
                 "define_cell declared the exposed {node}:\n{tcl}"
@@ -2655,12 +2913,12 @@ Y = "!W"
         ] {
             let cell = analyse_one(&src);
             assert_eq!(
-                cell.state_holding,
-                cell.arc_view().state_holding,
+                cell.state_holding(),
+                cell.arc_view().state_holding(),
                 "cell {}: the two views disagree on state_holding",
                 cell.repr_name(),
             );
-            holding += usize::from(cell.state_holding);
+            holding += usize::from(cell.state_holding());
         }
         assert_eq!(holding, 2, "the fixtures cover both verdicts");
     }

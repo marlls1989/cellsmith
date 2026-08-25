@@ -1,31 +1,33 @@
 //! Whole-pipeline benchmarks: a single cell's full `analyse()` and the whole-crate run across all
-//! example cells, each swept across the thread range with a scoped rayon pool built once per
-//! registration.
+//! example cells, each measured at every one of [`common::thread_counts`] with the pool built once
+//! per registration.
 
 mod common;
 
 use rayon::prelude::*;
 
-use cellsmith::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
-use cellsmith::emit::liberty::library_liberty;
-use cellsmith::emit::verilog::cell_verilog;
+use cellsmith::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, CellArcs, Deck};
+use cellsmith::emit::liberty::{cell_liberty, library_liberty};
+use cellsmith::emit::verilog::{cell_verilog, Verilog};
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
-/// One target per example cell: the full `analyse()` pipeline. `analyse` is internally parallel, so
-/// every cell is measured at the max thread count and the [`common::HEAVY`] ones also sweep 1..max.
+/// One target per example cell: the full `analyse()` pipeline, which is internally parallel.
 fn bench_cell_analyse(c: &mut Criterion) {
     let mut g = c.benchmark_group("whole_cell");
     let cells = common::raw_cells();
     for cell in &cells {
-        for &n in &common::sweep(true, common::is_heavy(cell.name[0].as_str())) {
+        for n in common::thread_counts() {
             g.bench_with_input(
-                BenchmarkId::new("cell_analyse", format!("{}/n{}", cell.name[0], n)),
+                BenchmarkId::new(
+                    "cell_analyse",
+                    format!("{}/{}", cell.name[0], common::label(n)),
+                ),
                 &n,
                 |b, &n| {
                     let p = common::pool(n);
-                    p.install(|| b.iter(|| black_box(cell.analyse().unwrap())));
+                    common::in_pool(&p, || b.iter(|| black_box(cell.analyse().unwrap())));
                 },
             );
         }
@@ -33,33 +35,34 @@ fn bench_cell_analyse(c: &mut Criterion) {
     g.finish();
 }
 
-/// A single target mirroring `main.rs`'s compute path — cross-cell parallel `analyse`, the arc and
-/// Verilog emit maps, and the Liberty fragment — minus file-IO and hazard warnings, swept across the
-/// full thread range. Cross-cell and intra-cell parallelism share the one installed pool.
+/// A single target over a whole run: cross-cell parallel `analyse`, then the arc, Verilog and Liberty
+/// artifacts, each stated as values for all the cells at once and rendered once at its sink. Writing
+/// the files and reporting the hazards are outside the measurement. Cross-cell and intra-cell
+/// parallelism share the one installed pool.
 fn bench_whole_run(c: &mut Criterion) {
     let mut g = c.benchmark_group("whole_run");
     let cells = common::raw_cells();
-    for &n in &common::full_sweep() {
+    for n in common::thread_counts() {
         g.bench_with_input(
-            BenchmarkId::new("whole_run", format!("n{n}")),
+            BenchmarkId::new("whole_run", common::label(n)),
             &n,
             |b, &n| {
                 let p = common::pool(n);
-                p.install(|| {
+                common::in_pool(&p, || {
                     b.iter(|| {
                         let analysed: Vec<_> =
                             cells.par_iter().map(|c| c.analyse().unwrap()).collect();
-                        let arcs = analysed
+                        let rendered: Vec<CellArcs> = analysed
                             .par_iter()
-                            .map(|c| cell_arcs_tcl(c, ArcsTclOptions::default()))
-                            .collect::<Vec<_>>()
-                            .concat();
-                        let v = analysed
-                            .par_iter()
-                            .map(cell_verilog)
-                            .collect::<Vec<_>>()
-                            .concat();
-                        let lib = library_liberty("cells", &analysed);
+                            .map(|c| cell_arcs(c, ArcsTclOptions::default()))
+                            .collect();
+                        let arcs = Deck(&rendered).to_string();
+                        let declarations: Vec<_> =
+                            analysed.par_iter().flat_map_iter(cell_verilog).collect();
+                        let v = Verilog(&declarations).to_string();
+                        let groups: Vec<_> =
+                            analysed.par_iter().flat_map_iter(cell_liberty).collect();
+                        let lib = library_liberty("cells", groups).to_string();
                         black_box((arcs, v, lib));
                     })
                 });

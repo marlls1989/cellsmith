@@ -30,7 +30,7 @@
 //! `classify` is a **post-exploration** read-only pass over the shared [`Machine`]: it re-walks the
 //! exploration with `machine::toggle`/`machine::settle`, mirroring [`super::arcs::derive`]'s
 //! per-node walk, and only ADDS an edge annotation. It never re-derives the exploration, the
-//! prevectors or the hazards — those stay byte-identical whether the annotation is on or off.
+//! prevectors or the hazards — those are the same records whether the annotation is on or off.
 //!
 //! # The mechanism
 //!
@@ -83,13 +83,25 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
-use espresso_logic::{Cover, CoverType, CubeType, Minimizable, Minterm, Symbol};
+use espresso_logic::{
+    Anonymous, Cover, CoverType, Cube, CubeType, Minimizable, Minterm, OutputSet, Symbol,
+};
 use rayon::prelude::*;
 
 use crate::logic::analysis::Machine;
-use crate::logic::arcs::{Arc as DelayArc, Edge};
+use crate::logic::arcs::{Arc as DelayArc, Edge, PinEdge};
 use crate::logic::machine;
 use crate::logic::regions::{self, StateRegions};
+
+/// One active edge of one clock and the combinational next-state the node captures on it.
+#[derive(Debug, Clone)]
+pub(crate) struct Capture {
+    /// The clock the capture keys off, with the direction it moves in.
+    pub(crate) clock: PinEdge,
+    /// The captured next-state function, as combinational state-table regions (total — off is the
+    /// complement of on, empty hold).
+    pub(crate) regions: StateRegions,
+}
 
 /// The edge arcs carried by one node: the node re-expressed as an edge register on one or more clocks,
 /// each active edge making it capture-and-hold a next-state value.
@@ -97,11 +109,10 @@ use crate::logic::regions::{self, StateRegions};
 pub(crate) struct EdgeCaptures {
     /// The node the edge arcs belong to.
     pub(crate) node: Symbol,
-    /// The captured next-state function per active edge, as combinational state-table regions (total —
-    /// off is the complement of on, empty hold). Each capture carries ITS OWN clock. Grouped by clock in
-    /// cell input-pin order, `Rise` before `Fall` within a clock; a single-clock node keeps one entry per
-    /// active edge (two for a dual-edge node with `Rise` first).
-    pub(crate) captures: Vec<(Symbol, Edge, StateRegions)>,
+    /// One entry per active edge, each carrying ITS OWN clock. Grouped by clock in cell input-pin
+    /// order, `Rise` before `Fall` within a clock; a single-clock node keeps one entry per active edge
+    /// (two for a dual-edge node with `Rise` first).
+    pub(crate) captures: Vec<Capture>,
     /// The off-edge (hold) function as state-table regions, keyed by the clock set's phase vector: on/off
     /// are the set/clear covers, hold is the quiescent region. A phase-agreed forcing drops the clocks
     /// from its cover; a phase-conditioned one keeps its gating clock literal (`CLK*R`).
@@ -114,9 +125,9 @@ impl EdgeCaptures {
     /// The distinct clocks the edge arcs key off, in first-appearance (capture) order.
     pub(crate) fn clocks(&self) -> Vec<&Symbol> {
         let mut out: Vec<&Symbol> = Vec::new();
-        for (clock, _, _) in &self.captures {
-            if !out.contains(&clock) {
-                out.push(clock);
+        for c in &self.captures {
+            if !out.contains(&&c.clock.pin) {
+                out.push(&c.clock.pin);
             }
         }
         out
@@ -154,12 +165,17 @@ pub(crate) struct EdgeArcs {
     /// the emitters render as a first-class internal node, and carries the combinational read function(s)
     /// of the output(s) that read it through a gate.
     pub(crate) derived: Vec<DerivedRegister>,
+    /// The outputs the read-gate factorisation took apart: each one's register moved to a node of its own
+    /// (`derived`) and the output itself became a combinational read over it, so it no longer carries an
+    /// `EdgeCaptures` entry of its own. Stated here by the pass that decides it, rather than recovered
+    /// downstream by asking which outputs `derived` names as readers.
+    pub(crate) factored: BTreeSet<Symbol>,
 }
 
 /// One EDGE-typed delay arc at full identity — the identity [`super::arcs::derive`] keys an
 /// [`super::arcs::Arc`] on. The two pins are the arc's ends and are not interchangeable: `output` is where
-/// the transition lands, `clock` the related pin it came from, and `clock_edge` the direction the CLOCK
-/// moves in, which is not in general the direction the output moves in.
+/// the transition lands and `clock` the related pin it came from, carrying the direction the CLOCK moves
+/// in, which is not in general the direction the output moves in.
 ///
 /// The start minterm is the machine's own node, so it is as wide as the machine's coordinates — a
 /// column per state variable and per combinational survivor. That width never has to be matched by
@@ -170,10 +186,8 @@ pub(crate) struct EdgeArcs {
 pub(crate) struct EdgeLabel {
     /// The output pin the arc lands on.
     pub(crate) output: Symbol,
-    /// The related pin, a declared clock.
-    pub(crate) clock: Symbol,
-    /// The clock's own direction across the firing.
-    pub(crate) clock_edge: Edge,
+    /// The related pin — a declared clock — with its own direction across the firing.
+    pub(crate) clock: PinEdge,
     /// The stable state the firing started from: `super::arcs::Arc::start` verbatim.
     pub(crate) start: Minterm<Symbol>,
 }
@@ -209,31 +223,64 @@ pub(crate) struct RegisterRead {
     pub(crate) function: StateRegions,
 }
 
+/// One observation of a candidate node: a domain state with the node's value there. A capture sample
+/// carries the pre-state of a clock toggle and the value that toggle delivered; a stable sample carries a
+/// reachable stable state and the value held there. Both feed the same cover synthesis.
+#[derive(Clone)]
+struct Sample {
+    /// The state the value was observed at.
+    state: Minterm<Symbol>,
+    /// The node's value there.
+    value: bool,
+}
+
+/// One settling firing of a clock edge, as the typing replays it for content-dependence.
+#[derive(Clone)]
+struct Firing {
+    /// The state the firing started from.
+    pre: Minterm<Symbol>,
+    /// The stable state it settled at.
+    dest: Minterm<Symbol>,
+    /// The node's value once settled.
+    post: bool,
+}
+
 /// A single clock edge's observations for one candidate: whether any sample changed the value (the
-/// vacuity gate), the `(pre-state, post-value)` samples (unchanged clock-toggle samples included) for
-/// cover synthesis, and the full per-firing census the typing replays for content-dependence.
+/// vacuity gate), the samples (unchanged clock-toggle samples included) for cover synthesis, and the
+/// full per-firing census the typing replays for content-dependence.
 #[derive(Default, Clone)]
 struct CapAgg {
     changed: bool,
-    samples: Vec<(Minterm<Symbol>, bool)>,
-    /// One entry per settling firing of this edge — CHANGED OR NOT: `(pre-state, destination stable
-    /// state, post value)`.
-    firings: Vec<(Minterm<Symbol>, Minterm<Symbol>, bool)>,
+    samples: Vec<Sample>,
+    /// One entry per settling firing of this edge — CHANGED OR NOT.
+    firings: Vec<Firing>,
+}
+
+/// One single-input toggle that CHANGED a candidate node. Every moving toggle is recorded uniformly —
+/// clock, data and async alike — and the decision core reads them back for the node's forcing pins. The
+/// source state is kept so a move can be replayed from where it started (the forcing classification needs
+/// the pre-toggle state, not just where it landed).
+#[derive(Clone)]
+struct Move {
+    /// The input whose toggle moved the node.
+    pin: Symbol,
+    /// The stable state the toggle started from.
+    source: Minterm<Symbol>,
+    /// The stable state it settled at.
+    dest: Minterm<Symbol>,
+    /// The node's value once settled.
+    post: bool,
 }
 
 /// The aggregated observations of one candidate node across the whole exploration walk.
 #[derive(Default, Clone)]
 struct CandAgg {
-    /// One entry per single-input toggle that CHANGED the node: `(toggled input, SOURCE stable state,
-    /// destination stable state, post value)`. Every moving toggle is recorded uniformly — clock, data
-    /// and async alike — and the decision core reads them back for the node's forcing pins. The source
-    /// state is kept so a move can be replayed from where it started (the forcing classification needs
-    /// the pre-toggle state, not just where it landed).
-    moves: Vec<(Symbol, Minterm<Symbol>, Minterm<Symbol>, bool)>,
-    /// Per `(clock, is_rise)`: the clock-edge observations.
-    captures: BTreeMap<(Symbol, bool), CapAgg>,
-    /// The `(stable state, value)` samples, for the off-edge synthesis.
-    stable: Vec<(Minterm<Symbol>, bool)>,
+    /// One entry per single-input toggle that CHANGED the node.
+    moves: Vec<Move>,
+    /// Per candidate edge arc: the clock-edge observations.
+    captures: BTreeMap<ActiveEdge, CapAgg>,
+    /// The stable-state samples, for the off-edge synthesis.
+    stable: Vec<Sample>,
 }
 
 impl CandAgg {
@@ -252,11 +299,30 @@ impl CandAgg {
 
 /// A synthesised register: its per-clock, per-edge captures (each carrying its clock, grouped by clock in
 /// input-pin order with Rise first) and its off-edge.
-type Synthesised = (Vec<(Symbol, Edge, StateRegions)>, StateRegions);
+struct Synthesised {
+    captures: Vec<Capture>,
+    off_edge: StateRegions,
+}
 
-/// One candidate edge arc on a node: `(clock, is_rise)`. The decision core's whole currency — each arc on
-/// a node is typed independently, so edge and combinational arcs coexist freely on one output.
-type Arc = (Symbol, bool);
+/// One candidate edge arc on a node: the keying clock — an input the cell declares as one — with the
+/// direction that clock moves in. The decision core's whole currency — each arc on a node is typed
+/// independently, so edge and combinational arcs coexist freely on one output.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct ActiveEdge {
+    clock: PinEdge,
+}
+
+/// One clock keyed together with every direction it is active on — one clock, possibly several
+/// directions, kept as a unit rather than flattened into separate [`PinEdge`]s: [`synth_node_captures`]
+/// groups a node's captures by clock (input-pin order, `Rise` before `Fall` within a clock), and that
+/// grouping is the contract the two passes share.
+#[derive(Debug, Clone)]
+struct ClockEdges {
+    /// The clock pin.
+    clock: Symbol,
+    /// The directions this clock is active on, `Rise` before `Fall`.
+    directions: Vec<Edge>,
+}
 
 /// A latch taken in one phase of one clock: what the opacity memo is keyed on. The two names carry
 /// different roles — `latch` is a state variable, `clock` an input the phase belongs to — and `level` is
@@ -281,7 +347,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // `captures` come out empty from the loops below — there is no early return (its absence was what let
     // an unrelated flop change an unrelated arc's type). Every path that needs the builder is guarded by
     // a non-empty opener set, which implies a state variable exists.
-    let builder = m.deltas.first().map(|(_, d)| d.builder());
+    let builder = m.deltas.first().map(|c| c.delta.builder());
 
     let cell = m.cell;
     let inputs = &cell.inputs;
@@ -316,7 +382,10 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         let v0: Vec<Option<bool>> = candidates.iter().map(|c| value(c, node)).collect();
         for (i, b) in v0.iter().enumerate() {
             if let Some(b) = b {
-                out[i].stable.push((node.clone(), *b));
+                out[i].stable.push(Sample {
+                    state: node.clone(),
+                    value: *b,
+                });
             }
         }
         for related in inputs {
@@ -325,7 +394,8 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                 continue;
             };
             let is_clock = scan.clock_set.contains(related.as_str());
-            let rose = np.value_of(related.as_str()) == Some(true);
+            let toggled_edge =
+                Edge::from_settled_level(np.value_of(related.as_str()) == Some(true));
             for (i, c) in candidates.iter().enumerate() {
                 let (Some(b0), Some(b1)) = (v0[i], value(c, &np)) else {
                     continue;
@@ -333,9 +403,24 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                 if is_clock {
                     // A clock toggle: record every sample for the cover synthesis, changed or not, and the
                     // firing itself — pre, destination and post — for the typing.
-                    let cap = out[i].captures.entry((related.clone(), rose)).or_default();
-                    cap.samples.push((node.clone(), b1));
-                    cap.firings.push((node.clone(), np.clone(), b1));
+                    let cap = out[i]
+                        .captures
+                        .entry(ActiveEdge {
+                            clock: PinEdge {
+                                pin: related.clone(),
+                                edge: toggled_edge,
+                            },
+                        })
+                        .or_default();
+                    cap.samples.push(Sample {
+                        state: node.clone(),
+                        value: b1,
+                    });
+                    cap.firings.push(Firing {
+                        pre: node.clone(),
+                        dest: np.clone(),
+                        post: b1,
+                    });
                     if b0 != b1 {
                         cap.changed = true;
                     }
@@ -343,9 +428,12 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                 if b0 != b1 {
                     // Every moving toggle — clock, data or async alike — is a uniform move: the source
                     // state, the destination stable state and the post value the decision core reads.
-                    out[i]
-                        .moves
-                        .push((related.clone(), node.clone(), np.clone(), b1));
+                    out[i].moves.push(Move {
+                        pin: related.clone(),
+                        source: node.clone(),
+                        dest: np.clone(),
+                        post: b1,
+                    });
                 }
             }
         }
@@ -369,7 +457,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // decides the fold-eligible internals the drop-loop prefers to shed — is settled first. Forcing plays
     // no part in typing; it is consumed only by off-edge synthesis and the forcing exemption in
     // `retain_active_edges`.
-    let forcing_of: Vec<BTreeMap<Symbol, (bool, bool)>> = candidates
+    let forcing_of: Vec<Minterm<Symbol>> = candidates
         .iter()
         .zip(&aggs)
         .map(|(name, agg)| scan.forcing_pins(name, &agg.moves))
@@ -381,11 +469,11 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // combinational coordinate is not a candidate, so it carries no entry here and no cone, propagation
     // or liveness question is ever asked of it.
     let mut fn_of: BTreeMap<&str, &Bdd<B, C>> = BTreeMap::new();
-    for (n, d) in &m.deltas {
-        fn_of.insert(n.as_str(), d);
+    for coord in &m.deltas {
+        fn_of.insert(coord.signal.as_str(), &coord.delta);
     }
-    for (n, d) in m.combinational_outputs() {
-        fn_of.insert(n.as_str(), d);
+    for coord in m.combinational_outputs() {
+        fn_of.insert(coord.signal.as_str(), &coord.delta);
     }
 
     // OPACITY over the live dependency loops. `live_succ[i]` is state `i`'s live-dependency graph among the
@@ -456,13 +544,13 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // A latch GENERATES on `(K, d)` iff it is opaque at the source level (`!d`) and transparent at the
     // delivered level (`d`). It is K-ASSOCIATED when its opacity differs across `K`'s two phases (a real latch
     // on `K` — the generator that opens on `d`, or the closer that shuts).
-    let generates = |w: &Symbol, clock: &Symbol, is_rise: bool| -> bool {
+    let generates = |w: &Symbol, clock: &Symbol, edge: Edge| -> bool {
         let source = LatchPhase {
             latch: w.clone(),
             clock: clock.clone(),
-            level: !is_rise,
+            level: !edge.settled_level(),
         };
-        opaque_of[&source] && transparent(w, clock, is_rise)
+        opaque_of[&source] && transparent(w, clock, edge.settled_level())
     };
     let k_assoc = |w: &Symbol, clock: &Symbol| -> bool {
         let phase = |level: bool| LatchPhase {
@@ -487,7 +575,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
             })
             .unwrap_or_default()
     };
-    // BIRTH: is an edge BORN at node `n` on `(clock, is_rise)` at the post-arc stable state `sp`? Two ways,
+    // BIRTH: is an edge BORN at node `n` on `(clock, edge)` at the post-arc stable state `sp`? Two ways,
     // both evaluated at ANY node — never only the output:
     //   (a) BY GENERATION — a latch at `n` goes opaque→transparent across the edge (`generates`).
     //   (b) BY CLOSER-EXPOSURE — the toggle switches `n` to expose a latch it closes on THIS edge: a closer
@@ -496,8 +584,8 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     //       `c` (the two-leg mux shape — `DET`'s `Q` exposing the donor it just closed). The direct-support
     //       condition is the mux event itself, not a depth bound; a closer-exposure edge can be born at an
     //       internal node and then propagate onward.
-    let born = |n: &Symbol, clock: &Symbol, is_rise: bool, sp: &Minterm<Symbol>| -> bool {
-        if m.state_set.contains(n.as_str()) && generates(n, clock, is_rise) {
+    let born = |n: &Symbol, clock: &Symbol, edge: Edge, sp: &Minterm<Symbol>| -> bool {
+        if m.state_set.contains(n.as_str()) && generates(n, clock, edge) {
             return true;
         }
         let Some(f) = fn_of.get(n.as_str()) else {
@@ -506,7 +594,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         let legs = cone(n.as_str(), clock);
         legs.iter().any(|g| {
             g != n
-                && generates(g, clock, is_rise)
+                && generates(g, clock, edge)
                 && legs
                     .iter()
                     .any(|c| c != g && c != n && residual_depends(f, sp, c.as_str()))
@@ -550,10 +638,10 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // pipe or a BURIED mux types identically to a shallow one — there is no one-step-cone gate. Per firing
     // — `sp` is that firing's own destination — so two firings of one `(output, clock, direction)` can
     // type differently.
-    let types_edge = |o: &Symbol, clock: &Symbol, is_rise: bool, sp: &Minterm<Symbol>| -> bool {
+    let types_edge = |o: &Symbol, clock: &Symbol, edge: Edge, sp: &Minterm<Symbol>| -> bool {
         candidates
             .iter()
-            .any(|b| born(b, clock, is_rise, sp) && propagates(o, sp, b))
+            .any(|b| born(b, clock, edge, sp) && propagates(o, sp, b))
     };
 
     // THE PER-ARC LABELS: each derived delay arc whose related pin is a declared clock is an edge arc iff it
@@ -567,17 +655,18 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         if !scan.clock_set.contains(a.related.as_str()) || !scan.is_eligible(&a.start) {
             continue;
         }
-        let is_rise = a.end.value_of(a.related.as_str()) == Some(true);
+        let clock_edge = Edge::from_settled_level(a.end.value_of(a.related.as_str()) == Some(true));
         let Some(sp) = machine::settle(stepped, &machine::toggle(&a.start, &[a.related.as_str()]))
         else {
             continue;
         };
-        if types_edge(&a.output, &a.related, is_rise, &sp) {
-            let edge = if is_rise { Edge::Rise } else { Edge::Fall };
+        if types_edge(&a.output.pin, &a.related, clock_edge, &sp) {
             labels.insert(EdgeLabel {
-                output: a.output.clone(),
-                clock: a.related.clone(),
-                clock_edge: edge,
+                output: a.output.pin.clone(),
+                clock: PinEdge {
+                    pin: a.related.clone(),
+                    edge: clock_edge,
+                },
                 start: a.start.clone(),
             });
         }
@@ -587,24 +676,24 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // eligible CHANGED firing (the initial set), tightened to the greatest fixed point by
     // `retain_active_edges` — the delivered value must hold through the phase. A node with a non-empty set
     // is an edge register; an empty one is a level node (a latch that merely tracks, or a clock gate).
-    let active_edges: Vec<BTreeSet<Arc>> = candidates
+    let active_edges: Vec<BTreeSet<ActiveEdge>> = candidates
         .iter()
         .zip(&aggs)
         .zip(&forcing_of)
         .map(|((name, agg), node_forcing)| {
-            let mut s: BTreeSet<Arc> = BTreeSet::new();
-            for ((clock, is_rise), cap) in &agg.captures {
+            let mut s: BTreeSet<ActiveEdge> = BTreeSet::new();
+            for (arc, cap) in &agg.captures {
                 if !cap.changed {
                     continue; // vacuity gate: some eligible firing must change the node
                 }
-                let edge = cap.firings.iter().any(|(pre, np, post)| {
-                    scan.is_eligible(pre)
-                        && scan.is_eligible(np)
-                        && m.output_value(name.as_str(), pre) != Some(*post)
-                        && types_edge(name, clock, *is_rise, np)
+                let types = cap.firings.iter().any(|f| {
+                    scan.is_eligible(&f.pre)
+                        && scan.is_eligible(&f.dest)
+                        && m.output_value(name.as_str(), &f.pre) != Some(f.post)
+                        && types_edge(name, &arc.clock.pin, arc.clock.edge, &f.dest)
                 });
-                if edge {
-                    s.insert((clock.clone(), *is_rise));
+                if types {
+                    s.insert(arc.clone());
                 }
             }
             scan.retain_active_edges(name.as_str(), node_forcing, &mut s);
@@ -629,24 +718,34 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         }
         let name = &candidates[i];
         let agg = &aggs[i];
-        // The keying clocks in cell input-pin order, each with the `(is_rise, Edge)` directions kept
-        // (Rise before Fall). Every clock present carries at least one active-edge direction.
-        let clock_edges: Vec<(Symbol, Vec<(bool, Edge)>)> = inputs
+        // The keying clocks in cell input-pin order, each with its active directions kept (Rise before
+        // Fall). Every clock present carries at least one active-edge direction.
+        let clock_edges: Vec<ClockEdges> = inputs
             .iter()
-            .filter(|p| s.iter().any(|(clock, _)| clock == *p))
+            .filter(|p| s.iter().any(|a| &a.clock.pin == *p))
             .map(|clock| {
-                let mut edges: Vec<(bool, Edge)> = Vec::new();
-                if s.contains(&(clock.clone(), true)) {
-                    edges.push((true, Edge::Rise));
+                let directions: Vec<Edge> = [Edge::Rise, Edge::Fall]
+                    .into_iter()
+                    .filter(|&edge| {
+                        s.contains(&ActiveEdge {
+                            clock: PinEdge {
+                                pin: clock.clone(),
+                                edge,
+                            },
+                        })
+                    })
+                    .collect();
+                ClockEdges {
+                    clock: clock.clone(),
+                    directions,
                 }
-                if s.contains(&(clock.clone(), false)) {
-                    edges.push((false, Edge::Fall));
-                }
-                (clock.clone(), edges)
             })
             .collect();
 
-        let (node_captures, off_edge) = synth_node_captures(
+        let Synthesised {
+            captures: node_captures,
+            off_edge,
+        } = synth_node_captures(
             builder
                 .as_ref()
                 .expect("an active edge implies a state variable, hence a builder"),
@@ -705,10 +804,10 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
             .enumerate()
             .map(|(i, c)| (c.as_str(), i))
             .collect();
-        let mut taken: BTreeSet<String> = inputs
+        let mut taken: BTreeSet<Symbol> = inputs
             .iter()
-            .map(|s| s.to_string())
-            .chain(candidates.iter().map(|s| s.to_string()))
+            .cloned()
+            .chain(candidates.iter().cloned())
             .collect();
         let mut derived_map: BTreeMap<Symbol, DerivedRegister> = BTreeMap::new();
         let mut minted: Vec<EdgeCaptures> = Vec::new();
@@ -728,29 +827,28 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
             let cone = cone_of(y.as_str());
             // A forcing pin is a READ-GATE iff toggling it never moves any state variable in the output's
             // cone (its pass level is the pin's un-asserted level).
-            let mut gate_pass: Vec<(Symbol, bool)> = Vec::new();
-            for (pin, (asserted, _)) in &forcing_of[iy] {
-                let changes_cone = cone.iter().any(|w| {
+            let changes_cone = |pin: &Symbol| {
+                cone.iter().any(|w| {
                     index_of
                         .get(w.as_str())
-                        .is_some_and(|&iw| aggs[iw].moves.iter().any(|(p, _, _, _)| p == pin))
-                });
-                if !changes_cone {
-                    gate_pass.push((pin.clone(), !*asserted));
-                }
-            }
-            if gate_pass.is_empty() {
+                        .is_some_and(|&iw| aggs[iw].moves.iter().any(|mv| &mv.pin == pin))
+                })
+            };
+            let node_forcing = &forcing_of[iy];
+            let read_gates: Vec<Symbol> = node_forcing
+                .vars()
+                .iter()
+                .zip(node_forcing.iter())
+                .filter(|&(pin, asserted)| asserted.is_some() && !changes_cone(pin))
+                .map(|(pin, _)| pin.clone())
+                .collect();
+            if read_gates.is_empty() {
                 continue; // an ordinary register: its forcing pins all change the held state
             }
 
-            // The register content the output reads: δ_Y cofactored at the read-gates' pass levels.
-            let pass_min = Minterm::with_labels(
-                &gate_pass
-                    .iter()
-                    .map(|(g, p)| (g.as_str(), Some(*p)))
-                    .collect::<Vec<_>>(),
-            )
-            .expect("distinct read-gate pins");
+            // The register content the output reads: δ_Y cofactored at the read-gates' pass levels — the
+            // pins' forcing row, complemented.
+            let pass_min = !node_forcing.project_to_labels(read_gates);
             let content_bdd = dy.restrict_to(&pass_min);
             // The read function's columns: the register node plus every non-clock input the output reads.
             let gate_cols: Vec<Symbol> = inputs
@@ -778,7 +876,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                 None => {
                     let nm = crate::logic::mint_state_node(y.as_ref(), |n| taken.contains(n));
                     taken.insert(nm.clone());
-                    Symbol::from(nm.as_str())
+                    nm
                 }
             };
 
@@ -787,7 +885,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
             let read_header: Vec<Symbol> = std::iter::once(reg_name.clone())
                 .chain(gate_cols.iter().cloned())
                 .collect();
-            let read_samples: Vec<(Minterm<Symbol>, bool)> = ex
+            let read_samples: Vec<Sample> = ex
                 .order
                 .iter()
                 .filter_map(|s| {
@@ -806,7 +904,10 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                     for g in &gate_cols {
                         labels.push((g.as_str(), s.value_of(g.as_str())));
                     }
-                    Some((Minterm::with_labels(&labels).ok()?, yv))
+                    Some(Sample {
+                        state: Minterm::with_labels(&labels).ok()?,
+                        value: yv,
+                    })
                 })
                 .collect();
             let reads_sr = synth_capture(b, &read_header, &read_samples)
@@ -819,11 +920,12 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
                     .iter()
                     .find(|ec| ec.node == y)
                     .expect("a register output has an EdgeCaptures entry");
-                let node_captures: Vec<(Symbol, Edge, StateRegions)> = y_ec
+                let node_captures: Vec<Capture> = y_ec
                     .captures
                     .iter()
-                    .map(|(clock, edge, sr)| {
-                        (clock.clone(), *edge, cofactor_capture(b, sr, &pass_min))
+                    .map(|c| Capture {
+                        clock: c.clock.clone(),
+                        regions: cofactor_capture(b, &c.regions, &pass_min),
                     })
                     .collect();
                 let off_edge = cofactor_off_edge(b, &y_ec.off_edge, &pass_min);
@@ -941,6 +1043,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         folded,
         labels,
         derived,
+        factored,
     }
 }
 
@@ -1019,10 +1122,12 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
                 if !self.eligible[i] {
                     return succ;
                 }
-                for (target, delta) in &self.m.deltas {
-                    for n in delta.variables() {
-                        if self.m.state_set.contains(&n) && residual_depends(delta, s, n.as_str()) {
-                            succ.entry(n).or_default().insert(target.clone());
+                for coord in &self.m.deltas {
+                    for n in coord.delta.variables() {
+                        if self.m.state_set.contains(&n)
+                            && residual_depends(&coord.delta, s, n.as_str())
+                        {
+                            succ.entry(n).or_default().insert(coord.signal.clone());
                         }
                     }
                 }
@@ -1042,20 +1147,23 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
     fn retain_active_edges(
         &self,
         node: &str,
-        node_forcing: &BTreeMap<Symbol, (bool, bool)>,
-        s: &mut BTreeSet<Arc>,
+        node_forcing: &Minterm<Symbol>,
+        s: &mut BTreeSet<ActiveEdge>,
     ) {
         let is_forced = |st: &Minterm<Symbol>| {
             node_forcing
+                .vars()
                 .iter()
-                .any(|(p, (a, _))| st.value_of(p.as_str()) == Some(*a))
+                .zip(node_forcing.iter())
+                .any(|(p, asserted)| asserted.is_some_and(|a| st.value_of(p.as_str()) == Some(a)))
         };
         loop {
-            let mut to_remove: Option<Arc> = None;
-            'search: for (k, is_rise) in s.iter() {
+            let mut to_remove: Option<ActiveEdge> = None;
+            'search: for arc in s.iter() {
+                let k = &arc.clock.pin;
                 for (si, st) in self.order.iter().enumerate() {
                     if !self.eligible[si]
-                        || st.value_of(k.as_str()) != Some(*is_rise)
+                        || st.value_of(k.as_str()) != Some(arc.clock.edge.settled_level())
                         || is_forced(st)
                     {
                         continue;
@@ -1082,16 +1190,22 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
                             Some(dv) if dv != v => {}
                             _ => continue, // the node did not move (or is undefined) here
                         }
-                        if node_forcing.contains_key(x) {
+                        if node_forcing.value_of(x.as_str()).is_some() {
                             continue; // a forcing pin's assertion is a coexisting combinational arc
                         }
                         // Is the toggle of `x` itself an active edge of the node's current set?
                         let x_is_active_edge = self.clock_set.contains(x.as_str()) && {
-                            let xdir = dest.value_of(x.as_str()) == Some(true);
-                            s.contains(&(x.clone(), xdir))
+                            s.contains(&ActiveEdge {
+                                clock: PinEdge {
+                                    pin: x.clone(),
+                                    edge: Edge::from_settled_level(
+                                        dest.value_of(x.as_str()) == Some(true),
+                                    ),
+                                },
+                            })
                         };
                         if !x_is_active_edge {
-                            to_remove = Some((k.clone(), *is_rise));
+                            to_remove = Some(arc.clone());
                             break 'search;
                         }
                     }
@@ -1111,14 +1225,14 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
     /// destination level of the pin — a set or clear, whatever the pin's declared class. Stratified:
     /// moves whose source or destination lie under an already-established forcing pin's asserted level
     /// are discounted before re-classifying (a clear pulsing the node inside a preset's region is still
-    /// a clear). A pin dragging the node BOTH ways (a tracked data pin) never classifies. Returns
-    /// `pin -> (asserted level, forced node value)`.
-    fn forcing_pins(
-        &self,
-        node: &Symbol,
-        moves: &[(Symbol, Minterm<Symbol>, Minterm<Symbol>, bool)],
-    ) -> BTreeMap<Symbol, (bool, bool)> {
+    /// a clear). A pin dragging the node BOTH ways (a tracked data pin) never classifies. A pin the
+    /// returned minterm defines is forcing, asserted at the level it is defined with; a pin the minterm
+    /// leaves undefined is not forcing.
+    fn forcing_pins(&self, node: &Symbol, moves: &[Move]) -> Minterm<Symbol> {
         let inputs = &self.m.cell.inputs;
+        // The pins classified so far, each paired with the level that asserts it: the row the returned
+        // minterm is built from, and what both stages below read back while they accumulate it.
+        let mut forcing: Vec<(Symbol, Option<bool>)> = Vec::new();
         // Clause 2 - GLOBAL CONSTANT-PINNING: exactly one level of the pin holds the node at one constant
         // across ALL reachable stable states (an async override whose release re-acquires, like a toggle
         // flop's reset). No tracked data pin satisfies this: its tracking is confined to a clock-phase
@@ -1126,7 +1240,6 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
         // the node to a constant either (the node carries content in both phases), so declaration plays no
         // part — a level-forcing reset is a forcing pin whether or not it was declared a clock, which is how
         // `RDFF`'s clock-declared `R` is handled here.
-        let mut pinning: BTreeMap<Symbol, (bool, bool)> = BTreeMap::new();
         for x in inputs {
             let pinned_value = |level: bool| -> Option<bool> {
                 let mut seen: Option<bool> = None;
@@ -1147,57 +1260,56 @@ impl<'a, B: Brand, C: ManagerCell + Send + Sync> Scan<'a, B, C> {
             };
             match (pinned_value(false), pinned_value(true)) {
                 (Some(_), Some(_)) | (None, None) => {} // both levels pin to a constant (degenerate) or neither
-                (Some(v), None) => {
-                    pinning.insert(x.clone(), (false, v));
-                }
-                (None, Some(v)) => {
-                    pinning.insert(x.clone(), (true, v));
-                }
+                (Some(_), None) => forcing.push((x.clone(), Some(false))),
+                (None, Some(_)) => forcing.push((x.clone(), Some(true))),
             }
         }
         // Monotone accumulation: established forcing pins are never re-litigated, so each round can only
         // ADD pins and the loop terminates within `inputs.len()` rounds.
-        let mut forcing: BTreeMap<Symbol, (bool, bool)> = pinning;
         loop {
             let mut added = false;
             for x in inputs {
-                if forcing.contains_key(x) {
+                if forcing.iter().any(|(p, _)| p == x) {
                     continue;
                 }
                 let mut dest_levels: BTreeSet<bool> = BTreeSet::new();
                 let mut posts: BTreeSet<bool> = BTreeSet::new();
                 let mut any = false;
-                for (pin, src, dest, post) in moves {
-                    if pin != x {
+                for mv in moves {
+                    if &mv.pin != x {
                         continue;
                     }
                     any = true;
-                    let discounted = forcing.iter().any(|(p, (a, _))| {
+                    let discounted = forcing.iter().any(|(p, asserted)| {
                         p != x
-                            && (src.value_of(p.as_str()) == Some(*a)
-                                || dest.value_of(p.as_str()) == Some(*a))
+                            && asserted.is_some_and(|a| {
+                                mv.source.value_of(p.as_str()) == Some(a)
+                                    || mv.dest.value_of(p.as_str()) == Some(a)
+                            })
                     });
                     if discounted {
                         continue;
                     }
-                    if let Some(l) = dest.value_of(x.as_str()) {
+                    if let Some(l) = mv.dest.value_of(x.as_str()) {
                         dest_levels.insert(l);
                     }
-                    posts.insert(*post);
+                    posts.insert(mv.post);
                 }
                 if any && dest_levels.len() == 1 && posts.len() == 1 {
-                    forcing.insert(
+                    forcing.push((
                         x.clone(),
-                        (
-                            dest_levels.into_iter().next().unwrap(),
-                            posts.into_iter().next().unwrap(),
+                        Some(
+                            dest_levels
+                                .into_iter()
+                                .next()
+                                .expect("dest_levels.len() == 1 was just checked"),
                         ),
-                    );
+                    ));
                     added = true;
                 }
             }
             if !added {
-                return forcing;
+                return Minterm::labeled(&forcing).expect("distinct forcing pins");
             }
         }
     }
@@ -1237,15 +1349,14 @@ fn reaches_self(succ: &BTreeMap<Symbol, BTreeSet<Symbol>>, w: &Symbol) -> bool {
     false
 }
 
-/// Are the `(pre-projection, post-value)` samples CONFLICT-FREE over `cols` — no two samples whose
-/// pre-states project equally deliver different values? The drop-loop's sole test: a sample-level
-/// grouping, no BDD quantification.
-fn conflict_free(cols: &[Symbol], samples: &[(Minterm<Symbol>, bool)]) -> bool {
+/// Are the samples CONFLICT-FREE over `cols` — no two samples whose states project equally deliver
+/// different values? The drop-loop's sole test: a sample-level grouping, no BDD quantification.
+fn conflict_free(cols: &[Symbol], samples: &[Sample]) -> bool {
     let mut seen: HashMap<Minterm<Symbol>, bool> = HashMap::new();
-    for (pre, post) in samples {
-        let proj = pre.project_to(cols.iter().map(Symbol::as_str));
-        if let Some(prev) = seen.insert(proj, *post) {
-            if prev != *post {
+    for sample in samples {
+        let proj = sample.state.project_to(cols.iter().map(Symbol::as_str));
+        if let Some(prev) = seen.insert(proj, sample.value) {
+            if prev != sample.value {
                 return false;
             }
         }
@@ -1263,7 +1374,7 @@ fn conflict_free(cols: &[Symbol], samples: &[(Minterm<Symbol>, bool)]) -> bool {
 /// could legally keep `sela1`).
 fn drop_loop_columns(
     header: &[Symbol],
-    samples: &[(Minterm<Symbol>, bool)],
+    samples: &[Sample],
     inputs_set: &BTreeSet<&str>,
     fold_eligible: &BTreeSet<Symbol>,
 ) -> Vec<Symbol> {
@@ -1303,16 +1414,17 @@ fn synth_node_captures<B: Brand, C: ManagerCell>(
     fold_eligible: &BTreeSet<Symbol>,
     inputs_set: &BTreeSet<&str>,
     inputs: &[Symbol],
-    clock_edges: &[(Symbol, Vec<(bool, Edge)>)],
+    clock_edges: &[ClockEdges],
     agg: &CandAgg,
 ) -> Synthesised {
-    let clocks: Vec<Symbol> = clock_edges.iter().map(|(c, _)| c.clone()).collect();
+    let clocks: Vec<Symbol> = clock_edges.iter().map(|ce| ce.clock.clone()).collect();
 
     // Capture per clock (input-pin order), per active edge (Rise first). The uniform header is the inputs
     // minus THAT capture's clock, then every candidate signal name; any OTHER clock stays as a level
     // column. The drop-loop then sheds the columns emission does not need.
-    let mut captures: Vec<(Symbol, Edge, StateRegions)> = Vec::new();
-    for (clock, edges) in clock_edges {
+    let mut captures: Vec<Capture> = Vec::new();
+    for ce in clock_edges {
+        let clock = &ce.clock;
         let header: Vec<Symbol> = inputs
             .iter()
             .filter(|p| p.as_str() != clock.as_str())
@@ -1320,16 +1432,25 @@ fn synth_node_captures<B: Brand, C: ManagerCell>(
             .chain(candidates.iter().cloned())
             .collect();
 
-        for (is_rise, edge) in edges {
+        for &edge in &ce.directions {
+            let active = ActiveEdge {
+                clock: PinEdge {
+                    pin: clock.clone(),
+                    edge,
+                },
+            };
             let samples = agg
                 .captures
-                .get(&(clock.clone(), *is_rise))
+                .get(&active)
                 .map(|c| c.samples.as_slice())
                 .unwrap_or(&[]);
             let cols = drop_loop_columns(&header, samples, inputs_set, fold_eligible);
             let sr = synth_capture(builder, &cols, samples)
                 .expect("the uniform header is conflict-free, so no dropped subset conflicts");
-            captures.push((clock.clone(), *edge, sr));
+            captures.push(Capture {
+                clock: active.clock,
+                regions: sr,
+            });
         }
     }
 
@@ -1341,7 +1462,7 @@ fn synth_node_captures<B: Brand, C: ManagerCell>(
     // reset keeps its gating clock pinned to the forcing level (`CLK*R`).
     let off_edge = synth_off_edge(builder, inputs, &clocks, &agg.stable);
 
-    (captures, off_edge)
+    Synthesised { captures, off_edge }
 }
 
 /// The three-valued phase classification of a projection's observed values.
@@ -1365,21 +1486,20 @@ fn phase_class(vals: &[bool]) -> Option<Phase> {
     }
 }
 
-/// Build the BDD of a fully/partly-fixed minterm as a cube (AND of its fixed literals; don't-cares
-/// skipped). Mirrors the `regions.rs` reconstruction idiom.
-fn cube_bdd<B: Brand, C: ManagerCell>(
+/// The BDD of a set of sampled points, each point an ON-set cube of one cover that
+/// [`BddBuilder::build_cover`] then builds in a single call: a point fixing no variable is the
+/// constant `true`, and no points at all is `false` — a region nothing witnessed is empty.
+fn points_bdd<B: Brand, C: ManagerCell>(
     builder: &BddBuilder<B, C>,
-    m: &Minterm<Symbol>,
+    points: impl IntoIterator<Item = Minterm<Symbol>>,
 ) -> Bdd<B, C> {
-    let mut p = builder.constant(true);
-    for (v, val) in m.vars().iter().zip(m.iter()) {
-        match val {
-            Some(true) => p = p.and(&builder.var(v.as_str())),
-            Some(false) => p = p.and(&!&builder.var(v.as_str())),
-            None => {}
-        }
-    }
-    p
+    let cover: Cover<Symbol, Anonymous> = Cover::from_cubes(
+        CoverType::F,
+        points
+            .into_iter()
+            .map(|p| Cube::new(p, OutputSet::anonymous(&[true]), CubeType::F)),
+    );
+    builder.build_cover(&cover)
 }
 
 /// The support of the given BDDs, restricted to and ordered by `header` (mirrors `regions.rs`'s
@@ -1396,9 +1516,17 @@ fn support_in_header<B: Brand, C: ManagerCell>(
         .collect()
 }
 
-/// Assemble a [`StateRegions`] from an on/off region-BDD pair over `header`, reusing the `regions.rs`
-/// cover pipeline so the emitted cubes are byte-compatible. `hold_bdd` is the quiescent gap (empty for a
-/// total capture).
+/// Assemble a [`StateRegions`] from an on/off region-BDD pair over `header`, going through the same
+/// `regions.rs` cover pipeline a signal's regions go through, so a capture's regions are derived the same
+/// way as a signal's. `hold_bdd` is the quiescent gap (empty for a total capture).
+///
+/// [`StateRegions::hysteretic`] is `true` by construction. Every region set assembled here is a capture
+/// or an off-edge of an edge register — a node whose active-edge set is non-empty, or a register the
+/// read-gate factorisation minted from one — and an edge register carries its delivered value across the
+/// whole phase between two active edges. Holding a value that no current input determines IS being a
+/// state variable, so the node emits a `statetable` rather than a combinational `function`. That stands
+/// whatever the hold region looks like: a total capture leaves `hold` empty and is hysteretic all the
+/// same, exactly as cross-coupled emergent memory is.
 fn regions_from<B: Brand, C: ManagerCell>(
     on_bdd: &Bdd<B, C>,
     off_bdd: &Bdd<B, C>,
@@ -1406,21 +1534,18 @@ fn regions_from<B: Brand, C: ManagerCell>(
     header: &[Symbol],
 ) -> StateRegions {
     let cols = support_in_header(&[on_bdd, off_bdd], header);
-    let on_cover = regions::minimise(regions::f_side(
+    let on = regions::minimise(regions::f_side(
         &on_bdd.cover_over_fr(cols.iter().map(Symbol::as_str)),
     ));
-    let off_cover = regions::minimise(regions::f_side(
+    let off = regions::minimise(regions::f_side(
         &off_bdd.cover_over_fr(cols.iter().map(Symbol::as_str)),
     ));
-    let hold_cover = regions::minimise_bdd(hold_bdd);
+    let hold = regions::minimise_bdd(hold_bdd);
     StateRegions {
-        on: regions::region_cubes(&on_cover, &cols),
-        off: regions::region_cubes(&off_cover, &cols),
-        hold: regions::region_cubes(&hold_cover, &cols),
         cols,
-        on_cover,
-        off_cover,
-        hold_cover,
+        on,
+        off,
+        hold,
         hysteretic: true,
     }
 }
@@ -1434,7 +1559,7 @@ fn cofactor_capture<B: Brand, C: ManagerCell>(
     sr: &StateRegions,
     pass: &Minterm<Symbol>,
 ) -> StateRegions {
-    let on = builder.build_cover(&sr.on_cover).restrict_to(pass);
+    let on = builder.build_cover(&sr.on).restrict_to(pass);
     let off = !&on;
     let hold = builder.constant(false);
     let header: Vec<Symbol> = sr
@@ -1454,8 +1579,8 @@ fn cofactor_off_edge<B: Brand, C: ManagerCell>(
     sr: &StateRegions,
     pass: &Minterm<Symbol>,
 ) -> StateRegions {
-    let on = builder.build_cover(&sr.on_cover).restrict_to(pass);
-    let off = builder.build_cover(&sr.off_cover).restrict_to(pass);
+    let on = builder.build_cover(&sr.on).restrict_to(pass);
+    let off = builder.build_cover(&sr.off).restrict_to(pass);
     let hold = !&on.or(&off);
     let header: Vec<Symbol> = sr
         .cols
@@ -1466,8 +1591,8 @@ fn cofactor_off_edge<B: Brand, C: ManagerCell>(
     regions_from(&on, &off, &hold, &header)
 }
 
-/// Synthesise a capture region from its `(pre-state, post-value)` samples over `header`. The witnessed
-/// on-samples are the ON-set, the witnessed off-samples the OFF-set and the unwitnessed remainder a
+/// Synthesise a capture region from its samples over `header`. The witnessed on-samples are the ON-set,
+/// the witnessed off-samples the OFF-set and the unwitnessed remainder a
 /// don't-care set: the capture is the ON-set generalised (incompletely-specified minimisation) so it
 /// generalises past the reachable pre-states to the underlying function — reachability need not cover
 /// every projection for the cover to land on the true capture. The generalised on-set is total, its off
@@ -1478,18 +1603,11 @@ fn cofactor_off_edge<B: Brand, C: ManagerCell>(
 fn synth_capture<B: Brand, C: ManagerCell>(
     builder: &BddBuilder<B, C>,
     header: &[Symbol],
-    samples: &[(Minterm<Symbol>, bool)],
+    samples: &[Sample],
 ) -> Option<StateRegions> {
-    let mut on_pts = builder.constant(false);
-    let mut off_pts = builder.constant(false);
-    for (pre, post) in samples {
-        let cube = cube_bdd(builder, &pre.project_to(header.iter().map(Symbol::as_str)));
-        if *post {
-            on_pts = on_pts.or(&cube);
-        } else {
-            off_pts = off_pts.or(&cube);
-        }
-    }
+    let point = |s: &Sample| s.state.project_to(header.iter().map(Symbol::as_str));
+    let on_pts = points_bdd(builder, samples.iter().filter(|s| s.value).map(point));
+    let off_pts = points_bdd(builder, samples.iter().filter(|s| !s.value).map(point));
     if !on_pts.and(&off_pts).is_contradiction() {
         return None; // a projection is both on and off under this header
     }
@@ -1552,51 +1670,53 @@ fn synth_off_edge<B: Brand, C: ManagerCell>(
     builder: &BddBuilder<B, C>,
     header_off: &[Symbol],
     clocks: &[Symbol],
-    stable: &[(Minterm<Symbol>, bool)],
+    stable: &[Sample],
 ) -> StateRegions {
     // Group the stable samples by off-edge projection, then by the clocks' phase vector.
     let mut groups: BTreeMap<Minterm<Symbol>, BTreeMap<Vec<bool>, Vec<bool>>> = BTreeMap::new();
-    'sample: for (state, val) in stable {
+    'sample: for sample in stable {
         let mut phase: Vec<bool> = Vec::with_capacity(clocks.len());
         for c in clocks {
-            match state.value_of(c.as_str()) {
+            match sample.state.value_of(c.as_str()) {
                 Some(b) => phase.push(b),
                 None => continue 'sample, // a keying clock unset ⇒ skip this sample
             }
         }
-        let proj = state.project_to(header_off.iter().map(Symbol::as_str));
+        let proj = sample
+            .state
+            .project_to(header_off.iter().map(Symbol::as_str));
         groups
             .entry(proj)
             .or_default()
             .entry(phase)
             .or_default()
-            .push(*val);
+            .push(sample.value);
     }
 
-    let mut on_pts = builder.constant(false);
-    let mut off_pts = builder.constant(false);
+    let mut on_proj: Vec<Minterm<Symbol>> = Vec::new();
+    let mut off_proj: Vec<Minterm<Symbol>> = Vec::new();
     for (proj, phases) in &groups {
         // The header names the clocks, so a projection carries exactly one phase vector — the classes
         // cannot disagree, and a mixed projection is held.
-        let agreed = phases.values().find_map(|vals| phase_class(vals));
-        let cube = cube_bdd(builder, proj);
-        match agreed {
-            Some(Phase::Forced1) => on_pts = on_pts.or(&cube),
-            Some(Phase::Forced0) => off_pts = off_pts.or(&cube),
+        match phases.values().find_map(|vals| phase_class(vals)) {
+            Some(Phase::Forced1) => on_proj.push(proj.clone()),
+            Some(Phase::Forced0) => off_proj.push(proj.clone()),
             _ => {} // held or unobserved ⇒ hold
         }
     }
+    let on_pts = points_bdd(builder, on_proj);
+    let off_pts = points_bdd(builder, off_proj);
 
     let hold = !&on_pts.or(&off_pts);
     regions_from(&on_pts, &off_pts, &hold, header_off)
 }
 
 /// The node's column set: the first-appearance union of every capture's cols then the off-edge's cols.
-fn capture_cols(captures: &[(Symbol, Edge, StateRegions)], off_edge: &StateRegions) -> Vec<Symbol> {
+fn capture_cols(captures: &[Capture], off_edge: &StateRegions) -> Vec<Symbol> {
     let mut cols: Vec<Symbol> = Vec::new();
     let sources = captures
         .iter()
-        .map(|(_, _, sr)| &sr.cols)
+        .map(|c| &c.regions.cols)
         .chain([&off_edge.cols]);
     for src in sources {
         for s in src {
@@ -1650,12 +1770,20 @@ mod tests {
     /// the delay arcs first, then label against them. Shadowing the glob-imported `super::classify`
     /// keeps every call site in the natural form.
     fn classify<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> EdgeArcs {
-        let (arcs, _) = crate::logic::arcs::derive(m);
+        let arcs = crate::logic::arcs::derive(m).arcs;
         super::classify(m, &arcs)
     }
 
     fn cols_of(sr: &StateRegions) -> Vec<&str> {
         sr.cols.iter().map(Symbol::as_str).collect()
+    }
+
+    /// The distinct levels a region cover's cubes pin `var` to, read by name — a cube that leaves `var`
+    /// unconstrained reads as `None`. How many cubes espresso's minimisation lands on, and in what
+    /// order, is its own choice, so a region over a single column is stated as the set of levels its
+    /// cubes fix that column at.
+    fn pinned(cover: &Cover<Symbol, Anonymous>, var: &str) -> BTreeSet<Option<bool>> {
+        cover.cubes().map(|c| c.inputs().value_of(var)).collect()
     }
 
     fn clocks_of(er: &EdgeCaptures) -> Vec<&str> {
@@ -1677,27 +1805,46 @@ mod tests {
         es.folded.iter().map(Symbol::as_str).collect()
     }
 
-    /// The DISTINCT edge arcs as `(output, clock, clock direction)` tuples, in sorted order. The label
-    /// set keys on the full start context, so several firings of one `(output, clock, direction)` collapse
-    /// to a single tuple here — the test cares which directions are edge, not how many contexts present
-    /// them.
-    fn label_list(es: &EdgeArcs) -> Vec<(&str, &str, Edge)> {
-        let mut v: Vec<(&str, &str, Edge)> = es
+    /// A `PinEdge` built from a plain pin name, for constructing expected labels and captures in
+    /// assertions without spelling out `Symbol::from` at every call site.
+    fn pin(name: &str, edge: Edge) -> PinEdge {
+        PinEdge {
+            pin: Symbol::from(name),
+            edge,
+        }
+    }
+
+    /// One entry of [`label_list`]: the output an edge arc lands on and the clock (with direction) that
+    /// fires it. Drops [`EdgeLabel`]'s start context, so several firings of one `(output, clock)` pair
+    /// collapse to a single `LabelSite` here — the test cares which directions are edge, not how many
+    /// contexts present them.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+    struct LabelSite {
+        output: Symbol,
+        clock: PinEdge,
+    }
+
+    /// The DISTINCT edge arcs as `LabelSite`s, in sorted order.
+    fn label_list(es: &EdgeArcs) -> Vec<LabelSite> {
+        let mut v: Vec<LabelSite> = es
             .labels
             .iter()
-            .map(|l| (l.output.as_str(), l.clock.as_str(), l.clock_edge))
+            .map(|l| LabelSite {
+                output: l.output.clone(),
+                clock: l.clock.clone(),
+            })
             .collect();
         v.sort();
         v.dedup();
         v
     }
 
-    /// The edge arcs carried by one output, as `(clock, clock direction)`.
-    fn labels_of<'a>(es: &'a EdgeArcs, node: &str) -> Vec<(&'a str, Edge)> {
+    /// The edge arcs carried by one output, as `PinEdge`s (clock with direction).
+    fn labels_of(es: &EdgeArcs, node: &str) -> Vec<PinEdge> {
         label_list(es)
             .into_iter()
-            .filter(|(n, _, _)| *n == node)
-            .map(|(_, c, e)| (c, e))
+            .filter(|l| l.output == node)
+            .map(|l| l.clock)
             .collect()
     }
 
@@ -1723,16 +1870,16 @@ mod tests {
         es: &EdgeArcs,
     ) -> BTreeMap<Symbol, Bdd<B, C>> {
         let mut values: BTreeMap<Symbol, Bdd<B, C>> = BTreeMap::new();
-        let Some((_, any)) = m.deltas.first() else {
+        let Some(any) = m.deltas.first() else {
             return values; // no state variables, so nothing was factored out
         };
-        let b = any.builder();
+        let b = any.delta.builder();
         let mut fn_of: BTreeMap<&str, &Bdd<B, C>> = BTreeMap::new();
-        for (n, d) in &m.deltas {
-            fn_of.insert(n.as_str(), d);
+        for coord in &m.deltas {
+            fn_of.insert(coord.signal.as_str(), &coord.delta);
         }
-        for (n, d) in m.combinational_outputs() {
-            fn_of.insert(n.as_str(), d);
+        for coord in m.combinational_outputs() {
+            fn_of.insert(coord.signal.as_str(), &coord.delta);
         }
         let is_machine_node = |name: &Symbol| {
             m.state_set.contains(name.as_str()) || m.cell.outputs.iter().any(|o| &o.name == name)
@@ -1745,7 +1892,7 @@ mod tests {
                 .first()
                 .expect("a derived register carries its reading output");
             let out = &reveal.output;
-            let read = b.build_cover(&reveal.function.on_cover);
+            let read = b.build_cover(&reveal.function.on);
             let sensitive = read
                 .cofactor(d.name.as_str(), true)
                 .xor(&read.cofactor(d.name.as_str(), false));
@@ -1777,7 +1924,7 @@ mod tests {
             // the machine either way, so nothing downstream would notice. Sensitivity must therefore BE
             // this cube: non-empty, and revealing the register nowhere outside it.
             assert!(
-                !gates.is_empty() && sensitive.equivalent_to(&cube_bdd(&b, &released)),
+                !gates.is_empty() && sensitive.equivalent_to(&points_bdd(&b, [released.clone()])),
                 "the read function of {out} must reveal {} on a cube of released gate levels and \
                  nowhere else, released {released:?}",
                 d.name
@@ -1788,6 +1935,24 @@ mod tests {
             values.insert(d.name.clone(), dy.restrict_to(&released));
         }
         values
+    }
+
+    /// One open phase a node's latch tracks: the clock, the level at which it leaves the node
+    /// transparent, and the cover the node equals while that phase holds. `open_at` addresses a
+    /// destination state by `(clock, level)` to find the phase it falls in, if any.
+    struct OpenPhase<'a, B: Brand, C: ManagerCell + Send + Sync> {
+        clock: Symbol,
+        level: bool,
+        cover: &'a Bdd<B, C>,
+    }
+
+    /// The `releases` map's key: the forcing pin being released, and the destination state it settles
+    /// into projected onto the machine's inputs — the address a release's outcome is checked to agree at
+    /// (see clause 4 of [`assert_captures_faithful`]'s replay).
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+    struct ReleaseKey {
+        pin: Symbol,
+        dest: Minterm<Symbol>,
     }
 
     /// Replay-faithfulness harness: prove the emitted edge arcs against the machine's own
@@ -1813,10 +1978,10 @@ mod tests {
         m: &Machine<B, C>,
         es: &EdgeArcs,
     ) {
-        let Some((_, any_delta)) = m.deltas.first() else {
+        let Some(any) = m.deltas.first() else {
             return; // no state variables ⇒ nothing carries a capture
         };
-        let builder = any_delta.builder();
+        let builder = any.delta.builder();
         let inputs = &m.cell.inputs;
 
         // The classifier's own scan context — the transition table and the ELIGIBLE stable states, measured
@@ -1873,18 +2038,20 @@ mod tests {
             };
 
             // The emitted model: one capture cover per arc, plus the clock-inclusive forcing covers.
-            let covers: BTreeMap<Arc, Bdd<B, C>> = r
+            let covers: BTreeMap<ActiveEdge, Bdd<B, C>> = r
                 .captures
                 .iter()
-                .map(|(clock, edge, sr)| {
+                .map(|c| {
                     (
-                        (clock.clone(), *edge == Edge::Rise),
-                        builder.build_cover(&sr.on_cover),
+                        ActiveEdge {
+                            clock: c.clock.clone(),
+                        },
+                        builder.build_cover(&c.regions.on),
                     )
                 })
                 .collect();
-            let forced_on = builder.build_cover(&r.off_edge.on_cover);
-            let forced_off = builder.build_cover(&r.off_edge.off_cover);
+            let forced_on = builder.build_cover(&r.off_edge.on);
+            let forced_off = builder.build_cover(&r.off_edge.off);
             let forced = |s: &Minterm<Symbol>| {
                 if forced_on.evaluate_fast(s) == Some(true) {
                     Some(true)
@@ -1898,27 +2065,32 @@ mod tests {
             // Does some firing of this arc CHANGE the node? The behavioural half of the no-vacuous guard,
             // and the discriminator between a latch CLOSE (change-free: the node already tracks the
             // delivered value through the open phase) and an edge that moves the node.
-            let changes = |(clock, is_rise): &Arc| -> bool {
-                let xi = inputs.iter().position(|p| p == clock).unwrap();
+            let changes = |arc: &ActiveEdge| -> bool {
+                let xi = inputs.iter().position(|p| p == &arc.clock.pin).unwrap();
                 scan.order.iter().enumerate().any(|(si, s)| {
-                    s.value_of(clock.as_str()) == Some(!*is_rise)
+                    s.value_of(arc.clock.pin.as_str()) == Some(!arc.clock.edge.settled_level())
                         && scan.next[si][xi].is_some_and(|ni| value(&scan.order[ni]) != value(s))
                 })
             };
-            let is_transparent =
-                |(clock, is_rise): &Arc| -> bool { phase_transparent(&r.node, clock, !*is_rise) };
+            let is_transparent = |arc: &ActiveEdge| -> bool {
+                phase_transparent(&r.node, &arc.clock.pin, !arc.clock.edge.settled_level())
+            };
 
             // The OPEN phases: a CHANGE-FREE arc whose pre-phase is genuinely transparent is a latch
             // close, and its pre-phase is where the node tracks that arc's cover.
-            let open: Vec<(Symbol, bool, &Bdd<B, C>)> = covers
+            let open: Vec<OpenPhase<'_, B, C>> = covers
                 .keys()
                 .filter(|arc| !changes(arc) && is_transparent(arc))
-                .map(|arc| (arc.0.clone(), !arc.1, &covers[arc]))
+                .map(|arc| OpenPhase {
+                    clock: arc.clock.pin.clone(),
+                    level: !arc.clock.edge.settled_level(),
+                    cover: &covers[arc],
+                })
                 .collect();
             let open_at = |s: &Minterm<Symbol>| {
                 open.iter()
-                    .find(|(clock, level, _)| s.value_of(clock.as_str()) == Some(*level))
-                    .map(|(_, _, cov)| *cov)
+                    .find(|o| s.value_of(o.clock.as_str()) == Some(o.level))
+                    .map(|o| o.cover)
             };
 
             // (1) TRANSPARENCY.
@@ -1943,7 +2115,7 @@ mod tests {
 
             // (2)-(4) the replay. Release outcomes are collected and checked for agreement, never
             // exempted by a declared pin class.
-            let mut releases: BTreeMap<(Symbol, Minterm<Symbol>), Option<bool>> = BTreeMap::new();
+            let mut releases: BTreeMap<ReleaseKey, Option<bool>> = BTreeMap::new();
             for (si, s) in scan.order.iter().enumerate() {
                 for (xi, x) in inputs.iter().enumerate() {
                     let Some(ni) = scan.next[si][xi] else {
@@ -1954,10 +2126,16 @@ mod tests {
                         continue; // an undetermined coordinate at either end: nothing to prove
                     };
                     let got = value(dest);
-                    let rising = s.value_of(x.as_str()) == Some(false);
+                    // The toggle leaves `x` at the complement of the level it started from.
+                    let toggled = ActiveEdge {
+                        clock: PinEdge {
+                            pin: x.clone(),
+                            edge: Edge::from_settled_level(s.value_of(x.as_str()) == Some(false)),
+                        },
+                    };
 
                     // (2) CAPTURE: this toggle is an emitted arc firing from its matching pre-phase.
-                    if let Some(cov) = covers.get(&(x.clone(), rising)) {
+                    if let Some(cov) = covers.get(&toggled) {
                         let want = forced(dest)
                             .map(Some)
                             .unwrap_or_else(|| cov.evaluate_fast(s));
@@ -1966,9 +2144,9 @@ mod tests {
                         }
                         assert_eq!(
                             got, want,
-                            "capture unfaithful: node {node}, clock {x} {} from pre {s:?} settled to \
-                             {dest:?}: observed {got:?} != synthesised capture {want:?}",
-                            if rising { "Rise" } else { "Fall" }
+                            "capture unfaithful: node {node}, clock {x} {:?} from pre {s:?} settled \
+                             to {dest:?}: observed {got:?} != synthesised capture {want:?}",
+                            toggled.clock.edge
                         );
                         continue;
                     }
@@ -1982,16 +2160,16 @@ mod tests {
                     } else if forced(s).is_some() {
                         // A RELEASE from a forcing region: the node re-acquires, which the covers do not
                         // model. Its outcomes must at least AGREE per (pin, destination projection).
-                        let key = (
-                            x.clone(),
-                            dest.project_to(inputs.iter().map(Symbol::as_str)),
-                        );
+                        let key = ReleaseKey {
+                            pin: x.clone(),
+                            dest: dest.project_to(inputs.iter().map(Symbol::as_str)),
+                        };
                         if let Some(prev) = releases.insert(key.clone(), got) {
                             assert_eq!(
                                 prev, got,
                                 "release unfaithful: node {node}, pin {x} into {:?}: {prev:?} != \
                                  {got:?}",
-                                key.1
+                                key.dest
                             );
                         }
                         continue;
@@ -2013,10 +2191,10 @@ mod tests {
             for arc in covers.keys() {
                 assert!(
                     changes(arc) || is_transparent(arc),
-                    "vacuous edge arc: node {node}, clock {} {} never changes the node and its \
+                    "vacuous edge arc: node {node}, clock {} {:?} never changes the node and its \
                      opposite phase is not transparent",
-                    arc.0.as_str(),
-                    if arc.1 { "Rise" } else { "Fall" }
+                    arc.clock.pin.as_str(),
+                    arc.clock.edge
                 );
             }
         }
@@ -2052,11 +2230,7 @@ mod tests {
         // A read-gated output emits its READ FUNCTION (over the factored register and gate pins), not its
         // raw δ — that function must name no folded node, and the output is excluded from the raw-function
         // check (b) below, which would otherwise flag the masters it re-expresses.
-        let read_gated: BTreeSet<&str> = es
-            .derived
-            .iter()
-            .flat_map(|d| d.reads.iter().map(|r| r.output.as_str()))
-            .collect();
+        let read_gated: BTreeSet<&str> = es.factored.iter().map(Symbol::as_str).collect();
         for d in &es.derived {
             for r in &d.reads {
                 for col in &r.function.cols {
@@ -2081,11 +2255,11 @@ mod tests {
             .chain(read_gated.iter().copied())
             .collect();
         let mut fn_of: BTreeMap<&str, &Bdd<B, C>> = BTreeMap::new();
-        for (n, d) in &m.deltas {
-            fn_of.insert(n.as_str(), d);
+        for coord in &m.deltas {
+            fn_of.insert(coord.signal.as_str(), &coord.delta);
         }
-        for (n, d) in m.combinational_outputs() {
-            fn_of.insert(n.as_str(), d);
+        for coord in m.combinational_outputs() {
+            fn_of.insert(coord.signal.as_str(), &coord.delta);
         }
         let candidates = output_names
             .iter()
@@ -2119,10 +2293,10 @@ mod tests {
         m: &Machine<B, C>,
         es: &EdgeArcs,
     ) {
-        let Some((_, any)) = m.deltas.first() else {
+        let Some(any) = m.deltas.first() else {
             return;
         };
-        let b = any.builder();
+        let b = any.delta.builder();
         let derived = derived_values(m, es);
         for d in &es.derived {
             let reg_value = |s: &Minterm<Symbol>| -> Option<bool> {
@@ -2136,7 +2310,7 @@ mod tests {
                 function: sr,
             } in &d.reads
             {
-                let read = b.build_cover(&sr.on_cover);
+                let read = b.build_cover(&sr.on);
                 let mut exercised = false;
                 for s in &m.explored.order {
                     let (Some(rv), Some(yv)) = (reg_value(s), m.output_value(o.as_str(), s)) else {
@@ -2200,25 +2374,31 @@ GCLK = "enA*CLKA+enB*CLKB"
 
     #[test]
     fn edge_dff_floor() {
-        with_machine!(DFF_TOML, |_b, _a, _m2, m| {
+        with_machine!(DFF_TOML, |b, _a, _m2, m| {
             let es = classify(&m);
             assert_captures_faithful(&m, &es);
             assert_eq!(node_list(&es), ["Q"], "only Q is a register");
             let q = reg(&es, "Q");
             assert_eq!(clocks_of(q), ["CLK"]);
             assert_eq!(q.captures.len(), 1);
-            let (clk, edge, cap) = &q.captures[0];
-            assert_eq!(clk, "CLK");
-            assert_eq!(*edge, Edge::Rise);
+            let capture = &q.captures[0];
+            let cap = &capture.regions;
+            assert_eq!(capture.clock.pin, "CLK");
+            assert_eq!(capture.clock.edge, Edge::Rise);
             assert_eq!(cols_of(cap), ["D"]);
-            assert_eq!(cap.on, vec![vec![Some(true)]]);
-            assert_eq!(cap.off, vec![vec![Some(false)]]);
-            assert!(cap.hold.is_empty(), "capture is total, empty hold");
-            // off_edge: empty cols, universal hold.
+            // Over that single column the capture IS D: every on cube pins D high, every off cube pins
+            // D low, and a total capture leaves no gap between the two.
+            assert_eq!(pinned(&cap.on, "D"), BTreeSet::from([Some(true)]));
+            assert_eq!(pinned(&cap.off, "D"), BTreeSet::from([Some(false)]));
+            assert_eq!(cap.hold.num_cubes(), 0, "capture is total, empty hold");
+            // off_edge: no column, nothing set and nothing cleared, so the hold is every assignment.
             assert!(q.off_edge.cols.is_empty());
-            assert!(q.off_edge.on.is_empty());
-            assert!(q.off_edge.off.is_empty());
-            assert_eq!(q.off_edge.hold, vec![vec![]], "universal hold");
+            assert_eq!(q.off_edge.on.num_cubes(), 0);
+            assert_eq!(q.off_edge.off.num_cubes(), 0);
+            assert!(
+                b.build_cover(&q.off_edge.hold).is_tautology(),
+                "the off-edge hold is universal — between two rising edges Q holds whatever D does"
+            );
             assert_eq!(q.cols.iter().map(Symbol::as_str).collect::<Vec<_>>(), ["D"]);
             assert_eq!(folded_list(&es), ["M"], "master M folded");
         });
@@ -2241,7 +2421,7 @@ GCLK = "enA*CLKA+enB*CLKB"
                 let r = reg(&es, name);
                 assert_eq!(clocks_of(r), [clock], "{name}");
                 assert_eq!(r.captures.len(), 1, "{name}");
-                assert_eq!(r.captures[0].1, Edge::Fall, "{name}");
+                assert_eq!(r.captures[0].clock.edge, Edge::Fall, "{name}");
             }
             // Each synchroniser's three latches are two flops in series: sela1/selb1 fold as the
             // first flop's internal master, sela2/selb2 capture on the rising edge and enA/enB on
@@ -2250,7 +2430,7 @@ GCLK = "enA*CLKA+enB*CLKB"
                 let r = reg(&es, name);
                 assert_eq!(clocks_of(r), [clock], "{name} is single-clock");
                 assert_eq!(r.captures.len(), 1, "{name}");
-                assert_eq!(r.captures[0].1, Edge::Rise, "{name}");
+                assert_eq!(r.captures[0].clock.edge, Edge::Rise, "{name}");
             }
             let mut folded = folded_list(&es);
             folded.sort();
@@ -2414,8 +2594,8 @@ Q = "!R*(CLK*M + !CLK*Q)"
                 let q = reg(&es, "Q");
                 assert_eq!(clocks_of(q), ["CLK"], "{label}");
                 assert_eq!(q.captures.len(), 1, "{label}: rise only");
-                assert_eq!(q.captures[0].1, Edge::Rise, "{label}");
-                let off = builder.build_cover(&q.off_edge.off_cover);
+                assert_eq!(q.captures[0].clock.edge, Edge::Rise, "{label}");
+                let off = builder.build_cover(&q.off_edge.off);
                 let want = builder.var("CLK").and(&builder.var("R"));
                 assert!(
                     off.equivalent_to(&want),
@@ -2433,7 +2613,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
             assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             // off_edge.off is forced-0 exactly where R is asserted.
-            let off = builder.build_cover(&q.off_edge.off_cover);
+            let off = builder.build_cover(&q.off_edge.off);
             let r = builder.var("R");
             assert!(off.equivalent_to(&r), "off_edge.off must cover R");
         });
@@ -2448,10 +2628,10 @@ Q = "!R*(CLK*M + !CLK*Q)"
             assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             assert_eq!(q.captures.len(), 1);
-            let (_clk, edge, cap) = &q.captures[0];
-            assert_eq!(*edge, Edge::Rise);
+            assert_eq!(q.captures[0].clock.edge, Edge::Rise);
+            let cap = &q.captures[0].regions;
             // capture == !D, recorded verbatim (no special-casing).
-            let on = builder.build_cover(&cap.on_cover);
+            let on = builder.build_cover(&cap.on);
             assert!(on.equivalent_to(&!&builder.var("D")), "capture must be !D");
             assert_eq!(folded_list(&es), ["M"]);
         });
@@ -2463,7 +2643,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
             let es = classify(&m);
             assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
-            assert_eq!(q.captures[0].1, Edge::Rise);
+            assert_eq!(q.captures[0].clock.edge, Edge::Rise);
             // M is an output master (never folded); the slave Q is recognised. The cover PREFERS the input
             // D over the internal M (cover columns prefer inputs), and D coincides with M over the CLK=0
             // capture domain — where the rising edge samples the master — so `D` and `M` are the same
@@ -2473,21 +2653,20 @@ Q = "!R*(CLK*M + !CLK*Q)"
                 "an output master is not folded"
             );
             assert_eq!(
-                cols_of(&q.captures[0].2),
+                cols_of(&q.captures[0].regions),
                 ["D"],
                 "the capture prefers input D"
             );
             // Over the CLK=0 (capture) domain of the reachable states, the cover (D) equals the master M.
-            let mut reach0 = builder.constant(false);
-            for state in m
-                .explored
-                .order
-                .iter()
-                .filter(|s| s.value_of("CLK") == Some(false))
-            {
-                reach0 = reach0.or(&super::cube_bdd(&builder, state));
-            }
-            let on = builder.build_cover(&q.captures[0].2.on_cover).and(&reach0);
+            let reach0 = super::points_bdd(
+                &builder,
+                m.explored
+                    .order
+                    .iter()
+                    .filter(|s| s.value_of("CLK") == Some(false))
+                    .cloned(),
+            );
+            let on = builder.build_cover(&q.captures[0].regions.on).and(&reach0);
             let want = builder.var("M").and(&reach0);
             assert!(
                 on.equivalent_to(&want),
@@ -2539,22 +2718,22 @@ Q = "!R*(CLK*M + !CLK*Q)"
             assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             let mm = reg(&es, "M");
-            assert_eq!(q.captures[0].1, Edge::Rise);
-            assert_eq!(mm.captures[0].1, Edge::Fall);
+            assert_eq!(q.captures[0].clock.edge, Edge::Rise);
+            assert_eq!(mm.captures[0].clock.edge, Edge::Fall);
             let want = (!&builder.var("R")).and(&!&builder.var("Q"));
             // Q's rising capture is the toggle !R*!Q over cols [R, Q] (the self-referential ring closes on
             // Q, not the folded/dropped master).
-            assert_eq!(cols_of(&q.captures[0].2), ["R", "Q"]);
-            let q_on = builder.build_cover(&q.captures[0].2.on_cover);
+            assert_eq!(cols_of(&q.captures[0].regions), ["R", "Q"]);
+            let q_on = builder.build_cover(&q.captures[0].regions.on);
             assert!(
                 q_on.equivalent_to(&want),
                 "Q captures !R*!Q (the toggle ring)"
             );
             // M's falling capture is the same toggle over the same cols: at the pre-fall (CLK=1) states
             // M equals Q, so capturing !M is capturing !Q.
-            let mcap = &mm.captures[0].2;
+            let mcap = &mm.captures[0].regions;
             assert_eq!(cols_of(mcap), ["R", "Q"]);
-            let m_on = builder.build_cover(&mcap.on_cover);
+            let m_on = builder.build_cover(&mcap.on);
             assert!(
                 m_on.equivalent_to(&want),
                 "M captures !R*!Q (=!R*!M at the pre-fall states), inverting, no special-casing"
@@ -2590,10 +2769,10 @@ Qn = "!( !(!M*CLK) * Q )"
             assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             let qn = reg(&es, "Qn");
-            assert_eq!(q.captures[0].1, Edge::Rise);
-            assert_eq!(qn.captures[0].1, Edge::Rise);
-            let q_on = builder.build_cover(&q.captures[0].2.on_cover);
-            let qn_on = builder.build_cover(&qn.captures[0].2.on_cover);
+            assert_eq!(q.captures[0].clock.edge, Edge::Rise);
+            assert_eq!(qn.captures[0].clock.edge, Edge::Rise);
+            let q_on = builder.build_cover(&q.captures[0].regions.on);
+            let qn_on = builder.build_cover(&qn.captures[0].regions.on);
             assert!(q_on.equivalent_to(&builder.var("D")), "Q captures D");
             assert!(qn_on.equivalent_to(&!&builder.var("D")), "Qn captures !D");
             assert_eq!(folded_list(&es), ["M"], "shared master M folded once");
@@ -2621,10 +2800,10 @@ Q = "CLK*L1 + !CLK*L2"
             assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             assert_eq!(q.captures.len(), 2, "dual edge");
-            assert_eq!(q.captures[0].1, Edge::Rise);
-            assert_eq!(q.captures[1].1, Edge::Fall);
-            for (_, _, cap) in &q.captures {
-                let on = builder.build_cover(&cap.on_cover);
+            assert_eq!(q.captures[0].clock.edge, Edge::Rise);
+            assert_eq!(q.captures[1].clock.edge, Edge::Fall);
+            for capture in &q.captures {
+                let on = builder.build_cover(&capture.regions.on);
                 assert!(on.equivalent_to(&builder.var("D")), "each edge captures D");
             }
             let mut folded = folded_list(&es);
@@ -2665,7 +2844,10 @@ L3 = "!K3*L2 + K3*L3"
             // The two-birth gate types the `K1->L3` arc EDGE (the generator two hops away, through the open
             // cross-clock latches).
             assert!(
-                label_list(&es).contains(&("L3", "K1", Edge::Fall)),
+                label_list(&es).contains(&LabelSite {
+                    output: Symbol::from("L3"),
+                    clock: pin("K1", Edge::Fall)
+                }),
                 "K1->L3 must type edge under the two-birth gate: {:?}",
                 label_list(&es)
             );
@@ -2678,8 +2860,8 @@ L3 = "!K3*L2 + K3*L3"
                     .combinational
                     .iter()
                     .chain(&m.deltas)
-                    .find(|(s, _)| s.as_str() == n)
-                    .map(|(_, d)| d)
+                    .find(|c| c.signal.as_str() == n)
+                    .map(|c| &c.delta)
                     .expect("a delta for the queried node");
                 f.variables()
                     .filter(|v| m.state_set.contains(v))
@@ -2743,9 +2925,9 @@ Y = "!(T*A)"
             let yst = reg(&es, "Y_st");
             assert_eq!(yst.captures.len(), 2, "dual edge");
             let nd = !&builder.var("D");
-            for (_, _, cap) in &yst.captures {
+            for capture in &yst.captures {
                 assert!(
-                    builder.build_cover(&cap.on_cover).equivalent_to(&nd),
+                    builder.build_cover(&capture.regions.on).equivalent_to(&nd),
                     "each edge captures !D"
                 );
             }
@@ -2765,7 +2947,7 @@ Y = "!(T*A)"
             // arcs render `-type combinational`.
             assert_eq!(
                 labels_of(&es, "Y"),
-                [("CLK", Edge::Rise), ("CLK", Edge::Fall)]
+                [pin("CLK", Edge::Rise), pin("CLK", Edge::Fall)]
             );
         });
     }
@@ -2814,9 +2996,9 @@ Y = "!((CLK*L1 + !CLK*L2)*A) + B"
             let yst = reg(&es, "Y_st");
             assert_eq!(yst.captures.len(), 2, "dual edge");
             let nd = !&builder.var("D");
-            for (_, _, cap) in &yst.captures {
+            for capture in &yst.captures {
                 assert!(
-                    builder.build_cover(&cap.on_cover).equivalent_to(&nd),
+                    builder.build_cover(&capture.regions.on).equivalent_to(&nd),
                     "each edge captures !D"
                 );
             }
@@ -2834,7 +3016,7 @@ Y = "!((CLK*L1 + !CLK*L2)*A) + B"
             let gate_a = builder.var("A");
             let gate_b = builder.var("B");
             let expected_read = builder.var("Y_st").or(&!&gate_a).or(&gate_b);
-            let read = builder.build_cover(&es.derived[0].reads[0].function.on_cover);
+            let read = builder.build_cover(&es.derived[0].reads[0].function.on);
             assert!(read.equivalent_to(&expected_read), "Y reads Y_st + !A + B");
 
             // Both gates are released — the cube is `A*!B` — so the register resolves to `!M`.
@@ -2850,7 +3032,7 @@ Y = "!((CLK*L1 + !CLK*L2)*A) + B"
 
             assert_eq!(
                 labels_of(&es, "Y"),
-                [("CLK", Edge::Rise), ("CLK", Edge::Fall)]
+                [pin("CLK", Edge::Rise), pin("CLK", Edge::Fall)]
             );
         });
     }
@@ -2872,8 +3054,14 @@ Y = "!((CLK*L1 + !CLK*L2)*A) + B"
 
             // The two CLK->Y arcs type EDGE under the two-birth gate (the internal-node birth propagates
             // onward to Y). This is the teeth arc.
-            assert!(label_list(&es).contains(&("Y", "CLK", Edge::Rise)));
-            assert!(label_list(&es).contains(&("Y", "CLK", Edge::Fall)));
+            assert!(label_list(&es).contains(&LabelSite {
+                output: Symbol::from("Y"),
+                clock: pin("CLK", Edge::Rise)
+            }));
+            assert!(label_list(&es).contains(&LabelSite {
+                output: Symbol::from("Y"),
+                clock: pin("CLK", Edge::Fall)
+            }));
 
             // `T` keeps its native edge register; `Y` is factored to a read over it; nothing minted.
             assert!(
@@ -2938,7 +3126,7 @@ Y = "!(Q*A)"
             assert_no_dropped_references(&m, &es);
 
             let q = reg(&es, "Q");
-            let off = builder.build_cover(&q.off_edge.off_cover);
+            let off = builder.build_cover(&q.off_edge.off);
             assert!(
                 off.equivalent_to(&builder.var("R")),
                 "Q keeps its off-edge R clear"
@@ -2988,8 +3176,8 @@ Y = "!(Q*A)"
                 .iter_mut()
                 .find(|ec| ec.node == name)
                 .expect("the minted register carries edge captures");
-            let good = builder.build_cover(&er.captures[0].2.on_cover);
-            er.captures[0].2.on_cover = regions::minimise_bdd(&!&good);
+            let good = builder.build_cover(&er.captures[0].regions.on);
+            er.captures[0].regions.on = regions::minimise_bdd(&!&good);
             assert!(
                 fails(|| assert_captures_faithful(&m, &es)),
                 "corrupting a derived register's capture cover must make the replay harness fail"
@@ -3001,8 +3189,8 @@ Y = "!(Q*A)"
         with_machine!(BDET_TOML, |builder, _a, _m2, m| {
             let mut es = classify(&m);
             let sr = &mut es.derived[0].reads[0].function;
-            let good = builder.build_cover(&sr.on_cover);
-            sr.on_cover = regions::minimise_bdd(&!&good);
+            let good = builder.build_cover(&sr.on);
+            sr.on = regions::minimise_bdd(&!&good);
             assert!(
                 fails(|| assert_reads_faithful(&m, &es)),
                 "corrupting a derived register's read function must make the read harness fail"
@@ -3017,8 +3205,7 @@ Y = "!(Q*A)"
         with_machine!(BDET_TOML, |builder, _a, _m2, m| {
             let mut es = classify(&m);
             let name = es.derived[0].name.clone();
-            es.derived[0].reads[0].function.on_cover =
-                regions::minimise_bdd(&builder.var(name.as_str()));
+            es.derived[0].reads[0].function.on = regions::minimise_bdd(&builder.var(name.as_str()));
             assert!(
                 fails(|| {
                     derived_values(&m, &es);
@@ -3136,7 +3323,7 @@ Q = "!(R*G)*(CLK*M + !CLK*Q)"
             let q = reg(&es, "Q");
             assert_eq!(clocks_of(q), ["CLK"]);
             // The conjunctive clear is carried faithfully: off_edge.off is forced-0 exactly where R*G.
-            let off = builder.build_cover(&q.off_edge.off_cover);
+            let off = builder.build_cover(&q.off_edge.off);
             let rg = builder.var("R").and(&builder.var("G"));
             assert!(off.equivalent_to(&rg), "off_edge.off must cover R*G");
             // D (captured value) and the clear's R, G all survive as register columns.
@@ -3194,15 +3381,15 @@ Q = "!R*(CLK*M + !CLK*Q)"
             let q = reg(&es, "Q");
             assert_eq!(clocks_of(q), ["CLK"]);
             assert_eq!(q.captures.len(), 1);
-            assert_eq!(q.captures[0].1, Edge::Rise);
-            let off = builder.build_cover(&q.off_edge.off_cover);
+            assert_eq!(q.captures[0].clock.edge, Edge::Rise);
+            let off = builder.build_cover(&q.off_edge.off);
             let r = builder.var("R");
             assert!(off.equivalent_to(&r), "off_edge.off must cover R");
             // The transparent master M is a latch on CLK — no edge arc — and folds, exactly as in
             // MOR: declaring R a clock changes nothing behavioural. Q's capture generalises past
             // the folded master to !R*D.
             assert!(folded_list(&es).contains(&"M"), "the master folds");
-            let on = builder.build_cover(&q.captures[0].2.on_cover);
+            let on = builder.build_cover(&q.captures[0].regions.on);
             let want = (!&r).and(&builder.var("D"));
             assert!(on.equivalent_to(&want), "capture is !R*D");
             let cols = q.cols.iter().map(Symbol::as_str).collect::<Vec<_>>();
@@ -3214,7 +3401,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
             // when R is not declared a clock (SYNCR). Only CLK's rise is an edge arc on Q.
             assert_eq!(
                 labels_of(&es, "Q"),
-                [("CLK", Edge::Rise)],
+                [pin("CLK", Edge::Rise)],
                 "declaring R a clock must not label its level arcs"
             );
         });
@@ -3325,15 +3512,16 @@ GCLK = "CLK*EL"
     }
 
     /// PERMANENT guard on the CRITICAL INVARIANT: behavioural edge classification re-expresses
-    /// already-explored behaviour and must change ONLY `edge` — every other `AnalysedCell` field (the
-    /// exploration, prevector/vector and hazard outputs) is byte-for-byte identical whether classification
-    /// is on or off.
+    /// already-explored behaviour and must change ONLY `edge` — every other `AnalysedCell` field holds the
+    /// same records whether classification is on or off, compared by what identifies each record — the
+    /// state a record was measured at (`start`/`end`/`prevector`/`levels`) is a walk's own free
+    /// representative and is excluded, as each comparison below states.
     ///
     /// The invariant holds BY CONSTRUCTION: `classify` takes `&Machine` read-only, mutates nothing, and the
     /// annotation may carry emission-time derived registers (the read-gate factorisation) that are
     /// functions of already-explored state, never new state variables. This test additionally proves the
     /// flag-gating is PURE — when opted out (`no_edge_collapse`) the classify() call is skipped and the
-    /// annotation is the byte-identical Default, with every other field untouched. `BDET`/`DETP` exercise
+    /// annotation is the plain `Default`, with every other field untouched. `BDET`/`DETP` exercise
     /// the factorisation path: only `edge` differs there too.
     #[test]
     fn edge_classification_changes_only_the_edge_annotation() {
@@ -3341,25 +3529,47 @@ GCLK = "CLK*EL"
             let off = analyse_toggled(src, true); // classification suppressed
             let on = analyse_toggled(src, false); // classification active
 
-            // Every exploration-derived field is identical (Debug-string equality across all of them
-            // except `edge`).
-            macro_rules! unchanged {
-                ($field:ident) => {
+            assert_eq!(
+                off.name, on.name,
+                "edge classification changed AnalysedCell::name"
+            );
+            assert_eq!(
+                off.inputs, on.inputs,
+                "edge classification changed AnalysedCell::inputs"
+            );
+            // `AnalysedOutput` carries no `PartialEq`, so a signal list is compared signal for signal
+            // over the fields that carry its function, as the exposure-pair check in `model.rs` does.
+            let same_signals = |a: &[crate::model::AnalysedOutput],
+                                b: &[crate::model::AnalysedOutput],
+                                field: &str| {
+                assert_eq!(
+                    a.len(),
+                    b.len(),
+                    "edge classification changed how many signals AnalysedCell::{field} holds"
+                );
+                for (x, y) in a.iter().zip(b) {
+                    let name = &x.name;
+                    assert_eq!(x.name, y.name, "edge classification changed a {field} name");
                     assert_eq!(
-                        format!("{:?}", off.$field),
-                        format!("{:?}", on.$field),
-                        concat!(
-                            "edge classification changed AnalysedCell::",
-                            stringify!($field)
-                        ),
+                        x.expr, y.expr,
+                        "edge classification changed {field} {name}'s expression"
                     );
-                };
-            }
-            unchanged!(name);
-            unchanged!(inputs);
-            unchanged!(outputs);
-            unchanged!(internals);
-            unchanged!(async_pins);
+                    assert_eq!(
+                        x.vars, y.vars,
+                        "edge classification changed {field} {name}'s support"
+                    );
+                    assert_eq!(
+                        x.feedback, y.feedback,
+                        "edge classification changed {field} {name}'s feedback"
+                    );
+                }
+            };
+            same_signals(&off.outputs, &on.outputs, "outputs");
+            same_signals(&off.internals, &on.internals, "internals");
+            assert_eq!(
+                off.async_pins, on.async_pins,
+                "edge classification changed AnalysedCell::async_pins"
+            );
             // Arcs and hidden arcs by what they characterise — the pins and the direction — rather
             // than by the state the run measured them at. `start`, `end`, `prevector` and `levels`
             // name a representative of that arc's context, and a walk that claims a level in parallel
@@ -3371,8 +3581,8 @@ GCLK = "CLK*EL"
                     .map(|a| {
                         format!(
                             "{:?} {} {} {}",
-                            a.edge,
-                            a.output,
+                            a.output.edge,
+                            a.output.pin,
                             a.related,
                             c.async_pins.contains(&a.related)
                         )
@@ -3385,7 +3595,7 @@ GCLK = "CLK*EL"
                 let mut v: Vec<String> = c
                     .hidden_arcs
                     .iter()
-                    .map(|h| format!("{:?} {}", h.edge, h.pin))
+                    .map(|h| format!("{:?} {}", h.pin.edge, h.pin.pin))
                     .collect();
                 v.sort();
                 v
@@ -3421,18 +3631,19 @@ GCLK = "CLK*EL"
             // sampled at the probed state and name the same free representative the arcs do, and
             // `condition` is a FULL input assignment, so it carries the inputs outside the race at
             // whatever the probed state held them — the racing pins and their edges are what the
-            // hazard is. `settled` is a group-projected set the detector sorts, so it stays. Race-cause
-            // hazards only: this equivalence check has never compared pulse-cause ones.
+            // hazard is. `settled` is a set of alternatives, canonicalised here before the compare.
+            // Input-cause hazards only, a lone toggle's as much as a pair's: this equivalence check has
+            // never compared pulse-cause ones.
             let hazard_shapes = |c: &crate::model::AnalysedCell| {
                 let mut v: Vec<String> = c
                     .hazards
                     .iter()
-                    .filter(|h| matches!(h.cause, Cause::Race { .. }))
+                    .filter(|h| matches!(h.cause, Cause::Toggle { .. } | Cause::Race { .. }))
                     .map(|h| {
-                        format!(
-                            "{:?} {:?} {:?} {:?}",
-                            h.cause, h.outcome, h.group, h.settled
-                        )
+                        let mut landed: Vec<String> =
+                            h.settled.iter().map(|m| format!("{m:?}")).collect();
+                        landed.sort();
+                        format!("{:?} {:?} {:?} {landed:?}", h.cause, h.outcome, h.group)
                     })
                     .collect();
                 v.sort();
@@ -3443,9 +3654,9 @@ GCLK = "CLK*EL"
                     .constraints
                     .iter()
                     .map(|k| {
-                        // The kind carries the other pin of a separation and the edge it makes, so the
-                        // pin the constraint constrains and its own edge complete the identity.
-                        format!("{:?} {} {:?}", k.kind, k.pin, k.pin_edge)
+                        // The kind carries the other pin of a separation with the edge it makes, so
+                        // the pin the constraint constrains completes the identity.
+                        format!("{:?} {}", k.kind, k.pin)
                     })
                     .collect();
                 v.sort();
@@ -3456,14 +3667,49 @@ GCLK = "CLK*EL"
                 hazard_shapes(&on),
                 "edge classification changed AnalysedCell::hazards",
             );
-            unchanged!(clock_pins);
+            assert_eq!(
+                off.clock_pins, on.clock_pins,
+                "edge classification changed AnalysedCell::clock_pins"
+            );
             assert_eq!(
                 constraint_shapes(&off),
                 constraint_shapes(&on),
                 "edge classification changed AnalysedCell::constraints",
             );
-            unchanged!(constraint_arcs_declared);
-            unchanged!(regions);
+            assert_eq!(
+                off.constraint_arcs_declared, on.constraint_arcs_declared,
+                "edge classification changed AnalysedCell::constraint_arcs_declared"
+            );
+            // `StateRegions` carries no `PartialEq` either, so its regions are compared field by field.
+            // `Cover` does carry one — same header, same cubes — so each of the three regions compares
+            // as itself.
+            assert_eq!(
+                off.regions.len(),
+                on.regions.len(),
+                "edge classification changed how many signals AnalysedCell::regions holds"
+            );
+            for (a, b) in off.regions.iter().zip(&on.regions) {
+                assert_eq!(
+                    a.cols, b.cols,
+                    "edge classification changed a signal's columns"
+                );
+                assert_eq!(
+                    a.on, b.on,
+                    "edge classification changed a signal's on region"
+                );
+                assert_eq!(
+                    a.off, b.off,
+                    "edge classification changed a signal's off region"
+                );
+                assert_eq!(
+                    a.hold, b.hold,
+                    "edge classification changed a signal's hold region"
+                );
+                assert_eq!(
+                    a.hysteretic, b.hysteretic,
+                    "edge classification changed whether a signal is hysteretic"
+                );
+            }
 
             // The guard has teeth: classification is a no-op when suppressed and does recognise captures
             // on these fixtures when active.
@@ -3511,7 +3757,16 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
             // label. Q carries exactly the two rising edge labels.
             assert_eq!(
                 label_list(&es),
-                [("Q", "CLKA", Edge::Rise), ("Q", "CLKB", Edge::Rise)],
+                [
+                    LabelSite {
+                        output: Symbol::from("Q"),
+                        clock: pin("CLKA", Edge::Rise)
+                    },
+                    LabelSite {
+                        output: Symbol::from("Q"),
+                        clock: pin("CLKB", Edge::Rise)
+                    }
+                ],
                 "rises edge-labelled, falls combinational"
             );
         });
@@ -3541,11 +3796,11 @@ Q = "!R*(B + CLK*M + !CLK*Q)"
             // The edge arc: CLK rising captures.
             assert_eq!(clocks_of(q), ["CLK"]);
             assert_eq!(q.captures.len(), 1);
-            assert_eq!(q.captures[0].1, Edge::Rise);
+            assert_eq!(q.captures[0].clock.edge, Edge::Rise);
             // The combinational set B is a Forced1 off-edge column (only while not cleared); the async
             // clear R is a Forced0 column. Edge and combinational arcs coexist on the one output.
-            let on = builder.build_cover(&q.off_edge.on_cover);
-            let off = builder.build_cover(&q.off_edge.off_cover);
+            let on = builder.build_cover(&q.off_edge.on);
+            let off = builder.build_cover(&q.off_edge.off);
             let b = builder.var("B");
             let r = builder.var("R");
             assert!(
@@ -3610,10 +3865,10 @@ Q = "!CLR*(PRE + CLK*M + !CLK*Q)"
             assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             assert_eq!(clocks_of(q), ["CLK"]);
-            assert_eq!(q.captures[0].1, Edge::Rise);
+            assert_eq!(q.captures[0].clock.edge, Edge::Rise);
             // The async set/clear off-edge covers: PRE forces 1 (only while not cleared), CLR forces 0.
-            let on = builder.build_cover(&q.off_edge.on_cover);
-            let off = builder.build_cover(&q.off_edge.off_cover);
+            let on = builder.build_cover(&q.off_edge.on);
+            let off = builder.build_cover(&q.off_edge.off);
             let pre = builder.var("PRE");
             let clr = builder.var("CLR");
             assert!(
@@ -3657,24 +3912,21 @@ Q = "!CLKB*M2 + CLKB*Q"
             let es = classify(&m);
             assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
-            let arcs: Vec<(&str, Edge)> = q
-                .captures
-                .iter()
-                .map(|(c, e, _)| (c.as_str(), *e))
-                .collect();
+            let arcs: Vec<PinEdge> = q.captures.iter().map(|c| c.clock.clone()).collect();
             assert_eq!(
                 arcs,
-                [("CLKA", Edge::Rise), ("CLKB", Edge::Fall)],
+                [pin("CLKA", Edge::Rise), pin("CLKB", Edge::Fall)],
                 "Q carries the conditioned CLKA capture and its own CLKB-fall opening"
             );
             // The CLKA capture characterises the condition: Q captures D when CLKB is transparent
             // (CLKB=0) and re-delivers its own held value when CLKB is opaque (CLKB=1).
-            let (_, _, cap_a) = q
+            let cap_a = &q
                 .captures
                 .iter()
-                .find(|(c, e, _)| c == "CLKA" && *e == Edge::Rise)
-                .unwrap();
-            let on = builder.build_cover(&cap_a.on_cover);
+                .find(|c| c.clock.pin == "CLKA" && c.clock.edge == Edge::Rise)
+                .unwrap()
+                .regions;
+            let on = builder.build_cover(&cap_a.on);
             let clkb = builder.var("CLKB");
             let want = clkb
                 .and(&builder.var("Q"))
@@ -3684,13 +3936,14 @@ Q = "!CLKB*M2 + CLKB*Q"
                 "CLKA capture is CLKB*Q + !CLKB*D (conditioned on CLKB transparent)"
             );
             // The CLKB-fall opening reveals the surviving master node M2.
-            let (_, _, cap_b) = q
+            let cap_b = &q
                 .captures
                 .iter()
-                .find(|(c, e, _)| c == "CLKB" && *e == Edge::Fall)
-                .unwrap();
+                .find(|c| c.clock.pin == "CLKB" && c.clock.edge == Edge::Fall)
+                .unwrap()
+                .regions;
             assert_eq!(cols_of(cap_b), ["M2"], "CLKB fall reveals M2");
-            let on_b = builder.build_cover(&cap_b.on_cover);
+            let on_b = builder.build_cover(&cap_b.on);
             assert!(
                 on_b.equivalent_to(&builder.var("M2")),
                 "CLKB fall captures M2"
@@ -3789,16 +4042,14 @@ Q = "!( !(M2*!CLKB) * Qn )"
         builder: &BddBuilder<B, C>,
         m: &Machine<B, C>,
     ) -> Bdd<B, C> {
-        let mut reach = builder.constant(false);
-        for state in m
-            .explored
-            .order
-            .iter()
-            .filter(|s| s.vars().iter().all(|v| s.value_of(v.as_str()).is_some()))
-        {
-            reach = reach.or(&super::cube_bdd(builder, state));
-        }
-        reach
+        super::points_bdd(
+            builder,
+            m.explored
+                .order
+                .iter()
+                .filter(|s| s.vars().iter().all(|v| s.value_of(v.as_str()).is_some()))
+                .cloned(),
+        )
     }
 
     #[test]
@@ -3835,23 +4086,30 @@ Q = "!( !(M2*!CLKB) * Qn )"
             assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
             assert_eq!(q.captures.len(), 1);
-            let (clk, edge, cap) = &q.captures[0];
-            assert_eq!((clk.as_str(), *edge), ("CLK", Edge::Rise));
-            assert_eq!(cols_of(cap), cols_of(&dff.captures[0].2));
-            assert_eq!(cap.on, dff.captures[0].2.on, "same capture as the pass DFF");
-            assert_eq!(cap.off, dff.captures[0].2.off);
-            assert_eq!(cap.hold, dff.captures[0].2.hold);
+            let capture = &q.captures[0];
+            let cap = &capture.regions;
+            assert_eq!(
+                (capture.clock.pin.as_str(), capture.clock.edge),
+                ("CLK", Edge::Rise)
+            );
+            assert_eq!(cols_of(cap), cols_of(&dff.captures[0].regions));
+            assert_eq!(
+                cap.on, dff.captures[0].regions.on,
+                "same capture as the pass DFF"
+            );
+            assert_eq!(cap.off, dff.captures[0].regions.off);
+            assert_eq!(cap.hold, dff.captures[0].regions.hold);
             assert_eq!(q.off_edge.hold, dff.off_edge.hold, "universal hold");
-            assert!(q.off_edge.on.is_empty() && q.off_edge.off.is_empty());
-            let on = builder.build_cover(&cap.on_cover);
+            assert!(q.off_edge.on.num_cubes() == 0 && q.off_edge.off.num_cubes() == 0);
+            let on = builder.build_cover(&cap.on);
             assert!(on.equivalent_to(&builder.var("D")), "Q captures D exactly");
             // The complement carries the same edge capturing !D.
             let qn = reg(&es, "Qn");
             assert_eq!(
-                (qn.captures[0].0.as_str(), qn.captures[0].1),
+                (qn.captures[0].clock.pin.as_str(), qn.captures[0].clock.edge),
                 ("CLK", Edge::Rise)
             );
-            let qn_on = builder.build_cover(&qn.captures[0].2.on_cover);
+            let qn_on = builder.build_cover(&qn.captures[0].regions.on);
             assert!(qn_on.equivalent_to(&!&builder.var("D")), "Qn captures !D");
 
             // The pass DFF folds its lone master M; the NAND master pair M/Mn is captureless and
@@ -3884,14 +4142,10 @@ Q = "!( !(M2*!CLKB) * Qn )"
             let es = classify(&m);
             assert_captures_faithful(&m, &es);
             let q = reg(&es, "Q");
-            let arcs: Vec<(&str, Edge)> = q
-                .captures
-                .iter()
-                .map(|(c, e, _)| (c.as_str(), *e))
-                .collect();
+            let arcs: Vec<PinEdge> = q.captures.iter().map(|c| c.clock.clone()).collect();
             assert_eq!(
                 arcs,
-                [("CLKA", Edge::Rise), ("CLKB", Edge::Fall)],
+                [pin("CLKA", Edge::Rise), pin("CLKB", Edge::Fall)],
                 "Q matches the pass-gate HPIPE: conditioned CLKA capture and its own CLKB-fall opening"
             );
 
@@ -3906,12 +4160,13 @@ Q = "!( !(M2*!CLKB) * Qn )"
             );
             // Same conditioned capture as the pass-gate HPIPE, written over the complement the NAND style
             // exposes: D while CLKB is transparent, the held value re-delivered while CLKB is opaque.
-            let (_, _, cap_a) = q
+            let cap_a = &q
                 .captures
                 .iter()
-                .find(|(c, e, _)| c == "CLKA" && *e == Edge::Rise)
-                .unwrap();
-            let on = builder.build_cover(&cap_a.on_cover).and(&reach);
+                .find(|c| c.clock.pin == "CLKA" && c.clock.edge == Edge::Rise)
+                .unwrap()
+                .regions;
+            let on = builder.build_cover(&cap_a.on).and(&reach);
             let clkb = builder.var("CLKB");
             let want = clkb
                 .and(&!&qn_var)
@@ -3927,7 +4182,7 @@ Q = "!( !(M2*!CLKB) * Qn )"
                 "master node keeps CLKA"
             );
             assert_eq!(
-                reg(&es, "M2").captures[0].1,
+                reg(&es, "M2").captures[0].clock.edge,
                 Edge::Rise,
                 "master captures on the CLKA rising edge"
             );
@@ -3965,7 +4220,13 @@ Q = "!( !(M2*!CLKB) * Qn )"
         // arc at all: the label set is exactly the one rising edge arc.
         with_machine!(DFF_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
-            assert_eq!(label_list(&es), [("Q", "CLK", Edge::Rise)]);
+            assert_eq!(
+                label_list(&es),
+                [LabelSite {
+                    output: Symbol::from("Q"),
+                    clock: pin("CLK", Edge::Rise)
+                }]
+            );
         });
 
         // A plain latch has no capture anywhere, but its enable's OPENING edge (opaque→transparent) is a
@@ -3975,7 +4236,13 @@ Q = "!( !(M2*!CLKB) * Qn )"
         with_machine!(DLAT_TOML, |_b, _a, _m2, m| {
             let es = classify(&m);
             assert!(es.captures.is_empty(), "a latch has no capture");
-            assert_eq!(label_list(&es), [("Q", "CLK", Edge::Rise)]);
+            assert_eq!(
+                label_list(&es),
+                [LabelSite {
+                    output: Symbol::from("Q"),
+                    clock: pin("CLK", Edge::Rise)
+                }]
+            );
         });
 
         // A transparent-LOW cascade is the fall-mirror of `DLAT`: `Q` is opaque across the high phase and
@@ -3991,7 +4258,10 @@ Q = "!( !(M2*!CLKB) * Qn )"
             );
             assert_eq!(
                 label_list(&es),
-                [("Q", "CLK", Edge::Fall)],
+                [LabelSite {
+                    output: Symbol::from("Q"),
+                    clock: pin("CLK", Edge::Fall)
+                }],
                 "the transparent-low cascade opens on the fall — a generation on the output"
             );
         });
@@ -4002,7 +4272,16 @@ Q = "!( !(M2*!CLKB) * Qn )"
             let es = classify(&m);
             assert_eq!(
                 label_list(&es),
-                [("Q", "CLK", Edge::Rise), ("Q", "CLK", Edge::Fall)]
+                [
+                    LabelSite {
+                        output: Symbol::from("Q"),
+                        clock: pin("CLK", Edge::Rise)
+                    },
+                    LabelSite {
+                        output: Symbol::from("Q"),
+                        clock: pin("CLK", Edge::Fall)
+                    }
+                ]
             );
         });
     }
@@ -4018,7 +4297,16 @@ Q = "!( !(M2*!CLKB) * Qn )"
             let es = classify(&m);
             assert_eq!(
                 label_list(&es),
-                [("Q", "CLKA", Edge::Rise), ("Q", "CLKB", Edge::Rise)]
+                [
+                    LabelSite {
+                        output: Symbol::from("Q"),
+                        clock: pin("CLKA", Edge::Rise)
+                    },
+                    LabelSite {
+                        output: Symbol::from("Q"),
+                        clock: pin("CLKB", Edge::Rise)
+                    }
+                ]
             );
         });
 
@@ -4028,13 +4316,22 @@ Q = "!( !(M2*!CLKB) * Qn )"
             let es = classify(&m);
             assert_eq!(
                 label_list(&es),
-                [("Q", "CLKA", Edge::Rise), ("Q", "CLKB", Edge::Fall)]
+                [
+                    LabelSite {
+                        output: Symbol::from("Q"),
+                        clock: pin("CLKA", Edge::Rise)
+                    },
+                    LabelSite {
+                        output: Symbol::from("Q"),
+                        clock: pin("CLKB", Edge::Fall)
+                    }
+                ]
             );
             assert_eq!(
                 reg(&es, "Q")
                     .captures
                     .iter()
-                    .map(|(c, e, _)| (c.as_str(), *e))
+                    .map(|c| (c.clock.pin.as_str(), c.clock.edge))
                     .collect::<Vec<_>>(),
                 [("CLKA", Edge::Rise), ("CLKB", Edge::Fall)],
                 "Q's active edges: the CLKA capture and its own CLKB-fall opening"
@@ -4054,7 +4351,16 @@ Q = "!( !(M2*!CLKB) * Qn )"
             );
             assert_eq!(
                 label_list(&es),
-                [("Q", "CLKA", Edge::Fall), ("Q", "CLKB", Edge::Rise)]
+                [
+                    LabelSite {
+                        output: Symbol::from("Q"),
+                        clock: pin("CLKA", Edge::Fall)
+                    },
+                    LabelSite {
+                        output: Symbol::from("Q"),
+                        clock: pin("CLKB", Edge::Rise)
+                    }
+                ]
             );
         });
     }
@@ -4096,19 +4402,49 @@ Q = "!( !(M2*!CLKB) * Qn )"
         for (toml, want) in [
             (
                 NDLAT_TOML,
-                vec![("Q", "CLK", Edge::Rise), ("Qn", "CLK", Edge::Rise)],
+                vec![
+                    LabelSite {
+                        output: Symbol::from("Q"),
+                        clock: pin("CLK", Edge::Rise),
+                    },
+                    LabelSite {
+                        output: Symbol::from("Qn"),
+                        clock: pin("CLK", Edge::Rise),
+                    },
+                ],
             ),
             (
                 NDFF_TOML,
-                vec![("Q", "CLK", Edge::Rise), ("Qn", "CLK", Edge::Rise)],
+                vec![
+                    LabelSite {
+                        output: Symbol::from("Q"),
+                        clock: pin("CLK", Edge::Rise),
+                    },
+                    LabelSite {
+                        output: Symbol::from("Qn"),
+                        clock: pin("CLK", Edge::Rise),
+                    },
+                ],
             ),
             (
                 NHPIPE_TOML,
                 vec![
-                    ("Q", "CLKA", Edge::Rise),
-                    ("Q", "CLKB", Edge::Fall),
-                    ("Qn", "CLKA", Edge::Rise),
-                    ("Qn", "CLKB", Edge::Fall),
+                    LabelSite {
+                        output: Symbol::from("Q"),
+                        clock: pin("CLKA", Edge::Rise),
+                    },
+                    LabelSite {
+                        output: Symbol::from("Q"),
+                        clock: pin("CLKB", Edge::Fall),
+                    },
+                    LabelSite {
+                        output: Symbol::from("Qn"),
+                        clock: pin("CLKA", Edge::Rise),
+                    },
+                    LabelSite {
+                        output: Symbol::from("Qn"),
+                        clock: pin("CLKB", Edge::Fall),
+                    },
                 ],
             ),
         ] {
@@ -4180,13 +4516,17 @@ Y = "CLK + !CLK*!R*Y"
             let y = reg(&es, "Y");
             assert_eq!(clocks_of(y), ["CLK"]);
             assert_eq!(y.captures.len(), 1);
-            assert_eq!(y.captures[0].1, Edge::Rise, "Y generates on the rise");
+            assert_eq!(
+                y.captures[0].clock.edge,
+                Edge::Rise,
+                "Y generates on the rise"
+            );
             assert_eq!(
                 labels_of(&es, "Y"),
-                [("CLK", Edge::Rise)],
+                [pin("CLK", Edge::Rise)],
                 "the rise types edge — a live delivered phase"
             );
-            let off = builder.build_cover(&y.off_edge.off_cover);
+            let off = builder.build_cover(&y.off_edge.off);
             assert!(
                 off.equivalent_to(&builder.var("R")),
                 "off_edge.off is the async clear R"
@@ -4254,22 +4594,24 @@ Y = "CLK*A + !CLK*B + Y*A*B"
         edge_when: bool, // the mask value at which the fall reveals `L`
     ) {
         with_machine!(src, |_b, _a, _m2, m| {
-            let (arcs, _) = crate::logic::arcs::derive(&m);
+            let arcs = crate::logic::arcs::derive(&m).arcs;
             let es = classify(&m);
             assert_captures_faithful(&m, &es);
             let mut edge_ctx = 0;
             let mut comb_ctx = 0;
             for a in &arcs {
-                if a.output.as_str() != "Y"
+                if a.output.pin.as_str() != "Y"
                     || a.related.as_str() != "CLK"
                     || a.end.value_of("CLK") != Some(false)
                 {
                     continue; // only Y's CLK Fall arcs
                 }
                 let labelled = es.labels.contains(&EdgeLabel {
-                    output: a.output.clone(),
-                    clock: a.related.clone(),
-                    clock_edge: Edge::Fall,
+                    output: a.output.pin.clone(),
+                    clock: PinEdge {
+                        pin: a.related.clone(),
+                        edge: Edge::Fall,
+                    },
                     start: a.start.clone(),
                 });
                 match a.start.value_of(mask) {
@@ -4346,9 +4688,13 @@ Y = "!CLK*R + L"
             assert_captures_faithful(&m, &es);
             let labs = label_list(&es);
             assert!(
-                labs.contains(&("Q", "CLK", Edge::Rise))
-                    && labs.contains(&("Q", "CLK", Edge::Fall))
-                    && labs.len() == 2,
+                labs.contains(&LabelSite {
+                    output: Symbol::from("Q"),
+                    clock: pin("CLK", Edge::Rise)
+                }) && labs.contains(&LabelSite {
+                    output: Symbol::from("Q"),
+                    clock: pin("CLK", Edge::Fall)
+                }) && labs.len() == 2,
                 "DET exposes D on both edges: {labs:?}"
             );
         });
@@ -4412,21 +4758,18 @@ Y = "K2*T + !K2*Y"
         // The reveal types EDGE at any pipe depth: propagation is a single transitive restriction-survival
         // chain with no cutoff, so the shallow pipe (PIPE2) and the one-deeper pipe (PIPE3) carry the SAME
         // `Y@K2:Rise` edge label. Each is proven against the machine by the replay harness.
-        let y_labels = |src: &str| -> Vec<(String, Edge)> {
+        let y_labels = |src: &str| -> Vec<PinEdge> {
             with_machine!(src, |_b, _a, _m2, m| {
                 let es = classify(&m);
                 assert_captures_faithful(&m, &es);
                 labels_of(&es, "Y")
-                    .into_iter()
-                    .map(|(c, e)| (c.to_string(), e))
-                    .collect()
             })
         };
         let pipe2 = y_labels(PIPE2_TOML);
         let pipe3 = y_labels(PIPE3_TOML);
         assert_eq!(
             pipe2,
-            [("K2".to_string(), Edge::Rise)],
+            [pin("K2", Edge::Rise)],
             "shallow pipe reveals on the rise"
         );
         assert_eq!(

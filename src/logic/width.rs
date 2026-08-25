@@ -15,8 +15,9 @@
 //! narrowest of them the zero-width close, whose outcome is `s` itself. A hazard is a candidate that
 //! disagrees with the reference, or a candidate that does not converge.
 //!
-//! That is the [`Cause::Pulse`] half of the hazard taxonomy, the sibling of [`Cause::Race`] — two
-//! signals racing each other — which [`super::confluence`] detects. What the machine then does is the
+//! That is the [`Cause::Pulse`] half of the hazard taxonomy, the sibling of the input causes
+//! [`Cause::Toggle`] and [`Cause::Race`] — a signal racing the cell's own feedback, or two signals
+//! racing each other — which [`super::confluence`] detects. What the machine then does is the
 //! other, independent axis, and this pass files one [`Hazard`] per [`Outcome`] it observes:
 //!
 //! - [`Outcome::Indeterminate`] — a candidate converges somewhere the reference does not, so which state
@@ -58,8 +59,8 @@ use espresso_logic::bdd::{Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::analysis::Machine;
-use crate::logic::arcs::ArcLevels;
-use crate::logic::confluence::{edge_from, node_levels_at, oscillating_group};
+use crate::logic::arcs::{ArcLevels, PinEdge};
+use crate::logic::confluence::{edge_from, oscillating_group};
 use crate::logic::hazard::{Cause, Hazard, Outcome};
 use crate::logic::machine;
 
@@ -147,17 +148,17 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
                 })
                 .collect();
 
-            // Does some candidate leave `w` where the reference does not? Every state read here is
-            // total (see `DETERMINATE`), so this is a comparison of values, not of definedness.
-            let diverges = |w: &Symbol| {
-                let level = |x: &Minterm<Symbol>| x.value_of(w.as_str()).expect(DETERMINATE);
-                let settles_to = level(&reference);
-                level(s) != settles_to
-                    || candidates
-                        .iter()
-                        .filter_map(|out| out.as_ref().ok())
-                        .any(|out| level(out) != settles_to)
-            };
+            // Where some close leaves the machine other than the reference does: each close's Kleene XOR
+            // against the reference marks the variables the two fix differently, and the Kleene OR folds
+            // those rows into one, seeded with cut 0 — the zero-width close, whose outcome is `s` itself.
+            // An undefined variable stays `-` through both tables (`- ^ x = -`, `0 | - = -`) instead of
+            // reading as agreement, so the read below raises `DETERMINATE` on it wherever no other close
+            // parts from the reference there.
+            let divergence = candidates
+                .iter()
+                .filter_map(|out| out.as_ref().ok())
+                .fold(s ^ &reference, |parted, out| parted | (out ^ &reference));
+            let diverges = |w: &Symbol| divergence.value_of(w.as_str()).expect(DETERMINATE);
             let diverging: Vec<Symbol> = m
                 .state_vars
                 .iter()
@@ -191,8 +192,10 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
             };
 
             let cause = Cause::Pulse {
-                pin: p.clone(),
-                edge: edge_from(s, p.as_str()),
+                pin: PinEdge {
+                    pin: p.clone(),
+                    edge: edge_from(s, p.as_str()),
+                },
             };
             // A candidate converges somewhere the reference does not over these nodes, so which state a
             // pulse leaves them in is decided by its width: the hazard proper, empty exactly where every
@@ -203,7 +206,6 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
                     outcome: Outcome::Indeterminate,
                     condition: s.project_to(inputs),
                     settled: settled(&diverging),
-                    node_levels: node_levels_at(s, &diverging),
                     group: diverging,
                     prevector: prevector_s.clone(),
                     levels: levels_s.clone(),
@@ -221,7 +223,6 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
                     outcome: Outcome::Oscillation,
                     condition: s.project_to(inputs),
                     settled: settled(&ringing),
-                    node_levels: node_levels_at(s, &ringing),
                     group: ringing,
                     prevector: prevector_s.clone(),
                     levels: levels_s.clone(),
@@ -252,11 +253,12 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
 
 #[cfg(test)]
 mod tests {
-    use crate::logic::arcs::Edge;
+    use crate::logic::arcs::{Edge, PinEdge};
     use crate::logic::constraint::{Constraint, ConstraintKind};
     use crate::logic::hazard::{Cause, Hazard, Outcome};
     use crate::model::analyse_one as analyse;
     use crate::model::AnalysedCell;
+    use espresso_logic::Symbol;
     use std::collections::BTreeSet;
 
     /// This pass's own records, picked out of the cell's one `hazards` list by their cause: the
@@ -270,32 +272,50 @@ mod tests {
 
     /// The pulsed pin and its opening edge of a record [`pulses`] has already picked out, so any other
     /// cause reaching here is a filtering fault rather than a case to handle.
-    fn pulse(hz: &Hazard) -> (String, char) {
+    fn pulse(hz: &Hazard) -> PinEdge {
         match &hz.cause {
-            Cause::Pulse { pin, edge } => (pin.to_string(), edge.rf()),
+            Cause::Pulse { pin } => pin.clone(),
+            Cause::Toggle { pin } => panic!("a toggle of {pin} came through the pulse filter"),
             Cause::Race { pins } => panic!("a race over {pins:?} came through the pulse filter"),
         }
     }
 
+    /// What identifies one detected pulse hazard: the pulsed pin, the pulse's opening edge, the
+    /// outcome and the nodes the record names.
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct PulseKey {
+        pin: PinEdge,
+        outcome: Outcome,
+        nodes: Vec<Symbol>,
+    }
+
     /// One detected hazard as what identifies it: the pulsed pin, the pulse's opening edge, the outcome
     /// and the nodes the record names.
-    fn keys(cell: &AnalysedCell) -> BTreeSet<(String, char, Outcome, String)> {
+    fn keys(cell: &AnalysedCell) -> BTreeSet<PulseKey> {
         pulses(cell)
             .into_iter()
-            .map(|hz| {
-                let (pin, edge) = pulse(hz);
-                (pin, edge, hz.outcome, hz.group.join(","))
+            .map(|hz| PulseKey {
+                pin: pulse(hz),
+                outcome: hz.outcome,
+                nodes: hz.group.clone(),
             })
             .collect()
     }
 
-    /// The cell's race-cause oscillations — [`super::super::confluence`]'s records. The pulse tests read
-    /// them to check that a ringing candidate stays a pulse-cause record and files no race.
+    /// A [`PulseKey::nodes`] literal from comma-separated names, in the same order as the group.
+    fn group(names: &[&str]) -> Vec<Symbol> {
+        names.iter().map(|n| Symbol::from(*n)).collect()
+    }
+
+    /// The cell's race-cause oscillations — [`super::super::confluence`]'s records, a lone toggle's as
+    /// much as a pair's. The pulse tests read them to check that a ringing candidate stays a pulse-cause
+    /// record and files no race.
     fn race_rings(cell: &AnalysedCell) -> Vec<&Hazard> {
         cell.hazards
             .iter()
             .filter(|hz| {
-                matches!(hz.cause, Cause::Race { .. }) && hz.outcome == Outcome::Oscillation
+                matches!(hz.cause, Cause::Toggle { .. } | Cause::Race { .. })
+                    && hz.outcome == Outcome::Oscillation
             })
             .collect()
     }
@@ -306,34 +326,44 @@ mod tests {
     fn on<'h>(cell: &'h AnalysedCell, pin: &str, edge: Edge, outcome: Outcome) -> Vec<&'h Hazard> {
         let found: Vec<&Hazard> = pulses(cell)
             .into_iter()
-            .filter(|hz| hz.outcome == outcome && pulse(hz) == (pin.to_string(), edge.rf()))
+            .filter(|hz| {
+                hz.outcome == outcome
+                    && pulse(hz)
+                        == PinEdge {
+                            pin: Symbol::from(pin),
+                            edge,
+                        }
+            })
             .collect();
         assert!(
             !found.is_empty(),
-            "no {outcome:?} {pin}{} hazard in {:?}",
-            edge.rf(),
+            "no {outcome:?} {pin}{edge} hazard in {:?}",
             keys(cell)
         );
         found
     }
 
-    /// Every record on `pin` in `edge` with `outcome` over the nodes `nodes` — all four fields of a
-    /// detection key ([`keys`]), which is what tells two observations of one pulse apart.
+    /// Every record on `pin` in `edge` with `outcome` over the nodes `nodes` — every field of a
+    /// [`PulseKey`], which is what tells two observations of one pulse apart.
     fn on_nodes<'h>(
         cell: &'h AnalysedCell,
         pin: &str,
         edge: Edge,
         outcome: Outcome,
-        nodes: &str,
+        nodes: &[&str],
     ) -> Vec<&'h Hazard> {
         let found: Vec<&Hazard> = on(cell, pin, edge, outcome)
             .into_iter()
-            .filter(|hz| hz.group.join(",") == nodes)
+            .filter(|hz| {
+                hz.group
+                    .iter()
+                    .map(Symbol::as_str)
+                    .eq(nodes.iter().copied())
+            })
             .collect();
         assert!(
             !found.is_empty(),
-            "no {outcome:?} {pin}{} hazard over {{{nodes}}} in {:?}",
-            edge.rf(),
+            "no {outcome:?} {pin}{edge} hazard over {nodes:?} in {:?}",
             keys(cell)
         );
         found
@@ -358,7 +388,11 @@ mod tests {
     /// the opening edge's stable state, then the reference, where the closing edge settles. Every
     /// pulse record states exactly those two: a probe whose reference does not converge files nothing.
     fn waypoints(hz: &Hazard) -> Vec<String> {
-        let stated = hz.settled_strs();
+        let stated: Vec<String> = hz
+            .settled
+            .iter()
+            .map(|s| crate::report::State(s).to_string())
+            .collect();
         assert_eq!(
             stated.len(),
             2,
@@ -402,18 +436,22 @@ Q = "CLK*M + !CLK*Q"
         assert_eq!(
             keys(&cell),
             [
-                (
-                    "CLK".to_string(),
-                    'R',
-                    Outcome::Indeterminate,
-                    "Q".to_string()
-                ),
-                (
-                    "CLK".to_string(),
-                    'F',
-                    Outcome::Indeterminate,
-                    "Q,M".to_string()
-                ),
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("CLK"),
+                        edge: Edge::Rise,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: group(&["Q"]),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("CLK"),
+                        edge: Edge::Fall,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: group(&["Q", "M"]),
+                },
             ]
             .into_iter()
             .collect(),
@@ -444,7 +482,7 @@ Q = "CLK*M + !CLK*Q"
         // transparent master tracks D straight back to where it was, so every candidate lands on the
         // reference.
         assert!(
-            !pulses(&cell).iter().any(|hz| pulse(hz).0 == "D"),
+            !pulses(&cell).iter().any(|hz| pulse(hz).pin == "D"),
             "a D pulse settles back to where it started, got {:?}",
             keys(&cell)
         );
@@ -470,12 +508,14 @@ Q = "E*D + !E*Q"
         // side: with E low D reaches nothing, and with E high the transparent latch tracks D back.
         assert_eq!(
             keys(&cell),
-            [(
-                "E".to_string(),
-                'R',
-                Outcome::Indeterminate,
-                "Q".to_string()
-            )]
+            [PulseKey {
+                pin: PinEdge {
+                    pin: Symbol::from("E"),
+                    edge: Edge::Rise,
+                },
+                outcome: Outcome::Indeterminate,
+                nodes: group(&["Q"]),
+            }]
             .into_iter()
             .collect(),
         );
@@ -512,18 +552,22 @@ Qn = "!(S+Q)"
         // settles at once.
         let both = |pin: &str| {
             [
-                (
-                    pin.to_string(),
-                    'R',
-                    Outcome::Indeterminate,
-                    "Q,Qn".to_string(),
-                ),
-                (
-                    pin.to_string(),
-                    'R',
-                    Outcome::Oscillation,
-                    "Q,Qn".to_string(),
-                ),
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from(pin),
+                        edge: Edge::Rise,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: group(&["Q", "Qn"]),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from(pin),
+                        edge: Edge::Rise,
+                    },
+                    outcome: Outcome::Oscillation,
+                    nodes: group(&["Q", "Qn"]),
+                },
             ]
         };
         assert_eq!(
@@ -559,7 +603,7 @@ Qn = "!(S+Q)"
         assert_eq!(rings[0].group, ["Q", "Qn"]);
         // That race is the simultaneous release, so it is toggled FROM the co-asserted state, which is
         // the assignment its `when` states. (It rings at S=R=0, which is where the release lands.)
-        assert_eq!(rings[0].condition_str(), "S*R");
+        assert_eq!(rings[0].condition().to_string(), "S & R");
     }
 
     #[test]
@@ -582,18 +626,22 @@ Qb = "!Qa * B"
         );
         let both = |pin: &str| {
             [
-                (
-                    pin.to_string(),
-                    'F',
-                    Outcome::Indeterminate,
-                    "Qa,Qb".to_string(),
-                ),
-                (
-                    pin.to_string(),
-                    'F',
-                    Outcome::Oscillation,
-                    "Qa,Qb".to_string(),
-                ),
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from(pin),
+                        edge: Edge::Fall,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: group(&["Qa", "Qb"]),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from(pin),
+                        edge: Edge::Fall,
+                    },
+                    outcome: Outcome::Oscillation,
+                    nodes: group(&["Qa", "Qb"]),
+                },
             ]
         };
         assert_eq!(
@@ -620,7 +668,7 @@ Qb = "!Qa * B"
         // A rise pulse from idle is inert: the grant it takes is handed straight back when the request
         // drops again, so every candidate lands on the reference.
         assert!(
-            !pulses(&cell).iter().any(|hz| pulse(hz).1 == 'R'),
+            !pulses(&cell).iter().any(|hz| pulse(hz).edge == Edge::Rise),
             "a request pulse from idle settles back to idle, got {:?}",
             keys(&cell)
         );
@@ -636,7 +684,7 @@ Qb = "!Qa * B"
         assert_eq!(rings[0].group, ["Qa", "Qb"]);
         // That race is the pair asserted together, so it is toggled FROM the idle state, which is the
         // assignment its `when` states. (It rings at A=B=1, which is where the pair lands.)
-        assert_eq!(rings[0].condition_str(), "!A*!B");
+        assert_eq!(rings[0].condition().to_string(), "!A & !B");
     }
 
     #[test]
@@ -669,49 +717,65 @@ Qn = "!(S+Q)"
         assert_eq!(
             keys(&cell),
             [
-                (
-                    "S".to_string(),
-                    'R',
-                    Outcome::Indeterminate,
-                    "Q,Qn,L".to_string()
-                ),
-                (
-                    "S".to_string(),
-                    'R',
-                    Outcome::Indeterminate,
-                    "L".to_string()
-                ),
-                (
-                    "S".to_string(),
-                    'R',
-                    Outcome::Oscillation,
-                    "Q,Qn".to_string()
-                ),
-                (
-                    "R".to_string(),
-                    'R',
-                    Outcome::Indeterminate,
-                    "Q,Qn".to_string()
-                ),
-                (
-                    "R".to_string(),
-                    'R',
-                    Outcome::Oscillation,
-                    "Q,Qn".to_string()
-                ),
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("S"),
+                        edge: Edge::Rise,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: group(&["Q", "Qn", "L"]),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("S"),
+                        edge: Edge::Rise,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: group(&["L"]),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("S"),
+                        edge: Edge::Rise,
+                    },
+                    outcome: Outcome::Oscillation,
+                    nodes: group(&["Q", "Qn"]),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("R"),
+                        edge: Edge::Rise,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: group(&["Q", "Qn"]),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("R"),
+                        edge: Edge::Rise,
+                    },
+                    outcome: Outcome::Oscillation,
+                    nodes: group(&["Q", "Qn"]),
+                },
             ]
             .into_iter()
             .collect(),
         );
         // Each record's waypoints are its own nodes' halves of the same two states: the cascade rests
         // set with L raised, and the reference's closing S↓ holds all three there.
-        for hz in on_nodes(&cell, "S", Edge::Rise, Outcome::Indeterminate, "Q,Qn,L") {
+        for hz in on_nodes(
+            &cell,
+            "S",
+            Edge::Rise,
+            Outcome::Indeterminate,
+            &["Q", "Qn", "L"],
+        ) {
             assert_eq!(
                 waypoints(hz),
                 held(&[("Q", true), ("Qn", false), ("L", true)])
             );
         }
-        for hz in on_nodes(&cell, "S", Edge::Rise, Outcome::Oscillation, "Q,Qn") {
+        for hz in on_nodes(&cell, "S", Edge::Rise, Outcome::Oscillation, &["Q", "Qn"]) {
             assert_eq!(waypoints(hz), held(&[("Q", true), ("Qn", false)]));
         }
     }
@@ -738,12 +802,14 @@ Q = "!CLK*M + CLK*Q"
         );
         assert_eq!(
             keys(&cell),
-            [(
-                "CLK".to_string(),
-                'F',
-                Outcome::Indeterminate,
-                "Q,M".to_string()
-            )]
+            [PulseKey {
+                pin: PinEdge {
+                    pin: Symbol::from("CLK"),
+                    edge: Edge::Fall,
+                },
+                outcome: Outcome::Indeterminate,
+                nodes: group(&["Q", "M"]),
+            }]
             .into_iter()
             .collect(),
         );
@@ -786,30 +852,38 @@ Q = "!CLK*(EN*M + !EN*Q) + CLK*Q"
         assert_eq!(
             keys(&cell),
             [
-                (
-                    "CLK".to_string(),
-                    'F',
-                    Outcome::Indeterminate,
-                    "Q,M".to_string()
-                ),
-                (
-                    "CLK".to_string(),
-                    'F',
-                    Outcome::Indeterminate,
-                    "Q".to_string()
-                ),
-                (
-                    "CLK".to_string(),
-                    'F',
-                    Outcome::Indeterminate,
-                    "M".to_string()
-                ),
-                (
-                    "EN".to_string(),
-                    'R',
-                    Outcome::Indeterminate,
-                    "Q".to_string()
-                ),
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("CLK"),
+                        edge: Edge::Fall,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: group(&["Q", "M"]),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("CLK"),
+                        edge: Edge::Fall,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: group(&["Q"]),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("CLK"),
+                        edge: Edge::Fall,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: group(&["M"]),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("EN"),
+                        edge: Edge::Rise,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: group(&["Q"]),
+                },
             ]
             .into_iter()
             .collect(),
@@ -837,30 +911,38 @@ B = "!CLK*(!SEL*D + SEL*B) + CLK*B"
         assert_eq!(
             keys(&cell),
             [
-                (
-                    "CLK".to_string(),
-                    'F',
-                    Outcome::Indeterminate,
-                    "A".to_string()
-                ),
-                (
-                    "CLK".to_string(),
-                    'F',
-                    Outcome::Indeterminate,
-                    "B".to_string()
-                ),
-                (
-                    "SEL".to_string(),
-                    'R',
-                    Outcome::Indeterminate,
-                    "A".to_string()
-                ),
-                (
-                    "SEL".to_string(),
-                    'F',
-                    Outcome::Indeterminate,
-                    "B".to_string()
-                ),
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("CLK"),
+                        edge: Edge::Fall,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: group(&["A"]),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("CLK"),
+                        edge: Edge::Fall,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: group(&["B"]),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("SEL"),
+                        edge: Edge::Rise,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: group(&["A"]),
+                },
+                PulseKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("SEL"),
+                        edge: Edge::Fall,
+                    },
+                    outcome: Outcome::Indeterminate,
+                    nodes: group(&["B"]),
+                },
             ]
             .into_iter()
             .collect(),
@@ -876,15 +958,23 @@ B = "!CLK*(!SEL*D + SEL*B) + CLK*B"
             .collect()
     }
 
-    /// One generated constraint as the triple that identifies it: the constrained pin, the pulse's
+    /// What identifies a generated constraint: the pin its opening edge constrains, and the victim
+    /// nodes it probes.
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct ConstraintKey {
+        pin: PinEdge,
+        nodes: Vec<Symbol>,
+    }
+
+    /// One generated constraint as the key that identifies it: the constrained pin, the pulse's
     /// opening edge and the victim nodes it probes. The levels sampled beside those nodes name WHICH probed
     /// state the representative came from, which is a choice the exploration order makes.
-    fn constrained(cell: &AnalysedCell) -> BTreeSet<(String, char, String)> {
+    fn constrained(cell: &AnalysedCell) -> BTreeSet<ConstraintKey> {
         widths(cell)
             .into_iter()
-            .map(|c| {
-                let nodes: Vec<&str> = c.nodes.iter().map(|p| p.node.as_str()).collect();
-                (c.pin.to_string(), c.pin_edge.rf(), nodes.join(","))
+            .map(|c| ConstraintKey {
+                pin: c.pin.clone(),
+                nodes: c.victim_names().to_vec(),
             })
             .collect()
     }
@@ -916,8 +1006,20 @@ Q = "CLK*M + !CLK*Q"
         assert_eq!(
             constrained(&declared),
             [
-                ("CLK".to_string(), 'R', "Q".to_string()),
-                ("CLK".to_string(), 'F', "Q,M".to_string()),
+                ConstraintKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("CLK"),
+                        edge: Edge::Rise,
+                    },
+                    nodes: vec![Symbol::from("Q")],
+                },
+                ConstraintKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("CLK"),
+                        edge: Edge::Fall,
+                    },
+                    nodes: vec![Symbol::from("Q"), Symbol::from("M")],
+                },
             ]
             .into_iter()
             .collect(),
@@ -952,8 +1054,20 @@ Qn = "!(S+Q)"
         assert_eq!(
             constrained(&cell),
             [
-                ("S".to_string(), 'R', "Q,Qn".to_string()),
-                ("R".to_string(), 'R', "Q,Qn".to_string()),
+                ConstraintKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("S"),
+                        edge: Edge::Rise,
+                    },
+                    nodes: vec![Symbol::from("Q"), Symbol::from("Qn")],
+                },
+                ConstraintKey {
+                    pin: PinEdge {
+                        pin: Symbol::from("R"),
+                        edge: Edge::Rise,
+                    },
+                    nodes: vec![Symbol::from("Q"), Symbol::from("Qn")],
+                },
             ]
             .into_iter()
             .collect(),

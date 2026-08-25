@@ -68,61 +68,31 @@ use espresso_logic::bdd::{Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
 
 use crate::logic::analysis::Machine;
-use crate::logic::arcs::{ArcLevels, Edge};
-use crate::logic::hazard::{Cause, Hazard, Outcome, Racer};
+use crate::logic::arcs::{ArcLevels, Edge, PinEdge};
+use crate::logic::hazard::{Cause, Hazard, Outcome};
 use crate::logic::machine;
-
-/// The level each of `group`'s nodes holds at the probed state — what a constraint block states as the
-/// start condition of each victim node it probes. A hazard's group holds state variables, which are machine
-/// coordinates, and a probed state is fully initialised, so every one of them is defined there.
-///
-/// Shared with [`super::width`], which samples its pulses' nodes at the pre-pulse state through it.
-pub(super) fn node_levels_at(state: &Minterm<Symbol>, group: &[Symbol]) -> BTreeMap<Symbol, bool> {
-    group
-        .iter()
-        .map(|w| {
-            let level = state
-                .value_of(w.as_str())
-                .expect("a hazard's group node is defined at the fully-initialised probed state");
-            (w.clone(), level)
-        })
-        .collect()
-}
 
 /// The direction `name` toggles from its current value at `node`. Explored nodes carry a complete input
 /// assignment, so an input's value is always fixed there.
 ///
 /// Shared with [`super::width`], which reads a pulse's opening edge through it.
+///
+/// The level read here is the one the pin toggles AWAY from, and an edge is named by where the pin
+/// settles, so the complement is what [`Edge::from_settled_level`] is given: a pin standing high falls.
 pub(super) fn edge_from(node: &Minterm<Symbol>, name: &str) -> Edge {
-    if node
-        .value_of(name)
-        .expect("every input is fixed at an explored node")
-    {
-        Edge::Fall
-    } else {
-        Edge::Rise
-    }
+    Edge::from_settled_level(
+        !node
+            .value_of(name)
+            .expect("every input is fixed at an explored node"),
+    )
 }
 
 /// One racer of a detected race: the pin, and the edge it makes when toggled from `node`.
-fn racer(node: &Minterm<Symbol>, pin: &Symbol) -> Racer {
-    Racer {
+fn racer(node: &Minterm<Symbol>, pin: &Symbol) -> PinEdge {
+    PinEdge {
         pin: pin.clone(),
         edge: edge_from(node, pin.as_str()),
     }
-}
-
-/// The detected hazards of one pass over the reachable state machine, split by the outcome observed —
-/// every record carries [`Cause::Race`], the cause this pass probes for. No generated constraint is
-/// nested here — `super::constraint` turns these into constraints downstream.
-#[derive(Debug, Default)]
-pub struct DetectedHazards {
-    /// [`Outcome::Indeterminate`]: races whose settled state depends on which edge lands first — one
-    /// record per observation, a pair diverging from several states filing one for each.
-    pub(crate) order_dependence: Vec<Hazard>,
-    /// [`Outcome::Oscillation`]: pairs (or single toggles) that drive a periodic, non-settling cycle —
-    /// one record per observation, a pair ringing from several states filing one for each.
-    pub(crate) oscillation: Vec<Hazard>,
 }
 
 /// Why every state value the hazard path reads is defined: a settle from a fully-initialised state
@@ -163,7 +133,11 @@ pub(super) fn oscillating_group(cycle: &[Minterm<Symbol>], state_vars: &[Symbol]
 /// confluent cells (ordinary combinational / self-holding gates that always settle) and for cells with
 /// no state to latch. The input count empties only the PAIR probes: a single toggle races the cell's own
 /// feedback and is probed however few inputs there are.
-pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> DetectedHazards {
+///
+/// Every record carries [`Cause::Toggle`] or [`Cause::Race`], the causes this pass probes for, and the
+/// two outcomes share the one list: a reader tells them apart by the [`Outcome`] on the record rather
+/// than by which list it came out of.
+pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<Hazard> {
     let cell = m.cell;
     let inputs = &cell.inputs;
     let n = inputs.len();
@@ -171,7 +145,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
     let state_vars = &m.state_vars;
     let k = state_vars.len();
     if k == 0 {
-        return DetectedHazards::default(); // no state to latch ⇒ always confluent
+        return Vec::new(); // no state to latch ⇒ always confluent
     }
 
     // Both coordinate halves, stepped together, exactly as the original exploration stepped them: a
@@ -184,7 +158,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
     // harmless, and no guard is added to carve it back out.
     let support: BTreeMap<Symbol, BTreeSet<Symbol>> = deltas
         .iter()
-        .map(|(n, d)| (n.clone(), d.variables().collect()))
+        .map(|c| (c.signal.clone(), c.delta.variables().collect()))
         .collect();
 
     let ex = &m.explored;
@@ -200,13 +174,12 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
     // independent — the parallel unit — and the results are concatenated in the `reduce` below.
     //
     // Every observation this body makes is reported, under either outcome.
-    let per_state = |(discovered, s): (usize, &Minterm<Symbol>)| -> (Vec<Hazard>, Vec<Hazard>) {
+    let per_state = |(discovered, s): (usize, &Minterm<Symbol>)| -> Vec<Hazard> {
         debug_assert!(
             m.arc_eligible(s),
             "detect: a probe may only start from a fully-initialised state"
         );
-        let mut order_dependence: Vec<Hazard> = Vec::new();
-        let mut oscillation: Vec<Hazard> = Vec::new();
+        let mut detected: Vec<Hazard> = Vec::new();
 
         // `path_to` depends only on `s`: compute the prevector into `s` once and clone it per hazard.
         let prevector_s = ex.path_to(s, inputs);
@@ -228,17 +201,16 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
             .collect();
 
         // Single-toggle capture: a lone input toggle that never settles is itself a non-settling
-        // observation. The observation was made under one pin's transition, and the cause names it —
-        // which is why a race's `pins` carries one member or two and is never empty. `settled` is empty:
-        // there is no competing order for the machine to land in, and no constraint follows from it
-        // either, a separation needing two edges to separate. Recorded once per input per state.
+        // observation. It was made under one pin's transition, which is the whole of [`Cause::Toggle`].
+        // `settled` is empty: there is no competing order for the machine to land in, and no constraint
+        // follows from it either, a separation needing two edges to separate. Recorded once per input
+        // per state.
         for (i, r) in single.iter().enumerate() {
             if let Err(cycle) = r {
                 let group = oscillating_group(cycle, state_vars);
-                let node_levels = node_levels_at(s, &group);
-                oscillation.push(Hazard {
-                    cause: Cause::Race {
-                        pins: vec![racer(s, &inputs[i])],
+                detected.push(Hazard {
+                    cause: Cause::Toggle {
+                        pin: racer(s, &inputs[i]),
                     },
                     outcome: Outcome::Oscillation,
                     group,
@@ -246,7 +218,6 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                     settled: Vec::new(),
                     prevector: prevector_s.clone(),
                     levels: levels_s.clone(),
-                    node_levels,
                     state: s.clone(),
                     discovered,
                 });
@@ -258,7 +229,7 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
         // on it — a lone toggle rings around the cell's own feedback whatever its input count, and it is
         // the record every downstream claim about a ringing single toggle rests on.
         if n < 2 {
-            return (order_dependence, oscillation);
+            return detected;
         }
 
         for i in 0..n {
@@ -298,10 +269,9 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                     // constraint generated from it needs. This is what supplies an oscillating pair's
                     // (e.g. a mutex's) constraint, standing in for the divergence-derived one the
                     // combinational-neighbourhood filter below discards for it.
-                    let node_levels = node_levels_at(s, &group);
-                    oscillation.push(Hazard {
+                    detected.push(Hazard {
                         cause: Cause::Race {
-                            pins: vec![racer(s, x), racer(s, y)],
+                            pins: [racer(s, x), racer(s, y)],
                         },
                         outcome: Outcome::Oscillation,
                         group,
@@ -309,7 +279,6 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                         settled: settled_set.into_iter().collect(),
                         prevector: prevector_s.clone(),
                         levels: levels_s.clone(),
-                        node_levels,
                         state: s.clone(),
                         discovered,
                     });
@@ -322,12 +291,14 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                     continue; // confluent at this state — no hazard
                 }
 
-                // Does `w` hold a different value in the two settle orders? Both are total (see
-                // `DETERMINATE`), so this is a comparison of values, not of definedness.
-                let diverges = |w: &Symbol| {
-                    s_xy.value_of(w.as_str()).expect(DETERMINATE)
-                        != s_yx.value_of(w.as_str()).expect(DETERMINATE)
-                };
+                // Where the two settle orders part: the Kleene XOR of the two rows, aligned by variable
+                // identity, holds 1 at every variable they fix differently and 0 at every variable they
+                // agree on. A variable either order left undefined comes through as `-` (`- ^ x = -`)
+                // rather than as agreement, so the read below raises `DETERMINATE` on it exactly as the
+                // two reads it replaces did. Taken over the whole row like `support` above — only ever
+                // read at a state key, so the input and combinational columns sit unread.
+                let divergence = s_xy ^ s_yx;
+                let diverges = |w: &Symbol| divergence.value_of(w.as_str()).expect(DETERMINATE);
 
                 // Global divergence is not enough: it must interact with {x, y} in the immediate
                 // combinational neighbourhood — some state variable that actually diverges between the
@@ -350,13 +321,12 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                 // the cell rather than of the declaration.
                 let group: Vec<Symbol> =
                     state_vars.iter().filter(|w| diverges(w)).cloned().collect();
-                let node_levels = node_levels_at(s, &group);
                 let mut settled_set: BTreeSet<Minterm<Symbol>> = BTreeSet::new();
                 settled_set.insert(s_xy.project_to(&group));
                 settled_set.insert(s_yx.project_to(&group));
-                order_dependence.push(Hazard {
+                detected.push(Hazard {
                     cause: Cause::Race {
-                        pins: vec![racer(s, x), racer(s, y)],
+                        pins: [racer(s, x), racer(s, y)],
                     },
                     outcome: Outcome::Indeterminate,
                     group,
@@ -364,40 +334,29 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Dete
                     settled: settled_set.into_iter().collect(),
                     prevector: prevector_s.clone(),
                     levels: levels_s.clone(),
-                    node_levels,
                     state: s.clone(),
                     discovered,
                 });
             }
         }
 
-        (order_dependence, oscillation)
+        detected
     };
 
     // Probe every fully-initialised reachable state in parallel, then fold the per-state results
     // together. The filter comes AFTER `enumerate`, so `discovered` stays the BFS index of the state —
     // the key a downstream reader tells two observations apart by — rather than a position in the
-    // filtered sequence. The merge concatenates both halves, which is associative, so the folded result
-    // holds the same records regardless of state/thread order.
-    let (order_dependence, oscillation) = ex
-        .order
+    // filtered sequence. The merge concatenates, which is associative, so the folded result holds the
+    // same records regardless of state/thread order.
+    ex.order
         .par_iter()
         .enumerate()
         .filter(|(_, s)| m.arc_eligible(s))
         .map(per_state)
-        .reduce(
-            || (Vec::new(), Vec::new()),
-            |(mut oa, mut osca), (mut ob, mut oscb)| {
-                oa.append(&mut ob);
-                osca.append(&mut oscb);
-                (oa, osca)
-            },
-        );
-
-    DetectedHazards {
-        order_dependence,
-        oscillation,
-    }
+        .reduce(Vec::new, |mut a, mut b| {
+            a.append(&mut b);
+            a
+        })
 }
 
 #[cfg(test)]
@@ -418,10 +377,10 @@ mod tests {
     /// The pin a separation holds its own constrained pin apart from, and the edge that pin makes. A
     /// minimum pulse width relates a pin to itself and names no second one, so it reaches here only
     /// through a filtering fault.
-    fn related(c: &Constraint) -> (&str, Edge) {
+    fn related(c: &Constraint) -> &PinEdge {
         match &c.kind {
-            ConstraintKind::SetupHold { clock, clock_edge } => (clock.as_str(), *clock_edge),
-            ConstraintKind::NonSeq { other, other_edge } => (other.as_str(), *other_edge),
+            ConstraintKind::SetupHold { clock } => clock,
+            ConstraintKind::NonSeq { other } => other,
             ConstraintKind::MinPulseWidth => {
                 panic!("a minimum pulse width came through the separation filter")
             }
@@ -431,15 +390,17 @@ mod tests {
     /// The two pins a separation holds apart, sorted, so a test pins which pins it relates rather than
     /// which side of it each landed on.
     fn apart(c: &Constraint) -> Vec<&str> {
-        let mut pins = vec![related(c).0, c.pin.as_str()];
+        let mut pins = vec![related(c).pin.as_str(), c.pin.pin.as_str()];
         pins.sort();
         pins
     }
 
-    /// The pins a detected race names. Every record this pass files is caused by a race — it probes
-    /// input pairs and single toggles, never a pulse — so the pulse arm cannot arise here.
-    fn racing_pins(hz: &Hazard) -> &[Racer] {
+    /// The pins a detected record names. Every record this pass files is caused by inputs failing to
+    /// converge — it probes input pairs and single toggles, never a pulse — so the pulse arm cannot
+    /// arise here.
+    fn racing_pins(hz: &Hazard) -> &[PinEdge] {
         match &hz.cause {
+            Cause::Toggle { pin } => std::slice::from_ref(pin),
             Cause::Race { pins } => pins,
             Cause::Pulse { .. } => unreachable!("confluence detects a race, never a pulse"),
         }
@@ -453,13 +414,16 @@ mod tests {
         pins
     }
 
-    /// The cell's detected races settling under `outcome`. A cell carries one hazard list spanning both
-    /// causes, so what this pass detected is read back off it by both axes: the racing cause it probes
-    /// for, and the outcome the test is about.
+    /// The cell's detected races settling under `outcome`, a lone toggle's as much as a pair's. A cell
+    /// carries one hazard list spanning every cause, so what this pass detected is read back off it by
+    /// both axes: the causes it probes for, and the outcome the test is about.
     fn races(cell: &AnalysedCell, outcome: Outcome) -> Vec<&Hazard> {
         cell.hazards
             .iter()
-            .filter(|hz| matches!(hz.cause, Cause::Race { .. }) && hz.outcome == outcome)
+            .filter(|hz| {
+                matches!(hz.cause, Cause::Toggle { .. } | Cause::Race { .. })
+                    && hz.outcome == outcome
+            })
             .collect()
     }
 
@@ -502,8 +466,14 @@ Q = "CLK*M + !CLK*Q"
             "a declared-clock DFF yields only setup/hold, got {cons:?}"
         );
         assert!(
-            cons.iter()
-                .any(|c| related(c) == ("CLK", Edge::Rise) && c.pin == "D"),
+            cons.iter().any(|c| {
+                *related(c)
+                    == PinEdge {
+                        pin: Symbol::from("CLK"),
+                        edge: Edge::Rise,
+                    }
+                    && c.pin.pin == "D"
+            }),
             "expected a setup/hold of D around CLK↑, got {cons:?}"
         );
     }
@@ -642,8 +612,8 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
         );
         let mut endangered: Vec<Vec<&str>> = separations(&cell)
             .into_iter()
-            .filter(|c| related(c).0 == "CLKB" && c.pin.as_str() == "DB")
-            .map(|c| c.nodes.iter().map(|p| p.node.as_str()).collect())
+            .filter(|c| related(c).pin == "CLKB" && c.pin.pin.as_str() == "DB")
+            .map(|c| c.victim_names().iter().map(|n| n.as_str()).collect())
             .collect();
         endangered.sort();
         endangered.dedup();
@@ -728,14 +698,15 @@ Q = "CLK*M + !CLK*Q"
         );
         let cons = separations(&cell);
         assert!(!cons.is_empty());
-        let outputs: Vec<Symbol> = cell.outputs.iter().map(|o| o.name.clone()).collect();
+        let outputs: BTreeSet<Symbol> = cell.outputs.iter().map(|o| o.name.clone()).collect();
         for c in &cons {
             assert_eq!(
                 c.levels
                     .outputs
+                    .vars()
                     .iter()
-                    .map(|(n, _)| n.clone())
-                    .collect::<Vec<_>>(),
+                    .cloned()
+                    .collect::<BTreeSet<_>>(),
                 outputs
             );
             assert!(

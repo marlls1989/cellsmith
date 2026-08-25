@@ -7,14 +7,15 @@
 //! [`Outcome`](super::hazard::Outcome) is what told detection there was a hazard at all, and the same
 //! timing removes a race whether it settles indeterminately or never settles.
 //!
-//! - [`Cause::Race`] naming two pins is a **separation** between them: a directed
+//! - [`Cause::Toggle`] yields no constraint: a separation states that two edges stay apart, and a lone
+//!   toggle names one edge, with nothing to be separated from.
+//! - [`Cause::Race`] is a **separation** between its two pins: a directed
 //!   [`ConstraintKind::SetupHold`] (clock ← data — the DFF's `D` around `CLK`) where exactly one of the
 //!   pair is a declared clock, else a symmetric [`ConstraintKind::NonSeq`] (a mutex's `A`/`B`, a
 //!   C-element's `A↓`/`B↑`, an SR latch's simultaneous release). Clocks are *declared* inputs; the race
 //!   geometry is left out of the decision because inferring a clock from race order would be
 //!   state-dependent — the same pins read one way from one held state and the other way from another —
-//!   so it would distinguish nothing real. A race naming ONE pin yields no constraint: a separation
-//!   states that two edges stay apart, and one edge has nothing to be separated from.
+//!   so it would distinguish nothing real.
 //! - [`Cause::Pulse`] is a [`ConstraintKind::MinPulseWidth`]: the width a pulse on that one pin must
 //!   have for the nodes the record names to reach the outcome the reference close settles to (see
 //!   [`super::width`] for the reference). Liberate measures that width off the emitted block, narrowing
@@ -43,12 +44,12 @@
 //! characterise.
 
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use espresso_logic::{Minterm, Symbol};
 
-use crate::logic::arcs::{ArcLevels, Edge};
-use crate::logic::hazard::{Cause, Hazard, Racer};
+use crate::logic::arcs::{ArcLevels, PinEdge};
+use crate::logic::hazard::{Cause, Hazard};
 use crate::model::ConstraintPins;
 
 /// What a constraint relates its pin to: the other pin of a separation, or the pin itself.
@@ -58,47 +59,45 @@ use crate::model::ConstraintPins;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum ConstraintKind {
     /// A directed separation: the constrained pin is data, and this is the declared clock it is held
-    /// around.
-    SetupHold { clock: Symbol, clock_edge: Edge },
-    /// A symmetric separation between two requests, neither of which is a declared clock.
-    NonSeq { other: Symbol, other_edge: Edge },
+    /// around, with the edge that clock makes.
+    SetupHold { clock: PinEdge },
+    /// A symmetric separation between two requests, neither of which is a declared clock: the other
+    /// request, with the edge it makes.
+    NonSeq { other: PinEdge },
     /// A minimum pulse width on the constrained pin, which the emitted block names on both `-pin` and
     /// `-related_pin`: the constraint relates the pin to itself.
     MinPulseWidth,
 }
 
-/// One node a hazard attacks: a state variable whose settled value it puts at risk — a flop's master
-/// latch, under the race between its clock and its data — and the level that node holds at the probed
-/// state.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct VictimNode {
-    /// The state variable itself, which the emitted block names in its `-probe`.
-    pub(crate) node: Symbol,
-    /// The level it holds at the probed state, which the block's `-ic` initialises its column to.
-    pub(crate) level: bool,
-}
-
 /// One constraint generated to remove a detected hazard, rendered by the arcs emitter as the
 /// `define_arc` block(s) its kind calls for.
+///
+/// ONE PROBED STATE, as on the [`Hazard`] the views are inherited from: `prevector` walks to `state`,
+/// `levels` are the pin levels read there and `nodes` the victim levels read there, so the block's
+/// `-vector` and its `-ic` describe one and the same starting point. A situation keys on that state, so
+/// the readings it merges were all measured at it — which is why [`merged_victims`] can name the victims
+/// of every reading and still read each of their levels off the one state.
 #[derive(Debug, Clone)]
 pub(crate) struct Constraint {
     pub(crate) kind: ConstraintKind,
-    /// The pin this constraint constrains — the block's `-pin`.
-    pub(crate) pin: Symbol,
-    /// The edge that pin makes: the data edge of a separation, or the pulse's OPENING polarity, rise
-    /// meaning the pulse is high and fall low. A minimum-pulse-width block states that one edge, and
-    /// Liberate searches the width itself.
-    pub(crate) pin_edge: Edge,
+    /// The pin this constraint constrains — the block's `-pin` — with the edge it makes: the data edge
+    /// of a separation, or the pulse's OPENING polarity, rise meaning the pulse is high and fall low. A
+    /// minimum-pulse-width block states that one edge, and Liberate searches the width itself.
+    pub(crate) pin: PinEdge,
     /// The prevector: the input-assignment path that drives every state variable into the state where
     /// the constraint manifests (each node projected onto the inputs).
     pub(crate) prevector: Vec<Minterm<Symbol>>,
     /// The levels the cell's outputs hold in that state — the constraint arc's `-ic` initial condition,
     /// sampled at the same probed state as `prevector`.
     pub(crate) levels: ArcLevels,
-    /// The nodes the constrained cause attacks, in signal declaration order: the union of the victims
-    /// every outcome of that cause named. The emitted block gives each a column of its own and names them
-    /// all in one Liberate `-probe`, so the characterisation measures every node the cause puts at risk.
-    pub(crate) nodes: Vec<VictimNode>,
+    /// The nodes the constrained cause attacks — each a state variable whose settled value it puts at
+    /// risk, a flop's master latch under the race between its clock and its data — at the level it holds
+    /// at the probed state. The row's variables ARE the victims: the union of the victims every outcome
+    /// of that cause named, in signal declaration order, which is the order the hazard's group sampled
+    /// them in. The emitted block gives each a column of its own and names them all in one Liberate
+    /// `-probe`, so the characterisation measures every node the cause puts at risk, and `-ic`
+    /// initialises each of those columns to the level standing beside its name here.
+    pub(crate) nodes: Minterm<Symbol>,
     /// The probed state itself: every input and state variable at the level it holds there. The
     /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
     /// emitted column carries.
@@ -106,10 +105,12 @@ pub(crate) struct Constraint {
     /// Index of the probed state in the sequential BFS exploration order — the tie-break key the
     /// situation collapse and emission's general-block choice both land on one representative by.
     pub(crate) discovered: usize,
-    /// Which of the four (cause, outcome) cells the observations this constraint was generated from
-    /// occupy, as [`Hazard::ordinal`] numbers them — the lowest, where a cause showed more than one
-    /// outcome. The constraint follows the cause alone, so nothing here decides what is constrained; it
-    /// is the last component of the total order emission picks a representative by.
+    /// Which rank the observations this constraint was generated from occupy, as [`Hazard::ordinal`]
+    /// numbers them: three causes crossed with two outcomes give six (cause, outcome) pairs, which
+    /// `Hazard::ordinal` collapses into four ranks by giving a toggle and a race at the same outcome the
+    /// same number — the lowest rank among them, where a cause showed more than one outcome. The
+    /// constraint follows the cause alone, so nothing here decides what is constrained; it is the last
+    /// component of the total order emission picks a representative by.
     pub(crate) ordinal: u8,
 }
 
@@ -122,8 +123,8 @@ impl Constraint {
     /// observations of the same constraint carry the same names holding whatever their own states hold.
     /// Whatever identifies a constraint therefore reads the names, and the levels stay here, with the
     /// state they were sampled at.
-    pub(crate) fn victim_names(&self) -> Vec<Symbol> {
-        self.nodes.iter().map(|v| v.node.clone()).collect()
+    pub(crate) fn victim_names(&self) -> &[Symbol] {
+        self.nodes.vars()
     }
 
     /// Does `selection` ask for this constraint? The pins that reach it are the ones its KIND gives a
@@ -138,11 +139,11 @@ impl Constraint {
     /// names one pin, which is the pin that selects it.
     pub(crate) fn selected_by(&self, selection: &ConstraintPins) -> bool {
         match &self.kind {
-            ConstraintKind::NonSeq { other, .. } => {
-                selection.selects(&self.pin) || selection.selects(other)
+            ConstraintKind::NonSeq { other } => {
+                selection.selects(&self.pin.pin) || selection.selects(&other.pin)
             }
             ConstraintKind::SetupHold { .. } | ConstraintKind::MinPulseWidth => {
-                selection.selects(&self.pin)
+                selection.selects(&self.pin.pin)
             }
         }
     }
@@ -162,133 +163,64 @@ pub(crate) fn constrain(hazards: &[Hazard], clock_pins: &[Symbol]) -> Vec<Constr
 }
 
 /// The constraint that removes `hazard`, or `None` where its cause states no timing to constrain — a
-/// race observed under a single pin, which names one edge and so no separation.
+/// lone toggle, which names one edge and so no separation.
+///
+/// The views the constraint inherits are the hazard's samples of its one probed state (see [`Hazard`]),
+/// and this is where they are copied onward, so it is where the part of that a record can check without
+/// a machine is checked: the prevector's last step is the probed state's input projection, so the state
+/// fixes every input that step names and fixes it the same way — set-wise, the state's assignments are
+/// contained in the step's. The pin levels cannot be checked here: an output that is no state variable
+/// is no coordinate of the state, and re-reading it would need the machine detection ran on.
 fn remedy(hazard: &Hazard, clock_pins: &[Symbol]) -> Option<Constraint> {
-    let (kind, pin, pin_edge) = match &hazard.cause {
-        Cause::Race { pins } => {
-            let [x, y] = pins.as_slice() else {
-                return None; // fewer pins than a separation can relate
-            };
-            separation(x, y, clock_pins)
-        }
-        Cause::Pulse { pin, edge } => (ConstraintKind::MinPulseWidth, pin.clone(), *edge),
+    debug_assert!(
+        hazard.state.is_subset_of(hazard.pre_state()),
+        "a hazard's prevector must end at the state it was probed from",
+    );
+    let SeparationRole { kind, pin } = match &hazard.cause {
+        // A separation states that two edges stay apart, and one edge has nothing to be separated from.
+        Cause::Toggle { .. } => return None,
+        Cause::Race { pins: [x, y] } => separation(x, y, clock_pins),
+        Cause::Pulse { pin } => SeparationRole {
+            kind: ConstraintKind::MinPulseWidth,
+            pin: pin.clone(),
+        },
     };
     Some(Constraint {
         kind,
         pin,
-        pin_edge,
         prevector: hazard.prevector.clone(),
         levels: hazard.levels.clone(),
-        nodes: victims(&hazard.group, &hazard.node_levels),
+        nodes: hazard.node_levels(),
         state: hazard.state.clone(),
         discovered: hazard.discovered,
         ordinal: hazard.ordinal(),
     })
 }
 
-/// The separation that holds two racing pins apart, as the kind and the pin it constrains: a directed
-/// setup/hold when exactly one of the pair is a declared clock — the other pin being the data the clock
-/// is constrained against — else a symmetric non_seq of the two as they were probed.
-fn separation(x: &Racer, y: &Racer, clock_pins: &[Symbol]) -> (ConstraintKind, Symbol, Edge) {
-    let is_clock = |r: &Racer| clock_pins.contains(&r.pin);
+/// The role a pair of racing pins takes in the separation that holds them apart: the [`ConstraintKind`]
+/// it becomes, and the pin that becomes the constrained one — a directed setup/hold when exactly one of
+/// the pair is a declared clock, with the other pin the data that clock is constrained against, else a
+/// symmetric non_seq of the two as they were probed.
+struct SeparationRole {
+    kind: ConstraintKind,
+    pin: PinEdge,
+}
+
+/// The role two racing pins take in the separation that holds them apart. See [`SeparationRole`].
+fn separation(x: &PinEdge, y: &PinEdge, clock_pins: &[Symbol]) -> SeparationRole {
+    let is_clock = |r: &PinEdge| clock_pins.contains(&r.pin);
     if is_clock(x) ^ is_clock(y) {
         let (clk, data) = if is_clock(x) { (x, y) } else { (y, x) };
-        (
-            ConstraintKind::SetupHold {
-                clock: clk.pin.clone(),
-                clock_edge: clk.edge,
-            },
-            data.pin.clone(),
-            data.edge,
-        )
+        SeparationRole {
+            kind: ConstraintKind::SetupHold { clock: clk.clone() },
+            pin: data.clone(),
+        }
     } else {
-        (
-            ConstraintKind::NonSeq {
-                other: x.pin.clone(),
-                other_edge: x.edge,
-            },
-            y.pin.clone(),
-            y.edge,
-        )
-    }
-}
-
-/// The nodes a hazard attacks, each with the level the observation sampled for it. A record samples its
-/// levels for its own group, at the state it was probed from, so every entry is there.
-fn victims(group: &[Symbol], levels: &BTreeMap<Symbol, bool>) -> Vec<VictimNode> {
-    group
-        .iter()
-        .map(|node| VictimNode {
-            node: node.clone(),
-            level: *levels
-                .get(node)
-                .expect("a hazard observation samples every node of its own group"),
-        })
-        .collect()
-}
-
-/// Does `c` remove `hazard` — is the constraint the remedy generated for that observation?
-///
-/// A constraint answers to its situation, and a situation is the cause: the probed state, and the pins
-/// with the edge each makes. So that is what this compares, and the victim nodes are not in it — one
-/// cause has as many victim sets as it has outcomes, and the constraint covers them all. It therefore
-/// holds of the record `c` was generated from and of every other reading of that same cause: a ring and
-/// a divergence answer to it alike, whichever supplied the representative. An emitter asks it to
-/// annotate a constraint with the phenomenon that motivated it, which is why the probed state is
-/// compared — the annotation describes the very context the block renders.
-pub(crate) fn constrains(c: &Constraint, hazard: &Hazard) -> bool {
-    if c.state != hazard.state {
-        return false;
-    }
-    match (&c.kind, &hazard.cause) {
-        (ConstraintKind::MinPulseWidth, Cause::Pulse { pin, edge }) => {
-            c.pin == *pin && c.pin_edge == *edge
-        }
-        (
-            ConstraintKind::SetupHold { .. } | ConstraintKind::NonSeq { .. },
-            Cause::Race { pins },
-        ) => separated(c) == raced(pins),
-        // A pulse constrains no race and a separation no pulse, whatever pins the two happen to share.
-        (ConstraintKind::MinPulseWidth, Cause::Race { .. })
-        | (ConstraintKind::SetupHold { .. } | ConstraintKind::NonSeq { .. }, Cause::Pulse { .. }) => {
-            false
+        SeparationRole {
+            kind: ConstraintKind::NonSeq { other: x.clone() },
+            pin: y.clone(),
         }
     }
-}
-
-/// The two ends of a separation, sorted: which of them the record calls its constrained pin is a
-/// property of the declaration (a declared clock directs the pair), so it settles nothing about which
-/// pins are held apart.
-fn separated(c: &Constraint) -> Vec<Racer> {
-    let related = match &c.kind {
-        ConstraintKind::SetupHold { clock, clock_edge } => Racer {
-            pin: clock.clone(),
-            edge: *clock_edge,
-        },
-        ConstraintKind::NonSeq { other, other_edge } => Racer {
-            pin: other.clone(),
-            edge: *other_edge,
-        },
-        ConstraintKind::MinPulseWidth => return Vec::new(),
-    };
-    let mut pair = vec![
-        Racer {
-            pin: c.pin.clone(),
-            edge: c.pin_edge,
-        },
-        related,
-    ];
-    pair.sort();
-    pair
-}
-
-/// The pins a race names, sorted — the same reading [`separated`] takes of the constraint generated from
-/// it. A race is unordered, so a probe that took the pair one way round names the same race as one that
-/// took it the other.
-fn raced(pins: &[Racer]) -> Vec<Racer> {
-    let mut pins = pins.to_vec();
-    pins.sort();
-    pins
 }
 
 /// The pins one situation is about, each with the edge it makes: a constraint's kind carrying EVERY pin
@@ -302,39 +234,26 @@ fn raced(pins: &[Racer]) -> Vec<Racer> {
 enum SituationKind {
     /// A directed separation. Its two ends have different roles — data held around a declared clock — so
     /// each keeps a field of its own.
-    SetupHold { data: Racer, clock: Racer },
+    SetupHold { data: PinEdge, clock: PinEdge },
     /// A symmetric separation, as the unordered pair of the two edges it holds apart.
-    NonSeq { pair: [Racer; 2] },
+    NonSeq { pair: [PinEdge; 2] },
     /// A minimum pulse width, on the one pin it holds against that pin's own second edge.
-    MinPulseWidth { pin: Racer },
+    MinPulseWidth { pin: PinEdge },
 }
 
 impl SituationKind {
     fn of(c: &Constraint) -> Self {
-        let constrained = Racer {
-            pin: c.pin.clone(),
-            edge: c.pin_edge,
-        };
         match &c.kind {
-            ConstraintKind::SetupHold { clock, clock_edge } => SituationKind::SetupHold {
-                data: constrained,
-                clock: Racer {
-                    pin: clock.clone(),
-                    edge: *clock_edge,
-                },
+            ConstraintKind::SetupHold { clock } => SituationKind::SetupHold {
+                data: c.pin.clone(),
+                clock: clock.clone(),
             },
-            ConstraintKind::NonSeq { other, other_edge } => {
-                let mut pair = [
-                    constrained,
-                    Racer {
-                        pin: other.clone(),
-                        edge: *other_edge,
-                    },
-                ];
+            ConstraintKind::NonSeq { other } => {
+                let mut pair = [c.pin.clone(), other.clone()];
                 pair.sort();
                 SituationKind::NonSeq { pair }
             }
-            ConstraintKind::MinPulseWidth => SituationKind::MinPulseWidth { pin: constrained },
+            ConstraintKind::MinPulseWidth => SituationKind::MinPulseWidth { pin: c.pin.clone() },
         }
     }
 }
@@ -373,8 +292,9 @@ impl Situation {
 /// genuinely differ in is the victims they name and which (cause, outcome) cell they were read from: the
 /// victims merge, so the block probes every node any outcome of the cause attacks, and the ordinal keeps
 /// the lower, which lands emission's representative choice on one answer. Neither states a preference —
-/// the merge is a union and the ordinal a fixed numbering of the four cells — and the order the surviving
-/// constraints come out in states nothing.
+/// the merge is a union and the ordinal a fixed numbering of the four ranks the six (cause, outcome)
+/// pairs collapse into, a toggle and a race sharing a rank at the same outcome — and the order the
+/// surviving constraints come out in states nothing.
 fn record(found: &mut HashMap<Situation, Constraint>, c: Constraint) {
     match found.entry(Situation::of(&c)) {
         Entry::Occupied(mut e) => {
@@ -390,28 +310,26 @@ fn record(found: &mut HashMap<Situation, Constraint>, c: Constraint) {
 
 /// The victims of two readings of one situation, merged: every node either names, in the probed state's
 /// own column order — which for a state variable is signal declaration order, the order each reading's
-/// own list is already in.
+/// own row is already in.
 ///
-/// Both readings were measured at `state`, since the situation keys on it, so a node they share holds one
-/// level and the merge cannot disagree with itself.
+/// Both readings were measured at `state`, since the situation keys on it, so every node either names
+/// holds one level there and the merge cannot disagree with itself. Each level comes from that state:
+/// [`Minterm::or`] states WHICH nodes the union names — a variable defined in either row is a column of
+/// the result — and combines their values as TRUTH values, so its Kleene table reads a node only one of
+/// the two names as `0 | -`, the don't-care. A victim node is a `-probe` column, and `-ic` has to
+/// initialise that column to a level.
 fn merged_victims(
-    kept: &[VictimNode],
-    other: &[VictimNode],
+    kept: &Minterm<Symbol>,
+    other: &Minterm<Symbol>,
     state: &Minterm<Symbol>,
-) -> Vec<VictimNode> {
-    let levels: HashMap<&Symbol, bool> = kept
-        .iter()
-        .chain(other)
-        .map(|v| (&v.node, v.level))
-        .collect();
-    state
-        .vars()
-        .iter()
-        .filter_map(|node| {
-            levels.get(node).map(|level| VictimNode {
-                node: node.clone(),
-                level: *level,
-            })
-        })
-        .collect()
+) -> Minterm<Symbol> {
+    let both = kept.or(other);
+    let named = both.vars();
+    state.project_to_labels(
+        state
+            .vars()
+            .iter()
+            .filter(|&node| named.contains(node))
+            .cloned(),
+    )
 }

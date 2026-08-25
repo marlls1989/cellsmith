@@ -14,7 +14,7 @@
 //! data ([`Arc`]; the detected [`Hazard`]s; the
 //! generated `Constraint`s; the explored states themselves, which are minterms and carry no BDD
 //! handle) escapes
-//! into [`MachineAnalysis`]; the live BDD handles never leave this pass.
+//! into [`Derivations`]; the live BDD handles never leave this pass.
 //!
 //! The BDD brand is a **generic type parameter** `<B, C>` carried by [`Machine`]: the builder is minted
 //! once per cell in [`crate::model::Cell::analyse`] (a fresh brand each cell, so handles from two cells
@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
 
-use crate::logic::arcs::{self, Arc, HiddenArc};
+use crate::logic::arcs::{self, Arc, DerivedArcs, HiddenArc};
 use crate::logic::confluence;
 use crate::logic::constraint::{self, Constraint};
 use crate::logic::hazard::Hazard;
@@ -36,46 +36,37 @@ use crate::logic::leakage::{self, LeakageState};
 use crate::logic::{machine, resolve, width};
 use crate::model::{AnalysedCell, ConstraintPins};
 
-/// The plain-data outcome of the shared machine pass: the transition arcs, the detected hazards — one
-/// [`Hazard`] per (cause, outcome) pair the two detection passes observe — and the constraints generated
-/// to avoid them. Everything is empty when the exploration passed a budget ceiling, and `unexplored`
-/// then names the counter that stopped it
-/// (see [`machine::ExplorationBudget`]).
+/// What one fully explored machine yields: the transition arcs, the detected hazards — one [`Hazard`]
+/// per (cause, outcome) pair the two detection passes observe — and the constraints generated to avoid
+/// them.
 ///
-/// `MachineAnalysis` itself never escapes this module: [`analyse_machine`]'s result is copied field-for-
-/// field into the matching [`crate::model::AnalysedCell`] fields by `Cell::analyse` (see `model.rs`).
-#[derive(Debug, Default)]
-pub struct MachineAnalysis {
+/// This is what [`analyse_machine`] returns on success, and it is matched by `Cell::analyse` into the
+/// corresponding [`crate::model::AnalysedCell`] fields (see `model.rs`). A pass the budget stopped
+/// derives none of these and carries the counter that stopped it instead.
+#[derive(Debug)]
+pub struct Derivations {
     pub(crate) arcs: Vec<Arc>,
     pub(crate) hidden_arcs: Vec<HiddenArc>,
     pub(crate) constraints: Vec<Constraint>,
     pub(crate) hazards: Vec<Hazard>,
     pub(crate) leakage: Vec<LeakageState>,
     pub(crate) edge: crate::logic::edge::EdgeArcs,
-    /// The budget counter that stopped the exploration, or `None` when the machine was explored in
-    /// full. Set ⇒ every field above is empty, because nothing was derived.
-    ///
-    /// A [`Exploration::Reused`] view cannot itself be stopped — the exploration it reads already ran
-    /// to completion in the view that performed it — so this is set only for a view that explored
-    /// ([`Exploration::Fresh`]) or for one mirroring the ceiling that stopped the exploration it would
-    /// have reused.
-    pub(crate) unexplored: Option<machine::ExplorationLimit>,
     /// The exploration this pass performed, handed back so a second view of the same cell projects it
-    /// onto its own coordinates instead of repeating it. `None` when the pass reused an exploration, and
-    /// when a budget ceiling stopped one.
+    /// onto its own coordinates instead of repeating it. `None` when the pass reused an exploration.
     pub(crate) explored: Option<machine::Explored>,
 }
 
 /// Where a view's explored states come from.
 ///
 /// A cell explores once. The view that owns the exploration is `Fresh` and performs it under the
-/// budget; a second view of the same cell is `Reused` and carries that exploration's outcome — the
-/// explored states themselves, or the ceiling that stopped them.
+/// budget; a second view of the same cell is `Reused` and carries the states that view reached. A
+/// ceiling that stops the exploration ends the analysis there, so a `Reused` view is only ever reached
+/// once the exploration succeeded.
 pub enum Exploration<'e> {
     /// This view performs the exploration, bounded by this budget.
     Fresh(&'e machine::ExplorationBudget),
-    /// This view reuses the outcome the cell's other view already reached.
-    Reused(Result<&'e machine::Explored, machine::ExplorationLimit>),
+    /// This view reuses the states the cell's other view already explored.
+    Reused(&'e machine::Explored),
 }
 
 /// A cell's asynchronous state machine, built once and shared by the arc and confluence derivations. The
@@ -95,7 +86,8 @@ pub struct Machine<'c, B: Brand, C: ManagerCell> {
     /// addresses them by name; each is a node column of its own, stepped with the state variables.
     pub(crate) combinational: Vec<machine::Delta<B, C>>,
     /// The cell's exposed internal nodes — the internals the spec lists in `expose`, in declared order,
-    /// which is the order [`super::arcs::ArcLevels`] fills its exposed levels in.
+    /// which is the order the emitted blocks give them columns in. [`super::arcs::ArcLevels`] samples
+    /// the same nodes, keyed by name rather than by position.
     ///
     /// Exposure is read only to SAMPLE levels: these names are absent from the exploration's
     /// `seed_funcs` below, so exposing a node cannot change which states are reached. That is what makes
@@ -110,9 +102,9 @@ pub struct Machine<'c, B: Brand, C: ManagerCell> {
 impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
     /// Build the shared machine for `cell` from the minimised `bdds` map (built once in
     /// [`crate::model::Cell::analyse`]), taking its explored states from `exploration` — discovered here
-    /// under a budget, or carried over from the cell's other view. That is the only fallible step: the
-    /// exploration stops, leaving the cell unexplored, when one of the budget's two counters passes its
-    /// ceiling, and that counter comes back as the error whichever view it stopped.
+    /// under a budget, or carried over from the cell's other view. That is the only fallible step: a
+    /// fresh exploration stops when one of the budget's two counters passes its ceiling, and that
+    /// counter comes back as the error.
     pub fn build(
         cell: &'c AnalysedCell,
         bdds: &BTreeMap<Symbol, Bdd<B, C>>,
@@ -153,13 +145,19 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
         // other internal was folded away and is not in `signals()` at all.
         let deltas: Vec<machine::Delta<B, C>> = state_vars
             .iter()
-            .map(|v| (v.clone(), bdds[v].clone()))
+            .map(|v| machine::Delta {
+                signal: v.clone(),
+                delta: bdds[v].clone(),
+            })
             .collect();
         let combinational: Vec<machine::Delta<B, C>> = signals
             .iter()
             .map(|s| &s.name)
             .filter(|nm| !state_set.contains(*nm))
-            .map(|nm| (nm.clone(), bdds[nm].clone()))
+            .map(|nm| machine::Delta {
+                signal: nm.clone(),
+                delta: bdds[nm].clone(),
+            })
             .collect();
         // The exposed nodes surviving in this view. A combinational exposure is one of the coordinates
         // above; a state-variable exposure is one of the state columns.
@@ -183,9 +181,9 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
                     .chain(
                         combinational
                             .iter()
-                            .filter(|(n, _)| output_names.contains(n)),
+                            .filter(|c| output_names.contains(&c.signal)),
                     )
-                    .map(|(_, d)| d.clone())
+                    .map(|c| c.delta.clone())
                     .collect();
                 machine::explore(coords, &seed_funcs, inputs, budget)?
             }
@@ -193,13 +191,11 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
             // node columns — the inputs followed by this view's coordinates, in `machine::explore`'s own
             // column order. The target names are computed here and never passed in, so a projection onto
             // the wrong view's coordinates cannot be written.
-            Exploration::Reused(Ok(e)) => {
+            Exploration::Reused(e) => {
                 let full_names: Vec<Symbol> =
                     inputs.iter().cloned().chain(coords.names()).collect();
                 e.project_to(&full_names)
             }
-            // One exploration, one verdict: the ceiling that stopped it stops this view too.
-            Exploration::Reused(Err(limit)) => return Err(limit),
         };
 
         Ok(Machine {
@@ -231,7 +227,7 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
     pub(crate) fn combinational_outputs(&self) -> impl Iterator<Item = &machine::Delta<B, C>> {
         self.combinational
             .iter()
-            .filter(|(n, _)| self.cell.outputs.iter().any(|o| o.name == *n))
+            .filter(|c| self.cell.outputs.iter().any(|o| o.name == c.signal))
     }
 
     /// The machine's coordinate δ set, in [`machine::Coordinates`] order — the state variables followed
@@ -271,25 +267,24 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
 /// Build the cell's state machine from the minimised `bdds` map and derive its arcs and hazards from the
 /// shared exploration, which `exploration` either budgets or supplies. The builder was minted once in
 /// [`crate::model::Cell::analyse`]; this pass only reads the shared map. An exploration stopped by one of
-/// the budget's counters yields an otherwise-empty [`MachineAnalysis`] carrying that counter in
-/// `unexplored`: nothing was derived, and the caller reports it.
+/// the budget's counters comes back as the error carrying that counter (see
+/// [`machine::ExplorationBudget`]): nothing was derived, and the caller reports it.
+///
+/// A [`Exploration::Reused`] view cannot itself be stopped — the exploration it reads already ran to
+/// completion in the view that performed it — so the error is reached only by a [`Exploration::Fresh`]
+/// view.
 pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     cell: &AnalysedCell,
     bdds: &BTreeMap<Symbol, Bdd<B, C>>,
     collapse: bool,
     exploration: Exploration<'_>,
-) -> MachineAnalysis {
+) -> Result<Derivations, machine::ExplorationLimit> {
     let reused = matches!(exploration, Exploration::Reused(_));
-    let m = match Machine::build(cell, bdds, exploration) {
-        Ok(m) => m,
-        Err(limit) => {
-            return MachineAnalysis {
-                unexplored: Some(limit),
-                ..Default::default()
-            }
-        }
-    };
-    let (arcs, hidden_arcs) = arcs::derive(&m);
+    let m = Machine::build(cell, bdds, exploration)?;
+    let DerivedArcs {
+        arcs,
+        hidden: hidden_arcs,
+    } = arcs::derive(&m);
     // Detect the hazards, then generate the constraints that avoid them — two separate stages. Every
     // hazard is always detected — the race-cause and pulse-cause ones alike (they drive the warnings and
     // annotations); what the cell's selection decides is which of them get a constraint. The selection
@@ -306,12 +301,7 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     // The one `hazards` record set: what the two detection passes returned, concatenated. Generation
     // reads it whole — a constraint follows its record's cause, so both passes' records reach the one
     // generator.
-    let hazards: Vec<Hazard> = detected
-        .order_dependence
-        .into_iter()
-        .chain(detected.oscillation)
-        .chain(width_dependence)
-        .collect();
+    let hazards: Vec<Hazard> = detected.into_iter().chain(width_dependence).collect();
     let constraints = match &cell.constraint_arcs_declared {
         // Nothing is wanted of any pin, so generation is skipped whole rather than run and discarded.
         ConstraintPins::Off => Vec::new(),
@@ -324,25 +314,24 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     // already-existing names and mutates nothing (the exploration-unchanged invariant holds BY
     // CONSTRUCTION). The derived `arcs` are its label domain: every timing arc it labels is one of the
     // pipeline's own delay arcs. The opt-out (`collapse == false`) SKIPS the classify() call entirely
-    // rather than discarding its result: a real bypass, byte-identical to the Default annotation.
+    // rather than discarding its result: a real bypass, leaving the annotation at its plain `Default`.
     let edge = if collapse {
         crate::logic::edge::classify(&m, &arcs)
     } else {
         crate::logic::edge::EdgeArcs::default()
     };
     let leakage = leakage::derive(&m);
-    MachineAnalysis {
+    Ok(Derivations {
         arcs,
         hidden_arcs,
         constraints,
         hazards,
         leakage,
         edge,
-        unexplored: None,
         // Handed back only by the view that performed the exploration: the derivations above are the
         // whole of what a reusing view owes its caller.
         explored: (!reused).then_some(m.explored),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -351,61 +340,65 @@ mod tests {
 
     use espresso_logic::Symbol;
 
-    use crate::emit::arcs_tcl::{cell_arcs_tcl, ArcsTclOptions};
+    use crate::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, Deck};
     use crate::emit::liberty::cell_liberty;
-    use crate::emit::verilog::cell_verilog;
-    use crate::logic::arcs::Edge;
+    use crate::emit::tcl::VectorValue;
+    use crate::logic::arcs::PinEdge;
     use crate::logic::constraint::{Constraint, ConstraintKind};
     use crate::logic::hazard::{Cause, Outcome};
-    use crate::logic::machine::ExplorationLimit;
+    use crate::logic::machine::{ExplorationBudget, ExplorationLimit};
     use crate::logic::resolve;
-    use crate::model::{analyse_one, AnalysedCell};
+    use crate::model::{analyse_one, parse_spec, AnalysedCell, ModelError};
+
+    /// Analyse the one cell `src` declares under the default budget, expecting the exploration to be
+    /// stopped: the [`ModelError`] the failure comes back as.
+    fn budget_verdict(src: &str) -> ModelError {
+        parse_spec(src)
+            .expect("the spec parses")
+            .cells
+            .remove(0)
+            .analyse()
+            .expect_err("the exploration passes a ceiling, so the analysis fails")
+    }
 
     #[test]
     fn oversized_cell_trips_the_candidate_budget() {
         // 24 inputs, so each forced cover cube of Y carries 23 don't-care input columns and expands to
-        // 2^23 seed minterms — past the default candidate ceiling. The exploration stops there, so arcs,
-        // constraints and both detected hazards all come back empty (the unexplored path) — yet the
-        // emitters must still run without panicking.
+        // 2^23 seed minterms — past the default candidate ceiling. The exploration stops there and the
+        // analysis fails with it: a cell derives no arcs, hazards, leakage states or constraints
+        // without an exploration, so there is nothing to hand back.
         let n = 24;
         let list = (0..n)
             .map(|i| format!("\"I{i}\""))
             .collect::<Vec<_>>()
             .join(", ");
-        // Opt in to constraints so the empty result below is the stopped exploration suppressing
-        // generation, not merely the per-cell gate leaving `constraints` untouched.
         let src = format!(
             "[[cell]]\nname = \"WIDE\"\nconstraint_arcs = true\ninputs = [{list}]\n[cell.outputs]\nY = \"I0\"\n"
         );
-        let cell = analyse_one(&src);
-        assert!(
-            matches!(cell.unexplored, Some(ExplorationLimit::Candidates(_))),
-            "the candidate counter is the one that stopped it, got {:?}",
-            cell.unexplored,
+        let err = budget_verdict(&src);
+        assert_eq!(
+            err,
+            ModelError::Exploration {
+                cell: Symbol::from("WIDE"),
+                source: ExplorationLimit::Candidates(ExplorationBudget::default().candidates),
+            },
+            "the candidate counter is the one that stopped it, and the failure names the cell",
         );
-        assert!(cell.arcs.is_empty(), "an unexplored cell has no arcs");
+        // The counter and its ceiling read off the leaf; the cell and the flag are the wrapper's.
+        let msg = err.to_string();
         assert!(
-            cell.constraints.is_empty(),
-            "an unexplored cell has no constraints"
+            msg.contains("cell \"WIDE\"")
+                && msg.contains("candidate budget")
+                && msg.contains("--max-candidates"),
+            "the diagnostic names the cell, the budget and the flag: {msg}"
         );
-        assert!(cell.hazards.is_empty(), "an unexplored cell has no hazards");
-        assert!(
-            cell.leakage.is_empty(),
-            "an unexplored cell has no leakage states"
-        );
-        // Emission still succeeds (no panic); the artifacts are arc-free.
-        let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());
-        let _ = cell_verilog(&cell);
-        let _ = cell_liberty(&cell);
     }
 
     #[test]
-    fn an_exposing_cell_over_budget_reports_one_verdict_on_both_views() {
-        // The same over-budget shape, exposing an internal node so the cell carries two views. The cell
-        // explores once, in the arc view, and the ceiling that stopped it reaches the model view too:
-        // both views carry the verdict and neither derives anything. That is what lets `main`'s
-        // `c.unexplored.or(c.arc_view().unexplored)` name an offending cell exactly once, whichever view
-        // the exploration belonged to.
+    fn an_exposing_cell_over_budget_reports_the_same_verdict() {
+        // The same over-budget shape, exposing an internal node so the cell would carry two views. The
+        // cell explores once, in the arc view, and the ceiling that stopped it ends the analysis there:
+        // the model view is never built, and the one verdict names the cell exactly once.
         let n = 24;
         let list = (0..n)
             .map(|i| format!("\"I{i}\""))
@@ -416,48 +409,17 @@ mod tests {
         // past the ceiling. That keeps the fixture cheap as well as over budget: a cube charged past the
         // ceiling is never expanded.
         let src = format!(
-            "[[cell]]\nname = \"WIDEX\"\nconstraint_arcs = true\nexpose = [\"M\"]\ninputs = [{list}]\n[cell.internal]\nM = \"I0\"\n[cell.outputs]\nY = \"M\"\n"
+            "[[cell]]\nname = \"WIDEX\"\nconstraint_arcs = true\nexpose = [\"M\"]\n\
+             inputs = [{list}]\n[cell.internal]\nM = \"I0\"\n[cell.outputs]\nY = \"M\"\n"
         );
-        let cell = analyse_one(&src);
-        assert!(
-            cell.exposed_view.is_some(),
-            "the exposure gives the cell an arc view beside the model view",
+        assert_eq!(
+            budget_verdict(&src),
+            ModelError::Exploration {
+                cell: Symbol::from("WIDEX"),
+                source: ExplorationLimit::Candidates(ExplorationBudget::default().candidates),
+            },
+            "an exposing cell reaches the same single verdict as one with no view of its own",
         );
-        for (which, view) in [("model view", &cell), ("arc view", cell.arc_view())] {
-            assert!(
-                matches!(view.unexplored, Some(ExplorationLimit::Candidates(_))),
-                "the {which} carries the candidate counter that stopped the cell, got {:?}",
-                view.unexplored,
-            );
-            assert!(view.arcs.is_empty(), "the unexplored {which} has no arcs");
-            assert!(
-                view.hidden_arcs.is_empty(),
-                "the unexplored {which} has no hidden arcs"
-            );
-            assert!(
-                view.constraints.is_empty(),
-                "the unexplored {which} has no constraints"
-            );
-            assert!(
-                view.hazards.is_empty(),
-                "the unexplored {which} has no hazards"
-            );
-            assert!(
-                view.leakage.is_empty(),
-                "the unexplored {which} has no leakage states"
-            );
-            assert!(
-                view.edge.labels.is_empty()
-                    && view.edge.captures.is_empty()
-                    && view.edge.folded.is_empty()
-                    && view.edge.derived.is_empty(),
-                "the unexplored {which} carries the default edge classification"
-            );
-        }
-        // Emission still succeeds (no panic); the artifacts are arc-free.
-        let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());
-        let _ = cell_verilog(&cell);
-        let _ = cell_liberty(&cell);
     }
 
     #[test]
@@ -495,7 +457,8 @@ mod tests {
         let state_vars = resolve::state_variables(&signals);
         assert_eq!(state_vars.len(), k, "every output is a state variable");
         assert_eq!(cell.inputs.len() + state_vars.len(), 24, "machine width");
-        assert_eq!(cell.unexplored, None, "the exploration ran to completion");
+        // A stopped exploration fails the analysis, so `analyse_one` returning at all is the exploration
+        // having run to completion.
         assert!(
             !cell.arcs.is_empty(),
             "a fully explored machine yields arcs"
@@ -517,14 +480,14 @@ inputs = ["A"]
 Q = "A + Q"
 "#,
         );
-        assert!(!cell
-            .hazards
-            .iter()
-            .any(|h| matches!(h.cause, Cause::Race { .. }) && h.outcome == Outcome::Oscillation));
+        assert!(!cell.hazards.iter().any(|h| {
+            matches!(h.cause, Cause::Toggle { .. } | Cause::Race { .. })
+                && h.outcome == Outcome::Oscillation
+        }));
         assert_eq!(cell.regions.len(), 1);
         let q = &cell.regions[0];
         assert!(q.hysteretic, "a single-input keeper holds its own state");
-        assert!(!q.on.is_empty(), "Q is forced high when A is high");
+        assert_ne!(q.on.num_cubes(), 0, "Q is forced high when A is high");
         // No measured arc: the only rise leaves the uninitialised state, which is not characterised.
         assert!(
             cell.arcs.is_empty(),
@@ -541,8 +504,10 @@ Q = "A + Q"
             "a single-input keeper's pulses all settle back to where they started"
         );
         // Emission is well-formed: a statetable for the hysteretic output, and no panic on the arcs.
-        assert!(cell_liberty(&cell).contains("statetable"));
-        let _ = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        assert!(liberty_parser::liberty::Liberty(cell_liberty(&cell))
+            .to_string()
+            .contains("statetable"));
+        let _ = Deck(&[cell_arcs(&cell, ArcsTclOptions::default())]).to_string();
     }
 
     #[test]
@@ -581,7 +546,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
             !cell.constraints.is_empty(),
             "the CLK/D setup-hold hazard is constrained",
         );
-        let tcl = cell_arcs_tcl(&cell, ArcsTclOptions::default());
+        let tcl = Deck(&[cell_arcs(&cell, ArcsTclOptions::default())]).to_string();
         assert!(tcl.contains("define_arc"));
     }
 
@@ -594,7 +559,11 @@ Q = "!R*(CLK*M + !CLK*Q)"
         // The pins constrained, as a set: which observation supplied a constraint states nothing, so
         // two runs agree here without agreeing on the records behind it.
         let pins = |c: &crate::model::AnalysedCell| {
-            let mut v: Vec<String> = c.constraints.iter().map(|k| k.pin.to_string()).collect();
+            let mut v: Vec<String> = c
+                .constraints
+                .iter()
+                .map(|k| k.pin.pin.to_string())
+                .collect();
             v.sort();
             v.dedup();
             v
@@ -605,14 +574,9 @@ Q = "!R*(CLK*M + !CLK*Q)"
                 .hazards
                 .iter()
                 .map(|h| match &h.cause {
-                    Cause::Pulse { pin, .. } => format!("pulse {pin}"),
-                    Cause::Race { pins } => format!(
-                        "race {}",
-                        pins.iter()
-                            .map(|r| r.pin.to_string())
-                            .collect::<Vec<_>>()
-                            .join("+")
-                    ),
+                    Cause::Pulse { pin } => format!("pulse {}", pin.pin),
+                    Cause::Toggle { pin } => format!("toggle {}", pin.pin),
+                    Cause::Race { pins: [x, y] } => format!("race {}+{}", x.pin, y.pin),
                 })
                 .collect();
             v.sort();
@@ -636,7 +600,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
 
         // And the deck follows the selection: the separation blocks come out, the minimum width the
         // unselected `CLK` would have carried does not.
-        let tcl = cell_arcs_tcl(&data_only, ArcsTclOptions::default());
+        let tcl = Deck(&[cell_arcs(&data_only, ArcsTclOptions::default())]).to_string();
         assert!(tcl.contains("-type setup"));
         assert!(tcl.contains("-type hold"));
         assert!(!tcl.contains("-type min_pulse_width"));
@@ -645,7 +609,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
     #[test]
     fn exposure_leaves_the_exploration_untouched() {
         // Exposed nodes are read to sample levels and never seed the exploration, so the same cell
-        // explores the same states in the same order whether or not it exposes its master — and an
+        // explores the same states whether or not it exposes its master — and an
         // exposure-free cell carries no exposed nodes and no δ for them at all.
         let dff = |expose: &str| {
             format!(
@@ -754,7 +718,7 @@ Q = "W + Q*(A+B)"
         assert_eq!(
             m.combinational
                 .iter()
-                .map(|(n, _)| n.as_str())
+                .map(|c| c.signal.as_str())
                 .collect::<Vec<_>>(),
             ["W"],
             "the exposed combinational node is the other coordinate",
@@ -764,26 +728,37 @@ Q = "W + Q*(A+B)"
             "the fixture explores at least one state"
         );
         for node in &m.explored.order {
-            for (name, delta) in m.deltas.iter().chain(&m.combinational) {
+            for coord in m.deltas.iter().chain(&m.combinational) {
+                let name = &coord.signal;
                 assert!(
                     node.vars().iter().any(|v| v == name),
                     "coordinate {name} has no column at {node:?}",
                 );
                 assert_eq!(
                     node.value_of(name.as_str()),
-                    delta.evaluate_fast(node),
+                    coord.delta.evaluate_fast(node),
                     "coordinate {name}'s column disagrees with its δ at {node:?}",
                 );
             }
         }
     }
 
+    /// One state read off the fixture's whole explored set: its A and B inputs, the keeper's resolved
+    /// Q level and the exposure's resolved W level.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    struct ExploredState {
+        a: bool,
+        b: bool,
+        q: bool,
+        w: bool,
+    }
+
     #[test]
     fn the_field_readers_return_the_coordinate_columns() {
         // `output_value` and `exposed_value` read a coordinate's column whichever half it belongs to.
-        // Pinned over the fixture's whole explored set as `(A, B, Q, W)`: the keeper holds through the
-        // two single-input vectors — hence each of them twice, once per held value — is set at `A·B`
-        // and cleared at neither input, while the exposure tracks `A·B`.
+        // Read over the fixture's whole explored set: the keeper holds through the two single-input
+        // vectors — hence each of them twice, once per held value — is set at `A·B` and cleared at
+        // neither input, while the exposure tracks `A·B`.
         let cell = coordinate_fixture();
         let builder = espresso_logic::sync_bdd_builder!();
         let bdds = crate::model::build_signal_bdds(&cell, &builder);
@@ -794,7 +769,7 @@ Q = "W + Q*(A+B)"
         )
         .expect("fixture is explored");
 
-        let mut read: Vec<(bool, bool, bool, bool)> = m
+        let mut read: Vec<ExploredState> = m
             .explored
             .order
             .iter()
@@ -803,26 +778,56 @@ Q = "W + Q*(A+B)"
                     node.value_of(pin)
                         .expect("every input is fixed in an explored state")
                 };
-                (
-                    of("A"),
-                    of("B"),
-                    m.output_value("Q", node)
+                ExploredState {
+                    a: of("A"),
+                    b: of("B"),
+                    q: m.output_value("Q", node)
                         .expect("the keeper resolves at every explored state"),
-                    m.exposed_value("W", node)
+                    w: m.exposed_value("W", node)
                         .expect("the exposure resolves at every explored state"),
-                )
+                }
             })
             .collect();
         read.sort();
         assert_eq!(
             read,
             [
-                (false, false, false, false),
-                (false, true, false, false),
-                (false, true, true, false),
-                (true, false, false, false),
-                (true, false, true, false),
-                (true, true, true, true),
+                ExploredState {
+                    a: false,
+                    b: false,
+                    q: false,
+                    w: false
+                },
+                ExploredState {
+                    a: false,
+                    b: true,
+                    q: false,
+                    w: false
+                },
+                ExploredState {
+                    a: false,
+                    b: true,
+                    q: true,
+                    w: false
+                },
+                ExploredState {
+                    a: true,
+                    b: false,
+                    q: false,
+                    w: false
+                },
+                ExploredState {
+                    a: true,
+                    b: false,
+                    q: true,
+                    w: false
+                },
+                ExploredState {
+                    a: true,
+                    b: true,
+                    q: true,
+                    w: true
+                },
             ],
         );
     }
@@ -833,21 +838,19 @@ Q = "W + Q*(A+B)"
     /// the selections below must not depend on. The probed state is left out: these tests compare WHICH
     /// constraints a selection returns, and the selections of one cell answer over the same states.
     fn describe(c: &Constraint) -> String {
-        let end = |pin: &Symbol, edge: Edge| format!("{pin}/{}", edge.rf());
+        let end = |p: &PinEdge| format!("{}/{}", p.pin, VectorValue::from(p.edge));
         let head = match &c.kind {
-            ConstraintKind::SetupHold { clock, clock_edge } => format!(
-                "setup_hold {} around {}",
-                end(&c.pin, c.pin_edge),
-                end(clock, *clock_edge),
-            ),
-            ConstraintKind::NonSeq { other, other_edge } => {
-                let mut ends = [end(&c.pin, c.pin_edge), end(other, *other_edge)];
+            ConstraintKind::SetupHold { clock } => {
+                format!("setup_hold {} around {}", end(&c.pin), end(clock))
+            }
+            ConstraintKind::NonSeq { other } => {
+                let mut ends = [end(&c.pin), end(other)];
                 ends.sort();
                 format!("non_seq {} {}", ends[0], ends[1])
             }
-            ConstraintKind::MinPulseWidth => format!("min_pulse_width {}", end(&c.pin, c.pin_edge)),
+            ConstraintKind::MinPulseWidth => format!("min_pulse_width {}", end(&c.pin)),
         };
-        let nodes: Vec<String> = c.nodes.iter().map(|v| v.node.to_string()).collect();
+        let nodes: Vec<String> = c.victim_names().iter().map(|n| n.to_string()).collect();
         format!("{head} over {}", nodes.join(","))
     }
 

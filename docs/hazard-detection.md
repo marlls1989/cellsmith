@@ -2,29 +2,31 @@
 
 How cellsmith detects the hazards of a state-holding cell and generates the timing constraint
 (setup/hold, non-sequential, or minimum pulse width) that avoids each one. A hazard is classified on two
-independent axes — what its timing is between, a race or a pulse, and what the machine then does,
-settling indeterminately or oscillating — giving four hazards in all. Detection and emission are two
-separate layers: detection walks the reachable-state machine and reports every hazard it observes there;
-emission decides which of those reports becomes a rendered block, and states the timing that removes it.
+independent axes — what its timing is between, one of three causes, and what the machine then does,
+settling indeterminately or oscillating. Detection and emission are two separate layers: detection walks
+the reachable-state machine and reports every hazard it observes there; emission decides which of those
+reports becomes a rendered block, and states the timing that removes it.
 Both run on the same reachable-state machine that drives arc discovery.
 
 This is a companion to `state-machine-arc-engine.md`, which covers the model, the next-state functions δ,
 settling, and the reachability exploration; everything here builds on those. The functional state-table
 view of the same signals is documented separately in `state-table-regions.md`.
 
-## 1. Two axes, four hazards
+## 1. Two axes, three causes
 
-A **delay arc** records that a single input edge causes an output edge. A hazard instead involves *two
-edges* landing too close together — one edge on each of two inputs, or the two edges a single input makes
-on its own. Edges that land close enough in time can drive the cell into **metastability**: an unresolved
-condition the cell cannot leave cleanly. Detection finds the occasions where that risk is real, and
-classifies each on two independent axes.
+A **delay arc** records that a single input edge causes an output edge. A hazard instead involves timing
+the cell cannot settle around cleanly: a single input's own edge whose cascade never converges, one edge
+on each of two inputs landing close together, or the two edges a single input makes on its own. Such
+timing can drive the cell into **metastability**: an unresolved condition the cell cannot leave cleanly.
+Detection finds the occasions where that risk is real, and classifies each on two independent axes.
 
 **What the timing is between** — the *cause*:
 
-- **A race** — two inputs' edges landing close together, or, degenerately, a single input's edge observed
-  on its own with nothing to race against. The pins involved are its **racers**, each carrying the edge it
-  makes.
+- **A toggle** — one input's edge observed on its own, its cascade ringing around the cell's own feedback
+  instead of settling: there is nothing else for it to race, so there is no separation for a constraint to
+  state, only the ring itself. The pin involved is its **racer**, carrying the edge it makes.
+- **A race** — two inputs' edges landing close together. The pins involved are its **racers**, each
+  carrying the edge it makes.
 - **A pulse** — one input racing itself. A pulse on input `p`, applied from a stable state, is `p` toggled
   (the **opening edge**), the cascade that toggle opens left to run some distance, and `p` toggled back
   (the **closing edge**) before the cell settles again.
@@ -36,15 +38,17 @@ classifies each on two independent axes.
 - **Oscillation** — the cell never settles: instead of reaching a **stable state** — Huffman's term,
   defined in `state-machine-arc-engine.md` §5 — it walks a periodic cycle.
 
-The two axes are independent, so there are four hazards: a race settling indeterminately (the settled
-state depends on which of two edges lands first), a race that oscillates (the two edges landing at once
-drive the state into a periodic cycle), a pulse settling indeterminately (the settled state depends on how
-far apart the pulse's two edges are — a pulse too narrow to carry the cell through settles it somewhere a
-wider one does not), and a pulse that oscillates (closing the pulse mid-cascade leaves the cell ringing
-rather than at rest).
+The two axes are independent, so a hazard is one of the three causes settling indeterminately or
+oscillating instead. A toggle has no second edge to disagree with, so it is recorded only when it
+oscillates — the ring around the cell's own feedback never dies out. A race settling indeterminately has
+the settled state depend on which of its two edges lands first; a race that oscillates has the two edges
+landing at once drive the state into a periodic cycle. A pulse settling indeterminately has the settled
+state depend on how far apart the pulse's two edges are — a pulse too narrow to carry the cell through
+settles it somewhere a wider one does not; a pulse that oscillates has closing the pulse mid-cascade leave
+the cell ringing rather than at rest.
 
-**Metastability is the shared physical risk of all four** — the reason a remedy is needed — not a fifth
-hazard and not a name for any one of them alone.
+**Metastability is the shared physical risk every cause and outcome carries** — the reason a remedy is
+needed — not a hazard of its own and not a name for any one of them alone.
 
 A **constraint** is that remedy. It is **generated from** a detected hazard; it is never itself a hazard
 and never itself detected. It states the timing the risky situation cannot arise under — for a race, the
@@ -130,7 +134,7 @@ classify as:
 | Observation | Meaning | Reported as |
 |---|---|---|
 | the simultaneous settle returns a cycle | the pair tied and the state oscillates | a race that oscillates (§5) |
-| a lone toggle never settles | even one toggle is degenerate | a race that oscillates, one pin named (§5) |
+| a lone toggle never settles | nothing to race, ringing on its own | a toggle that oscillates, the one pin named (§5) |
 | the two order outcomes agree | confluent — order does not matter here | nothing |
 | the two order outcomes diverge, and the divergence *interacts* (§4) | order matters at this pair | a race settling indeterminately (§4) |
 | the two order outcomes diverge, latch-mediated only (§4) | divergence real but design-tolerated | nothing |
@@ -205,15 +209,15 @@ settles, which is where the metastability risk arises. From the cycle the report
 A bare oscillation record cannot by itself name the pins, edges and prevector its constraint needs, so
 detection **records the racing pair with the hazard** — the two pins, their edges, and the path to the
 probed state — one per pair-probe that oscillates. Emission (§7) turns that record into a constraint, and
-it is why an arbiter's constraint originates here rather than from its (filtered) divergence. A degenerate
-oscillation from a lone toggle has no competing orders, so it records no racing pair and yields no pair
-constraint.
+it is why an arbiter's constraint originates here rather than from its (filtered) divergence. A toggle's
+oscillation has no competing order to name a pair from — the record carries the one pin and its edge alone
+— so it yields no constraint (§7).
 
-Detection reports every reachable state at which a pair (or a lone toggle) is observed racing into
-oscillation — one record per probed state, not a single representative standing for the pair. That holds
-of every record detection files, under either cause and either outcome: **detection deduplicates, ranks
-and selects nothing.** Which of those records becomes a rendered block, and which of the rest are
-rendered alongside it, is emission's decision (§8).
+Detection reports every reachable state at which a pair or a lone toggle is observed oscillating — one
+record per probed state, not a single representative standing for the pair. That holds of every record
+detection files, under either cause and either outcome: **detection deduplicates, ranks and selects
+nothing.** Which of those records becomes a rendered block, and which of the rest are rendered alongside
+it, is emission's decision (§8).
 
 Worked example — the mutex Qa = !Qb·A, Qb = !Qa·B, from the idle state (0 0 | 0 0) (notation
 (A B | Qa Qb)), pair {A, B}:
@@ -273,10 +277,10 @@ cascade, which no separation between two pins can forbid and only a wide enough 
 that oscillates, its own cell of the grid (§1); the ringing is a property of the width, and the width is
 what the constraint (§7) states.
 
-An **opening** toggle that never settles is a different thing: it is the single-toggle race that oscillates,
-which §5 already records — the machine never comes to rest for a second edge to be placed against, so
-there is no pulse here to widen. No hazard is recorded for a pulse on that pin at that state; §5's record
-already covers it.
+An **opening** toggle that never settles is a different thing: it is the toggle that oscillates, which §5
+already records — the machine never comes to rest for a second edge to be placed against, so there is no
+pulse here to widen. No hazard is recorded for a pulse on that pin at that state; §5's record already
+covers it.
 
 Worked example — the master-slave flop M = !CLK·D + CLK·M (the master, transparent while CLK is low) and
 Q = CLK·M + !CLK·Q (the slave, transparent while CLK is high), notation (CLK D | Q M):
@@ -395,12 +399,13 @@ its own right — that is what the conditioned pass is for — so a conditioned 
 
 **The tie-break.** Several constraints can be equally dominant: the same identity, the same maximal
 node set, reached from different probed states. One of them supplies the general block, chosen by
-the probed state's index in exploration order and then by the lowest-numbered of the four (cause,
-outcome) cells its readings came from. Neither component states a preference — the index is a
-breadth-first position, not stable between runs — so this is no quality judgement. What the pair
-buys is a total order: a parallel fold lands on one answer within a run, and choosing among
-equally-good alternatives is free. Nothing is lost to the tie-break either, since every other
-constraint is its own conditioned block's `-when` away.
+the probed state's index in exploration order and then by the lowest-numbered of the four ranks its
+readings' (cause, outcome) pairs fall into — three causes crossed with two outcomes give six such
+pairs, and a toggle and a race sharing a rank at the same outcome brings the count to four. Neither
+component states a preference — the index is a breadth-first position, not stable between runs — so
+this is no quality judgement. What the pair buys is a total order: a parallel fold lands on one
+answer within a run, and choosing among equally-good alternatives is free. Nothing is lost to the
+tie-break either, since every other constraint is its own conditioned block's `-when` away.
 
 §4's combinational-neighbourhood filter remains the one place the engine decides what *not* to
 report: it says a divergence is not the pin pair's fault. Nothing in this section suppresses a
@@ -415,17 +420,12 @@ constraint — it decides how each one renders, generally or in its own context.
   timing is honoured. The two outcomes need not agree on either, which is why neither the header nor
   a shared field carries a node set. A reading with nowhere to land states its nodes alone — a lone
   toggle has no second edge to be separated from. A constraint is the remedy for a hazard reported
-  here, so it carries no diagnostic of its own. The metastability risk the four hazards share (§1)
-  is named in the deck alone, by the comment the next bullet leads an oscillation's constraint block
-  with. This report is the run's full account of what was detected — the annotation below is not a
-  second one.
-- **The oscillation annotation.** A ring is annotated on the constraint generated from it, as a comment
-  leading that constraint's block in the emitted Tcl and the `.lib` cell's fragment: the condition the
-  cell rings under, the nodes that ring, and the competing outcomes the ring is torn between. A comment
-  explains what it accompanies, so a ring with no constraint beside it carries none — a ring observed
-  under a lone toggle names one pin, and one edge has nothing to be separated from (§5), and a cell that
-  did not opt into constraint arcs states no constraint at all. Either way the ring reaches the user
-  through the report above.
+  here, so it carries no diagnostic of its own. This report is the run's whole account of what was
+  detected: the emitted artifacts state the timing that removes a hazard and say nothing of the hazard
+  itself, so the metastability risk every cause and outcome shares (§1) is named here and nowhere else —
+  including for a ring the run states no constraint for, which is one observed under a lone toggle (one
+  pin, and one edge has nothing to be separated from — §5) or one in a cell that did not opt into
+  constraint arcs.
 - **Constraint arcs.** Off by default; enabled per cell in the spec or globally with a CLI flag. A
   constraint over a pin pair renders its general block as a *pair* of characterisation arcs — the two
   sides are characterised separately — a setup and a hold arc for a directed clock↔data constraint, the
@@ -452,16 +452,17 @@ constraint — it decides how each one renders, generally or in its own context.
 
 ## 10. Guards and invariants
 
-- A cell with **no state variables** has none of the four hazards: every coordinate is a function of the
-  inputs alone, so every input order is confluent, and returning a pulsed pin to its pre-pulse value
-  returns the whole machine to the state it started from — a pulse can leave no net effect for its width
-  to decide. Detection returns an empty result at that early-out before probing anything.
+- A cell with **no state variables** has none of the three causes' hazards: every coordinate is a
+  function of the inputs alone, so every input toggle settles cleanly with nothing to ring around,
+  every input order is confluent, and returning a pulsed pin to its pre-pulse value returns the whole
+  machine to the state it started from — a pulse can leave no net effect for its width to decide.
+  Detection returns an empty result at that early-out before probing anything.
 - A cell with **fewer than two inputs** has no pair to race, so the *pair* probes (§3) early out there
   too. That rule is theirs alone. The single-toggle probes run at any input count — one pin races the
   cell's own feedback, and a lone toggle that never settles is a hazard however few other pins the cell
   has — and so do the pulse probes (§6), which relate one pin to itself. §6's reference close rests on
-  that: it is the closing edge alone toggled from a stable state, which is exactly the single-toggle
-  race §5 records, and the record has to be there at one input as much as at ten.
+  that: it is the closing edge alone toggled from a stable state, which is exactly the toggle §5
+  records, and the record has to be there at one input as much as at ten.
 - Within a cell that clears those early-outs, the probed population is filtered per state: only a
   fully-initialised reachable stable state is probed from (§2). The filter is applied after the states are
   numbered, so a hazard's `discovered` index — the tie-break emission's general-block selection reads (§7,
@@ -469,9 +470,9 @@ constraint — it decides how each one renders, generally or in its own context.
 - Two budgets bound the machine pass, each charged against work the exploration actually performs rather
   than against the cell's declared shape: the seed minterms pooled as initialisation candidates (a forced
   cover cube contributes `2^d` of them for its `d` unconstrained input columns) and the reachable stable
-  states the exploration records. A cell that passes either ceiling is left unexplored — it yields neither
-  arcs nor hazards — and the run stops with an error naming the cell and the flag that raises that
-  ceiling (`--max-candidates`, `--max-states`).
+  states the exploration records. A cell that passes either ceiling yields neither arcs nor hazards, so
+  the analysis fails there rather than handing an empty cell on: the run stops with an error naming the
+  cell and the flag that raises that ceiling (`--max-candidates`, `--max-states`).
 - The set of reported hazards and constraints is determined by the machine analysis; the order in which
   entries are emitted is not.
 - The probes never mutate the exploration: they settle *copies* with inputs toggled, so the reachable

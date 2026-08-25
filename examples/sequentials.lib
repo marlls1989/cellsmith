@@ -782,7 +782,7 @@ library (sequentials) {
     }
     pin (T) {
       direction : output;
-      state_function : "M*!M2 + !M*M2";
+      state_function : "M & !M2 | !M & M2";
     }
     pin (M) {
       direction : internal;
@@ -886,7 +886,7 @@ library (sequentials) {
     }
     pin (GCLK) {
       direction : output;
-      state_function : "CLK*EL";
+      state_function : "CLK & EL";
     }
     pin (EL) {
       direction : internal;
@@ -933,7 +933,7 @@ library (sequentials) {
     }
     pin (GCLK) {
       direction : output;
-      state_function : "enB*CLKB + enA*CLKA";
+      state_function : "CLKB & enB | CLKA & enA";
     }
     pin (enA) {
       direction : internal;
@@ -966,7 +966,7 @@ library (sequentials) {
     }
     pin (Y) {
       direction : output;
-      state_function : "C*L";
+      state_function : "C & L";
     }
     pin (L) {
       direction : internal;
@@ -993,11 +993,11 @@ library (sequentials) {
     }
     pin (Y) {
       direction : output;
-      state_function : "C*L";
+      state_function : "C & L";
     }
     pin (Z) {
       direction : output;
-      function : "A*B";
+      function : "A & B";
     }
     pin (L) {
       direction : internal;
@@ -1021,7 +1021,7 @@ library (sequentials) {
     }
     pin (Z2) {
       direction : output;
-      state_function : "C*L + E";
+      state_function : "C & L | E";
     }
     pin (L) {
       direction : internal;

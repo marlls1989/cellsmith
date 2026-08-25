@@ -28,30 +28,39 @@
 //! `explore` is bounded by two counters, carried together in [`ExplorationBudget`] and charged against
 //! the work the call actually performs — never against the cell's declared shape (a cell is not turned
 //! away for having many inputs or many state variables). Whichever counter trips is the returned
-//! [`ExplorationLimit`] variant, carrying the ceiling it passed.
+//! [`ExplorationLimit`] error, carrying the ceiling it passed.
 //!
 //! * **`candidates`** counts the **seed minterms** of the candidate pool. The pool expands every seed
 //!   function's forced FR cover into complete input assignments, so one cube carrying `d` don't-care
 //!   *input* columns is exactly `2^d` minterms — a quantity in the input count alone, not in
-//!   inputs + state variables. Every pooled candidate then costs a settlement map (one δ evaluation per
-//!   state variable) for the ranking, so the pool sets both the memory and the ranking cost.
-//!   [`Cube::expand_to`](espresso_logic::Cube::expand_to) yields a cube's minterms lazily and knows its
-//!   own length up front, so each cube is charged before it is expanded and an over-budget pool is
-//!   counted without ever being materialised.
+//!   inputs + state variables. [`Cube::expand_to`](espresso_logic::Cube::expand_to) yields a cube's
+//!   minterms lazily and knows its own length up front, so each cube is charged before it is expanded
+//!   and an over-budget pool is counted without ever being materialised.
 //! * **`states`** counts the reachable stable states the BFS records in `Explored::order`. That vector
 //!   is what the downstream passes re-walk: [`super::arcs::derive`] at O(|order| · inputs) settles and
 //!   [`super::confluence::detect`] at O(|order| · inputs²), so a machine that explores unboundedly many
 //!   states is one whose hazard detection does not finish.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use espresso_logic::bdd::{Bdd, Brand, ManagerCell};
 use espresso_logic::{Minterm, Symbol};
 use rayon::prelude::*;
 
-/// A coordinate paired with its next-state function δ (over inputs + state variables).
-pub(crate) type Delta<B, C> = (Symbol, Bdd<B, C>);
+/// A coordinate paired with its next-state function δ (over inputs + state variables). Cloning one
+/// duplicates the `Bdd` handle — the manager reference and the root node — not the diagram, so a
+/// coordinate costs no more to copy than its δ does. The derived bounds `B: Clone, C: Clone` are carried
+/// by the struct's own: `Brand` is `Copy` and `ManagerCell` is `Clone`, so they hold wherever a `Bdd`
+/// does.
+#[derive(Clone)]
+pub(crate) struct Delta<B: Brand, C: ManagerCell> {
+    /// The coordinate the δ writes — a state variable or a combinational survivor.
+    pub(crate) signal: Symbol,
+    /// That coordinate's next-state function.
+    pub(crate) delta: Bdd<B, C>,
+}
 
 /// The machine's coordinates — every signal surviving the minimisation — split by the role [`explore`]
 /// gives each half.
@@ -62,9 +71,7 @@ pub(crate) type Delta<B, C> = (Symbol, Bdd<B, C>);
 /// the state variables — its δ is a function of the inputs and the state alone — so it is a coordinate
 /// like any other, stepped with the rest and landing absent where its δ is unsatisfied.
 ///
-/// BOTH halves are stepped ([`Self::stepped`]) and both are node columns ([`Self::names`]). Only `state`
-/// is measured by [`explore`]'s candidate ranking and its depth tie-break, so a combinational coordinate
-/// cannot change which states the BFS reaches, nor in which order.
+/// BOTH halves are stepped ([`Self::stepped`]) and both are node columns ([`Self::names`]).
 pub(crate) struct Coordinates<'d, B: Brand, C: ManagerCell> {
     /// The state variables' δ, in signal order.
     pub(crate) state: &'d [Delta<B, C>],
@@ -79,7 +86,7 @@ impl<B: Brand, C: ManagerCell> Coordinates<'_, B, C> {
         self.state
             .iter()
             .chain(self.combinational)
-            .map(|(name, _)| name.clone())
+            .map(|c| c.signal.clone())
             .collect()
     }
 
@@ -105,9 +112,9 @@ pub struct ExplorationBudget {
 }
 
 impl Default for ExplorationBudget {
-    /// 2^22 seed minterms and 2^20 explored states: the pool ceiling holds the candidate expansion (and
-    /// the per-candidate settlement maps ranking it) to a few million rows, and a machine reaching a
-    /// million stable states carries a downstream hazard probe that does not finish.
+    /// 2^22 seed minterms and 2^20 explored states: the pool ceiling holds the candidate expansion to a
+    /// few million rows, and a machine reaching a million stable states carries a downstream hazard
+    /// probe that does not finish.
     fn default() -> Self {
         Self {
             candidates: 1 << 22,
@@ -117,13 +124,37 @@ impl Default for ExplorationBudget {
 }
 
 /// The counter that stopped an `explore` call, carrying the ceiling it passed.
+///
+/// One exploration is one cell's, but this says only which budget stopped it and at what ceiling. The
+/// cell it stopped, and the command-line flag that raises the ceiling, are added by the layer walking
+/// the cells, which wraps this ([`ModelError::Exploration`](crate::model::ModelError::Exploration)).
+// `Clone` and `#[non_exhaustive]` are inert here for the same reason as on `ModelError`'s derives
+// (see the note there): they follow the espresso-logic error idiom rather than serving a call site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ExplorationLimit {
     /// The candidate pool passed this many seed minterms.
     Candidates(usize),
     /// The BFS passed this many reachable stable states.
     States(usize),
 }
+
+impl fmt::Display for ExplorationLimit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ExplorationLimit::Candidates(n) => write!(
+                f,
+                "exploration stopped at the candidate budget ({n} seed minterms)"
+            ),
+            ExplorationLimit::States(n) => write!(
+                f,
+                "exploration stopped at the state budget ({n} explored states)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ExplorationLimit {}
 
 /// Build a fully-fixed node over `names` from a `name -> value` lookup (called once per variable).
 #[cfg(test)]
@@ -174,8 +205,8 @@ fn step<B: Brand, C: ManagerCell>(
     // written is `None`, so the `expect` is a standing check — in release as well as debug — that every
     // δ handed here names a column of the node.
     let mut next = node.clone();
-    for (name, d) in deltas {
-        next.set_value_of(name.as_str(), d.evaluate_fast(node))
+    for coord in deltas {
+        next.set_value_of(coord.signal.as_str(), coord.delta.evaluate_fast(node))
             .expect("every delta names a column of the node");
     }
     next
@@ -323,12 +354,7 @@ impl Explored {
 /// seed too). Both on- and off-set candidates come from a single FR extraction per seed (see
 /// `cover_inputs`).
 ///
-/// Pre-step: for each candidate input `x` — an input minterm drawn from the pooled on/off covers — its
-/// **settlement map** records, per state variable `w`, the value the fixed inputs force on `w`'s δ via
-/// [`Bdd::evaluate`]: `Some(true)` if they force `w=1`, `Some(false)` if `w=0`, else absent (the δ still
-/// depends on unresolved state). Candidates are ranked by
-/// how many state variables they settle, ties broken toward state nearest the inputs. Exploration then
-/// seeds the BFS from the ranked candidates in parallel: each candidate input is widened onto the full
+/// Exploration seeds the BFS from the pooled candidates: each candidate input is widened onto the full
 /// `[inputs…, coordinates…]` columns (the coordinate columns come in absent) and settled with [`settle`],
 /// refining further state as inputs toggle.
 ///
@@ -348,13 +374,6 @@ pub(crate) fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     // Every coordinate's δ, applied together by each `step` — the state variables and the combinational
     // survivors alike.
     let stepped = coords.stepped();
-    let state_deltas = coords.state;
-    let k = state_deltas.len();
-    let state_index: HashMap<&str, usize> = state_deltas
-        .iter()
-        .enumerate()
-        .map(|(i, (n, _))| (n.as_str(), i))
-        .collect();
 
     // Forced on/off cover of a function over the inputs. `cover_over_fr(input_names)` re-bases the
     // function onto the inputs by universal projection — each cube is an input assignment that forces
@@ -366,7 +385,7 @@ pub(crate) fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     // `charged` before a single minterm is packed: the pool is measured whether or not it is affordable.
     // The charge is saturating, so a cube whose expansion exceeds `usize` still reads as over budget.
     let charged = AtomicUsize::new(0);
-    let cover_inputs = |f: &Bdd<B, C>| -> BTreeSet<Minterm<Symbol>> {
+    let cover_inputs = |f: &Bdd<B, C>| -> HashSet<Minterm<Symbol>> {
         f.cover_over_fr(input_names)
             .cubes()
             .flat_map(|c| {
@@ -393,97 +412,21 @@ pub(crate) fn explore<B: Brand, C: ManagerCell + Send + Sync>(
     // built in parallel across seed functions — set semantics make the union order-free.
     // ¬f's FR cover is f's with the F/R sides swapped, and `cover_inputs` pools `.cubes()`
     // type-blind, so `cover_inputs(&!f) == cover_inputs(f)` as a minterm set — no complement call.
-    let pool: BTreeSet<Minterm<Symbol>> =
+    let pool: HashSet<Minterm<Symbol>> =
         seed_funcs.par_iter().flat_map_iter(cover_inputs).collect();
     if charged.load(Ordering::Relaxed) > budget.candidates {
         return Err(ExplorationLimit::Candidates(budget.candidates));
     }
 
-    // Depth of each state variable from the inputs (shallowest dependency chain), for the ranking
-    // tie-break. A variable driven purely by inputs is depth 1; others are 1 + the shallowest state
-    // variable they reference. Pure cycles (no input-only base) stay at the max.
-    // Sequential: this is a relaxation — each pass's `depth` values feed the next pass — so passes
-    // cannot be parallelised.
-    let support: Vec<BTreeSet<usize>> = state_deltas
-        .iter()
-        .map(|(_, d)| {
-            d.variables()
-                .filter_map(|v| state_index.get(v.as_str()).copied())
-                .collect()
-        })
-        .collect();
-    let mut depth = vec![u32::MAX; k];
-    for _ in 0..=k {
-        for i in 0..k {
-            let others = support[i].iter().copied().filter(|j| *j != i);
-            let base = others
-                .filter_map(|j| (depth[j] != u32::MAX).then_some(depth[j]))
-                .min();
-            let d = match (support[i].iter().all(|j| *j == i), base) {
-                (true, _) => 1,            // driven only by inputs (and possibly itself)
-                (false, Some(m)) => 1 + m, // one hop past its shallowest resolved dependency
-                (false, None) => u32::MAX, // not yet reachable from the inputs
-            };
-            if d < depth[i] {
-                depth[i] = d;
-            }
-        }
-    }
-
-    // Settlement map of a candidate input: per state variable, the value its δ takes when the fixed
-    // inputs already determine it (`evaluate_fast` → `Some(v)`), or absent when the δ still depends
-    // on unresolved state (`None`). This is the membership test on(w)/off(w) done directly against
-    // each δ, and is used only to RANK the candidates below (the seed itself is extracted and widened,
-    // not rebuilt from it).
-    //
-    // The pool, this map, `settle_count`, `depth_sum` and the depth relaxation above are quantities over
-    // `coords.state` and `seed_funcs` ALONE — never the combinational coordinates. The ranking fixes the
-    // seed order, hence the BFS discovery order, and hence the distance (reported as `prevector.len()`)
-    // of every discovered state from its seed. BFS explores all nodes at distance d before moving to
-    // distance d+1, assigning a consistent path length independent of within-level discovery order.
-    // Ranking over the combinational δ would move hazard and constraint representatives, and leakage,
-    // for EVERY cell — cells that expose nothing included. Both halves are STEPPED; only `state` is
-    // RANKED.
-    let settlement = |x: &Minterm<Symbol>| -> Vec<Option<bool>> {
-        state_deltas
-            .iter()
-            .map(|(_, d)| d.evaluate_fast(x))
-            .collect()
-    };
-    let settle_count = |m: &[Option<bool>]| m.iter().filter(|o| o.is_some()).count();
-    let depth_sum = |m: &[Option<bool>]| -> u64 {
-        m.iter()
-            .enumerate()
-            .filter(|(_, o)| o.is_some())
-            .map(|(i, _)| depth[i] as u64)
-            .sum()
-    };
-
-    // Rank the candidates: most state variables settled first, ties toward state nearest the inputs,
-    // then by minterm order for determinism.
-    let mut ranked: Vec<(Minterm<Symbol>, Vec<Option<bool>>)> = pool
-        .into_par_iter()
-        .map(|x| {
-            let m = settlement(&x);
-            (x, m)
-        })
-        .collect();
-    ranked.sort_by(|a, b| {
-        settle_count(&b.1)
-            .cmp(&settle_count(&a.1))
-            .then_with(|| depth_sum(&a.1).cmp(&depth_sum(&b.1)))
-            .then_with(|| a.0.cmp(&b.0))
-    });
-
-    // Seed the BFS from the ranked candidates: widen each candidate input onto the full columns (the
-    // coordinate columns arrive absent, target-only labels of the projection) and settle to a
-    // stable state, which is where a combinational coordinate first takes a value — no separate
-    // fill phase. Metastable seeds (no stable state) are dropped. Sequential: the Vacant-insertion
-    // order into `prev` fixes the order seeds are pushed onto the BFS queue.
+    // Seed the BFS from the pooled candidates: widen each candidate input onto the full columns (the
+    // coordinate columns arrive absent, target-only labels of the projection) and settle to a stable
+    // state, which is where a combinational coordinate first takes a value — no separate fill phase.
+    // Metastable seeds (no stable state) are dropped, and a `Vacant` entry dedups candidates settling
+    // to one state.
     let mut prev: HashMap<Minterm<Symbol>, Option<Minterm<Symbol>>> = HashMap::new();
     let mut frontier: Vec<Minterm<Symbol>> = Vec::new();
-    for (x, _) in &ranked {
-        let seed = x.project_to(&full_names);
+    for input in &pool {
+        let seed = input.project_to(&full_names);
         let Some(st) = settle(&stepped, &seed) else {
             continue;
         };
@@ -551,7 +494,10 @@ mod tests {
         // Q = A*B + Q*(A+B). Over columns [A, B, Q], hold state 01/10 keeps Q; 11 forces Q high.
         let builder = bdd_builder!();
         let dq = builder.parse("A*B + Q*(A+B)").unwrap();
-        let deltas = vec![(Symbol::from("Q"), dq)];
+        let deltas = vec![Delta {
+            signal: Symbol::from("Q"),
+            delta: dq,
+        }];
 
         // A=1 B=0 Q=1 is a stable hold state.
         let hold = node_from(&["A", "B", "Q"], |n| matches!(n, "A" | "Q"));
@@ -571,7 +517,10 @@ mod tests {
         // covers — the on-set (A=1,B=1,Q=1) and the off-set (A=0,B=0,Q=0), both present.
         let builder = sync_bdd_builder!();
         let dq = builder.parse("A*B + Q*(A+B)").unwrap();
-        let deltas = vec![(Symbol::from("Q"), dq.clone())];
+        let deltas = vec![Delta {
+            signal: Symbol::from("Q"),
+            delta: dq.clone(),
+        }];
         let inputs = [Symbol::from("A"), Symbol::from("B")];
         let explored = explore(
             Coordinates {
@@ -650,7 +599,10 @@ mod tests {
         // position — the standing check that a δ handed to `step` names a coordinate of the node.
         let builder = bdd_builder!();
         let dq = builder.parse("A*B + Q*(A+B)").unwrap();
-        let deltas = vec![(Symbol::from("Q"), dq)];
+        let deltas = vec![Delta {
+            signal: Symbol::from("Q"),
+            delta: dq,
+        }];
         let no_q = node_from(&["A", "B"], |n| n == "A");
         let _ = step(&deltas, &no_q);
     }
@@ -660,7 +612,10 @@ mod tests {
         // Under a hold input (A=1 B=0) with Q undefined, Q is not forced: it stays absent.
         let builder = bdd_builder!();
         let dq = builder.parse("A*B + Q*(A+B)").unwrap();
-        let deltas = vec![(Symbol::from("Q"), dq)];
+        let deltas = vec![Delta {
+            signal: Symbol::from("Q"),
+            delta: dq,
+        }];
         let node = node_from_opt(&["A", "B", "Q"], |n| match n {
             "A" => Some(true),
             "B" => Some(false),
@@ -677,7 +632,16 @@ mod tests {
         let builder = bdd_builder!();
         let da = builder.parse("!Qb*A").unwrap();
         let db = builder.parse("!Qa*B").unwrap();
-        let deltas = vec![(Symbol::from("Qa"), da), (Symbol::from("Qb"), db)];
+        let deltas = vec![
+            Delta {
+                signal: Symbol::from("Qa"),
+                delta: da,
+            },
+            Delta {
+                signal: Symbol::from("Qb"),
+                delta: db,
+            },
+        ];
         let both_low = node_from(&["A", "B", "Qa", "Qb"], |n| matches!(n, "A" | "B"));
         assert_eq!(settle(&deltas, &both_low), None);
     }
@@ -690,7 +654,16 @@ mod tests {
         let builder = bdd_builder!();
         let da = builder.parse("!Qb*A").unwrap();
         let db = builder.parse("!Qa*B").unwrap();
-        let deltas = vec![(Symbol::from("Qa"), da), (Symbol::from("Qb"), db)];
+        let deltas = vec![
+            Delta {
+                signal: Symbol::from("Qa"),
+                delta: da,
+            },
+            Delta {
+                signal: Symbol::from("Qb"),
+                delta: db,
+            },
+        ];
         let both_low = node_from(&["A", "B", "Qa", "Qb"], |n| matches!(n, "A" | "B"));
 
         let cycle = settle_or_cycle(&deltas, &both_low).expect_err("oscillates, no stable state");
@@ -717,7 +690,10 @@ mod tests {
         // settle() reports.
         let builder = bdd_builder!();
         let dq = builder.parse("A*B + Q*(A+B)").unwrap();
-        let deltas = vec![(Symbol::from("Q"), dq)];
+        let deltas = vec![Delta {
+            signal: Symbol::from("Q"),
+            delta: dq,
+        }];
         let forcing = node_from(&["A", "B", "Q"], |n| matches!(n, "A" | "B"));
 
         let trace = settle_trace(&deltas, &forcing).expect("settles");
@@ -740,7 +716,16 @@ mod tests {
         let builder = bdd_builder!();
         let da = builder.parse("!Qb*A").unwrap();
         let db = builder.parse("!Qa*B").unwrap();
-        let deltas = vec![(Symbol::from("Qa"), da), (Symbol::from("Qb"), db)];
+        let deltas = vec![
+            Delta {
+                signal: Symbol::from("Qa"),
+                delta: da,
+            },
+            Delta {
+                signal: Symbol::from("Qb"),
+                delta: db,
+            },
+        ];
         let both_low = node_from(&["A", "B", "Qa", "Qb"], |n| matches!(n, "A" | "B"));
 
         let cycle = settle_trace(&deltas, &both_low).expect_err("oscillates, no stable state");

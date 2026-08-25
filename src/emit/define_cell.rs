@@ -5,28 +5,92 @@
 //! characterisation templates the cell carries (`-delay`/`-power`/`-constraint`). Clock and async pins
 //! are split out of `-input` into their own flags but still appear verbatim in `-pinlist`; any flag
 //! whose pin set is empty is omitted. The drive-strength aliases are bundled by their resolved
-//! `(delay, power, constraint)` template triple — each alias inherits the cell-wide `template` unless
-//! its `template_overrides` entry supplies a field — so aliases sharing a triple emit as one block, in
-//! first-appearance order.
+//! [`TemplateSpec`] — each alias inherits the cell-wide `template` unless its `template_overrides` entry
+//! supplies a field — so aliases resolving to the same template emit as one block, in first-appearance
+//! order.
 //!
 //! Unlike the arcs emitter these blocks carry no `-type`/`-when`/`-related_pin`/`-function`: they are
 //! purely the cell's structural declaration.
+//!
+//! A block travels as the value [`DefineCell`] holds and becomes text once, in
+//! [`Display`](fmt::Display), written into the writer the `cells.tcl` is going out on.
 
 use std::collections::BTreeSet;
+use std::fmt;
 
 use espresso_logic::Symbol;
 use indexmap::IndexMap;
 
-use crate::emit::arcs_tcl::pinlist_str;
-use crate::model::AnalysedCell;
+use crate::emit::arcs_tcl::pinlist;
+use crate::emit::tcl::Braced;
+use crate::model::{AnalysedCell, TemplateSpec};
+use crate::text::Words;
 
-/// A resolved template triple: the `(delay, power, constraint)` names an alias attaches, each `Some`
-/// only when the alias override or the cell-wide template supplies it.
-type Triple = (Option<Symbol>, Option<Symbol>, Option<Symbol>);
+/// One `define_cell` block: the pins the cell declares, split into the flags Liberate reads them under,
+/// the characterisation templates the block's aliases resolve to, and the aliases it speaks for.
+pub struct DefineCell {
+    /// The data inputs — the cell's inputs less its clock and async pins, which carry their own flags.
+    inputs: Vec<Symbol>,
+    outputs: Vec<Symbol>,
+    clocks: Vec<Symbol>,
+    async_pins: Vec<Symbol>,
+    /// Every pin the arcs address by position: all inputs (clock and async included) then the outputs.
+    pinlist: Vec<Symbol>,
+    delay: Option<Symbol>,
+    power: Option<Symbol>,
+    constraint: Option<Symbol>,
+    /// The drive-strength aliases this one block speaks for.
+    names: Vec<Symbol>,
+}
 
-/// All `define_cell` blocks for a cell, one per resolved template triple. Aliases sharing a triple are
-/// bundled into a single block; the blocks follow the first-appearance order of their aliases.
-pub fn cell_define_cell(cell: &AnalysedCell) -> String {
+impl fmt::Display for DefineCell {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "define_cell \\")?;
+        // Data inputs only — an all-clock/all-async cell drops the flag entirely.
+        if !self.inputs.is_empty() {
+            writeln!(f, "\t-input {} \\", Braced(Words(&self.inputs)))?;
+        }
+        writeln!(f, "\t-output {} \\", Braced(Words(&self.outputs)))?;
+        if !self.clocks.is_empty() {
+            writeln!(f, "\t-clock {} \\", Braced(Words(&self.clocks)))?;
+        }
+        if !self.async_pins.is_empty() {
+            writeln!(f, "\t-async {} \\", Braced(Words(&self.async_pins)))?;
+        }
+        // `-pinlist` is the arcs emitter's source of truth — all inputs (incl. clock + async) then
+        // outputs — and is emitted unfiltered.
+        writeln!(f, "\t-pinlist {} \\", Braced(Words(&self.pinlist)))?;
+        if let Some(d) = &self.delay {
+            writeln!(f, "\t-delay {d} \\")?;
+        }
+        if let Some(p) = &self.power {
+            writeln!(f, "\t-power {p} \\")?;
+        }
+        if let Some(c) = &self.constraint {
+            writeln!(f, "\t-constraint {c} \\")?;
+        }
+        writeln!(f, "\t{}", Braced(Words(&self.names)))?;
+        writeln!(f)
+    }
+}
+
+/// A run's `define_cell` blocks as the text they write: each block in turn, written into the writer the
+/// `cells.tcl` is going out on. Every cell's blocks make up the one file, so this holds them all.
+pub struct Declarations<'a>(pub &'a [DefineCell]);
+
+impl fmt::Display for Declarations<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for block in self.0 {
+            write!(f, "{block}")?;
+        }
+        Ok(())
+    }
+}
+
+/// All `define_cell` blocks for a cell, one per resolved [`TemplateSpec`]. Aliases resolving to the same
+/// template are bundled into a single block; the blocks follow the first-appearance order of their
+/// aliases.
+pub fn cell_define_cell(cell: &AnalysedCell) -> Vec<DefineCell> {
     // Pin flags are group-independent, so compute them once. Clock and async pins are lifted out of
     // `-input` into their own flags (they still appear in `-pinlist`, which is untouched).
     let excluded: BTreeSet<&Symbol> = cell.async_pins.iter().chain(&cell.clock_pins).collect();
@@ -38,26 +102,27 @@ pub fn cell_define_cell(cell: &AnalysedCell) -> String {
         .collect();
     let outputs: Vec<Symbol> = cell.outputs.iter().map(|o| o.name.clone()).collect();
 
-    // Resolve one alias's template triple: the alias override wins per field, else the cell-wide
-    // template, else `None`.
-    let resolve = |name: &Symbol| -> Triple {
+    // Resolve one alias's template: the alias override wins per field, else the cell-wide template,
+    // else `None`.
+    let resolve = |name: &Symbol| -> TemplateSpec {
         let ov = cell.template_overrides.get(name);
         let def = cell.template.as_ref();
-        let delay = ov
-            .and_then(|o| o.delay.clone())
-            .or_else(|| def.and_then(|d| d.delay.clone()));
-        let power = ov
-            .and_then(|o| o.power.clone())
-            .or_else(|| def.and_then(|d| d.power.clone()));
-        let constraint = ov
-            .and_then(|o| o.constraint.clone())
-            .or_else(|| def.and_then(|d| d.constraint.clone()));
-        (delay, power, constraint)
+        TemplateSpec {
+            delay: ov
+                .and_then(|o| o.delay.clone())
+                .or_else(|| def.and_then(|d| d.delay.clone())),
+            power: ov
+                .and_then(|o| o.power.clone())
+                .or_else(|| def.and_then(|d| d.power.clone())),
+            constraint: ov
+                .and_then(|o| o.constraint.clone())
+                .or_else(|| def.and_then(|d| d.constraint.clone())),
+        }
     };
 
-    // Bundle the aliases by resolved triple. `IndexMap` insertion order groups by first appearance and
+    // Bundle the aliases by resolved template. `IndexMap` insertion order groups by first appearance and
     // keeps each group's aliases in written order.
-    let mut groups: IndexMap<Triple, Vec<Symbol>> = IndexMap::new();
+    let mut groups: IndexMap<TemplateSpec, Vec<Symbol>> = IndexMap::new();
     for alias in &cell.name {
         groups
             .entry(resolve(alias))
@@ -65,43 +130,32 @@ pub fn cell_define_cell(cell: &AnalysedCell) -> String {
             .push(alias.clone());
     }
 
-    let mut out = String::new();
-    for ((delay, power, constraint), aliases) in &groups {
-        out.push_str("define_cell \\\n");
-        // Data inputs only — an all-clock/all-async cell drops the flag entirely.
-        if !data_inputs.is_empty() {
-            out.push_str(&format!("\t-input {} \\\n", brace(&data_inputs)));
-        }
-        out.push_str(&format!("\t-output {} \\\n", brace(&outputs)));
-        if !cell.clock_pins.is_empty() {
-            out.push_str(&format!("\t-clock {} \\\n", brace(&cell.clock_pins)));
-        }
-        if !cell.async_pins.is_empty() {
-            out.push_str(&format!("\t-async {} \\\n", brace(&cell.async_pins)));
-        }
-        // `-pinlist` is the arcs emitter's source of truth — all inputs (incl. clock + async) then
-        // outputs — and is emitted unfiltered.
-        out.push_str(&format!("\t-pinlist {{ {} }} \\\n", pinlist_str(cell)));
-        if let Some(d) = delay {
-            out.push_str(&format!("\t-delay {d} \\\n"));
-        }
-        if let Some(p) = power {
-            out.push_str(&format!("\t-power {p} \\\n"));
-        }
-        if let Some(c) = constraint {
-            out.push_str(&format!("\t-constraint {c} \\\n"));
-        }
-        out.push_str(&format!("\t{}\n", brace(aliases)));
-        out.push('\n');
-    }
-    out
-}
-
-/// Brace a Tcl list in the `define_cell` layout: `{ A B Q }`, space-padded inside the braces. Unlike
-/// [`crate::emit::arcs_tcl`]'s `name_block`, which braces the whole name list, this braces a per-group
-/// subset.
-fn brace(items: &[Symbol]) -> String {
-    format!("{{ {} }}", items.join(" "))
+    // The pin flags and the `-pinlist` are the cell's own, so every block states the same ones; what a
+    // block adds of its own is its resolved template and the aliases that resolved to it.
+    let pinlist = pinlist(cell);
+    groups
+        .into_iter()
+        .map(
+            |(
+                TemplateSpec {
+                    delay,
+                    power,
+                    constraint,
+                },
+                names,
+            )| DefineCell {
+                inputs: data_inputs.clone(),
+                outputs: outputs.clone(),
+                clocks: cell.clock_pins.clone(),
+                async_pins: cell.async_pins.clone(),
+                pinlist: pinlist.clone(),
+                delay,
+                power,
+                constraint,
+                names,
+            },
+        )
+        .collect()
 }
 
 #[cfg(test)]
@@ -109,9 +163,9 @@ mod tests {
     use super::*;
     use crate::model::analyse_one as analyse;
 
-    /// Emit the `define_cell` blocks for a single-cell TOML spec.
+    /// Emit the `define_cell` blocks for a single-cell TOML spec, as the text the sink writes.
     fn emit(src: &str) -> String {
-        cell_define_cell(&analyse(src))
+        Declarations(&cell_define_cell(&analyse(src))).to_string()
     }
 
     /// The first `define_cell` block fragment containing `needle` (split on the block keyword).
@@ -143,7 +197,7 @@ constraint = "ct"
         assert!(tcl.contains("-delay dt \\"));
         assert!(tcl.contains("-power pt \\"));
         assert!(tcl.contains("-constraint ct \\"));
-        assert!(tcl.contains("{ INVX1 INVX2 }"));
+        assert!(tcl.contains("{INVX1 INVX2}"));
     }
 
     /// (b) No template at all: ONE block, no template flags, all aliases braced together.
@@ -163,7 +217,7 @@ Y = "!A"
         assert!(!tcl.contains("-delay"));
         assert!(!tcl.contains("-power"));
         assert!(!tcl.contains("-constraint"));
-        assert!(tcl.contains("{ INVX1 INVX2 }"));
+        assert!(tcl.contains("{INVX1 INVX2}"));
     }
 
     /// (c) An override that changes a field splits the aliases into TWO blocks with the correct
@@ -185,12 +239,12 @@ delay = "dt2"
         );
         eprintln!("{tcl}");
         assert_eq!(tcl.matches("define_cell").count(), 2);
-        assert!(block_with(&tcl, "{ INVX1 }").contains("-delay dt \\"));
-        assert!(block_with(&tcl, "{ INVX2 }").contains("-delay dt2 \\"));
+        assert!(block_with(&tcl, "{INVX1}").contains("-delay dt \\"));
+        assert!(block_with(&tcl, "{INVX2}").contains("-delay dt2 \\"));
     }
 
     /// (d) Two non-adjacent aliases share a triple while the middle one is overridden: they group
-    /// together (`{ A C }`) ahead of the odd one (`{ B }`), in first-appearance order.
+    /// together (`{A C}`) ahead of the odd one (`{B}`), in first-appearance order.
     #[test]
     fn non_adjacent_same_triple_first_appearance_order() {
         let tcl = emit(
@@ -208,12 +262,9 @@ delay = "other"
         );
         eprintln!("{tcl}");
         assert_eq!(tcl.matches("define_cell").count(), 2);
-        let ac = tcl.find("{ A C }").expect("A and C share a group");
-        let b = tcl.find("{ B }").expect("B is its own group");
-        assert!(
-            ac < b,
-            "first-appearance order puts {{ A C }} before {{ B }}"
-        );
+        let ac = tcl.find("{A C}").expect("A and C share a group");
+        let b = tcl.find("{B}").expect("B is its own group");
+        assert!(ac < b, "first-appearance order puts {{A C}} before {{B}}");
     }
 
     /// (e) A template that sets only delay + power emits no `-constraint` flag.
@@ -257,7 +308,7 @@ delay = "dt2"
 "#,
         );
         eprintln!("{tcl}");
-        let inv2 = block_with(&tcl, "{ INVX2 }");
+        let inv2 = block_with(&tcl, "{INVX2}");
         assert!(inv2.contains("-delay dt2 \\"));
         assert!(inv2.contains("-power pt \\"));
         assert!(inv2.contains("-constraint ct \\"));
@@ -299,9 +350,9 @@ Q = "(A*B + Q*(A+B))*!R"
 "#,
         );
         eprintln!("{tcl}");
-        assert!(tcl.contains("-input { A B }"));
-        assert!(tcl.contains("-async { R }"));
-        assert!(tcl.contains("-pinlist { A B R Q }"));
+        assert!(tcl.contains("-input {A B}"));
+        assert!(tcl.contains("-async {R}"));
+        assert!(tcl.contains("-pinlist {A B R Q}"));
     }
 
     /// (i) A cell with no async pins emits no `-async` flag.
@@ -318,7 +369,7 @@ Y = "A*B"
         );
         eprintln!("{tcl}");
         assert!(!tcl.contains("-async"));
-        assert!(tcl.contains("-input { A B }"));
+        assert!(tcl.contains("-input {A B}"));
     }
 
     /// (j) An internal state node is excluded from both `-output` and `-pinlist`.
@@ -338,8 +389,8 @@ Q = "CLK*M + !CLK*Q"
         );
         eprintln!("{tcl}");
         // Only the external output Q is listed; the internal master latch M never appears.
-        assert!(tcl.contains("-output { Q }"));
-        assert!(tcl.contains("-pinlist { CLK D Q }"));
+        assert!(tcl.contains("-output {Q}"));
+        assert!(tcl.contains("-pinlist {CLK D Q}"));
     }
 
     /// (k) When every input is async, `-input` is dropped entirely — but `-pinlist` still lists them.
@@ -357,8 +408,8 @@ Q = "!R*(S + Q)"
         );
         eprintln!("{tcl}");
         assert!(!tcl.contains("-input"));
-        assert!(tcl.contains("-async { S R }"));
-        assert!(tcl.contains("-pinlist { S R Q }"));
+        assert!(tcl.contains("-async {S R}"));
+        assert!(tcl.contains("-pinlist {S R Q}"));
     }
 
     /// (l) A declared clock pin is lifted out of `-input` into `-clock`, yet still appears in
@@ -378,9 +429,9 @@ Q = "CLK*M + !CLK*Q"
 "#,
         );
         eprintln!("{tcl}");
-        assert!(tcl.contains("-input { D }"));
-        assert!(tcl.contains("-clock { CLK }"));
-        assert!(tcl.contains("-pinlist { CLK D Q }"));
+        assert!(tcl.contains("-input {D}"));
+        assert!(tcl.contains("-clock {CLK}"));
+        assert!(tcl.contains("-pinlist {CLK D Q}"));
     }
 
     /// (m) A cell with no clock pins emits no `-clock` flag.

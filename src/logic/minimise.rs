@@ -253,22 +253,37 @@ impl Preserved {
     }
 }
 
-/// `Some((t, parity))` iff `f` is a bare ±alias of another surviving key.
+/// Which of the two bare forms a ±alias took: the target variable itself, or its complement.
+enum Parity {
+    Direct,
+    Inverted,
+}
+
+/// A bare ±alias of another surviving key: the key aliased to, and the parity the alias took.
+struct Alias {
+    target: Symbol,
+    parity: Parity,
+}
+
+/// `Some(alias)` iff `f` is a bare ±alias of another surviving key.
 ///
-/// `parity` is `0` when `f == var(t)` and `1` when `f == !var(t)`. Serves [`fold_pass`]'s arity-1
-/// substitution decision (folding the coordinate onto an output alias): `!var(x)` is just an arity-1
-/// function like `var(x)`, so a bare ±alias always collapses.
+/// Serves [`fold_pass`]'s arity-1 substitution decision (folding the coordinate onto an output alias):
+/// `!var(x)` is just an arity-1 function like `var(x)`, so a bare ±alias always collapses.
 fn alias_target<B: Brand, C: ManagerCell>(
     name: &Symbol,
     f: &Bdd<B, C>,
     bdds: &BTreeMap<Symbol, Bdd<B, C>>,
-) -> Option<(Symbol, u8)> {
+) -> Option<Alias> {
     let vars: Vec<Symbol> = f.variables().collect();
     if vars.len() == 1 && vars[0] != *name && bdds.contains_key(&vars[0]) {
         let t = vars[0].clone();
         let b = f.builder();
-        let parity = if *f == b.var(t.as_str()) { 0 } else { 1 };
-        Some((t, parity))
+        let parity = if *f == b.var(t.as_str()) {
+            Parity::Direct
+        } else {
+            Parity::Inverted
+        };
+        Some(Alias { target: t, parity })
     } else {
         None
     }
@@ -285,6 +300,14 @@ fn alias_target<B: Brand, C: ManagerCell>(
 /// `state-space-minimisation.md`) and is bounded at
 /// `2 * order.len() + 2` outer iterations — a `debug_assert` backstop against a runaway loop, not a
 /// behavioural limit reached in practice.
+///
+/// The result does not depend on which BDD builder instance produced the inputs: the same
+/// definitions minted in another [`BddBuilder`](espresso_logic::bdd::BddBuilder) reduce to the same
+/// [`Minimised`] and, signal by signal, to an equivalent function. Every decision the passes take
+/// reads a name — the scan `order`, `p`, and the signal-name supports — or plain equality between
+/// two handles of the one map, which within a manager is canonical and so answers the same whatever
+/// variable ordering that manager happens to hold. The ordering itself is never read, so it cannot
+/// reach an outcome.
 pub fn minimise_state_space<B: Brand, C: ManagerCell>(
     bdds: &mut BTreeMap<Symbol, Bdd<B, C>>,
     order: &[Symbol],
@@ -310,6 +333,20 @@ pub fn minimise_state_space<B: Brand, C: ManagerCell>(
     result
 }
 
+/// A dedup group: the function shared by every signal in `members`, discovered by scanning `order`
+/// for plain-BDD equality.
+struct DuplicateGroup<B: Brand, C: ManagerCell> {
+    function: Bdd<B, C>,
+    members: Vec<Symbol>,
+}
+
+/// A preserved duplicate demoted rather than purged: `member` keeps its name, but its stored function
+/// becomes `alias`, the group representative's `var(rep)`.
+struct Demotion<B: Brand, C: ManagerCell> {
+    member: Symbol,
+    alias: Bdd<B, C>,
+}
+
 /// One dedup pass: collapse every plain-BDD-equal group onto a single coordinate. Returns whether it
 /// committed anything.
 ///
@@ -332,12 +369,15 @@ fn dedup_pass<B: Brand, C: ManagerCell>(
     p: &Preserved,
     result: &mut Minimised,
 ) -> bool {
-    let mut groups: Vec<(Bdd<B, C>, Vec<Symbol>)> = Vec::new();
+    let mut groups: Vec<DuplicateGroup<B, C>> = Vec::new();
     for s in order {
         let Some(f) = bdds.get(s) else { continue };
-        match groups.iter_mut().find(|(g, _)| g == f) {
-            Some((_, members)) => members.push(s.clone()),
-            None => groups.push((f.clone(), vec![s.clone()])),
+        match groups.iter_mut().find(|group| &group.function == f) {
+            Some(group) => group.members.push(s.clone()),
+            None => groups.push(DuplicateGroup {
+                function: f.clone(),
+                members: vec![s.clone()],
+            }),
         }
     }
     // Accumulate every committed group's equation-field edits, then apply them ONCE at pass end. The
@@ -345,9 +385,10 @@ fn dedup_pass<B: Brand, C: ManagerCell>(
     // substitution and pushed through one stream compose ([`Composer::compose_map`]) that shares a
     // single memo across all surviving functions, instead of re-walking the map per group, per signal.
     let mut rename: BTreeMap<Symbol, Bdd<B, C>> = BTreeMap::new();
-    let mut demoted: Vec<(Symbol, Bdd<B, C>)> = Vec::new();
+    let mut demoted: Vec<Demotion<B, C>> = Vec::new();
     let mut purged: Vec<Symbol> = Vec::new();
-    for (_, members) in groups.into_iter().filter(|(_, m)| m.len() >= 2) {
+    for group in groups.into_iter().filter(|g| g.members.len() >= 2) {
+        let members = group.members;
         // The coordinate lands on an output pin where the group holds one; failing that on a preserved
         // member, so an exposed name keeps it; failing that on the first member in scan order. An
         // exposed internal never outranks a real output pin.
@@ -388,7 +429,10 @@ fn dedup_pass<B: Brand, C: ManagerCell>(
             rename.insert(m.clone(), rep_var.clone());
             if p.is_preserved(&m) {
                 // Preserved duplicate: demoted to var(rep) at pass end, name kept — never purged.
-                demoted.push((m, rep_var.clone()));
+                demoted.push(Demotion {
+                    member: m,
+                    alias: rep_var.clone(),
+                });
             } else {
                 // Plain internal duplicate: purged. The interface and the exposed names are sacred —
                 // result.purged ∩ preserved = ∅.
@@ -415,7 +459,7 @@ fn dedup_pass<B: Brand, C: ManagerCell>(
     // Rewrite every surviving consumer of a retired member in one shared-memo stream pass. Functions
     // referencing no retired member are held out (an untouched no-op); demoted signals are held out too
     // — their whole entry is overwritten with var(rep) below, not composed.
-    let demoted_names: BTreeSet<&Symbol> = demoted.iter().map(|(m, _)| m).collect();
+    let demoted_names: BTreeSet<&Symbol> = demoted.iter().map(|d| &d.member).collect();
     let names: Vec<Symbol> = order
         .iter()
         .filter(|n| bdds.contains_key(*n) && !demoted_names.contains(*n))
@@ -438,10 +482,10 @@ fn dedup_pass<B: Brand, C: ManagerCell>(
 
     // Demote each preserved duplicate to var(rep) (name kept). Its entry is still the snapshot original,
     // so the change-check is against the pre-pass function.
-    for (m, rep_var) in demoted {
-        if bdds[&m] != rep_var {
-            result.changed.insert(m.clone());
-            bdds.insert(m, rep_var);
+    for Demotion { member, alias } in demoted {
+        if bdds[&member] != alias {
+            result.changed.insert(member.clone());
+            bdds.insert(member, alias);
             progress = true;
         }
     }
@@ -477,17 +521,16 @@ fn fold_pass<B: Brand, C: ManagerCell>(
         // settles in the complement-pair shape instead — the arity-1 relay fold below composes `s` into
         // `t`'s definer, leaving `t` self-holding and `s` a consumer-free alias on its pin (I1).
         if p.is_output(s) {
-            if let Some((t, parity)) = alias_target(s, &f_s, bdds) {
+            if let Some(Alias { target: t, parity }) = alias_target(s, &f_s, bdds) {
                 if !p.is_preserved(&t) {
                     let b = f_s.builder();
                     // `t` expressed as ±s.
-                    let g = if parity == 0 {
-                        b.var(s.as_str())
-                    } else {
-                        !&b.var(s.as_str())
+                    let g = match parity {
+                        Parity::Direct => b.var(s.as_str()),
+                        Parity::Inverted => !&b.var(s.as_str()),
                     };
                     let mut new_s = bdds[&t].compose(t.as_str(), &g);
-                    if parity == 1 {
+                    if let Parity::Inverted = parity {
                         new_s = !&new_s;
                     }
                     if new_s != f_s {
@@ -598,22 +641,43 @@ mod tests {
     use espresso_logic::bdd::BddBuilder;
     use espresso_logic::bdd_builder;
 
-    /// Parse `(name, expr)` definitions into a signal map plus the scan order, all in one builder so
-    /// the handles share a manager.
-    fn parse_system<B: Brand, C: ManagerCell>(
-        b: &BddBuilder<B, C>,
-        defs: &[(&str, &str)],
-    ) -> (BTreeMap<Symbol, Bdd<B, C>>, Vec<Symbol>) {
-        let bdds = defs
-            .iter()
-            .map(|(n, e)| (Symbol::from(*n), b.parse(e).unwrap()))
-            .collect();
-        let order = defs.iter().map(|(n, _)| Symbol::from(*n)).collect();
-        (bdds, order)
+    /// One signal's definition in a fixture or expectation table: the name the signal is stored under and the expression text parsed into its BDD.
+    struct SignalDef {
+        name: &'static str,
+        expr: &'static str,
     }
 
-    /// Build a signal map from `(name, expr)` pairs in a fresh builder, plus the scan order and the
-    /// [`Preserved`] set — the outputs alone, or the outputs plus an `exposed:` list.
+    /// A parsed fixture: the signal map `parse_system` built plus the scan order it built it in.
+    struct ParsedSystem<B: Brand, C: ManagerCell> {
+        signals: BTreeMap<Symbol, Bdd<B, C>>,
+        order: Vec<Symbol>,
+    }
+
+    /// Parse [`SignalDef`] definitions into a signal map plus the scan order, all in one builder so the
+    /// handles share a manager.
+    fn parse_system<B: Brand, C: ManagerCell>(
+        b: &BddBuilder<B, C>,
+        defs: &[SignalDef],
+    ) -> ParsedSystem<B, C> {
+        let signals = defs
+            .iter()
+            .map(|d| (Symbol::from(d.name), b.parse(d.expr).unwrap()))
+            .collect();
+        let order = defs.iter().map(|d| Symbol::from(d.name)).collect();
+        ParsedSystem { signals, order }
+    }
+
+    /// One fixture system: the builder its handles were minted in, the signal map, the scan order and
+    /// the preserved set.
+    struct System<B: Brand, C: ManagerCell> {
+        builder: BddBuilder<B, C>,
+        bdds: BTreeMap<Symbol, Bdd<B, C>>,
+        order: Vec<Symbol>,
+        preserved: Preserved,
+    }
+
+    /// Build a [`System`] from [`SignalDef`] definitions in a fresh builder: its signal map, the scan
+    /// order and the [`Preserved`] set — the outputs alone, or the outputs plus an `exposed:` list.
     macro_rules! system {
         (
             outputs: [$($out:literal),* $(,)?],
@@ -621,16 +685,18 @@ mod tests {
             $($name:literal = $expr:literal),* $(,)?
         ) => {{
             let b = bdd_builder!();
-            let (bdds, order) = parse_system(&b, &[$(($name, $expr)),*]);
+            let ParsedSystem { signals: bdds, order } =
+                parse_system(&b, &[$(SignalDef { name: $name, expr: $expr }),*]);
             let outputs: BTreeSet<Symbol> = [$(Symbol::from($out)),*].into_iter().collect();
             let exposed: BTreeSet<Symbol> = [$(Symbol::from($exp)),*].into_iter().collect();
-            (b, bdds, order, Preserved::with_exposed(outputs, exposed))
+            System { builder: b, bdds, order, preserved: Preserved::with_exposed(outputs, exposed) }
         }};
         (outputs: [$($out:literal),* $(,)?], $($name:literal = $expr:literal),* $(,)?) => {{
             let b = bdd_builder!();
-            let (bdds, order) = parse_system(&b, &[$(($name, $expr)),*]);
+            let ParsedSystem { signals: bdds, order } =
+                parse_system(&b, &[$(SignalDef { name: $name, expr: $expr }),*]);
             let outputs: BTreeSet<Symbol> = [$(Symbol::from($out)),*].into_iter().collect();
-            (b, bdds, order, Preserved::outputs(outputs))
+            System { builder: b, bdds, order, preserved: Preserved::outputs(outputs) }
         }};
     }
 
@@ -648,24 +714,27 @@ mod tests {
         // started from — the very rewrite a single outputs-only run performs. QN is rewritten by the
         // first and purged by the second, and the closing rule drops it from `changed`, so the caller
         // never asks a purged signal for a regenerated expression.
-        let (_b, mut staged, order, exposed) = system! {
+        let mut staged = system! {
             outputs: ["Q"], exposed: ["QN"],
             "Q" = "!QN",
             "QN" = "!(A*B + Q*(A+B))",
         };
-        let first = minimise(&mut staged, &order, &exposed);
+        let first = minimise(&mut staged.bdds, &staged.order, &staged.preserved);
         assert!(first.purged.is_empty(), "an exposed node is never purged");
         assert_eq!(first.changed, [Symbol::from("QN")].into_iter().collect());
 
         let released = Preserved::outputs([Symbol::from("Q")].into_iter().collect());
-        let composed = first.then(minimise(&mut staged, &order, &released));
+        let composed = first.then(minimise(&mut staged.bdds, &staged.order, &released));
 
-        let (_b2, mut direct, direct_order, p) = system! {
+        let mut direct = system! {
             outputs: ["Q"],
             "Q" = "!QN",
             "QN" = "!(A*B + Q*(A+B))",
         };
-        assert_eq!(composed, minimise(&mut direct, &direct_order, &p));
+        assert_eq!(
+            composed,
+            minimise(&mut direct.bdds, &direct.order, &direct.preserved)
+        );
         assert!(
             !composed.changed.contains("QN"),
             "a purged signal is no survivor"
@@ -675,20 +744,21 @@ mod tests {
     #[test]
     fn c_element_chain_collapses_to_single_output_coordinate() {
         // Q → IQ → QN with QN the definer: the three collapse onto the sole output Q.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Q"],
             "Q" = "IQ",
             "IQ" = "!QN",
             "QN" = "!(A*B + IQ*(A+B))",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert_eq!(
             min.purged,
             ["IQ", "QN"].map(Symbol::from).into_iter().collect()
         );
-        assert!(bdds[&Symbol::from("Q")].equivalent_to(&b.parse("A*B + Q*(A+B)").unwrap()));
-        assert!(!bdds.contains_key("IQ"));
-        assert!(!bdds.contains_key("QN"));
+        assert!(sys.bdds[&Symbol::from("Q")]
+            .equivalent_to(&sys.builder.parse("A*B + Q*(A+B)").unwrap()));
+        assert!(!sys.bdds.contains_key("IQ"));
+        assert!(!sys.bdds.contains_key("QN"));
     }
 
     #[test]
@@ -696,27 +766,28 @@ mod tests {
         // Both Q and QN are outputs; the definer QN self-holds after the fold (Q = !QN substituted in),
         // leaving the non-cyclic output Q = !QN legally naming the cyclic output QN. No hoist runs —
         // output/state separation is now a Liberty-only concern handled at emission time.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Q", "QN"],
             "Q" = "!QN",
             "QN" = "!(A*B + Q*(A+B))",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert!(min.purged.is_empty());
         assert_eq!(min.changed, [Symbol::from("QN")].into_iter().collect());
-        assert!(bdds[&Symbol::from("Q")] == !&b.var("QN"));
-        assert!(bdds[&Symbol::from("QN")].equivalent_to(&b.parse("!(A*B + !QN*(A+B))").unwrap()));
+        assert!(sys.bdds[&Symbol::from("Q")] == !&sys.builder.var("QN"));
+        assert!(sys.bdds[&Symbol::from("QN")]
+            .equivalent_to(&sys.builder.parse("!(A*B + !QN*(A+B))").unwrap()));
     }
 
     #[test]
     fn mutex_cross_coupling_is_kept() {
         // Qa ↔ Qb is a 2-cycle: the guard refuses both folds; nothing changes.
-        let (_b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Qa", "Qb"],
             "Qa" = "!Qb * A",
             "Qb" = "!Qa * B",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert!(min.purged.is_empty());
         assert!(min.changed.is_empty());
     }
@@ -725,12 +796,12 @@ mod tests {
     fn sr_nor_latch_is_kept() {
         // Cross-coupled NOR: supports have two variables (not wires) and the fold guard trips on the
         // Q↔Qn 2-cycle.
-        let (_b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Q", "Qn"],
             "Q" = "!(R+Qn)",
             "Qn" = "!(S+Q)",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert!(min.purged.is_empty());
         assert!(min.changed.is_empty());
     }
@@ -738,12 +809,12 @@ mod tests {
     #[test]
     fn dff_master_slave_kept() {
         // Master M and slave Q both self-hold, so neither is a relay.
-        let (_b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Q"],
             "M" = "!CLK*D + CLK*M",
             "Q" = "CLK*M + !CLK*Q",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert!(min.purged.is_empty());
         assert!(min.changed.is_empty());
     }
@@ -751,7 +822,7 @@ mod tests {
     #[test]
     fn icm_relays_fold_into_consumers() {
         // The ICM system: sela/selb are combinational relays that fold into sela1/selb1.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["GCLK"],
             "sela" = "!enB*!S",
             "selb" = "!enA*S",
@@ -763,15 +834,21 @@ mod tests {
             "enB" = "!RB*(!CLKB*selb2+CLKB*enB)",
             "GCLK" = "enA*CLKA+enB*CLKB",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert_eq!(
             min.purged,
             ["sela", "selb"].map(Symbol::from).into_iter().collect()
         );
-        assert!(bdds[&Symbol::from("sela1")]
-            .equivalent_to(&b.parse("!RA*(!CLKA*(!enB*!S)+CLKA*sela1)").unwrap()));
-        assert!(bdds[&Symbol::from("selb1")]
-            .equivalent_to(&b.parse("!RB*(!CLKB*(!enA*S)+CLKB*selb1)").unwrap()));
+        assert!(sys.bdds[&Symbol::from("sela1")].equivalent_to(
+            &sys.builder
+                .parse("!RA*(!CLKA*(!enB*!S)+CLKA*sela1)")
+                .unwrap()
+        ));
+        assert!(sys.bdds[&Symbol::from("selb1")].equivalent_to(
+            &sys.builder
+                .parse("!RB*(!CLKB*(!enA*S)+CLKB*selb1)")
+                .unwrap()
+        ));
     }
 
     #[test]
@@ -780,14 +857,16 @@ mod tests {
         // fabricate a register — it only re-expresses an existing one. The guard allows the fold even
         // though X↔Q is a 2-cycle; `X` is purged and `δ_Q = Q*B + !Q*A` (which oscillates at A*!B,
         // preserving the oscillation in Q's own self-loop).
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Q"],
             "X" = "!Q*A",
             "Q" = "Q*B + X",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert_eq!(min.purged, ["X"].map(Symbol::from).into_iter().collect());
-        assert!(bdds[&Symbol::from("Q")].equivalent_to(&b.parse("Q*B + !Q*A").unwrap()));
+        assert!(
+            sys.bdds[&Symbol::from("Q")].equivalent_to(&sys.builder.parse("Q*B + !Q*A").unwrap())
+        );
     }
 
     #[test]
@@ -795,14 +874,14 @@ mod tests {
         // W="A" is a wire-of-input: its function targets a primary input, not a signal. Y="W" is a bare
         // alias of the key W, so the fold collapses the {Y, W} chain — W (an internal relay) folds into
         // its consumer Y and is purged, and Y resolves to A.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Y"],
             "W" = "A",
             "Y" = "W",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert!(min.purged.contains("W"));
-        assert!(bdds[&Symbol::from("Y")].equivalent_to(&b.parse("A").unwrap()));
+        assert!(sys.bdds[&Symbol::from("Y")].equivalent_to(&sys.builder.parse("A").unwrap()));
     }
 
     #[test]
@@ -812,61 +891,69 @@ mod tests {
         // carried (a lone keeper for a=b, a one-node oscillator for a=!b).
         //
         // a="b", b="a": a folds into b (b=b), a is purged, b is the sole keeper.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: [],
             "a" = "b",
             "b" = "a",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert_eq!(min.purged, [Symbol::from("a")].into_iter().collect());
-        assert!(bdds[&Symbol::from("b")] == b.var("b"));
+        assert!(sys.bdds[&Symbol::from("b")] == sys.builder.var("b"));
 
         // a="!b", b="a": a folds into b (b=!b), a is purged, b is a one-node oscillator.
-        let (b2, mut bdds2, order2, p2) = system! {
+        let mut sys2 = system! {
             outputs: [],
             "a" = "!b",
             "b" = "a",
         };
-        let min2 = minimise(&mut bdds2, &order2, &p2);
+        let min2 = minimise(&mut sys2.bdds, &sys2.order, &sys2.preserved);
         assert_eq!(min2.purged, [Symbol::from("a")].into_iter().collect());
-        assert!(bdds2[&Symbol::from("b")] == !&b2.var("b"));
+        assert!(sys2.bdds[&Symbol::from("b")] == !&sys2.builder.var("b"));
     }
 
     #[test]
     fn dead_combinational_internal_is_purged() {
         // W="CLK*D" with no consumers is a dead internal — the fold purges it.
-        let (_b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: [],
             "W" = "CLK*D",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert_eq!(min.purged, [Symbol::from("W")].into_iter().collect());
-        assert!(!bdds.contains_key("W"));
+        assert!(!sys.bdds.contains_key("W"));
     }
 
     #[test]
     fn relay_chain_folds_until_no_pass_commits() {
         // W1 → W2 → (input B): a relay chain feeding the self-holding output L. Both internals purge.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["L"],
             "W1" = "W2*A",
             "W2" = "B",
             "L" = "!R*(W1+L)",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert_eq!(
             min.purged,
             ["W1", "W2"].map(Symbol::from).into_iter().collect()
         );
-        assert!(bdds[&Symbol::from("L")].equivalent_to(&b.parse("!R*(B*A+L)").unwrap()));
+        assert!(
+            sys.bdds[&Symbol::from("L")].equivalent_to(&sys.builder.parse("!R*(B*A+L)").unwrap())
+        );
     }
 
     #[test]
-    fn minimisation_is_deterministic() {
-        // Two independent builder instances must fold each cell to equivalent results. The two runs
-        // carry different brands, so we compare the BDDs by their builder-independent `Cover`: rebuild
-        // the second run's function in the first run's builder and use `equivalent_to` — a real BDD
-        // equivalence, never a stringified cover.
+    fn minimisation_is_independent_of_the_builder_instance() {
+        // Each fixture is minimised twice, in two builder instances, each run over its own map, scan
+        // order and preserved set. Every run is pinned on its own by the answer its fixture forces —
+        // the names it purges and the definition each survivor is left holding — so the two runs
+        // agreeing adds the builder-independence [`minimise_state_space`] documents rather than
+        // carrying the test. The delta the pair may show is none at all: same `Minimised`, and
+        // signal-by-signal equivalent functions.
+        //
+        // The two runs carry different brands, so their handles cannot be compared directly: rebuild
+        // the second run's function in the first run's builder from its `Cover` and use
+        // `equivalent_to` — a real BDD equivalence, never a stringified cover.
         fn assert_runs_agree<B1: Brand, C1: ManagerCell, B2: Brand, C2: ManagerCell>(
             a: &BTreeMap<Symbol, Bdd<B1, C1>>,
             b: &BTreeMap<Symbol, Bdd<B2, C2>>,
@@ -881,24 +968,63 @@ mod tests {
             }
         }
 
-        // C-element.
-        let (_b1, mut a, order, p) = system! {
-            outputs: ["Q"],
-            "Q" = "IQ",
-            "IQ" = "!QN",
-            "QN" = "!(A*B + IQ*(A+B))",
-        };
-        let (_b2, mut b, _, _) = system! {
-            outputs: ["Q"],
-            "Q" = "IQ",
-            "IQ" = "!QN",
-            "QN" = "!(A*B + IQ*(A+B))",
-        };
-        assert_eq!(minimise(&mut a, &order, &p), minimise(&mut b, &order, &p));
-        assert_runs_agree(&a, &b);
+        /// Check one run against the answer its fixture forces: exactly `purged` removed, exactly the
+        /// `surviving` names left, and each survivor equivalent to its stated definition — parsed in
+        /// the run's own builder, so the expectation never crosses a brand.
+        fn assert_folds_to<B: Brand, C: ManagerCell>(
+            sys: &System<B, C>,
+            min: &Minimised,
+            purged: &[&str],
+            surviving: &[SignalDef],
+        ) {
+            assert_eq!(
+                min.purged,
+                purged.iter().copied().map(Symbol::from).collect()
+            );
+            assert_eq!(
+                sys.bdds.keys().cloned().collect::<BTreeSet<Symbol>>(),
+                surviving.iter().map(|d| Symbol::from(d.name)).collect()
+            );
+            for d in surviving {
+                let f = &sys.bdds[&Symbol::from(d.name)];
+                assert!(
+                    f.equivalent_to(&sys.builder.parse(d.expr).unwrap()),
+                    "signal {} is not {}",
+                    d.name,
+                    d.expr
+                );
+            }
+        }
 
-        // ICM.
-        let (_b1, mut a, order, p) = system! {
+        // C-element chain Q → IQ → QN with QN the definer: both internals purge and the one coordinate
+        // lands on the sole output pin.
+        let mut a = system! {
+            outputs: ["Q"],
+            "Q" = "IQ",
+            "IQ" = "!QN",
+            "QN" = "!(A*B + IQ*(A+B))",
+        };
+        let mut b = system! {
+            outputs: ["Q"],
+            "Q" = "IQ",
+            "IQ" = "!QN",
+            "QN" = "!(A*B + IQ*(A+B))",
+        };
+        let folded = [SignalDef {
+            name: "Q",
+            expr: "A*B + Q*(A+B)",
+        }];
+        let min_a = minimise(&mut a.bdds, &a.order, &a.preserved);
+        let min_b = minimise(&mut b.bdds, &b.order, &b.preserved);
+        assert_folds_to(&a, &min_a, &["IQ", "QN"], &folded);
+        assert_folds_to(&b, &min_b, &["IQ", "QN"], &folded);
+        assert_eq!(min_a, min_b);
+        assert_runs_agree(&a.bdds, &b.bdds);
+
+        // ICM: the two combinational selects are relays into synchroniser latches that already
+        // self-hold, so each is composed into its one consumer and purged; the six latches and the
+        // output GCLK survive, GCLK as a preserved signal nothing consumes.
+        let mut a = system! {
             outputs: ["GCLK"],
             "sela" = "!enB*!S",
             "selb" = "!enA*S",
@@ -910,7 +1036,7 @@ mod tests {
             "enB" = "!RB*(!CLKB*selb2+CLKB*enB)",
             "GCLK" = "enA*CLKA+enB*CLKB",
         };
-        let (_b2, mut b, _, _) = system! {
+        let mut b = system! {
             outputs: ["GCLK"],
             "sela" = "!enB*!S",
             "selb" = "!enA*S",
@@ -922,24 +1048,67 @@ mod tests {
             "enB" = "!RB*(!CLKB*selb2+CLKB*enB)",
             "GCLK" = "enA*CLKA+enB*CLKB",
         };
-        assert_eq!(minimise(&mut a, &order, &p), minimise(&mut b, &order, &p));
-        assert_runs_agree(&a, &b);
+        let folded = [
+            SignalDef {
+                name: "sela1",
+                expr: "!RA*(!CLKA*(!enB*!S)+CLKA*sela1)",
+            },
+            SignalDef {
+                name: "sela2",
+                expr: "!RA*(CLKA*sela1+!CLKA*sela2)",
+            },
+            SignalDef {
+                name: "enA",
+                expr: "!RA*(!CLKA*sela2+CLKA*enA)",
+            },
+            SignalDef {
+                name: "selb1",
+                expr: "!RB*(!CLKB*(!enA*S)+CLKB*selb1)",
+            },
+            SignalDef {
+                name: "selb2",
+                expr: "!RB*(CLKB*selb1+!CLKB*selb2)",
+            },
+            SignalDef {
+                name: "enB",
+                expr: "!RB*(!CLKB*selb2+CLKB*enB)",
+            },
+            SignalDef {
+                name: "GCLK",
+                expr: "enA*CLKA+enB*CLKB",
+            },
+        ];
+        let min_a = minimise(&mut a.bdds, &a.order, &a.preserved);
+        let min_b = minimise(&mut b.bdds, &b.order, &b.preserved);
+        assert_folds_to(&a, &min_a, &["sela", "selb"], &folded);
+        assert_folds_to(&b, &min_b, &["sela", "selb"], &folded);
+        assert_eq!(min_a, min_b);
+        assert_runs_agree(&a.bdds, &b.bdds);
 
-        // Buffered C-element: dedup of the {Q, IQ} duplicate followed by the output-alias fold.
-        let (_b1, mut a, order, p) = system! {
+        // Buffered C-element: dedup retires the {Q, IQ} duplicate, then the output-alias fold lands the
+        // coordinate on Q and purges QN.
+        let mut a = system! {
             outputs: ["Q"],
             "Q" = "!QN",
             "IQ" = "!QN",
             "QN" = "!(A*B + IQ*(A+B))",
         };
-        let (_b2, mut b, _, _) = system! {
+        let mut b = system! {
             outputs: ["Q"],
             "Q" = "!QN",
             "IQ" = "!QN",
             "QN" = "!(A*B + IQ*(A+B))",
         };
-        assert_eq!(minimise(&mut a, &order, &p), minimise(&mut b, &order, &p));
-        assert_runs_agree(&a, &b);
+        let folded = [SignalDef {
+            name: "Q",
+            expr: "A*B + Q*(A+B)",
+        }];
+        let min_a = minimise(&mut a.bdds, &a.order, &a.preserved);
+        let min_b = minimise(&mut b.bdds, &b.order, &b.preserved);
+        assert_folds_to(&a, &min_a, &["IQ", "QN"], &folded);
+        assert_folds_to(&b, &min_b, &["IQ", "QN"], &folded);
+        assert_eq!(min_a, min_b);
+        assert_runs_agree(&a.bdds, &b.bdds);
     }
 
     #[test]
@@ -948,20 +1117,21 @@ mod tests {
         // outright (purged, consumers rewritten onto var(Q)) inside dedup_pass itself. QN then folds
         // through via the fold landing the coordinate on the output alias, so the whole cell reduces to
         // the single output coordinate Q = A*B + Q*(A+B).
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Q"],
             "Q" = "!QN",
             "IQ" = "!QN",
             "QN" = "!(A*B + IQ*(A+B))",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert_eq!(
             min.purged,
             ["IQ", "QN"].map(Symbol::from).into_iter().collect()
         );
-        assert!(bdds[&Symbol::from("Q")].equivalent_to(&b.parse("A*B + Q*(A+B)").unwrap()));
-        assert!(!bdds.contains_key("IQ"));
-        assert!(!bdds.contains_key("QN"));
+        assert!(sys.bdds[&Symbol::from("Q")]
+            .equivalent_to(&sys.builder.parse("A*B + Q*(A+B)").unwrap()));
+        assert!(!sys.bdds.contains_key("IQ"));
+        assert!(!sys.bdds.contains_key("QN"));
     }
 
     #[test]
@@ -970,16 +1140,16 @@ mod tests {
         // non-recurrent all-output group, so dedup's retire set is empty: aliasing either pin to a
         // combinational rep the machine cannot evaluate would breach I3, so dedup commits nothing and
         // both pins keep the full function and stay independent.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Y1", "Y2"],
             "Y1" = "A*B",
             "Y2" = "A*B",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert!(min.purged.is_empty());
         assert!(min.changed.is_empty());
-        assert!(bdds[&Symbol::from("Y1")].equivalent_to(&b.parse("A*B").unwrap()));
-        assert!(bdds[&Symbol::from("Y2")].equivalent_to(&b.parse("A*B").unwrap()));
+        assert!(sys.bdds[&Symbol::from("Y1")].equivalent_to(&sys.builder.parse("A*B").unwrap()));
+        assert!(sys.bdds[&Symbol::from("Y2")].equivalent_to(&sys.builder.parse("A*B").unwrap()));
     }
 
     #[test]
@@ -987,33 +1157,36 @@ mod tests {
         // Two output pins carry the identical *recurrent* function (the coordinate self-reaches through
         // Q1). Dedup merges Q2 onto var(Q1), making Q1 self-holding — Q2 = var(Q1) legally names the
         // output Q1; no hoist runs (separation is now an emission-time concern).
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Q1", "Q2"],
             "Q1" = "!R*(S+Q1)",
             "Q2" = "!R*(S+Q1)",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert!(min.purged.is_empty());
-        assert!(bdds[&Symbol::from("Q2")] == b.var("Q1"));
-        assert!(bdds[&Symbol::from("Q1")].equivalent_to(&b.parse("!R*(S+Q1)").unwrap()));
+        assert!(sys.bdds[&Symbol::from("Q2")] == sys.builder.var("Q1"));
+        assert!(
+            sys.bdds[&Symbol::from("Q1")].equivalent_to(&sys.builder.parse("!R*(S+Q1)").unwrap())
+        );
     }
 
     #[test]
     fn projections_of_cyclic_output_stay_on_pins() {
         // A cyclic output Q (C-element) named by two non-cyclic outputs: Qn = !Q and Qc = Q. Nothing
         // fires: dead-output aliases are left as-is, on the pins.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Q", "Qn", "Qc"],
             "Q" = "A*B + Q*(A+B)",
             "Qn" = "!Q",
             "Qc" = "Q",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert!(min.purged.is_empty());
         assert!(min.changed.is_empty());
-        assert!(bdds[&Symbol::from("Q")].equivalent_to(&b.parse("A*B + Q*(A+B)").unwrap()));
-        assert!(bdds[&Symbol::from("Qn")] == !&b.var("Q"));
-        assert!(bdds[&Symbol::from("Qc")] == b.var("Q"));
+        assert!(sys.bdds[&Symbol::from("Q")]
+            .equivalent_to(&sys.builder.parse("A*B + Q*(A+B)").unwrap()));
+        assert!(sys.bdds[&Symbol::from("Qn")] == !&sys.builder.var("Q"));
+        assert!(sys.bdds[&Symbol::from("Qc")] == sys.builder.var("Q"));
     }
 
     #[test]
@@ -1021,38 +1194,41 @@ mod tests {
         // Q and IQ are plain-BDD-equal (both !QN): a PASS-LOCAL dedup_pass call retires the internal
         // duplicate IQ outright, during dedup itself — QN's IQ reference is rewritten onto var(Q) before
         // the fold ever runs. The rep's own bare alias (Q = !QN) is left untouched, still the fold's job.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Q"],
             "Q" = "!QN",
             "IQ" = "!QN",
             "QN" = "!(A*B + IQ*(A+B))",
         };
         let mut result = Minimised::default();
-        let committed = dedup_pass(&mut bdds, &order, &p, &mut result);
+        let committed = dedup_pass(&mut sys.bdds, &sys.order, &sys.preserved, &mut result);
         assert!(committed);
-        assert!(!bdds.contains_key("IQ"));
+        assert!(!sys.bdds.contains_key("IQ"));
         assert!(result.purged.contains("IQ"));
         assert_eq!(result.changed, [Symbol::from("QN")].into_iter().collect());
-        assert!(bdds[&Symbol::from("Q")] == !&b.var("QN"));
-        assert!(bdds[&Symbol::from("QN")].equivalent_to(&b.parse("!(A*B + Q*(A+B))").unwrap()));
+        assert!(sys.bdds[&Symbol::from("Q")] == !&sys.builder.var("QN"));
+        assert!(sys.bdds[&Symbol::from("QN")]
+            .equivalent_to(&sys.builder.parse("!(A*B + Q*(A+B))").unwrap()));
     }
 
     #[test]
     fn internal_cse_pair_dedups_onto_single_survivor() {
         // I1 and I2 are both internal and plain-BDD-equal (A*B): a PASS-LOCAL dedup_pass call retires
         // I2 onto I1 and rewrites L's I2 reference to var(I1), without ever reaching the fold.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["L"],
             "I1" = "A*B",
             "I2" = "A*B",
             "L" = "!R*(I1+I2+L)",
         };
         let mut result = Minimised::default();
-        dedup_pass(&mut bdds, &order, &p, &mut result);
+        dedup_pass(&mut sys.bdds, &sys.order, &sys.preserved, &mut result);
         assert!(result.purged.contains("I2"));
-        assert!(bdds.contains_key("I1"));
-        assert!(!bdds.contains_key("I2"));
-        assert!(bdds[&Symbol::from("L")].equivalent_to(&b.parse("!R*(I1+L)").unwrap()));
+        assert!(sys.bdds.contains_key("I1"));
+        assert!(!sys.bdds.contains_key("I2"));
+        assert!(
+            sys.bdds[&Symbol::from("L")].equivalent_to(&sys.builder.parse("!R*(I1+L)").unwrap())
+        );
     }
 
     #[test]
@@ -1061,7 +1237,7 @@ mod tests {
         // SINGLE dedup_pass. Their renames {I2 → var(I1), J2 → var(J1)} are unioned and applied to every
         // survivor in one end-of-pass stream compose, rewriting Z1's I2 reference and Z2's J2 reference
         // together — the combined-map path a single group could not exercise.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Z1", "Z2"],
             "I1" = "A*B",
             "I2" = "A*B",
@@ -1071,16 +1247,16 @@ mod tests {
             "Z2" = "J2 * Y",
         };
         let mut result = Minimised::default();
-        let committed = dedup_pass(&mut bdds, &order, &p, &mut result);
+        let committed = dedup_pass(&mut sys.bdds, &sys.order, &sys.preserved, &mut result);
         assert!(committed);
         assert_eq!(
             result.purged,
             ["I2", "J2"].map(Symbol::from).into_iter().collect()
         );
-        assert!(bdds.contains_key("I1") && bdds.contains_key("J1"));
-        assert!(!bdds.contains_key("I2") && !bdds.contains_key("J2"));
-        assert!(bdds[&Symbol::from("Z1")].equivalent_to(&b.parse("I1 + X").unwrap()));
-        assert!(bdds[&Symbol::from("Z2")].equivalent_to(&b.parse("J1 * Y").unwrap()));
+        assert!(sys.bdds.contains_key("I1") && sys.bdds.contains_key("J1"));
+        assert!(!sys.bdds.contains_key("I2") && !sys.bdds.contains_key("J2"));
+        assert!(sys.bdds[&Symbol::from("Z1")].equivalent_to(&sys.builder.parse("I1 + X").unwrap()));
+        assert!(sys.bdds[&Symbol::from("Z2")].equivalent_to(&sys.builder.parse("J1 * Y").unwrap()));
         assert_eq!(
             result.changed,
             ["Z1", "Z2"].map(Symbol::from).into_iter().collect()
@@ -1091,72 +1267,72 @@ mod tests {
     fn internal_cse_duplicates_merge_then_fold_into_consumers() {
         // W1 and W2 are internal duplicates (A*B); dedup retires W2 onto W1, then the fold relays the
         // survivor W1 into both its consumers.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Z1", "Z2"],
             "W1" = "A*B",
             "W2" = "A*B",
             "Z1" = "W1+C",
             "Z2" = "W2*D",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert_eq!(
             min.purged,
             ["W1", "W2"].map(Symbol::from).into_iter().collect()
         );
-        assert!(bdds[&Symbol::from("Z1")].equivalent_to(&b.parse("A*B+C").unwrap()));
-        assert!(bdds[&Symbol::from("Z2")].equivalent_to(&b.parse("A*B*D").unwrap()));
+        assert!(sys.bdds[&Symbol::from("Z1")].equivalent_to(&sys.builder.parse("A*B+C").unwrap()));
+        assert!(sys.bdds[&Symbol::from("Z2")].equivalent_to(&sys.builder.parse("A*B*D").unwrap()));
     }
 
     #[test]
     fn internal_duplicate_of_combinational_output_retires() {
         // W is an internal duplicate of the combinational output Y (A*B); the internal always retires
         // regardless of recurrence, and the fold carries Y's function into its consumer Z.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Y", "Z"],
             "Y" = "A*B",
             "W" = "A*B",
             "Z" = "W+C",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert_eq!(min.purged, [Symbol::from("W")].into_iter().collect());
-        assert!(!bdds.contains_key("W"));
-        assert!(bdds[&Symbol::from("Y")].equivalent_to(&b.parse("A*B").unwrap()));
-        assert!(bdds[&Symbol::from("Z")].equivalent_to(&b.parse("A*B+C").unwrap()));
+        assert!(!sys.bdds.contains_key("W"));
+        assert!(sys.bdds[&Symbol::from("Y")].equivalent_to(&sys.builder.parse("A*B").unwrap()));
+        assert!(sys.bdds[&Symbol::from("Z")].equivalent_to(&sys.builder.parse("A*B+C").unwrap()));
     }
 
     #[test]
     fn recurrent_internal_duplicate_of_output_merges() {
         // IQ is an internal duplicate of the recurrent output Q (the shared δ references IQ), so dedup
         // merges it onto Q, making Q self-holding on its own name.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Q"],
             "Q" = "!R*(S+IQ)",
             "IQ" = "!R*(S+IQ)",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert_eq!(min.purged, [Symbol::from("IQ")].into_iter().collect());
         assert!(min.changed.contains("Q"));
-        assert!(bdds[&Symbol::from("Q")].equivalent_to(&b.parse("!R*(S+Q)").unwrap()));
+        assert!(sys.bdds[&Symbol::from("Q")].equivalent_to(&sys.builder.parse("!R*(S+Q)").unwrap()));
     }
 
     #[test]
     fn mixed_group_retires_internal_but_keeps_duplicate_outputs() {
         // Y1, Y2 and W are all plain-BDD-equal (A*B); the group is non-recurrent, so the internal W
         // still retires unconditionally while the duplicate output Y2 is left un-aliased, independent.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Y1", "Y2", "Z"],
             "Y1" = "A*B",
             "Y2" = "A*B",
             "W" = "A*B",
             "Z" = "!W",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert_eq!(min.purged, [Symbol::from("W")].into_iter().collect());
         assert!(min.changed.contains("Z"));
-        assert!(bdds[&Symbol::from("Y1")].equivalent_to(&b.parse("A*B").unwrap()));
-        assert!(bdds[&Symbol::from("Y2")].equivalent_to(&b.parse("A*B").unwrap()));
-        assert!(bdds[&Symbol::from("Y2")] != b.var("Y1"));
-        assert!(bdds[&Symbol::from("Z")].equivalent_to(&b.parse("!(A*B)").unwrap()));
+        assert!(sys.bdds[&Symbol::from("Y1")].equivalent_to(&sys.builder.parse("A*B").unwrap()));
+        assert!(sys.bdds[&Symbol::from("Y2")].equivalent_to(&sys.builder.parse("A*B").unwrap()));
+        assert!(sys.bdds[&Symbol::from("Y2")] != sys.builder.var("Y1"));
+        assert!(sys.bdds[&Symbol::from("Z")].equivalent_to(&sys.builder.parse("!(A*B)").unwrap()));
     }
 
     #[test]
@@ -1165,17 +1341,18 @@ mod tests {
         // it is refused; instead the arity-1 relay fold composes Q = !QN into QN's own definer, which
         // leaves QN self-holding and Q a consumer-free alias on its pin — the same shape a complement
         // *output* pair reaches (I1). Nothing is purged.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Q"],
             exposed: ["QN"],
             "Q" = "!QN",
             "QN" = "!(A*B + Q*(A+B))",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert!(min.purged.is_empty());
         assert_eq!(min.changed, [Symbol::from("QN")].into_iter().collect());
-        assert!(bdds[&Symbol::from("Q")] == !&b.var("QN"));
-        assert!(bdds[&Symbol::from("QN")].equivalent_to(&b.parse("!(A*B + !QN*(A+B))").unwrap()));
+        assert!(sys.bdds[&Symbol::from("Q")] == !&sys.builder.var("QN"));
+        assert!(sys.bdds[&Symbol::from("QN")]
+            .equivalent_to(&sys.builder.parse("!(A*B + !QN*(A+B))").unwrap()));
     }
 
     #[test]
@@ -1183,18 +1360,18 @@ mod tests {
         // W is an exposed internal duplicate of the combinational output Y (A*B). The group is
         // non-recurrent, so aliasing W to a combinational rep the machine cannot evaluate would breach
         // I3 — dedup commits nothing and both names keep the full function.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Y"],
             exposed: ["W"],
             "Y" = "A*B",
             "W" = "A*B",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert!(min.purged.is_empty());
         assert!(min.changed.is_empty());
-        assert!(bdds[&Symbol::from("Y")].equivalent_to(&b.parse("A*B").unwrap()));
-        assert!(bdds[&Symbol::from("W")].equivalent_to(&b.parse("A*B").unwrap()));
-        assert!(bdds[&Symbol::from("W")] != b.var("Y"));
+        assert!(sys.bdds[&Symbol::from("Y")].equivalent_to(&sys.builder.parse("A*B").unwrap()));
+        assert!(sys.bdds[&Symbol::from("W")].equivalent_to(&sys.builder.parse("A*B").unwrap()));
+        assert!(sys.bdds[&Symbol::from("W")] != sys.builder.var("Y"));
     }
 
     #[test]
@@ -1202,17 +1379,17 @@ mod tests {
         // IQ is an exposed internal duplicate of the recurrent output Q (the shared δ references Q, so
         // the rep self-holds). The group is recurrent, so IQ retires — by demotion to var(Q), the
         // exposed name kept, rather than by the purge a plain internal would take.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Q"],
             exposed: ["IQ"],
             "Q" = "!R*(S+Q)",
             "IQ" = "!R*(S+Q)",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert!(min.purged.is_empty());
         assert_eq!(min.changed, [Symbol::from("IQ")].into_iter().collect());
-        assert!(bdds[&Symbol::from("IQ")] == b.var("Q"));
-        assert!(bdds[&Symbol::from("Q")].equivalent_to(&b.parse("!R*(S+Q)").unwrap()));
+        assert!(sys.bdds[&Symbol::from("IQ")] == sys.builder.var("Q"));
+        assert!(sys.bdds[&Symbol::from("Q")].equivalent_to(&sys.builder.parse("!R*(S+Q)").unwrap()));
     }
 
     #[test]
@@ -1220,16 +1397,16 @@ mod tests {
         // W is an exposed combinational relay. The fold composes it into every consumer exactly as it
         // would a plain internal and skips only the removal, so W survives to the minimised model with
         // no consumers left — the I3 shape that keeps the machine's support assert intact.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Z"],
             exposed: ["W"],
             "W" = "A*B",
             "Z" = "W+C",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert!(min.purged.is_empty());
-        assert!(bdds[&Symbol::from("W")].equivalent_to(&b.parse("A*B").unwrap()));
-        assert!(bdds[&Symbol::from("Z")].equivalent_to(&b.parse("A*B+C").unwrap()));
+        assert!(sys.bdds[&Symbol::from("W")].equivalent_to(&sys.builder.parse("A*B").unwrap()));
+        assert!(sys.bdds[&Symbol::from("Z")].equivalent_to(&sys.builder.parse("A*B+C").unwrap()));
     }
 
     #[test]
@@ -1237,7 +1414,7 @@ mod tests {
         // An output pin outranks an exposed internal: W, X and Y are plain-BDD-equal (A*B) with X
         // exposed, and the coordinate lands on the output Y — the retiring W's consumer is rewritten
         // onto var(Y), and the exposed X (non-recurrent, so not retired) is left independent.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Y", "Z"],
             exposed: ["X"],
             "W" = "A*B",
@@ -1246,14 +1423,14 @@ mod tests {
             "Z" = "!W",
         };
         let mut result = Minimised::default();
-        dedup_pass(&mut bdds, &order, &p, &mut result);
+        dedup_pass(&mut sys.bdds, &sys.order, &sys.preserved, &mut result);
         assert_eq!(result.purged, [Symbol::from("W")].into_iter().collect());
-        assert!(bdds.contains_key("X"));
-        assert!(bdds[&Symbol::from("Z")].equivalent_to(&b.parse("!Y").unwrap()));
+        assert!(sys.bdds.contains_key("X"));
+        assert!(sys.bdds[&Symbol::from("Z")].equivalent_to(&sys.builder.parse("!Y").unwrap()));
 
         // With no output in the group, the exposed member outranks the plain internal: the same
         // duplicate pair lands the coordinate on X and W retires onto var(X).
-        let (b2, mut bdds2, order2, p2) = system! {
+        let mut sys2 = system! {
             outputs: ["Z"],
             exposed: ["X"],
             "W" = "A*B",
@@ -1261,34 +1438,34 @@ mod tests {
             "Z" = "!W",
         };
         let mut result2 = Minimised::default();
-        dedup_pass(&mut bdds2, &order2, &p2, &mut result2);
+        dedup_pass(&mut sys2.bdds, &sys2.order, &sys2.preserved, &mut result2);
         assert_eq!(result2.purged, [Symbol::from("W")].into_iter().collect());
-        assert!(bdds2.contains_key("X"));
-        assert!(bdds2[&Symbol::from("Z")].equivalent_to(&b2.parse("!X").unwrap()));
+        assert!(sys2.bdds.contains_key("X"));
+        assert!(sys2.bdds[&Symbol::from("Z")].equivalent_to(&sys2.builder.parse("!X").unwrap()));
     }
 
     #[test]
     fn exposed_dead_alias_is_never_purged() {
         // QN names the complement of the self-holding output Q and nothing reads it. A plain internal
         // in that position is purged as dead; exposed, it is kept on its own name.
-        let (b, mut bdds, order, p) = system! {
+        let mut sys = system! {
             outputs: ["Q"],
             exposed: ["QN"],
             "Q" = "A*B + Q*(A+B)",
             "QN" = "!Q",
         };
-        let min = minimise(&mut bdds, &order, &p);
+        let min = minimise(&mut sys.bdds, &sys.order, &sys.preserved);
         assert!(min.purged.is_empty());
         assert!(min.changed.is_empty());
-        assert!(bdds[&Symbol::from("QN")] == !&b.var("Q"));
+        assert!(sys.bdds[&Symbol::from("QN")] == !&sys.builder.var("Q"));
 
         // The same cell without the exposure: the dead alias is purged.
-        let (_b2, mut bdds2, order2, p2) = system! {
+        let mut sys2 = system! {
             outputs: ["Q"],
             "Q" = "A*B + Q*(A+B)",
             "QN" = "!Q",
         };
-        let min2 = minimise(&mut bdds2, &order2, &p2);
+        let min2 = minimise(&mut sys2.bdds, &sys2.order, &sys2.preserved);
         assert_eq!(min2.purged, [Symbol::from("QN")].into_iter().collect());
     }
 
@@ -1298,90 +1475,253 @@ mod tests {
     struct Fixture {
         label: &'static str,
         outputs: &'static [&'static str],
-        defs: &'static [(&'static str, &'static str)],
+        defs: &'static [SignalDef],
     }
 
     const DIFFERENTIAL_FIXTURES: &[Fixture] = &[
         Fixture {
             label: "c_element_chain",
             outputs: &["Q"],
-            defs: &[("Q", "IQ"), ("IQ", "!QN"), ("QN", "!(A*B + IQ*(A+B))")],
+            defs: &[
+                SignalDef {
+                    name: "Q",
+                    expr: "IQ",
+                },
+                SignalDef {
+                    name: "IQ",
+                    expr: "!QN",
+                },
+                SignalDef {
+                    name: "QN",
+                    expr: "!(A*B + IQ*(A+B))",
+                },
+            ],
         },
         Fixture {
             label: "buffered_c_element",
             outputs: &["Q"],
-            defs: &[("Q", "!QN"), ("IQ", "!QN"), ("QN", "!(A*B + IQ*(A+B))")],
+            defs: &[
+                SignalDef {
+                    name: "Q",
+                    expr: "!QN",
+                },
+                SignalDef {
+                    name: "IQ",
+                    expr: "!QN",
+                },
+                SignalDef {
+                    name: "QN",
+                    expr: "!(A*B + IQ*(A+B))",
+                },
+            ],
         },
         // `examples/cells.toml`'s C2GATE, in the outputs-then-internals order `signals()` yields.
         Fixture {
             label: "C2GATE",
             outputs: &["Q"],
-            defs: &[("Q", "!QN"), ("IQ", "!QN"), ("QN", "!(A*B + IQ*(A+B))")],
+            defs: &[
+                SignalDef {
+                    name: "Q",
+                    expr: "!QN",
+                },
+                SignalDef {
+                    name: "IQ",
+                    expr: "!QN",
+                },
+                SignalDef {
+                    name: "QN",
+                    expr: "!(A*B + IQ*(A+B))",
+                },
+            ],
         },
         Fixture {
             label: "complement_output_pair",
             outputs: &["Q", "QN"],
-            defs: &[("Q", "!QN"), ("QN", "!(A*B + Q*(A+B))")],
+            defs: &[
+                SignalDef {
+                    name: "Q",
+                    expr: "!QN",
+                },
+                SignalDef {
+                    name: "QN",
+                    expr: "!(A*B + Q*(A+B))",
+                },
+            ],
         },
         Fixture {
             label: "mutex",
             outputs: &["Qa", "Qb"],
-            defs: &[("Qa", "!Qb * A"), ("Qb", "!Qa * B")],
+            defs: &[
+                SignalDef {
+                    name: "Qa",
+                    expr: "!Qb * A",
+                },
+                SignalDef {
+                    name: "Qb",
+                    expr: "!Qa * B",
+                },
+            ],
         },
         Fixture {
             label: "sr_nor_latch",
             outputs: &["Q", "Qn"],
-            defs: &[("Q", "!(R+Qn)"), ("Qn", "!(S+Q)")],
+            defs: &[
+                SignalDef {
+                    name: "Q",
+                    expr: "!(R+Qn)",
+                },
+                SignalDef {
+                    name: "Qn",
+                    expr: "!(S+Q)",
+                },
+            ],
         },
         Fixture {
             label: "dff_master_slave",
             outputs: &["Q"],
-            defs: &[("M", "!CLK*D + CLK*M"), ("Q", "CLK*M + !CLK*Q")],
+            defs: &[
+                SignalDef {
+                    name: "M",
+                    expr: "!CLK*D + CLK*M",
+                },
+                SignalDef {
+                    name: "Q",
+                    expr: "CLK*M + !CLK*Q",
+                },
+            ],
         },
         Fixture {
             label: "icm",
             outputs: &["GCLK"],
             defs: &[
-                ("sela", "!enB*!S"),
-                ("selb", "!enA*S"),
-                ("sela1", "!RA*(!CLKA*sela+CLKA*sela1)"),
-                ("sela2", "!RA*(CLKA*sela1+!CLKA*sela2)"),
-                ("enA", "!RA*(!CLKA*sela2+CLKA*enA)"),
-                ("selb1", "!RB*(!CLKB*selb+CLKB*selb1)"),
-                ("selb2", "!RB*(CLKB*selb1+!CLKB*selb2)"),
-                ("enB", "!RB*(!CLKB*selb2+CLKB*enB)"),
-                ("GCLK", "enA*CLKA+enB*CLKB"),
+                SignalDef {
+                    name: "sela",
+                    expr: "!enB*!S",
+                },
+                SignalDef {
+                    name: "selb",
+                    expr: "!enA*S",
+                },
+                SignalDef {
+                    name: "sela1",
+                    expr: "!RA*(!CLKA*sela+CLKA*sela1)",
+                },
+                SignalDef {
+                    name: "sela2",
+                    expr: "!RA*(CLKA*sela1+!CLKA*sela2)",
+                },
+                SignalDef {
+                    name: "enA",
+                    expr: "!RA*(!CLKA*sela2+CLKA*enA)",
+                },
+                SignalDef {
+                    name: "selb1",
+                    expr: "!RB*(!CLKB*selb+CLKB*selb1)",
+                },
+                SignalDef {
+                    name: "selb2",
+                    expr: "!RB*(CLKB*selb1+!CLKB*selb2)",
+                },
+                SignalDef {
+                    name: "enB",
+                    expr: "!RB*(!CLKB*selb2+CLKB*enB)",
+                },
+                SignalDef {
+                    name: "GCLK",
+                    expr: "enA*CLKA+enB*CLKB",
+                },
             ],
         },
         Fixture {
             label: "relay_chain",
             outputs: &["L"],
-            defs: &[("W1", "W2*A"), ("W2", "B"), ("L", "!R*(W1+L)")],
+            defs: &[
+                SignalDef {
+                    name: "W1",
+                    expr: "W2*A",
+                },
+                SignalDef {
+                    name: "W2",
+                    expr: "B",
+                },
+                SignalDef {
+                    name: "L",
+                    expr: "!R*(W1+L)",
+                },
+            ],
         },
         Fixture {
             label: "rosc",
             outputs: &["Q"],
-            defs: &[("X", "!Q*A"), ("Q", "Q*B + X")],
+            defs: &[
+                SignalDef {
+                    name: "X",
+                    expr: "!Q*A",
+                },
+                SignalDef {
+                    name: "Q",
+                    expr: "Q*B + X",
+                },
+            ],
         },
         // `arcs.rs`'s MASKPAIR: two latches, one masked out of the output by S.
         Fixture {
             label: "maskpair",
             outputs: &["Y"],
-            defs: &[("L", "E*D + !E*L"), ("K", "C*D + !C*K"), ("Y", "K + S*L")],
+            defs: &[
+                SignalDef {
+                    name: "L",
+                    expr: "E*D + !E*L",
+                },
+                SignalDef {
+                    name: "K",
+                    expr: "C*D + !C*K",
+                },
+                SignalDef {
+                    name: "Y",
+                    expr: "K + S*L",
+                },
+            ],
         },
         // A gated latch behind a relay: the enable is combinational, the internal latch self-holds
         // and the output is a bare alias of it, so the coordinate travels two hops to reach the pin.
         Fixture {
             label: "latch_behind_enable_relay",
             outputs: &["Q"],
-            defs: &[("EN", "G*!CLR"), ("IL", "EN*D + !EN*IL"), ("Q", "IL")],
+            defs: &[
+                SignalDef {
+                    name: "EN",
+                    expr: "G*!CLR",
+                },
+                SignalDef {
+                    name: "IL",
+                    expr: "EN*D + !EN*IL",
+                },
+                SignalDef {
+                    name: "Q",
+                    expr: "IL",
+                },
+            ],
         },
         // One internal register tapped by two output pins of opposite parity — the coordinate lands
         // on the first pin and the second becomes a bare alias of it.
         Fixture {
             label: "register_with_true_and_complement_taps",
             outputs: &["Q", "QB"],
-            defs: &[("IL", "!R*(S+IL)"), ("Q", "IL"), ("QB", "!IL")],
+            defs: &[
+                SignalDef {
+                    name: "IL",
+                    expr: "!R*(S+IL)",
+                },
+                SignalDef {
+                    name: "Q",
+                    expr: "IL",
+                },
+                SignalDef {
+                    name: "QB",
+                    expr: "!IL",
+                },
+            ],
         },
     ];
 
@@ -1405,17 +1745,24 @@ mod tests {
         {
             let outputs: BTreeSet<Symbol> = pins.iter().copied().map(Symbol::from).collect();
             let plain = Preserved::outputs(outputs.clone());
-            for (name, _) in defs.iter() {
+            for def in defs.iter() {
+                let name = def.name;
                 let exposed = Preserved::with_exposed(
                     outputs.clone(),
-                    [Symbol::from(*name)].into_iter().collect(),
+                    [Symbol::from(name)].into_iter().collect(),
                 );
                 // Both runs share one builder, so their BDDs are directly comparable.
                 let b = bdd_builder!();
-                let (mut direct, order) = parse_system(&b, defs);
+                let ParsedSystem {
+                    signals: mut direct,
+                    order,
+                } = parse_system(&b, defs);
                 minimise_state_space(&mut direct, &order, &plain);
 
-                let (mut released, _) = parse_system(&b, defs);
+                let ParsedSystem {
+                    signals: mut released,
+                    ..
+                } = parse_system(&b, defs);
                 minimise_state_space(&mut released, &order, &exposed);
                 minimise_state_space(&mut released, &order, &plain);
 

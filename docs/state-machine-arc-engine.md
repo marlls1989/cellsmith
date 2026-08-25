@@ -291,9 +291,7 @@ The exploration both discovers the start states and runs the BFS:
 1. **Start candidates — never an assumed all-zero state.** For each seed function (each state variable's
    δ plus the combinational outputs' δ) it takes the forced on/off cover over the inputs: input
    assignments that force the signal *regardless of* the undefined power-on state. These input minterms
-   are pooled, then **ranked by how many state variables they settle** — the state variables alone, since
-   what the ranking measures is how much of the cell's memory a candidate resolves (ties broken toward
-   state nearest the inputs). Each candidate input is widened onto the full `[inputs…, coordinates…]`
+   are pooled. Each candidate input is widened onto the full `[inputs…, coordinates…]`
    columns — every coordinate column arrives **absent**, and settling is what first gives a combinational
    one its value — and settled. A state-holding cell whose reset is an input *sequence*
    rather than a level is therefore initialised by the sequence that actually resolves it, not by an
@@ -339,15 +337,16 @@ cascade naturally through the multi-round settle.
 Derivation hands the emitter (`src/emit/arcs_tcl.rs`) every firing it found; the emitter is where the
 grain of the generated `.tcl` is decided.
 
-A block form is a variant there. The nine variants of `DefineArc` are Liberate's `-type` taxonomy —
-`async`, `edge` and `combinational` for a measured transition, `hidden` for an input toggle that settles
-with no output following it, and the five constraint types — and each variant renders its whole
-`define_arc` block, writing its own `-type` word. Picking the variant is the classification: a measured
-transition's kind is decided in one place, `TransitionIdentity::of`, and the identity it returns — the
-transition together with that kind — is what the general pass groups the arc under. The exploration's
-rest states come out as `define_leakage` blocks, one per state the cell can sit and leak in, and the two
-forms that command takes are the variants of `LeakageBlock`: the columns holding every pin and exposed
-node at the level the rest state carries, and the condition the inputs alone settle it at.
+A block form is a variant of `Block` (`src/emit/block.rs`), one emitted Liberate command as the value it
+is: the emitter builds those values and each writes its whole block where the deck is written. Nine of
+the variants are Liberate's `-type` taxonomy — `async`, `edge` and `combinational` for a measured
+transition, `hidden` for an input toggle that settles with no output following it, and the five
+constraint types — and each writes its own `-type` word. Picking the variant is the classification: a
+measured transition's kind is decided in one place, `TransitionIdentity::of`, and the identity it
+returns — the transition together with that kind — is what the general pass groups the arc under. The
+exploration's rest states come out as `define_leakage` blocks, one per state the cell can sit and leak
+in, and the two forms that command takes are the remaining two variants: the columns holding every pin
+and exposed node at the level the rest state carries, and the condition the inputs alone settle it at.
 
 Each arc class is emitted in two passes. The **general pass** always runs. It groups the class's derived
 arcs by **transition** — the output pin and the edge it makes, the related pin and the edge IT makes —
@@ -405,10 +404,11 @@ them, the edge-register classification, and the leakage states.
 Two exploration budgets gate the whole shared pass, each charged against work the pass actually performs
 rather than the cell's declared shape (a cell is not turned away for having many inputs or many state
 variables): the **candidate** budget bounds the seed minterms the candidate pool expands the signals'
-forced on/off covers into, before ranking and seeding the BFS; the **state** budget bounds the reachable
-stable states the BFS records in `Explored::order`. Exceeding either leaves the cell unexplored — arcs
-*and* hazards come back empty for it — and is reported as a hard error naming the cell; each budget is
-raised for a run with its own flag, `--max-candidates` or `--max-states`.
+forced on/off covers into, seeding the BFS; the **state** budget bounds the reachable
+stable states the BFS records in `Explored::order`. Exceeding either fails the analysis at that cell —
+without an exploration its arcs *and* hazards would both be empty — and is reported as a hard error
+naming the cell; each budget is raised for a run with its own flag, `--max-candidates` or
+`--max-states`.
 
 ## 7. Worked example: discovering `B↓ → Qa↑` on the mutex
 

@@ -23,96 +23,59 @@
 //! 'Sequential' is a property of an OUTPUT, not of the cell: each output pin is classified per output
 //! (Liberty UG Vol.1 pp.5-31..5-33), and each classification names NODES, never ports:
 //! - (A) an output that IS a state variable reads the node it minted: `state_function : "<node>"`;
-//! - (B) an output whose regions reference a state node carries `state_function : "<sop>"` over those
+//! - (B) an output whose regions reference a state node carries `state_function : "<expr>"` over those
 //!   nodes — including a former feedthrough or inverter of a single state node, rendered by the ordinary
-//!   SOP renderer as a plain or negated literal (e.g. `!Q_st`) (Liberty UG Vol.1 p.5-31, and the
+//!   function renderer as a plain or negated literal (e.g. `!Q_st`) (Liberty UG Vol.1 p.5-31, and the
 //!   `pin(QNZ){state_function:"QN"}` / feedthrough `pin(Y){state_function:"A"}` examples on p.5-33).
-//!   (A) is the special case of this where the SOP is the bare node, and the two emit identically;
-//! - (C) an output over primary inputs only carries a plain `function : "<sop>"`, EVEN inside a cell
+//!   (A) is the special case of this where the expression is the bare node, and the two emit identically;
+//! - (C) an output over primary inputs only carries a plain `function : "<expr>"`, EVEN inside a cell
 //!   that has a statetable.
 //!
-//! `cell_liberty` renders one cell as a bare `cell (...) { ... }` group; `library_liberty` wraps all of
-//! a run's cells in a single `library (<name>) { ... }` group — the `.lib` file cellsmith writes. Groups
-//! are built with `liberty-parse`'s `Group`/`Attribute`/`Value`
-//! trees (the same idiom as `pseudosync/src/lib.rs`) and rendered by wrapping in `Liberty` — `Group`
-//! itself has no `Display`.
+//! `cell_liberty` builds one cell's `cell (...) { ... }` groups; `library_liberty` states the whole run —
+//! every cell's groups inside a single `library (<name>) { ... }` group, which is the `.lib` file
+//! cellsmith writes. Groups are built with `liberty-parser`'s `Group`/`Attribute`/`Value`
+//! trees (the same idiom as `pseudosync/src/lib.rs`) and the whole document reaches its sink as one
+//! `Liberty` value, rendered by the crate whose syntax it is — `Group` itself has no `Display`.
 
-use liberty_parse::{
+use liberty_parser::{
     ast::Value,
     liberty::{Attribute, Group, Liberty},
 };
 
 use std::collections::BTreeMap;
+use std::fmt;
 
-use espresso_logic::Symbol;
-use rayon::prelude::*;
+use espresso_logic::{Anonymous, BoolExpr, Cover, Symbol};
 
 use crate::emit::statetable::{build_state_model, EdgeRow, EdgeTok, Next, StateModel};
-use crate::logic::constraint::constrains;
-use crate::logic::hazard::{Cause, Hazard, Outcome};
-use crate::logic::regions::{StateCube, StateRegions};
+use crate::logic::regions::StateRegions;
 use crate::model::AnalysedCell;
+use crate::text::{Joined, Words};
 
 /// Add a simple `name : value;` attribute to a group.
 ///
 /// Constructed via `Group`'s own `attributes` map so we never name `IndexMap` directly — the crate
-/// and `liberty-parse` pull different major versions of `indexmap`, whose types are incompatible.
+/// and `liberty-parser` pull different major versions of `indexmap`, whose types are incompatible.
 fn set_attr(group: &mut Group, name: &str, value: Value) {
     group
         .attributes
         .insert(name.to_owned(), vec![Attribute::Simple(value)]);
 }
 
-/// Wrap every cell's Liberty fragment in a single `library (<name>) { ... }` group so the output is a
-/// self-contained `.lib` that Liberate can consume directly as `user_data` — no external harness
-/// needed. Each cell fragment (oscillation comments included) is indented one level inside the
-/// library.
-pub fn library_liberty(name: &str, cells: &[AnalysedCell]) -> String {
-    let mut out = format!("library ({name}) {{\n");
-    let frags: Vec<String> = cells.par_iter().map(cell_liberty).collect();
-    for frag in &frags {
-        for line in frag.lines() {
-            if line.is_empty() {
-                out.push('\n');
-            } else {
-                out.push_str("  ");
-                out.push_str(line);
-                out.push('\n');
-            }
-        }
-    }
-    out.push_str("}\n");
-    out
+/// The `.lib` a run's cells make up: `cells` — every cell's groups, as [`cell_liberty`] builds them —
+/// inside a single `library (<name>) { ... }` group, so the output is a self-contained `.lib` that
+/// Liberate can consume directly as `user_data`, no external harness needed. Nesting is the AST's own,
+/// and so is the text: the document is one `liberty-parser` value that the sink writes by displaying it.
+pub fn library_liberty(name: &str, cells: Vec<Group>) -> Liberty {
+    let mut library = Group::new("library", name);
+    library.subgroups = cells;
+    Liberty(vec![library])
 }
 
-/// The Liberty `cell (...) { ... }` fragment for a cell, as text (newline-terminated so fragments
-/// concatenate cleanly).
-///
-/// The fragment is prefixed with a comment per RACE-cause oscillation the cell generated a constraint
-/// from, recording the racing condition and the competing settled outcomes. A comment explains the thing
-/// it accompanies, so an oscillation the cell states no constraint for is annotated nowhere — a
-/// lone-toggle ring names one pin, and one edge has nothing to be separated from, and a cell that did not
-/// opt into constraint arcs states none at all. What was detected is reported to the user on stderr
-/// either way. A pulse-cause oscillation names no competing settled state to report here, so this reads
-/// race-cause records only.
-pub fn cell_liberty(cell: &AnalysedCell) -> String {
-    let mut out = String::new();
-    for a in cell.hazards.iter().filter(|h| {
-        matches!(h.cause, Cause::Race { .. })
-            && h.outcome == Outcome::Oscillation
-            && cell.constraints.iter().any(|c| constrains(c, h))
-    }) {
-        let states: Vec<String> = a.settled.iter().map(Hazard::state_str).collect();
-        out.push_str(&format!(
-            "/* oscillation: {} risks metastability in {}, settling to one of {} */\n",
-            a.condition_str(),
-            a.group.join(", "),
-            states.join(" | "),
-        ));
-    }
-    let groups: Vec<Group> = cell.name.iter().map(|n| cell_group(cell, n)).collect();
-    out.push_str(&format!("{}\n", Liberty(groups)));
-    out
+/// The Liberty `cell (...) { ... }` groups for a cell: one per declared name, all identical. The hazards
+/// detected of the cell are reported to the user on stderr rather than written into the library.
+pub fn cell_liberty(cell: &AnalysedCell) -> Vec<Group> {
+    cell.name.iter().map(|n| cell_group(cell, n)).collect()
 }
 
 /// Build the `cell` group: one input `pin` per primary input, then — for a sequential cell — the single
@@ -147,7 +110,7 @@ fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
             for (sig, sr) in cell.signal_regions().take(n_out) {
                 group.subgroups.push(logic_pin(
                     sig.name.as_str(),
-                    PinLogic::Function(function_sop(sr, None)),
+                    PinLogic::Function(function_expr(sr, None)),
                 ));
             }
         }
@@ -171,9 +134,7 @@ fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
                         // A read-gated output reads its factored register combinationally, so it names
                         // PIN ports — the register's internal pin and the gate pins — never a folded
                         // master.
-                        Some(reads) => {
-                            PinLogic::StateFunction(function_sop(reads, Some(&model.node_of)))
-                        }
+                        Some(reads) => PinLogic::StateFunction(function_expr(reads, Some(&model))),
                         None => classify_output(&sig.name, sr, &model),
                     };
                     group.subgroups.push(logic_pin(sig.name.as_str(), logic));
@@ -183,10 +144,10 @@ fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
             // node, a genuine internal state node, and a register factored out of a read-gated output
             // alike. Driving this off the header is what keeps pins and columns in step — a folded
             // master has no column and so gets no pin, without needing to be filtered out here.
-            for node in &model.internal_nodes {
+            for col in &model.state_nodes {
                 group.subgroups.push(logic_pin(
-                    node.as_str(),
-                    PinLogic::InternalNode(node.clone()),
+                    col.node.as_str(),
+                    PinLogic::InternalNode(col.node.clone()),
                 ));
             }
         }
@@ -209,12 +170,12 @@ fn input_pin(name: &str) -> Group {
 /// Pairing the direction with the attribute here is what keeps the two from drifting apart: an
 /// output's logic can never be emitted on an internal pin, nor a node binding as an output's function.
 enum PinLogic {
-    /// `direction : output; function : "<sop>"` — a combinational output over primary inputs.
-    Function(String),
+    /// `direction : output; function : "<expr>"` — a combinational output over primary inputs.
+    Function(BoolExpr),
     /// `direction : output; state_function : "<expr>"` — an output's value as an expression over the
     /// statetable's nodes and input pins. A state output reads its own minted node; a dependent output
     /// reads the nodes it is a function of.
-    StateFunction(String),
+    StateFunction(BoolExpr),
     /// `direction : internal; internal_node : "<node>"` — a state-table node with no external pin,
     /// anchoring its column to a port (Liberty UG Vol.1 `pin(n1)` example). Both a genuine internal
     /// state node and the node minted for a state output take this form.
@@ -222,11 +183,12 @@ enum PinLogic {
 }
 
 /// `pin (<name>) { direction : <dir>; <attr> : "<value>"; }` — the one constructor for every pin that
-/// carries logic, with [`PinLogic`] fixing `<dir>` and `<attr>` together.
+/// carries logic, with [`PinLogic`] fixing `<dir>` and `<attr>` together. This is where a pin's logic
+/// becomes text: an expression writes itself, `BoolExpr`'s own rendering being Liberty's spelling.
 fn logic_pin(name: &str, logic: PinLogic) -> Group {
     let (dir, attr, value) = match logic {
-        PinLogic::Function(sop) => ("output", "function", sop),
-        PinLogic::StateFunction(expr) => ("output", "state_function", expr),
+        PinLogic::Function(expr) => ("output", "function", expr.to_string()),
+        PinLogic::StateFunction(expr) => ("output", "state_function", expr.to_string()),
         PinLogic::InternalNode(node) => ("internal", "internal_node", node.as_str().to_owned()),
     };
     let mut pin = Group::new("pin", name);
@@ -241,188 +203,218 @@ fn logic_pin(name: &str, logic: PinLogic) -> Group {
 /// - (B) an output that references a state node names those nodes through `state_function`;
 /// - (C) an output over primary inputs only carries a plain `function`.
 fn classify_output(name: &Symbol, sr: &StateRegions, model: &StateModel) -> PinLogic {
-    if let Some(node) = model.node_of.get(name) {
+    if let Some(node) = model.node_of(name) {
         // (A) This output IS a state variable: `state_function` states the pin's output logic — the
         // bare node it minted, which the output's own internal pin anchors. (Its cols may reference
         // other nodes, so this must be checked before the state-dependence predicate below.)
-        PinLogic::StateFunction(node.as_str().to_owned())
-    } else if sr.cols.iter().any(|c| model.node_of.contains_key(c)) {
+        PinLogic::StateFunction(BoolExpr::var(node))
+    } else if sr.cols.iter().any(|c| model.node_of(c).is_some()) {
         // (B) This output DEPENDS on a state node — a state_function over the table's nodes.
-        PinLogic::StateFunction(function_sop(sr, Some(&model.node_of)))
+        PinLogic::StateFunction(function_expr(sr, Some(model)))
     } else {
         // (C) Combinational output over primary inputs only — a plain `function`. By minimise
         // invariant I3 a surviving combinational output's support is inputs + state nodes only, so
-        // 'no node_of column' == 'no transitive state dependence' (ref statetable.rs:112-122).
-        PinLogic::Function(function_sop(sr, Some(&model.node_of)))
+        // 'no column with a state node of its own' == 'no transitive state dependence'
+        // (ref statetable.rs:112-122).
+        PinLogic::Function(function_expr(sr, Some(model)))
     }
 }
 
 /// `statetable ("<inputs>", "<nodes>") { table : "<rows>"; }` — the cell's single joint next-state
 /// table. Node values are space-separated within a field; rows are comma-separated.
 fn statetable_group(model: &StateModel) -> Group {
-    let header = format!(
-        "\"{}\", \"{}\"",
-        join_nodes(&model.input_nodes),
-        join_nodes(&model.internal_nodes),
-    );
+    let nodes: Vec<&Symbol> = model.state_nodes.iter().map(|col| &col.node).collect();
+    let header = format!("\"{}\", \"{}\"", Words(&model.input_nodes), Words(&nodes));
     let mut st = Group::new("statetable", &header);
-    set_attr(&mut st, "table", Value::String(table_string(model)));
+    set_attr(&mut st, "table", Value::String(Table(model).to_string()));
     st
 }
 
-/// Render the joint table body: one `<inputs> : <current> : <next>` row per [`StateModel::rows`] entry,
-/// then the edge-triggered rows ([`StateModel::edge_rows`]), comma-and-newline-joined (one statetable row
-/// per line in the emitted Liberty) in model (deterministic) order. Inputs/current use `H`/`L`/`-`; an
-/// edge row's clock column instead carries the token `R`/`F`/`~R`/`~F`; next uses `H`/`L`/`N`.
-fn table_string(model: &StateModel) -> String {
-    let mut rows: Vec<String> = model
-        .rows
-        .iter()
-        .map(|row| {
-            format!(
+/// The joint table body: one `<inputs> : <current> : <next>` row per [`StateModel::rows`] entry, then the
+/// edge-triggered rows ([`StateModel::edge_rows`]), separated by a comma and a newline so one statetable
+/// row occupies one line of the emitted Liberty, in model order. The body is the VALUE of the `table`
+/// attribute, which `liberty-parser` holds as a string, so this is where the rows become text.
+struct Table<'a>(&'a StateModel);
+
+impl fmt::Display for Table<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let model = self.0;
+        let mut written = false;
+        for row in &model.rows {
+            if written {
+                f.write_str(" ,\n")?;
+            }
+            write!(
+                f,
                 "{} : {} : {}",
-                state_pattern(&row.inputs),
-                state_pattern(&row.current),
-                next_pattern(&row.next),
-            )
-        })
-        .collect();
-    for er in &model.edge_rows {
-        rows.push(format!(
-            "{} : {} : {}",
-            edge_input_pattern(er, &model.input_nodes),
-            state_pattern(&er.current),
-            next_pattern(&er.next),
-        ));
+                Levels(&row.inputs),
+                Levels(&row.current),
+                NextPattern(&row.next),
+            )?;
+            written = true;
+        }
+        for er in &model.edge_rows {
+            if written {
+                f.write_str(" ,\n")?;
+            }
+            write!(
+                f,
+                "{} : {} : {}",
+                EdgeInputs {
+                    row: er,
+                    input_nodes: &model.input_nodes,
+                },
+                Levels(&er.current),
+                NextPattern(&er.next),
+            )?;
+            written = true;
+        }
+        Ok(())
     }
-    rows.join(" ,\n")
 }
 
-/// Render an edge row's input field: the ordinary `H`/`L`/`-` level symbols, except the register's clock
-/// column carries the edge token (`R`/`F`/`~R`/`~F`/`-`) in place of a level — but ONLY when the row's cube
-/// leaves the clock free (its `inputs` slot is `None`). A phase-conditioned cover (a `CLK*R` forcing clear)
-/// pins the clock in the cube, so `er.inputs` carries its level there; that literal `H`/`L` is printed
-/// instead of the token, so the clear fires in the intended clock phase rather than on any non-edge event.
-fn edge_input_pattern(er: &EdgeRow, input_nodes: &[Symbol]) -> String {
-    input_nodes
-        .iter()
-        .zip(er.inputs.iter())
-        .map(|(node, val)| {
-            if *node == er.clock && val.is_none() {
-                edge_token(er.token)
+/// An edge row's input field: the ordinary levels, except the register's clock column, which carries the
+/// edge [`Token`] in place of a level — but ONLY when the row's cube leaves the clock free (its `inputs`
+/// slot is `None`). A phase-conditioned cover (a `CLK*R` forcing clear) pins the clock in the cube, so
+/// `inputs` carries its level there; that literal `H`/`L` is printed instead of the token, so the clear
+/// fires in the intended clock phase rather than on any non-edge event.
+struct EdgeInputs<'a> {
+    row: &'a EdgeRow,
+    input_nodes: &'a [Symbol],
+}
+
+impl fmt::Display for EdgeInputs<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let cols = self.input_nodes.iter().zip(self.row.inputs.iter());
+        Joined::new(cols, " ", |(node, val): (&Symbol, &Option<bool>)| {
+            if *node == self.row.clock && val.is_none() {
+                EdgeInputColumn::Token(Token(self.row.token))
             } else {
-                level_symbol(val)
+                EdgeInputColumn::Level(Level(*val))
             }
         })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// The Liberty state-table symbol for a clock-edge token. A dual-edge register's off-edge row owns
-/// neither clock face, so its clock column prints the level don't-care `-`.
-fn edge_token(token: EdgeTok) -> &'static str {
-    match token {
-        EdgeTok::Rise => "R",
-        EdgeTok::Fall => "F",
-        EdgeTok::NotRise => "~R",
-        EdgeTok::NotFall => "~F",
-        EdgeTok::Level => "-",
+        .fmt(f)
     }
 }
 
-/// Render a per-node next-state action vector as space-separated `H`/`L`/`N`/`-` symbols. A `None` slot
-/// is a node this row leaves unconstrained (`-`), deferred to a lower-priority row per Liberty's
-/// per-output next-state resolution.
-fn next_pattern(next: &[Option<Next>]) -> String {
-    next.iter()
-        .map(|n| match n {
+/// One column of [`EdgeInputs`]: the ordinary [`Level`], or — only on the register's clock column when
+/// the row leaves it free — the edge [`Token`] in its place.
+enum EdgeInputColumn {
+    Level(Level),
+    Token(Token),
+}
+
+impl fmt::Display for EdgeInputColumn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EdgeInputColumn::Level(level) => write!(f, "{level}"),
+            EdgeInputColumn::Token(token) => write!(f, "{token}"),
+        }
+    }
+}
+
+/// One clock-edge token as a state-table clock column: `R`/`F` for an active edge and `~R`/`~F` for an
+/// inactive face. A dual-edge register's off-edge row owns neither clock face, so it prints the level
+/// don't-care `-`.
+struct Token(EdgeTok);
+
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self.0 {
+            EdgeTok::Rise => "R",
+            EdgeTok::Fall => "F",
+            EdgeTok::NotRise => "~R",
+            EdgeTok::NotFall => "~F",
+            EdgeTok::Level => "-",
+        })
+    }
+}
+
+/// One row's per-node next-state actions, space-separated over the node header: `H` drive high, `L` drive
+/// low, `N` hold, and `-` for a node the row leaves unconstrained, deferred to a lower-priority row per
+/// Liberty's per-output next-state resolution.
+struct NextPattern<'a>(&'a [Option<Next>]);
+
+impl fmt::Display for NextPattern<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Joined::new(self.0.iter(), " ", |next: &Option<Next>| match next {
             Some(Next::High) => "H",
             Some(Next::Low) => "L",
             Some(Next::Hold) => "N",
             None => "-",
         })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Space-join a node list into a single statetable-header field.
-fn join_nodes(nodes: &[Symbol]) -> String {
-    nodes
-        .iter()
-        .map(Symbol::as_str)
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Render a cube as space-separated `H`/`L`/`-` symbols (Liberty state-table input levels).
-fn state_pattern(cube: &StateCube) -> String {
-    cube.iter().map(level_symbol).collect::<Vec<_>>().join(" ")
-}
-
-/// The Liberty state-table level symbol for one cube value: `H`/`L`/`-`.
-fn level_symbol(val: &Option<bool>) -> &'static str {
-    match val {
-        Some(true) => "H",
-        Some(false) => "L",
-        None => "-",
+        .fmt(f)
     }
 }
 
-/// Render the on-region as a Liberty function string: a sum (`+`) of product (`*`) cubes, each a
-/// product of literals (`!` for negation) over the column header. A single empty cube is the
-/// tautology `"1"`; no cubes is the contradiction `"0"`.
+/// A cube as space-separated state-table input levels, one [`Level`] per column of the header it is
+/// aligned to.
+struct Levels<'a>(&'a [Option<bool>]);
+
+impl fmt::Display for Levels<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Joined::new(self.0.iter(), " ", |val: &Option<bool>| Level(*val)).fmt(f)
+    }
+}
+
+/// One cube value as a Liberty state-table input level: `H` high, `L` low, `-` don't care.
+struct Level(Option<bool>);
+
+impl fmt::Display for Level {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self.0 {
+            Some(true) => "H",
+            Some(false) => "L",
+            None => "-",
+        })
+    }
+}
+
+/// The on-region as the one expression a pin's `function` / `state_function` states: espresso rebuilds
+/// it from the minimised on-cover ([`Cover::to_expr_by_index`]), factoring out a literal several cubes
+/// share, so the result is a multi-level expression rather than always a flat sum of products. An
+/// empty on-region — a signal that never drives high — is the constant `0`, which the cover states by
+/// carrying no output at all and so is answered here.
 ///
 /// A region's columns are SIGNAL names, but a `state_function` must name the statetable's NODES, which
-/// for a state output is its minted `_st` node rather than the output's own name. `node_of` supplies
-/// that mapping; a column absent from it (a primary input) renders under its own name. Pass `None`
-/// only where the cell has no statetable at all and every column is therefore a primary input.
-fn function_sop(sr: &StateRegions, node_of: Option<&BTreeMap<Symbol, Symbol>>) -> String {
-    if sr.on.is_empty() {
-        return "0".to_owned();
+/// for a state output is its minted `_st` node rather than the output's own name.
+/// [`StateModel::node_of`] supplies that mapping, applied to the cover's own input labels so the
+/// expression is rebuilt over the node names directly; a column the table has no node for (a primary
+/// input) keeps its own name. Pass `None` only where the cell has no statetable at all and every column
+/// is therefore a primary input.
+fn function_expr(sr: &StateRegions, model: Option<&StateModel>) -> BoolExpr {
+    if sr.on.num_cubes() == 0 {
+        return BoolExpr::constant(false);
     }
-    let node_name = |col: &Symbol| -> String {
-        node_of
-            .and_then(|m| m.get(col))
-            .map_or_else(|| col.to_string(), |n| n.to_string())
-    };
-    let products: Vec<String> = sr
+    let nodes = sr
         .on
+        .input_labels()
         .iter()
-        .map(|cube| {
-            let lits: Vec<String> = sr
-                .cols
-                .iter()
-                .zip(cube.iter())
-                .filter_map(|(col, val)| match val {
-                    Some(true) => Some(node_name(col)),
-                    Some(false) => Some(format!("!{}", node_name(col))),
-                    None => None,
-                })
-                .collect();
-            if lits.is_empty() {
-                "1".to_owned()
-            } else {
-                lits.join("*")
-            }
-        })
-        .collect();
-    // If any product is the constant "1" the whole function is a tautology.
-    if products.iter().any(|p| p == "1") {
-        "1".to_owned()
-    } else {
-        products.join(" + ")
-    }
+        .map(|col| model.and_then(|m| m.node_of(col)).unwrap_or(col).clone());
+    let over_nodes: Cover<Symbol, Anonymous> = sr.on.clone().rename_inputs(nodes).expect(
+        "every column has a node of its own: `mint_state_node` escalates past a name in use",
+    );
+    over_nodes
+        .to_expr_by_index(0)
+        .expect("a region cover with cubes carries the single anonymous output they assert")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::analyse_one as analyse;
+    use crate::model::{analyse_both, analyse_one as analyse, AnalysedPair};
+    use std::collections::{BTreeSet, HashSet};
 
-    /// Wrap a bare cell fragment and assert it round-trips through `liberty_parse::parse_lib`.
+    /// The text one cell renders as inside the library: the groups [`cell_liberty`] builds of it,
+    /// newline-terminated so [`parse_frag`]'s closing brace lands on a line of its own.
+    fn fragment(cell: &AnalysedCell) -> String {
+        format!("{}\n", Liberty(cell_liberty(cell)))
+    }
+
+    /// Wrap a bare cell fragment and assert it round-trips through `liberty_parser::parse_lib`.
     fn parse_frag(frag: &str) -> Liberty {
         let wrapped = format!("library (test) {{\n{frag}}}\n");
-        liberty_parse::parse_lib(&wrapped).expect("emitted Liberty must parse")
+        liberty_parser::parse_lib(&wrapped).expect("emitted Liberty must parse")
     }
 
     /// Locate a cell group by name in a parsed library.
@@ -469,7 +461,7 @@ inputs = ["A", "B"]
 Q = "A*B + Q*(A+B)"
 "#,
         );
-        let lib = cell_liberty(&cell);
+        let lib = fragment(&cell);
         eprintln!("{lib}");
         assert!(lib.contains("cell (C2)"));
         assert!(lib.contains("pin (A)"));
@@ -507,7 +499,7 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 "#,
         );
-        let frag = cell_liberty(&cell);
+        let frag = fragment(&cell);
         eprintln!("{frag}");
         // Exactly one joint table over both state nodes (output Q and internal M).
         assert_eq!(frag.matches("statetable").count(), 1);
@@ -524,7 +516,7 @@ Q = "CLK*M + !CLK*Q"
         assert!(frag.contains("pin (M)"));
         assert!(frag.contains("direction : internal;"));
         assert!(frag.contains("internal_node : \"M\";"));
-        // The fragment still round-trips through liberty-parse.
+        // The fragment still round-trips through liberty-parser.
         let lib = parse_frag(&frag);
         let cellg = lib
             .iter()
@@ -558,7 +550,7 @@ M = "!CLK*D + CLK*M"
 Q = "CLK*M + !CLK*Q"
 "#,
         );
-        let frag = cell_liberty(&cell);
+        let frag = fragment(&cell);
         eprintln!("{frag}");
         assert_eq!(frag.matches("statetable").count(), 1);
         assert!(frag.contains("statetable (\"CLK D\", \"Q_st\")"));
@@ -602,7 +594,7 @@ Qn = "!( !(!M*CLK) * Q )"
 Q = "!( !(M*CLK) * Qn )"
 "#,
         );
-        let frag = cell_liberty(&cell);
+        let frag = fragment(&cell);
         eprintln!("{frag}");
         assert_eq!(frag.matches("statetable").count(), 1);
         assert!(frag.contains("statetable (\"CLK D\", \"Q_st Qn_st\")"));
@@ -664,7 +656,7 @@ Y = "A*D"
             ["L"],
             "premise: L is folded"
         );
-        let frag = cell_liberty(&cell);
+        let frag = fragment(&cell);
         eprintln!("{frag}");
         assert!(!frag.contains("statetable"), "the fold emptied the model");
         assert!(!frag.contains("pin (L)"), "folded internal emits no pin");
@@ -680,7 +672,7 @@ Y = "A*D"
         // The genuine output is untouched.
         let y = find_pin(cellg, "Y");
         assert_eq!(attr_expr(y, "direction").as_deref(), Some("output"));
-        assert_eq!(attr_string(y, "function").as_deref(), Some("A*D"));
+        assert_eq!(attr_string(y, "function").as_deref(), Some("A & D"));
     }
 
     #[test]
@@ -706,7 +698,7 @@ enB   = "!RB*(!CLKB*selb2+CLKB*enB)"
 GCLK = "enA*CLKA+enB*CLKB"
 "#,
         );
-        let frag = cell_liberty(&cell);
+        let frag = fragment(&cell);
         eprintln!("{frag}");
         // Both a rising (sela2/selb2) and a falling (enA/enB) register are present.
         assert!(frag.contains("R "));
@@ -752,7 +744,7 @@ L = "!C*D + C*L"
 Y = "C*L"
 "#,
         );
-        let frag = cell_liberty(&cell);
+        let frag = fragment(&cell);
         eprintln!("{frag}");
         assert!(frag.contains("statetable (\"C D\", \"L\")"));
         // Y names PIN ports through state_function — inputs and the internal pin L, never a table node.
@@ -793,7 +785,7 @@ L2 = "CLK*D + !CLK*L2"
 Y = "!((CLK*L1 + !CLK*L2)*A)"
 "#,
         );
-        let frag = cell_liberty(&cell);
+        let frag = fragment(&cell);
         let lib = parse_frag(&frag);
         let cellg = find_cell(&lib, "BDET");
 
@@ -808,7 +800,7 @@ Y = "!((CLK*L1 + !CLK*L2)*A)"
         // internal_node, never a folded master.
         let y = find_pin(cellg, "Y");
         let sf = attr_string(y, "state_function").expect("Y prints a state_function");
-        assert_eq!(sf, "Y_st + !A", "Y reads Y_st and A: {sf}");
+        assert_eq!(sf, "Y_st | !A", "Y reads Y_st and A: {sf}");
         assert!(!y.attributes.contains_key("internal_node"));
 
         // `Y_st` is a first-class internal-node pin.
@@ -835,7 +827,7 @@ T = "!CLKB*(CLK*L1 + !CLK*L2) + CLKB*T"
 Y = "!(T*A)"
 "#,
         );
-        let frag = cell_liberty(&cell);
+        let frag = fragment(&cell);
         let lib = parse_frag(&frag);
         let cellg = find_cell(&lib, "DETP");
 
@@ -869,7 +861,7 @@ Qa = "!Qb * A"
 Qb = "!Qa * B"
 "#,
         );
-        let frag = cell_liberty(&cell);
+        let frag = fragment(&cell);
         eprintln!("{frag}");
         assert!(frag.contains("statetable (\"A B\", \"Qa_st Qb_st\")"));
         // Each grant has its own per-output row: it drives high off its own request while the
@@ -903,18 +895,18 @@ inputs = ["A", "B"]
 Y = "!(A*B)"
 "#,
         );
-        let lib = cell_liberty(&cell);
+        let lib = fragment(&cell);
         eprintln!("{lib}");
         assert!(lib.contains("cell (ND2)"));
         assert!(!lib.contains("statetable"));
         assert!(lib.contains("pin (Y)"));
-        // NAND on-set = !(A*B), Espresso-minimised to the two-cube SOP !B + !A.
-        assert!(lib.contains("function : \"!B + !A\";"));
+        // NAND on-set = !(A*B), Espresso-minimised to the two cubes !B and !A.
+        assert!(lib.contains("function : \"!B | !A\";"));
         assert!(lib.contains("direction : output;"));
     }
 
     #[test]
-    fn function_sop_renders_literals() {
+    fn function_expr_renders_the_regions_cubes() {
         let cell = analyse(
             r#"
 [[cell]]
@@ -925,10 +917,19 @@ Y = "A*B + !C"
 "#,
         );
         let sr = &cell.regions[0];
-        let f = function_sop(sr, None);
-        // Must be a valid product-of-literals sum mentioning the pins.
-        assert!(f.contains('+') || f.contains('*') || f.contains('!'));
-        assert!(f.contains('A') || f.contains('C'));
+        let f = function_expr(sr, None).to_string();
+        // `A*B + !C` has exactly two prime implicants, `A*B` and `!C`, and both are essential — so the
+        // minimised on-region this renders is that one cover, whichever order the cubes and their
+        // literals come out in.
+        let products: BTreeSet<BTreeSet<&str>> = f
+            .split(" | ")
+            .map(|product| product.split(" & ").collect())
+            .collect();
+        assert_eq!(
+            products,
+            BTreeSet::from([BTreeSet::from(["A", "B"]), BTreeSet::from(["!C"])]),
+            "AOI renders its two essential primes: {f}"
+        );
     }
 
     #[test]
@@ -942,7 +943,7 @@ inputs = ["A"]
 Y = "!A"
 "#,
         );
-        let frag = cell_liberty(&cell);
+        let frag = fragment(&cell);
         eprintln!("{frag}");
         assert!(frag.contains("cell (INVX1)"));
         assert!(frag.contains("cell (INVX2)"));
@@ -960,22 +961,56 @@ Y = "!A"
             .iter()
             .find(|g| g.name == "INVX2")
             .expect("INVX2 cell present");
-        // Identical pin sets: same pin names and directions, differing only in the group name.
-        let pins = |g: &&Group| -> Vec<(String, String)> {
+        /// A pin's declared direction, over Liberty's closed keyword set.
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        enum Direction {
+            Input,
+            Output,
+            Inout,
+            Internal,
+        }
+        /// One pin's identity in the comparisons below: its name and its declared direction, `None`
+        /// where the pin carries no `direction` attribute.
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct PinSignature {
+            name: Symbol,
+            direction: Option<Direction>,
+        }
+        let pins = |g: &&Group| -> HashSet<PinSignature> {
             g.subgroups
                 .iter()
                 .filter(|p| p.type_ == "pin")
-                .map(|p| {
-                    (
-                        p.name.clone(),
-                        p.attributes
-                            .get("direction")
-                            .map(|v| format!("{v:?}"))
-                            .unwrap_or_default(),
-                    )
+                .map(|p| PinSignature {
+                    name: Symbol::from(p.name.as_str()),
+                    direction: p.attributes.get("direction").map(|_| {
+                        match attr_expr(p, "direction")
+                            .expect("direction is a simple expression attribute")
+                            .as_str()
+                        {
+                            "input" => Direction::Input,
+                            "output" => Direction::Output,
+                            "inout" => Direction::Inout,
+                            "internal" => Direction::Internal,
+                            other => panic!("unrecognised direction attribute: {other}"),
+                        }
+                    }),
                 })
                 .collect()
         };
+        // The cell declares one input and one combinational output, so each group carries exactly those
+        // two pins: the input `A` and the output `Y`. No state node, so no internal pin.
+        let declared = HashSet::from([
+            PinSignature {
+                name: Symbol::from("A"),
+                direction: Some(Direction::Input),
+            },
+            PinSignature {
+                name: Symbol::from("Y"),
+                direction: Some(Direction::Output),
+            },
+        ]);
+        assert_eq!(pins(invx1), declared);
+        // Identical pin sets: same pin names and directions, differing only in the group name.
         assert_eq!(pins(invx1), pins(invx2));
     }
 
@@ -995,14 +1030,14 @@ Y = "C*L"
 Z = "A*B"
 "#,
         );
-        let frag = cell_liberty(&cell);
+        let frag = fragment(&cell);
         eprintln!("{frag}");
         let lib = parse_frag(&frag);
         let cellg = find_cell(&lib, "MIX");
 
         // Z is combinational over inputs only: plain `function`, exactly `A*B`, nothing sequential.
         let z = find_pin(cellg, "Z");
-        assert_eq!(attr_string(z, "function").as_deref(), Some("A*B"));
+        assert_eq!(attr_string(z, "function").as_deref(), Some("A & B"));
         assert!(!z.attributes.contains_key("state_function"));
         assert!(!z.attributes.contains_key("internal_node"));
 
@@ -1030,9 +1065,9 @@ Z = "A*B"
 
     #[test]
     fn transitive_state_dependence_survives_fold() {
-        // Internal latch L self-holds; internal relay W = C*L merely feeds Z2 = W + E. minimise folds
-        // the relay W into its consumer Z2 (model.rs:163-165, minimise.rs:456-474), so Z2's cols
-        // contain the state node L directly — the transitive case collapses to the direct predicate.
+        // Internal latch L self-holds; internal relay W = C*L merely feeds Z2 = W + E. minimise's
+        // fold_pass folds the relay W into its consumer Z2, so Z2's cols contain the state node L
+        // directly — the transitive case collapses to the direct predicate.
         let cell = analyse(
             r#"
 [[cell]]
@@ -1045,7 +1080,7 @@ W = "C*L"
 Z2 = "W + E"
 "#,
         );
-        let frag = cell_liberty(&cell);
+        let frag = fragment(&cell);
         eprintln!("{frag}");
         let lib = parse_frag(&frag);
         let cellg = find_cell(&lib, "TRW");
@@ -1059,7 +1094,7 @@ Z2 = "W + E"
     #[test]
     fn projection_outputs_render_bare_state_literals() {
         // C-element output Q self-holds (a state node); projection outputs Qc = Q and Qn = !Q are
-        // aliases of that single node. Outputs are never purged (model.rs:417), so both survive.
+        // aliases of that single node. Outputs are never purged (Preserved::outputs), so both survive.
         let cell = analyse(
             r#"
 [[cell]]
@@ -1071,7 +1106,7 @@ Qc = "Q"
 Qn = "!Q"
 "#,
         );
-        let frag = cell_liberty(&cell);
+        let frag = fragment(&cell);
         eprintln!("{frag}");
         let lib = parse_frag(&frag);
         let cellg = find_cell(&lib, "C2P");
@@ -1095,25 +1130,6 @@ Qn = "!Q"
         assert_eq!(attr_string(qn, "state_function").as_deref(), Some("!Q_st"));
         assert!(!qn.attributes.contains_key("function"));
         assert!(!qn.attributes.contains_key("internal_node"));
-    }
-
-    /// Parse the single-cell `src` and analyse it twice: once as written, once with
-    /// `no_edge_collapse` forced true on every cell -- the same blanket mutation the
-    /// `--no-edge-collapse` CLI flag applies (main.rs:82-88). Proves the per-cell TOML switch and
-    /// the CLI flag are the identical code path, not two independently-tested mechanisms.
-    fn analyse_both(src: &str) -> (crate::model::AnalysedCell, crate::model::AnalysedCell) {
-        let default = crate::model::parse_spec(src)
-            .unwrap()
-            .cells
-            .remove(0)
-            .analyse()
-            .unwrap();
-        let mut spec = crate::model::parse_spec(src).unwrap();
-        for c in &mut spec.cells {
-            c.no_edge_collapse = true;
-        }
-        let forced = spec.cells.remove(0).analyse().unwrap();
-        (default, forced)
     }
 
     /// Three shapes the behavioural classifier leaves fully level (no edge token) even under default (on)
@@ -1152,25 +1168,54 @@ Q = "CLK*M + !CLK*Q"
     #[test]
     fn non_collapsible_suite_liberty_matches_the_no_edge_collapse_flag() {
         // No `R`/`F`/`~R`/`~F` edge token appears as its own statetable field, whether the flag is
-        // left off (default collapse, a no-op on these shapes) or forced on -- and the two runs emit
-        // byte-identical Liberty.
+        // left off (default collapse, a no-op on these shapes) or forced on.
         fn has_edge_token(frag: &str) -> bool {
             frag.split_whitespace()
                 .any(|tok| matches!(tok, "R" | "F" | "~R" | "~F"))
         }
         for src in NON_COLLAPSIBLE {
-            let (default, forced) = analyse_both(src);
-            let frag_default = cell_liberty(&default);
-            let frag_forced = cell_liberty(&forced);
+            let AnalysedPair { default, forced } = analyse_both(src);
+            let frag_default = fragment(&default);
+            let frag_forced = fragment(&forced);
             assert!(
                 !has_edge_token(&frag_default),
                 "unexpected edge token in {}",
                 default.repr_name()
             );
             assert!(!has_edge_token(&frag_forced));
-            assert_eq!(frag_default, frag_forced);
             parse_frag(&frag_default);
         }
+    }
+
+    #[test]
+    fn no_edge_collapse_flips_dff_liberty_between_edge_and_level_forms() {
+        // `analyse_both` re-analyses the same DFF spec with `no_edge_collapse` forced true -- the
+        // same code path the `--no-edge-collapse` CLI flag exercises -- so the flip between the
+        // collapsed edge-register Liberty form (a `R` token statetable row, no `pin (M)`) and the
+        // two-latch level form (`pin (M)` with `internal_node : "M"`, no edge token) needs no
+        // process run.
+        const DFF: &str = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+        let AnalysedPair { default, forced } = analyse_both(DFF);
+
+        let frag_default = fragment(&default);
+        assert!(frag_default.contains("statetable (\"CLK D\", \"Q_st\")"));
+        assert!(frag_default.split_whitespace().any(|t| t == "R"));
+        assert!(!frag_default.contains("pin (M)"));
+
+        let frag_forced = fragment(&forced);
+        assert!(frag_forced.contains("statetable (\"CLK D\", \"Q_st M\")"));
+        assert!(frag_forced.contains("pin (M)"));
+        assert!(frag_forced.contains("internal_node : \"M\";"));
+        assert!(!frag_forced.split_whitespace().any(|t| t == "R"));
     }
 
     #[test]
@@ -1194,7 +1239,8 @@ Q = "CLK*M + !CLK*Q"
             spec.cells.remove(0).analyse().unwrap()
         };
         let via_flag = {
-            // Mirrors main.rs:82-88's blanket application of `--no-edge-collapse` over every cell.
+            // The same blanket mutation `apply_overrides` applies over every cell for the
+            // `--no-edge-collapse` CLI flag.
             let mut spec = crate::model::parse_spec(DFF).unwrap();
             for c in &mut spec.cells {
                 c.no_edge_collapse = true;
@@ -1202,13 +1248,12 @@ Q = "CLK*M + !CLK*Q"
             spec.cells.remove(0).analyse().unwrap()
         };
 
-        let frag_direct = cell_liberty(&direct);
-        let frag_via_flag = cell_liberty(&via_flag);
+        let frag_direct = fragment(&direct);
+        let frag_via_flag = fragment(&via_flag);
         for frag in [&frag_direct, &frag_via_flag] {
             assert!(frag.contains("pin (M)"));
             assert!(frag.contains("internal_node : \"M\";"));
         }
-        assert_eq!(frag_direct, frag_via_flag);
     }
 
     #[test]
@@ -1227,7 +1272,7 @@ Q = "CLK*M + !CLK*Q"
 M = "!CLK*D + CLK*M"
 "#,
         );
-        let frag = cell_liberty(&cell);
+        let frag = fragment(&cell);
         eprintln!("{frag}");
         assert_eq!(frag.matches("statetable").count(), 1);
         // Node order follows signals() (outputs sorted: M before Q).
@@ -1270,7 +1315,7 @@ M = "!CLKA*D + CLKA*M"
 Q = "CLKB*M + !CLKB*Q"
 "#,
         );
-        let frag = cell_liberty(&cell);
+        let frag = fragment(&cell);
         eprintln!("{frag}");
         let has_edge_token = frag
             .split_whitespace()
@@ -1298,7 +1343,7 @@ L2 = "CLK*D + !CLK*L2"
 Q = "CLK*L1 + !CLK*L2"
 "#,
         );
-        let frag = cell_liberty(&cell);
+        let frag = fragment(&cell);
         eprintln!("{frag}");
         assert_eq!(frag.matches("statetable").count(), 1);
         assert!(frag.contains("statetable (\"CLK D\", \"Q_st\")"));
@@ -1334,7 +1379,7 @@ MB = "!CLKB*DB + CLKB*MB"
 Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
 "#,
         );
-        let frag = cell_liberty(&cell);
+        let frag = fragment(&cell);
         eprintln!("{frag}");
         // Column order of the statetable input header.
         let header = frag
