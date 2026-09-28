@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::io::{self, Read, Write};
@@ -168,13 +169,13 @@ impl FromArgMatches for WhenArg {
 
 fn main() {
     if let Err(e) = run(Cli::parse()) {
-        eprintln!("cellsmith: {e}");
+        eprintln!("cellsmith: error: {e}");
         std::process::exit(1);
     }
 }
 
 fn run(cli: Cli) -> io::Result<()> {
-    let src = read_spec(&cli.spec)?;
+    let src = read_spec(&cli.spec, io::stdin())?;
     let mut spec = parse_spec(&src)?;
     apply_overrides(&mut spec, &cli);
     let budget = ExplorationBudget {
@@ -417,6 +418,76 @@ impl From<PathError> for io::Error {
     }
 }
 
+/// The `attempt`th name a file of this run's may take beside `artifact`. It sits in the artifact's own
+/// directory, because a rename does not cross from one mount point to another; it is hidden, so nothing
+/// reading the directory takes it for an artifact; and it carries the process id, so two runs writing
+/// into one directory try different names.
+fn sibling(artifact: &Path, attempt: u32) -> PathBuf {
+    let name = artifact
+        .file_name()
+        .expect("an artifact's path ends in the file name built for it");
+    let mut hidden = OsString::from(".");
+    hidden.push(name);
+    hidden.push(format!(".{}.{attempt}.tmp", std::process::id()));
+    artifact.with_file_name(hidden)
+}
+
+/// A file this run created beside an artifact, under a name no other entry held.
+struct Reserved {
+    path: PathBuf,
+    file: fs::File,
+}
+
+/// Create a file of this run's own beside `artifact`, at the first of its [`sibling`] names nothing
+/// holds. `create_new` refuses any entry already at a name — a symlink included, so nothing is written
+/// through one and nothing is truncated — and a refused name passes on to the next. A failure names the
+/// artifact, the path the run was asked for.
+fn reserve(artifact: &Path) -> io::Result<Reserved> {
+    let mut attempt = 0;
+    loop {
+        let path = sibling(artifact, attempt);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => return Ok(Reserved { path, file }),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => attempt += 1,
+            Err(e) => return Err(PathError::at(artifact, e).into()),
+        }
+    }
+}
+
+/// Move whatever `artifact`'s path holds to a name beside it, from which [`restore`] can put it back.
+/// The result is that name, or `None` where the path held nothing. The name is reserved first, so the
+/// rename replaces a file of this run's own and no other entry.
+fn set_aside(artifact: &Path) -> io::Result<Option<PathBuf>> {
+    let Reserved { path, .. } = reserve(artifact)?;
+    match fs::rename(artifact, &path) {
+        Ok(()) => Ok(Some(path)),
+        Err(e) => {
+            let _ = fs::remove_file(&path);
+            match e.kind() {
+                io::ErrorKind::NotFound => Ok(None),
+                _ => Err(PathError::at(artifact, e).into()),
+            }
+        }
+    }
+}
+
+/// Rename the entry [`set_aside`] moved to `previous` back onto `artifact`, replacing whatever this run
+/// put there. It runs while a failure is being unwound, and that failure is the one the run reports, so
+/// a restore that fails in turn is a warning naming where the entry is kept.
+fn restore(previous: &Path, artifact: &Path) {
+    if let Err(e) = fs::rename(previous, artifact) {
+        eprintln!(
+            "cellsmith: warning: {}: the previous artifact could not be put back and is kept at {}: {e}",
+            artifact.display(),
+            previous.display(),
+        );
+    }
+}
+
 /// One artifact on its way to disk: the file its text is written to, and the path it takes once every
 /// artifact of the run has been written.
 struct Staged {
@@ -426,47 +497,107 @@ struct Staged {
     artifact: PathBuf,
 }
 
+impl Staged {
+    /// Rename the temporary onto the artifact, first setting aside whatever the artifact's path held.
+    /// The result is where that entry went, or `None` where the path held nothing. A placement that
+    /// fails has already put the entry back.
+    fn place(&self) -> io::Result<Option<PathBuf>> {
+        let previous = set_aside(&self.artifact)?;
+        if let Err(e) = fs::rename(&self.temporary, &self.artifact) {
+            if let Some(previous) = &previous {
+                restore(previous, &self.artifact);
+            }
+            return Err(PathError::at(&self.artifact, e).into());
+        }
+        Ok(previous)
+    }
+}
+
+/// An artifact a commit has renamed into place, and where the entry its path held was set aside —
+/// `None` where the path held nothing.
+struct Placed<'a> {
+    artifact: &'a Path,
+    previous: Option<PathBuf>,
+}
+
+impl Placed<'_> {
+    /// Take this run's artifact back out, leaving its path as the run found it: the entry set aside is
+    /// put back over it, and where there was none the artifact is removed.
+    fn undo(&self) {
+        match &self.previous {
+            Some(previous) => restore(previous, self.artifact),
+            None => {
+                if let Err(e) = fs::remove_file(self.artifact) {
+                    eprintln!(
+                        "cellsmith: warning: {}: this run's artifact could not be removed: {e}",
+                        self.artifact.display(),
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// A run's artifacts on their way to disk. Each is written to a temporary file beside the artifact it
-/// becomes and only renamed onto it once they all exist, so the directory holds one run's artifacts or
-/// the run before's, never a mixture — a Liberate run reading a directory a half-finished run left
-/// behind has no way to tell which artifact belongs to which. A staging dropped before it is committed
-/// removes the files it wrote.
+/// becomes, and the temporaries are renamed onto the artifacts once they all exist. Placing one first
+/// sets aside whatever its path held; where any placement fails, every entry set aside is put back and
+/// every artifact placed without one is removed. So once a run ends, the artifacts it writes are either
+/// all this run's or all as they stood before it — a Liberate run reading a directory a half-finished
+/// run left behind has no way to tell which artifact belongs to which. That holds over the artifacts the
+/// run writes and no others: under `--no-cells` the run writes no `<base>_cells.tcl`, and one already in
+/// the directory stays as it is. Putting an entry back is itself a rename, and where that fails the run
+/// warns, naming where the entry is kept. A staging dropped before it is committed removes the files it
+/// wrote.
 #[derive(Default)]
 struct Staging {
     written: Vec<Staged>,
 }
 
 impl Staging {
-    /// Write one artifact, destined for `name` under `dir`, into a temporary of its own. The artifact
+    /// Write the text of the artifact at `artifact` into a temporary of its own beside it. The artifact
     /// renders itself into that file's writer, buffered because it arrives as the many small writes its
-    /// `Display` makes.
-    fn write(&mut self, dir: &Path, name: &str, body: &impl fmt::Display) -> io::Result<()> {
-        // A sibling of the artifact, so the rename that follows stays inside the one directory, and
-        // hidden, so nothing reading the directory meanwhile takes a part-written file for an artifact.
-        let temporary = dir.join(format!(".{name}.tmp"));
-        let file = fs::File::create(&temporary).map_err(|e| PathError::at(&temporary, e))?;
+    /// `Display` makes. A failure names the artifact, the path the run was asked for.
+    fn write(&mut self, artifact: &Path, body: &impl fmt::Display) -> io::Result<()> {
+        let Reserved { path, file } = reserve(artifact)?;
         // Staged from the moment the file exists: whatever fails below, the drop has the path to remove.
         self.written.push(Staged {
-            temporary: temporary.clone(),
-            artifact: dir.join(name),
+            temporary: path,
+            artifact: artifact.to_owned(),
         });
         let mut out = io::BufWriter::new(file);
-        write!(out, "{body}").map_err(|e| PathError::at(&temporary, e))?;
-        out.flush().map_err(|e| PathError::at(&temporary, e))?;
+        write!(out, "{body}").map_err(|e| PathError::at(artifact, e))?;
+        out.flush().map_err(|e| PathError::at(artifact, e))?;
         Ok(())
     }
 
-    /// Rename every staged file onto the artifact it was written for, reporting each path as it lands.
+    /// Rename every staged file onto the artifact it was written for, and report each path once they
+    /// have all landed. Where one cannot be placed, every artifact already placed is undone before the
+    /// failure is returned.
     fn commit(mut self) -> io::Result<()> {
-        for Staged {
-            temporary,
-            artifact,
-        } in &self.written
-        {
-            fs::rename(temporary, artifact).map_err(|e| PathError::at(artifact, e))?;
+        let mut placed: Vec<Placed> = Vec::with_capacity(self.written.len());
+        for staged in &self.written {
+            match staged.place() {
+                Ok(previous) => placed.push(Placed {
+                    artifact: &staged.artifact,
+                    previous,
+                }),
+                Err(e) => {
+                    for p in &placed {
+                        p.undo();
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        // Every artifact is in place, so nothing set aside will be put back. Removing those entries is
+        // best-effort, as the drop's is: the artifacts are what the run delivers.
+        for Placed { artifact, previous } in &placed {
+            if let Some(previous) = previous {
+                let _ = fs::remove_file(previous);
+            }
             eprintln!("wrote {}", artifact.display());
         }
-        // The artifacts are in place and the temporaries are gone with them; nothing is left to clean up.
+        // The temporaries were renamed onto the artifacts; nothing is left for the drop to remove.
         self.written.clear();
         Ok(())
     }
@@ -482,34 +613,34 @@ impl Drop for Staging {
     }
 }
 
-/// Write every artifact into a file of its own under `dir`, each named from `base`, and rename them
-/// into place together once they are all written.
+/// Write every artifact into a file of its own at `dir` joined with a name built from `base`, and
+/// rename them into place together once they are all written. A `base` with a directory component
+/// places the artifacts in that directory under `dir`, which has to exist already.
 fn emit_files(dir: &Path, base: &str, a: &Artifacts, no_cells: bool) -> io::Result<()> {
     fs::create_dir_all(dir).map_err(|e| PathError::at(dir, e))?;
     let mut staging = Staging::default();
-    staging.write(dir, &format!("{base}_arcs.tcl"), &Deck(&a.rendered))?;
-    staging.write(dir, &format!("{base}.v"), &Verilog(&a.model))?;
+    staging.write(&dir.join(format!("{base}_arcs.tcl")), &Deck(&a.rendered))?;
+    staging.write(&dir.join(format!("{base}.v")), &Verilog(&a.model))?;
     staging.write(
-        dir,
-        &format!("{base}.lib"),
+        &dir.join(format!("{base}.lib")),
         &format_args!("{}\n", a.liberty),
     )?;
     if !no_cells {
         staging.write(
-            dir,
-            &format!("{base}_cells.tcl"),
+            &dir.join(format!("{base}_cells.tcl")),
             &Declarations(&a.declarations),
         )?;
     }
     staging.commit()
 }
 
-/// Read the spec's source text from wherever the argument named.
-fn read_spec(spec: &PathArg) -> io::Result<String> {
+/// Read the spec's source text from wherever the argument named. The standard stream is `stdin`, a
+/// parameter so that a test can supply the text.
+fn read_spec(spec: &PathArg, mut stdin: impl Read) -> io::Result<String> {
     match spec {
         PathArg::StdStream => {
             let mut buf = String::new();
-            io::stdin().read_to_string(&mut buf)?;
+            stdin.read_to_string(&mut buf)?;
             Ok(buf)
         }
         PathArg::File(path) => fs::read_to_string(path).map_err(|e| PathError::at(path, e).into()),
@@ -902,12 +1033,20 @@ mod tests {
     }
 
     /// `-` as the spec argument names the standard stream, which is where `read_spec` then reads the
-    /// source from. The routing is what is stated here; the read itself is `io::stdin`'s, and the file
-    /// arm is covered at [`read_spec_reads_a_file`].
+    /// source from. The routing is what is stated here; the read through the stream is covered at
+    /// [`read_spec_reads_the_standard_stream`], and the file arm at [`read_spec_reads_a_file`].
     #[test]
     fn dash_names_the_standard_stream() {
         let cli = Cli::try_parse_from(["cellsmith", "--stdout", "-"]).unwrap();
         assert_eq!(cli.spec, PathArg::StdStream);
+    }
+
+    /// A spec named `-` is read from the standard stream: the source text is what the stream holds.
+    #[test]
+    fn read_spec_reads_the_standard_stream() {
+        let cli = Cli::try_parse_from(["cellsmith", "-"]).unwrap();
+        let got = read_spec(&cli.spec, C2.as_bytes()).unwrap();
+        assert_eq!(got, C2);
     }
 
     #[test]
@@ -1000,7 +1139,7 @@ Y = "A*B"
         let path =
             std::env::temp_dir().join(format!("cellsmith_read_spec_{}.toml", std::process::id()));
         fs::write(&path, "hello = 1\n").unwrap();
-        let got = read_spec(&PathArg::File(path.clone())).unwrap();
+        let got = read_spec(&PathArg::File(path.clone()), io::empty()).unwrap();
         assert_eq!(got, "hello = 1\n");
         fs::remove_file(&path).ok();
     }
@@ -1010,7 +1149,7 @@ Y = "A*B"
     #[test]
     fn read_spec_errors_on_a_missing_path() {
         let path = "/no/such/cellsmith/spec.toml";
-        let err = read_spec(&PathArg::File(path.into()))
+        let err = read_spec(&PathArg::File(path.into()), io::empty())
             .expect_err("a missing spec has no source text to read");
         assert!(
             err.to_string().contains(path),
@@ -1076,11 +1215,236 @@ Q = "A*B + Q*(A+B)"
         }
         // Each artifact is renamed into place from a temporary that the run does not outlive, so the
         // four are the whole of what a completed run leaves behind.
-        let left: HashSet<String> = fs::read_dir(&outdir)
+        assert_eq!(entries(&outdir), names(&artifacts));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The names of the entries `dir` holds.
+    fn entries(dir: &Path) -> HashSet<String> {
+        fs::read_dir(dir)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// `list` as the set [`entries`] compares against.
+    fn names(list: &[&str]) -> HashSet<String> {
+        list.iter().map(|n| n.to_string()).collect()
+    }
+
+    /// A combinational cell, for the tests about where a run writes, which need a spec that analyses
+    /// cleanly and say nothing about what it holds.
+    const INV: &str = r#"
+[[cell]]
+name = "INV"
+inputs = ["A"]
+[cell.outputs]
+Y = "!A"
+"#;
+
+    /// `--stdout` names the destination outright, so a directory given beside it has nothing left to
+    /// say: a run given both lands no artifact in the directory.
+    #[test]
+    fn stdout_takes_precedence_over_the_outdir() {
+        let dir = scratch_dir("stdout_outdir");
+        let spec = dir.join("inv.toml");
+        fs::write(&spec, INV).unwrap();
+        let outdir = dir.join("out");
+        fs::create_dir(&outdir).unwrap();
+
+        let cli = Cli::try_parse_from([
+            "cellsmith",
+            "--stdout",
+            "--outdir",
+            outdir.to_str().unwrap(),
+            spec.to_str().unwrap(),
+        ])
+        .unwrap();
+        run(cli).expect("the spec analyses cleanly");
+        assert!(
+            entries(&outdir).is_empty(),
+            "an artifact landed in the directory: {:?}",
+            entries(&outdir),
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A `--name` with a directory component names a directory under the output one, and the artifacts
+    /// land there.
+    #[test]
+    fn a_name_with_a_directory_writes_into_that_directory() {
+        let dir = scratch_dir("sub_name");
+        let spec = dir.join("inv.toml");
+        fs::write(&spec, INV).unwrap();
+        let outdir = dir.join("out");
+        let sub = outdir.join("sub");
+        fs::create_dir_all(&sub).unwrap();
+
+        let cli = Cli::try_parse_from([
+            "cellsmith",
+            "--outdir",
+            outdir.to_str().unwrap(),
+            "--name",
+            "sub/base",
+            spec.to_str().unwrap(),
+        ])
+        .unwrap();
+        run(cli).expect("the named directory exists");
+        assert_eq!(
+            entries(&sub),
+            names(&["base_arcs.tcl", "base.v", "base.lib", "base_cells.tcl"]),
+        );
+        assert_eq!(entries(&outdir), names(&["sub"]));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An entry already at the name a temporary would take — here a symlink to a file outside the
+    /// output directory — is neither followed nor truncated: the run passes over the name for another,
+    /// succeeds, and leaves the entry as it found it.
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_at_a_temporarys_name_is_left_alone() {
+        let dir = scratch_dir("planted");
+        let spec = dir.join("inv.toml");
+        fs::write(&spec, INV).unwrap();
+        let victim = dir.join("victim.txt");
+        fs::write(&victim, "not an artifact").unwrap();
+        let outdir = dir.join("out");
+        fs::create_dir(&outdir).unwrap();
+        let artifacts = ["cli_arcs.tcl", "cli.v", "cli.lib", "cli_cells.tcl"];
+        // The first name each artifact's temporary would take, every one a symlink to the victim.
+        let planted: Vec<PathBuf> = artifacts
+            .iter()
+            .map(|n| sibling(&outdir.join(n), 0))
             .collect();
-        assert_eq!(left, artifacts.iter().map(|n| n.to_string()).collect());
+        for p in &planted {
+            std::os::unix::fs::symlink(&victim, p).unwrap();
+        }
+
+        let cli = Cli::try_parse_from([
+            "cellsmith",
+            "--outdir",
+            outdir.to_str().unwrap(),
+            "--name",
+            "cli",
+            spec.to_str().unwrap(),
+        ])
+        .unwrap();
+        run(cli).expect("a taken name is passed over, not written through");
+
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "not an artifact");
+        for p in &planted {
+            assert_eq!(
+                fs::read_link(p).unwrap(),
+                victim,
+                "{} was replaced",
+                p.display()
+            );
+        }
+        for name in artifacts {
+            let file_type = fs::symlink_metadata(outdir.join(name)).unwrap().file_type();
+            assert!(file_type.is_file(), "{name} is not a file of its own");
+        }
+        // The planted entries stay beside the artifacts, and nothing else of the run's does.
+        let mut expected = names(&artifacts);
+        expected.extend(
+            planted
+                .iter()
+                .map(|p| p.file_name().unwrap().to_string_lossy().into_owned()),
+        );
+        assert_eq!(entries(&outdir), expected);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A commit that fails part-way leaves every path it was placing as it found it. The three artifacts
+    /// are the three cases a placement meets: one replacing a file, one landing where nothing was, and
+    /// one whose path holds a non-empty directory, which no file can be renamed onto. Staged last, that
+    /// one fails once the other two are in place.
+    #[test]
+    fn a_commit_failing_part_way_leaves_the_previous_artifacts() {
+        let dir = scratch_dir("commit_fails");
+        let replacing = dir.join("replacing.txt");
+        fs::write(&replacing, "previous run").unwrap();
+        let landing = dir.join("landing.txt");
+        let blocked = dir.join("blocked.txt");
+        fs::create_dir(&blocked).unwrap();
+        fs::write(blocked.join("kept.txt"), "previous run").unwrap();
+        let before = entries(&dir);
+
+        let mut staging = Staging::default();
+        for artifact in [&replacing, &landing, &blocked] {
+            staging.write(artifact, &"this run").unwrap();
+        }
+        let err = staging
+            .commit()
+            .expect_err("no file can be renamed onto a non-empty directory");
+        let named = err
+            .get_ref()
+            .and_then(|e| e.downcast_ref::<PathError>())
+            .expect("the failure carries the path it was made on");
+        assert_eq!(
+            named.path, blocked,
+            "the failure names the blocked artifact"
+        );
+
+        assert_eq!(fs::read_to_string(&replacing).unwrap(), "previous run");
+        assert!(
+            fs::symlink_metadata(&landing).is_err(),
+            "this run's artifact stayed where nothing was",
+        );
+        assert_eq!(
+            fs::read_to_string(blocked.join("kept.txt")).unwrap(),
+            "previous run"
+        );
+        // Neither this run's temporaries nor the entries it set aside are left behind.
+        assert_eq!(entries(&dir), before);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A commit that succeeds replaces what each path held with this run's artifact, and keeps no copy
+    /// of what it replaced.
+    #[test]
+    fn a_commit_replaces_the_previous_artifacts() {
+        let dir = scratch_dir("commit_replaces");
+        let replacing = dir.join("replacing.txt");
+        fs::write(&replacing, "previous run").unwrap();
+        let landing = dir.join("landing.txt");
+
+        let mut staging = Staging::default();
+        for artifact in [&replacing, &landing] {
+            staging.write(artifact, &"this run").unwrap();
+        }
+        staging.commit().expect("both paths take a file");
+
+        for artifact in [&replacing, &landing] {
+            assert_eq!(fs::read_to_string(artifact).unwrap(), "this run");
+        }
+        assert_eq!(entries(&dir), names(&["replacing.txt", "landing.txt"]));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A write that fails names the artifact it was writing, the path the run was asked for, and not
+    /// the temporary beside it.
+    #[test]
+    fn a_failed_write_names_the_artifact() {
+        let dir = scratch_dir("write_fails");
+        let artifact = dir.join("missing").join("cli.v");
+
+        let mut staging = Staging::default();
+        let err = staging
+            .write(&artifact, &"this run")
+            .expect_err("no file can be created in a directory that does not exist");
+        let named = err
+            .get_ref()
+            .and_then(|e| e.downcast_ref::<PathError>())
+            .expect("the failure carries the path it was made on");
+        assert_eq!(named.path, artifact);
 
         fs::remove_dir_all(&dir).ok();
     }

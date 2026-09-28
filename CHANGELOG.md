@@ -70,6 +70,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of the report on stderr, spell the product with `&` and the negation with `!`. Liberate accepts that
   spelling of a condition as readily as the `A*!B` one it replaces.
 
+- **A Liberty `function` or `state_function` is written `A & B | !C`.** The `.lib` spells a pin's
+  function in the notation the `-when` values use — `&` for the product, `|` for the sum and `!` for
+  the negation — so an AND2's output reads `function : "A & B"`, and a toggle flop's
+  `state_function : "M & !M2 | !M & M2"`.
+
 - **`constraint_arcs` takes a pin name or a list of them as well as `true`, and a name selects the
   constraints that pin has a role in.** The roles are the kind's. A non-sequential separation is
   symmetric — its two pins are equals — so naming either end selects the separation that holds them
@@ -100,6 +105,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   several cells pass a ceiling the one named is whichever the analysis reached — raise that cell's
   ceiling, rerun, and the next is named in turn. A run used to analyse every cell first and list
   every offending one before exiting.
+
+- **A run writes its artifacts together or not at all.** Each artifact is written to a hidden
+  temporary file beside it, and the temporaries are renamed onto the artifacts once every one of them
+  is written. A run that fails part-way, whether writing a file or renaming one into place, leaves
+  none of its artifacts behind, and the ones it would have replaced stay as they were. That covers
+  the artifacts a run writes: under `--no-cells` a run writes no `<base>_cells.tcl`, and one already
+  in the output directory is left as it is.
+
+- **A fatal error is labelled `cellsmith: error:` on stderr.** A warning is labelled
+  `cellsmith: warning:`, and the label says which of the two a line is.
 
 ## [0.5.1] - 2026-08-08
 
