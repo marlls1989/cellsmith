@@ -1292,6 +1292,7 @@ mod tests {
     use std::collections::{BTreeSet, HashSet};
 
     use super::*;
+    use crate::emit::block::tests::Trailer;
     use crate::emit::block::Description;
     use crate::emit::tcl::tests::{AwkwardVoltage, AWKWARD_VOLTAGES};
     use crate::model::{
@@ -1323,7 +1324,9 @@ Q = "A*B + Q*(A+B)"
         assert!(tcl.contains("-related_pin B"));
         assert!(tcl.contains("-pin Q"));
         assert!(tcl.contains("-pinlist {A B Q}"));
-        assert!(tcl.contains("{ C2 }"));
+        assert!(blocks(&tcl)
+            .iter()
+            .any(|b| Trailer::of(b).aliases == ["C2"]));
         // every transition block is balanced and combinational here
         assert_eq!(
             tcl.matches("-type combinational").count(),
@@ -3768,7 +3771,7 @@ M = "XI4/m"
         for block in pair_blocks(&tcl) {
             let probed = braced(&block, "-probe").expect("a constraint block probes");
             assert!(!probed.contains('M') || probed.contains("/m"), "{block}");
-            let node = if block.contains("{ DFFX1 }") {
+            let node = if Trailer::of(&block).aliases == ["DFFX1"] {
                 "XI7/m"
             } else {
                 "XI4/m"
@@ -3814,7 +3817,7 @@ M = "XI4/m"
         let mut split = 0;
         for block in blocks(&tcl) {
             let carries = block.contains("/m");
-            let both = block.contains("{ DFFX1 DFFX4 }");
+            let both = Trailer::of(&block).aliases == ["DFFX1", "DFFX4"];
             assert_eq!(
                 carries, !both,
                 "a block names both drive strengths exactly when it carries no disputed column:\n{block}"
@@ -3825,7 +3828,7 @@ M = "XI4/m"
         // Leakage carries the cell's pins alone, so nothing divides it whatever the map says.
         for block in tcl.split("define_leakage").skip(1) {
             let block = block.split("\n\n").next().unwrap_or(block);
-            assert!(block.contains("{ DFFX1 DFFX4 }"), "{block}");
+            assert_eq!(Trailer::of(block).aliases, ["DFFX1", "DFFX4"], "{block}");
         }
     }
 
@@ -4489,6 +4492,15 @@ Qb = "!Qa * B"
         );
     }
 
+    /// The bare `define_leakage` the deck states under `when`: the one-line form, whose condition rides
+    /// on the command itself where the held form opens a block of its own lines.
+    fn bare_leakage<'a>(tcl: &'a str, when: &str) -> &'a str {
+        let head = format!("define_leakage -when \"{when}\" ");
+        tcl.lines()
+            .find(|l| l.starts_with(&head))
+            .unwrap_or_else(|| panic!("no bare define_leakage under {when:?} in:\n{tcl}"))
+    }
+
     #[test]
     fn c_element_emits_leakage_states() {
         let cell = analyse(
@@ -4525,8 +4537,10 @@ Q = "A*B + Q*(A+B)"
         // A forcing input drives the cell into its state on its own, so the condition alone states the
         // block and it carries no columns.
         for needle in ["A & B & Q", "!A & !B & !Q"] {
-            assert!(
-                tcl.contains(&format!("define_leakage -when \"{needle}\" {{ C2 }}")),
+            let forced = bare_leakage(&tcl, needle);
+            assert_eq!(
+                Trailer::of(forced).aliases,
+                ["C2"],
                 "a forced rest state is its condition alone:\n{tcl}"
             );
         }
@@ -4562,8 +4576,9 @@ Y = "A*B"
         // inputs drive it into each of them: nothing to prime, nothing to run, and the condition alone
         // states the block.
         assert_eq!(tcl.matches("define_leakage").count(), 4);
-        assert!(tcl.contains("define_leakage -when \"A & B & Y\" { AND2 }"));
-        assert!(tcl.contains("define_leakage -when \"!A & !B & !Y\" { AND2 }"));
+        for needle in ["A & B & Y", "!A & !B & !Y"] {
+            assert_eq!(Trailer::of(bare_leakage(&tcl, needle)).aliases, ["AND2"]);
+        }
         for block in tcl.split("define_leakage").skip(1) {
             // The whole block, to the blank line that ends it — truncating at the first newline would
             // cut a walked block's `define_leakage \` header off and assert against nothing.
@@ -4689,11 +4704,14 @@ Q = "A*B + Q*(A+B)"
         );
         let tcl = emit(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
-        assert!(tcl.contains("{ C2A C2B }"));
-        assert!(!tcl.contains("{ C2A }"));
-        assert!(!tcl.contains("{ C2B }"));
+        for block in tcl.split("\n\n").filter(|b| !b.trim().is_empty()) {
+            assert_eq!(Trailer::of(block).aliases, ["C2A", "C2B"], "{block}");
+        }
         // A leakage block fans the names into the same single trailer an arc block does.
-        assert!(tcl.contains("define_leakage -when \"A & B & Q\" { C2A C2B }"));
+        assert_eq!(
+            Trailer::of(bare_leakage(&tcl, "A & B & Q")).aliases,
+            ["C2A", "C2B"]
+        );
         let transitions: HashSet<_> = cell
             .arcs
             .iter()

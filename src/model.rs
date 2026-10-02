@@ -1481,6 +1481,7 @@ pub(crate) fn analyse_both(src: &str) -> AnalysedPair {
 mod tests {
     use super::*;
     use crate::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, Deck};
+    use crate::emit::block::tests::Trailer;
     use crate::logic::arcs::PinEdge;
     use crate::logic::constraint::ConstraintKind;
     use crate::logic::hazard::{Cause, Outcome};
@@ -2318,9 +2319,9 @@ M = "CLK"
             let block = block.split("\n\n").next().unwrap_or(block);
             let (x1, x4) = (block.contains("XI7/m"), block.contains("XI4/m"));
             assert!(x1 ^ x4, "a block addresses one netlist node:\n{block}");
-            let named = if x1 { "{ DFFX1 }" } else { "{ DFFX4 }" };
-            assert!(
-                block.contains(named),
+            assert_eq!(
+                Trailer::of(block).aliases,
+                [if x1 { "DFFX1" } else { "DFFX4" }],
                 "the block names only the aliases that agree on it:\n{block}"
             );
         }
@@ -2332,8 +2333,9 @@ M = "CLK"
                     !x1 && !x4,
                     "a bare block carries no exposed column:\n{block}"
                 );
-                assert!(
-                    block.contains("{ DFFX1 DFFX4 }"),
+                assert_eq!(
+                    Trailer::of(block).aliases,
+                    ["DFFX1", "DFFX4"],
                     "no column divides a bare block, so it names every alias:\n{block}"
                 );
                 continue;
@@ -2342,9 +2344,9 @@ M = "CLK"
                 x1 ^ x4,
                 "a walked block addresses one netlist node:\n{block}"
             );
-            let named = if x1 { "{ DFFX1 }" } else { "{ DFFX4 }" };
-            assert!(
-                block.contains(named),
+            assert_eq!(
+                Trailer::of(block).aliases,
+                [if x1 { "DFFX1" } else { "DFFX4" }],
                 "the block names only the aliases that agree on it:\n{block}"
             );
         }
@@ -2369,8 +2371,13 @@ Q = "CLK*sela0 + !CLK*Q"
         );
         let arcs = Deck(&[cell_arcs(&cell, ArcsTclOptions::default())]).to_string();
         assert!(arcs.contains("-pinlist {CLK D sela0 Q}"), "{arcs}");
-        assert!(!arcs.contains("{ DFFX1 }"), "one group names both:\n{arcs}");
-        assert!(arcs.contains("{ DFFX1 DFFX4 }"), "{arcs}");
+        for block in arcs.split("\n\n").filter(|b| !b.trim().is_empty()) {
+            assert_eq!(
+                Trailer::of(block).aliases,
+                ["DFFX1", "DFFX4"],
+                "one group names both:\n{block}"
+            );
+        }
     }
 
     #[test]

@@ -113,7 +113,7 @@ list.
 A TOML file describing many cells. The `name` field accepts either a single string or a list of
 strings; a list generates arcs and models for multiple physical cell variants that share the same
 function and interface but differ in drive strength or electrical properties. Cadence Liberate groups
-these as a braced list in the arc trailer (e.g. `define_arc ... { INVX1 INVX2 }`).
+these as a braced list in the arc trailer (e.g. `define_arc ... {INVX1 INVX2}`).
 
 ```toml
 [[cell]]

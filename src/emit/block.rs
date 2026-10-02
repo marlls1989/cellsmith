@@ -270,9 +270,9 @@ impl Resting {
     fn write(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "define_leakage -when \"{}\" {{ {} }}",
+            "define_leakage -when \"{}\" {}",
             self.when,
-            Words(&self.names)
+            Braced(Words(&self.names))
         )?;
         writeln!(f)
     }
@@ -331,7 +331,7 @@ fn write_when(f: &mut fmt::Formatter<'_>, when: Option<&BoolExpr>) -> fmt::Resul
 /// The line a block closes on — the aliases it speaks for — and the blank line separating it from the
 /// next block.
 fn write_names(f: &mut fmt::Formatter<'_>, names: &[Symbol]) -> fmt::Result {
-    writeln!(f, "\t{{ {} }}", Words(names))?;
+    writeln!(f, "\t{}", Braced(Words(names)))?;
     writeln!(f)
 }
 
@@ -374,9 +374,74 @@ impl fmt::Display for Description<'_> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::logic::{product, Literal};
+
+    /// The names an alias group lists, held as a multiset: each name with the number of times the group
+    /// lists it. Liberate reads a block's `-pinlist`, `-vector` and `-ic` by position, but nothing reads
+    /// the position of a name in its alias group, so two groups listing the same names equally often are
+    /// the same group — and a name listed twice is not the group that lists it once.
+    #[derive(Debug, PartialEq, Eq)]
+    pub(crate) struct Aliases<'a>(HashMap<&'a str, usize>);
+
+    impl<'a> Aliases<'a> {
+        fn of(names: impl IntoIterator<Item = &'a str>) -> Self {
+            let mut counts = HashMap::new();
+            for name in names {
+                *counts.entry(name).or_default() += 1;
+            }
+            Aliases(counts)
+        }
+    }
+
+    /// An alias group compared against the names a test expects it to list, written as an array.
+    impl<const N: usize> PartialEq<[&str; N]> for Aliases<'_> {
+        fn eq(&self, expected: &[&str; N]) -> bool {
+            *self == Aliases::of(expected.iter().copied())
+        }
+    }
+
+    /// A rendered block read at the brace group it closes on — the aliases it speaks for, which every
+    /// form writes as its last group. Tcl reads that group as a list, so what the block states there is
+    /// the list's elements, whatever whitespace separates them.
+    pub(crate) struct Trailer<'a> {
+        /// What the block writes before the group opens.
+        pub(crate) head: &'a str,
+        /// The group's elements: the aliases the block names.
+        pub(crate) aliases: Aliases<'a>,
+        /// What the block writes after the group closes.
+        pub(crate) tail: &'a str,
+    }
+
+    impl<'a> Trailer<'a> {
+        pub(crate) fn of(block: &'a str) -> Self {
+            let open = block
+                .rfind('{')
+                .unwrap_or_else(|| panic!("a block closes on its aliases:\n{block}"));
+            let close = block[open..]
+                .find('}')
+                .map(|at| open + at)
+                .unwrap_or_else(|| panic!("the alias group closes:\n{block}"));
+            Trailer {
+                head: &block[..open],
+                aliases: Aliases::of(block[open + 1..close].split_whitespace()),
+                tail: &block[close + 1..],
+            }
+        }
+    }
+
+    /// Assert `block` writes `head`, then closes on the brace group listing `aliases` and the blank line
+    /// separating it from the next block.
+    fn assert_writes<const N: usize>(block: &Block, head: &str, aliases: [&str; N]) {
+        let text = block.to_string();
+        let trailer = Trailer::of(&text);
+        assert_eq!(trailer.head, head, "{text}");
+        assert_eq!(trailer.aliases, aliases, "{text}");
+        assert_eq!(trailer.tail, "\n\n", "{text}");
+    }
 
     fn sym(name: &str) -> Symbol {
         Symbol::from(name)
@@ -434,8 +499,8 @@ mod tests {
             output: pin("Q", Edge::Rise),
             names: names(&["C2"]),
         });
-        assert_eq!(
-            block.to_string(),
+        assert_writes(
+            &block,
             "define_arc \\\n\
              \t-type combinational \\\n\
              \t-pinlist {A B Q} \\\n\
@@ -444,7 +509,8 @@ mod tests {
              \t-when \"B\" \\\n\
              \t-related_pin A \\\n\
              \t-pin Q \\\n\
-             \t{ C2 }\n\n"
+             \t",
+            ["C2"],
         );
     }
 
@@ -459,8 +525,8 @@ mod tests {
             output: pin("Q", Edge::Rise),
             names: names(&["C2", "C2X4"]),
         });
-        assert_eq!(
-            block.to_string(),
+        assert_writes(
+            &block,
             "define_arc \\\n\
              \t-type edge \\\n\
              \t-pinlist {A B Q} \\\n\
@@ -468,7 +534,8 @@ mod tests {
              \t-vector {R 1 R} \\\n\
              \t-related_pin A \\\n\
              \t-pin Q \\\n\
-             \t{ C2 C2X4 }\n\n"
+             \t",
+            ["C2", "C2X4"],
         );
     }
 
@@ -486,14 +553,15 @@ mod tests {
             pin: pin("A", Edge::Rise),
             names: names(&["AND2"]),
         });
-        assert_eq!(
-            block.to_string(),
+        assert_writes(
+            &block,
             "define_arc \\\n\
              \t-type hidden \\\n\
              \t-pinlist {A B Y} \\\n\
              \t-vector {R 0 0} \\\n\
              \t-pin A \\\n\
-             \t{ AND2 }\n\n"
+             \t",
+            ["AND2"],
         );
     }
 
@@ -514,8 +582,8 @@ mod tests {
             probe: names(&["M", "Q"]),
             names: names(&["DFF"]),
         });
-        assert_eq!(
-            block.to_string(),
+        assert_writes(
+            &block,
             "define_arc \\\n\
              \t-type setup \\\n\
              \t-pinlist {CLK D M Q} \\\n\
@@ -525,7 +593,8 @@ mod tests {
              \t-related_pin CLK \\\n\
              \t-pin D \\\n\
              \t-probe {M Q} \\\n\
-             \t{ DFF }\n\n"
+             \t",
+            ["DFF"],
         );
     }
 
@@ -542,8 +611,8 @@ mod tests {
             probe: names(&["Q"]),
             names: names(&["DFF"]),
         });
-        assert_eq!(
-            block.to_string(),
+        assert_writes(
+            &block,
             "define_arc \\\n\
              \t-type min_pulse_width \\\n\
              \t-pinlist {CLK D Q} \\\n\
@@ -552,7 +621,8 @@ mod tests {
              \t-related_pin CLK \\\n\
              \t-pin CLK \\\n\
              \t-probe {Q} \\\n\
-             \t{ DFF }\n\n"
+             \t",
+            ["DFF"],
         );
     }
 
@@ -576,13 +646,14 @@ mod tests {
             when: when(&[("A", true), ("B", false), ("Q", true)]),
             names: names(&["C2"]),
         });
-        assert_eq!(
-            block.to_string(),
+        assert_writes(
+            &block,
             "define_leakage \\\n\
              \t-pinlist {A B Q} \\\n\
              \t-vector {1 0 1} \\\n\
              \t-when \"A & !B & Q\" \\\n\
-             \t{ C2 }\n\n"
+             \t",
+            ["C2"],
         );
     }
 
@@ -592,10 +663,7 @@ mod tests {
             when: when(&[("A", false), ("B", false), ("Q", false)]),
             names: names(&["C2"]),
         });
-        assert_eq!(
-            block.to_string(),
-            "define_leakage -when \"!A & !B & !Q\" { C2 }\n\n"
-        );
+        assert_writes(&block, "define_leakage -when \"!A & !B & !Q\" ", ["C2"]);
     }
 
     #[test]
