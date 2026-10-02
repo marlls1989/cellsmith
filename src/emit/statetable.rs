@@ -622,6 +622,51 @@ mod tests {
         }
     }
 
+    /// Assert `a` and `b` are the same level table, reading no order: the same input columns, the same
+    /// state columns under the same table nodes, and the same level rows as a multiset. A row is written
+    /// against its own table's columns by position, so `b`'s rows are read through where each of `a`'s
+    /// columns sits in `b` before the two are compared. Edge rows are left to the caller.
+    fn assert_same_level_table(a: &StateModel, b: &StateModel) {
+        /// Where each column of `a` sits among the columns of `b`, matched by name.
+        fn positions(a: &[&str], b: &[&str]) -> Vec<usize> {
+            assert_eq!(
+                a.len(),
+                b.len(),
+                "the tables hold as many columns: {a:?} / {b:?}"
+            );
+            a.iter()
+                .map(|col| {
+                    b.iter()
+                        .position(|c| c == col)
+                        .unwrap_or_else(|| panic!("no {col} column in {b:?}"))
+                })
+                .collect()
+        }
+        let inputs = positions(&names(&a.input_nodes), &names(&b.input_nodes));
+        let states = positions(&signal_names(a), &signal_names(b));
+        for col in &a.state_nodes {
+            assert_eq!(
+                b.node_of(&col.signal),
+                Some(&col.node),
+                "{} prints under the same table node",
+                col.signal
+            );
+        }
+        let mut rows_a: Vec<StateRow> = a.rows.clone();
+        let mut rows_b: Vec<StateRow> = b
+            .rows
+            .iter()
+            .map(|row| StateRow {
+                inputs: inputs.iter().map(|&i| row.inputs[i]).collect(),
+                current: states.iter().map(|&i| row.current[i]).collect(),
+                next: states.iter().map(|&i| row.next[i]).collect(),
+            })
+            .collect();
+        rows_a.sort_unstable();
+        rows_b.sort_unstable();
+        assert_eq!(rows_a, rows_b, "level rows");
+    }
+
     #[test]
     fn c2_joint_table() {
         let cell = analyse(
@@ -951,7 +996,8 @@ Y = "!(A*B)"
     /// The crux of the cover construction: for every state signal of every fixture, the BDD
     /// reconstructed from the emitted joint rows carrying that node's `H`/`L`/`N` action must be
     /// logically equivalent to that signal's reference on/off/hold region — proving the per-node
-    /// next-state functions survive the joint multi-output minimisation and the `-`-deferred fold.
+    /// next-state functions survive the joint multi-output minimisation and the `-`-deferred fold. The
+    /// fixtures include the shapes the classifier leaves level ([`NON_COLLAPSIBLE`]).
     #[test]
     fn emitted_rows_reconstruct_per_node_regions() {
         let cells = [
@@ -1002,7 +1048,7 @@ Y = "C*L"
 "#,
         ];
 
-        for src in cells {
+        for src in cells.into_iter().chain(NON_COLLAPSIBLE) {
             let cell = analyse(src);
             let m = build_state_model(&cell).expect("fixture is sequential");
 
@@ -1096,19 +1142,35 @@ Q = "CLK*M + !CLK*Q"
 "#,
     ];
 
+    /// `no_edge_collapse` suppresses the behavioural edge classification, "leaving every arc in its
+    /// combinational form" (`Cell::no_edge_collapse`), and the annotation it suppresses,
+    /// `AnalysedCell::edge`, "never alters the exploration". The state table reads three parts of that
+    /// annotation — the recognised registers, the masters folded into them and the derived read-gate
+    /// registers — so where classification finds none of the three, the switch permits no change to the
+    /// table. What the table holds is pinned directly, for these fixtures, by
+    /// `emitted_rows_reconstruct_per_node_regions` and `rendered_rows_replay_machine_settled_values`.
     #[test]
     fn non_collapsible_suite_edge_rows_empty_with_and_without_the_flag() {
         for src in NON_COLLAPSIBLE {
             let AnalysedPair { default, forced } = analyse_both(src);
+            let name = default.repr_name();
             assert!(
                 default.edge.captures.is_empty(),
-                "unexpected edge register recognised in {}",
-                default.repr_name()
+                "unexpected edge register recognised in {name}"
+            );
+            assert!(
+                default.edge.folded.is_empty(),
+                "unexpected master folded in {name}"
+            );
+            assert!(
+                default.edge.derived.is_empty(),
+                "unexpected read-gate register derived in {name}"
             );
             let m_default = build_state_model(&default).expect("fixture is sequential");
             let m_forced = build_state_model(&forced).expect("fixture is sequential");
             assert!(m_default.edge_rows.is_empty());
             assert!(m_forced.edge_rows.is_empty());
+            assert_same_level_table(&m_default, &m_forced);
         }
     }
 
@@ -1116,7 +1178,10 @@ Q = "CLK*M + !CLK*Q"
     fn dff_opt_out_restores_level_rows_via_either_switch() {
         // The two-latch DFF, opted out directly (`no_edge_collapse = true` in the TOML) versus opted
         // out via the CLI-flag-equivalent blanket mutation over the whole spec: both switches restore
-        // the SAME level (non-edge) joint table -- Q and M both nodes, six rows, no edge rows.
+        // the SAME level (non-edge) joint table -- Q and M both nodes, six rows, no edge rows. The flag
+        // acts "exactly as if each had declared `no_edge_collapse = true`" (`apply_overrides`), so the two
+        // switches permit no difference at all. The table itself is pinned directly, from the declared
+        // form, by `dff_joint_table_internal_unaliased`.
         const DFF: &str = r#"
 [[cell]]
 name = "DFF"
@@ -1127,11 +1192,18 @@ M = "!CLK*D + CLK*M"
 [cell.outputs]
 Q = "CLK*M + !CLK*Q"
 "#;
-        let direct = {
-            let mut spec = crate::model::parse_spec(DFF).unwrap();
-            spec.cells[0].no_edge_collapse = true;
-            spec.cells.remove(0).analyse().unwrap()
-        };
+        const DECLARED: &str = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+no_edge_collapse = true
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+        let direct = analyse(DECLARED);
         let via_flag = {
             // Mirrors apply_overrides's blanket application of `--no-edge-collapse` over every cell.
             let mut spec = crate::model::parse_spec(DFF).unwrap();
@@ -1151,6 +1223,9 @@ Q = "CLK*M + !CLK*Q"
             assert_eq!(node_names(&m), ["Q_st", "M"]);
             assert_eq!(m.rows.len(), 6);
         }
+        let m_direct = build_state_model(&direct).expect("DFF is sequential");
+        let m_via_flag = build_state_model(&via_flag).expect("DFF is sequential");
+        assert_same_level_table(&m_direct, &m_via_flag);
     }
 
     // Exposed-master DFF: M is a declared output (never foldable). The behavioural classifier recognises
@@ -1826,12 +1901,13 @@ Q = "!R*(CLK*M + !CLK*Q)"
     /// The rendered-row replay over the joint level+edge first-match semantics, for the fixtures that
     /// carry the phase-conditioned clear (MOR/MORA), a multi-step two-node level model (SR), a dual-edge
     /// register (DET), a toggle register decomposing into two edge registers (TFF), the canonical DFF,
-    /// and a full-async clear DFF (RDFF). Fails against an `EdgeInputs` that drops the `CLK*R`
-    /// clock literal (which would make MOR/MORA clear on any non-rising event with R high, including
-    /// CLK=0 where the cell holds).
+    /// a full-async clear DFF (RDFF), and the shapes the classifier leaves level ([`NON_COLLAPSIBLE`]).
+    /// Fails against an `EdgeInputs` that drops the `CLK*R` clock literal (which would make MOR/MORA
+    /// clear on any non-rising event with R high, including CLK=0 where the cell holds).
     #[test]
     fn rendered_rows_replay_machine_settled_values() {
-        for src in [MOR, MORA, SR_FLOP, TOGGLE_FLOP, DET, DFF, RDFF] {
+        let fixtures = [MOR, MORA, SR_FLOP, TOGGLE_FLOP, DET, DFF, RDFF];
+        for src in fixtures.into_iter().chain(NON_COLLAPSIBLE) {
             replay_rendered_statetable(src);
         }
     }

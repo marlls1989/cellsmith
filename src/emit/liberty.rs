@@ -450,6 +450,49 @@ mod tests {
         }
     }
 
+    /// Whether `a` and `b` hold the same elements as often as each other under `same`, in any order.
+    fn same_multiset<T>(a: &[T], b: &[T], same: impl Fn(&T, &T) -> bool) -> bool {
+        a.len() == b.len()
+            && a.iter().all(|x| {
+                a.iter().filter(|y| same(x, y)).count() == b.iter().filter(|y| same(x, y)).count()
+            })
+    }
+
+    /// Whether `a` and `b` are the same group, reading no order: the same kind and name, the same
+    /// attributes looked up by name, each one's values compared as a multiset, and the same subgroups as
+    /// a multiset under this same test.
+    fn same_group(a: &Group, b: &Group) -> bool {
+        a.type_ == b.type_
+            && a.name == b.name
+            && a.attributes.len() == b.attributes.len()
+            && a.attributes.iter().all(|(name, values)| {
+                b.attributes
+                    .get(name)
+                    .is_some_and(|other| same_multiset(values, other, |x, y| x == y))
+            })
+            && same_multiset(&a.subgroups, &b.subgroups, same_group)
+    }
+
+    /// Assert `a` and `b` state the same Liberty beside the `statetable`, reading no order: the same cell
+    /// groups holding the same pins (see [`same_group`]). The `statetable` group is the joint model written
+    /// out — its header the model's columns, its body the rows, each in the model's own order — so it is
+    /// left out here, and `statetable.rs` compares the two models instead.
+    fn assert_same_beside_statetable(a: &AnalysedCell, b: &AnalysedCell) {
+        let groups = |cell: &AnalysedCell| {
+            let mut groups = cell_liberty(cell);
+            for g in &mut groups {
+                g.subgroups.retain(|sub| sub.type_ != "statetable");
+            }
+            groups
+        };
+        let groups_a = groups(a);
+        let groups_b = groups(b);
+        assert!(
+            same_multiset(&groups_a, &groups_b, same_group),
+            "{groups_a:#?}\nis not\n{groups_b:#?}"
+        );
+    }
+
     #[test]
     fn c_element_emits_statetable() {
         let cell = analyse(
@@ -1165,6 +1208,28 @@ Q = "CLK*M + !CLK*Q"
 "#,
     ];
 
+    /// The two-latch DFF with the edge classification opted out in its own spec.
+    const OPTED_OUT_DFF: &str = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+no_edge_collapse = true
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+
+    /// `no_edge_collapse` suppresses the behavioural edge classification, "leaving every arc in its
+    /// combinational form" (`Cell::no_edge_collapse`), and the annotation it suppresses,
+    /// `AnalysedCell::edge`, "never alters the exploration". The fragment reads that annotation through
+    /// the state table and the derived read-gate registers alone, so where classification recognises no
+    /// register, folds no master and derives no register, the switch permits no change to the fragment.
+    /// Its `statetable` is compared as the joint model by `statetable.rs`'s
+    /// `non_collapsible_suite_edge_rows_empty_with_and_without_the_flag`. What the fragment holds is pinned
+    /// directly by `level_shapes_bind_each_state_node_to_a_pin` and, for the table, by `statetable.rs`'s
+    /// `rendered_rows_replay_machine_settled_values`.
     #[test]
     fn non_collapsible_suite_liberty_matches_the_no_edge_collapse_flag() {
         // No `R`/`F`/`~R`/`~F` edge token appears as its own statetable field, whether the flag is
@@ -1175,15 +1240,85 @@ Q = "CLK*M + !CLK*Q"
         }
         for src in NON_COLLAPSIBLE {
             let AnalysedPair { default, forced } = analyse_both(src);
+            let name = default.repr_name();
+            assert!(
+                default.edge.captures.is_empty(),
+                "unexpected edge register recognised in {name}"
+            );
+            assert!(
+                default.edge.folded.is_empty(),
+                "unexpected master folded in {name}"
+            );
+            assert!(
+                default.edge.derived.is_empty(),
+                "unexpected read-gate register derived in {name}"
+            );
             let frag_default = fragment(&default);
             let frag_forced = fragment(&forced);
             assert!(
                 !has_edge_token(&frag_default),
-                "unexpected edge token in {}",
-                default.repr_name()
+                "unexpected edge token in {name}"
             );
             assert!(!has_edge_token(&frag_forced));
             parse_frag(&frag_default);
+            assert_same_beside_statetable(&default, &forced);
+        }
+    }
+
+    /// What each level shape states in Liberty, read off its spec. In every one the output `Q` feeds back
+    /// into its own function, so it is a state output: it mints the table node `Q_st` and reads it through
+    /// `state_function`. The two-latch shapes' master `M` feeds back into its own function too, and as an
+    /// internal signal it is a table node under its own name. Every table node is anchored by an internal
+    /// pin, `CLK` and `D` are plain input pins, and the cell states nothing else. The table's rows are
+    /// replayed against the machine by `statetable.rs`'s `rendered_rows_replay_machine_settled_values`.
+    #[test]
+    fn level_shapes_bind_each_state_node_to_a_pin() {
+        for src in NON_COLLAPSIBLE.into_iter().chain([OPTED_OUT_DFF]) {
+            let cell = analyse(src);
+            let name = cell.repr_name().as_str();
+            let nodes: &[&str] = match name {
+                "DLAT" | "GLAT" => &["Q_st"],
+                "UCDFF" | "DFF" => &["Q_st", "M"],
+                other => panic!("no expectation stated for {other}"),
+            };
+            let groups = cell_liberty(&cell);
+            let [cellg] = groups.as_slice() else {
+                panic!("{name} declares one name, so states one cell group");
+            };
+            for input in ["CLK", "D"] {
+                assert_eq!(
+                    attr_expr(find_pin(cellg, input), "direction").as_deref(),
+                    Some("input"),
+                    "{name}.{input}"
+                );
+            }
+            let q = find_pin(cellg, "Q");
+            assert_eq!(attr_expr(q, "direction").as_deref(), Some("output"));
+            assert_eq!(
+                attr_string(q, "state_function").as_deref(),
+                Some("Q_st"),
+                "{name}.Q reads the node it minted"
+            );
+            assert!(!q.attributes.contains_key("function"));
+            for node in nodes {
+                let pin = find_pin(cellg, node);
+                assert_eq!(
+                    attr_expr(pin, "direction").as_deref(),
+                    Some("internal"),
+                    "{name}.{node}"
+                );
+                assert_eq!(
+                    attr_string(pin, "internal_node").as_deref(),
+                    Some(*node),
+                    "{name}.{node} anchors its own column"
+                );
+            }
+            // Two inputs, the one statetable, the output and a pin per table node.
+            assert_eq!(
+                cellg.subgroups.len(),
+                2 + 1 + 1 + nodes.len(),
+                "{name} states nothing else"
+            );
         }
     }
 
@@ -1222,7 +1357,11 @@ Q = "CLK*M + !CLK*Q"
     fn dff_opt_out_restores_pin_m_internal_node_via_either_switch() {
         // The two-latch DFF, opted out directly (`no_edge_collapse = true` in the TOML) versus opted
         // out via the CLI-flag-equivalent blanket mutation over the whole spec: both switches restore
-        // the SAME two-latch Liberty -- a genuine `pin (M)` carrying `internal_node : "M"`.
+        // the SAME two-latch Liberty -- a genuine `pin (M)` carrying `internal_node : "M"`. The flag acts
+        // "exactly as if each had declared `no_edge_collapse = true`" (`apply_overrides`), so the two
+        // switches permit no difference at all. The `statetable` is compared as the joint model by
+        // `statetable.rs`'s `dff_opt_out_restores_level_rows_via_either_switch`. What that Liberty holds is
+        // pinned directly, from the declared form, by `level_shapes_bind_each_state_node_to_a_pin`.
         const DFF: &str = r#"
 [[cell]]
 name = "DFF"
@@ -1233,11 +1372,7 @@ M = "!CLK*D + CLK*M"
 [cell.outputs]
 Q = "CLK*M + !CLK*Q"
 "#;
-        let direct = {
-            let mut spec = crate::model::parse_spec(DFF).unwrap();
-            spec.cells[0].no_edge_collapse = true;
-            spec.cells.remove(0).analyse().unwrap()
-        };
+        let direct = analyse(OPTED_OUT_DFF);
         let via_flag = {
             // The same blanket mutation `apply_overrides` applies over every cell for the
             // `--no-edge-collapse` CLI flag.
@@ -1254,6 +1389,7 @@ Q = "CLK*M + !CLK*Q"
             assert!(frag.contains("pin (M)"));
             assert!(frag.contains("internal_node : \"M\";"));
         }
+        assert_same_beside_statetable(&direct, &via_flag);
     }
 
     #[test]

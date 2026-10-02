@@ -1289,7 +1289,7 @@ fn leakage_when(l: &LeakageState) -> BoolExpr {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeSet, HashSet};
+    use std::collections::{BTreeSet, HashMap, HashSet};
 
     use super::*;
     use crate::emit::block::tests::Trailer;
@@ -4861,12 +4861,67 @@ Q = "CLK*M + !CLK*Q"
     fn non_collapsible_suite_emits_no_edge_type_with_or_without_the_flag() {
         // Zero `-type edge` blocks, whether the flag is left off (default classification, a no-op on
         // these shapes) or forced on.
+        //
+        // The switch suppresses the edge classification, "leaving every arc in its combinational form"
+        // (`Cell::no_edge_collapse`), and the classification "never alters the exploration"
+        // (`AnalysedCell::edge`). The one change it permits in a deck is an `edge` block coming out
+        // `combinational`; with no `edge` block to begin with it permits none, so both runs state the same
+        // events, each as often. They are compared by event because the firing a block is measured from
+        // is the walk's own pick, which two analyses may make differently. The events themselves are
+        // pinned by `non_collapsible_suite_states_its_transitions_and_hidden_toggles`.
         for src in NON_COLLAPSIBLE {
             let AnalysedPair { default, forced } = analyse_both(src);
             let tcl_default = emit(&default, ArcsTclOptions::default());
             let tcl_forced = emit(&forced, ArcsTclOptions::default());
             assert_eq!(tcl_default.matches("-type edge").count(), 0);
             assert_eq!(tcl_forced.matches("-type edge").count(), 0);
+            assert_eq!(
+                stated_events(&default),
+                stated_events(&forced),
+                "{} states the same events whether or not it opts out",
+                default.repr_name()
+            );
+        }
+    }
+
+    /// What GLAT and UCDFF state at the defaults, read off their specs. Neither declares an async pin and
+    /// UCDFF declares no clock, so every transition is `combinational`, and each event is stated by one
+    /// general block.
+    ///
+    /// - GLAT, `Q = CLK*(D+Q) + !CLK*Q`: nothing drives `Q` low, so `Q` is known only once something has
+    ///   driven it high, and from there no toggle moves it. The deck states no transition, and every
+    ///   input edge as a hidden toggle.
+    /// - UCDFF: `Q` follows `M` only while `CLK` is high and `M` follows `D` only while `CLK` is low, so
+    ///   `Q` moves only on `CLK` rising into a master that differs from it, either way. Every input edge
+    ///   also arrives with `Q` unmoved — `CLK` rising into a master equal to `Q`, `CLK` falling, `D` at
+    ///   either level of `CLK` — so each is a hidden toggle too.
+    #[test]
+    fn non_collapsible_suite_states_its_transitions_and_hidden_toggles() {
+        let toggle = |pin: &str, edge| {
+            StatedEvent::Toggle(HiddenIdentity {
+                pin: pin_edge(pin, edge),
+            })
+        };
+        let q_on_clk_rise = |edge| {
+            StatedEvent::Transition(TransitionIdentity::Combinational(TransitionEvent {
+                output: pin_edge("Q", edge),
+                related: pin_edge("CLK", Edge::Rise),
+            }))
+        };
+        for src in NON_COLLAPSIBLE {
+            let cell = analyse(src);
+            let mut events: Vec<StatedEvent> = [Edge::Rise, Edge::Fall]
+                .into_iter()
+                .flat_map(|edge| [toggle("CLK", edge), toggle("D", edge)])
+                .collect();
+            match cell.repr_name().as_str() {
+                "GLAT" => {}
+                "UCDFF" => events.extend([Edge::Rise, Edge::Fall].map(q_on_clk_rise)),
+                other => panic!("no expectation stated for {other}"),
+            }
+            let expected: HashMap<StatedEvent, usize> =
+                events.into_iter().map(|e| (e, 1)).collect();
+            assert_eq!(stated_events(&cell), expected, "{}", cell.repr_name());
         }
     }
 
@@ -5209,6 +5264,49 @@ Q = "CLKB*M + !CLKB*Q"
         }
     }
 
+    /// The event a `define_arc` block states, under the identity the emitter states one general block
+    /// for: a transition by its [`TransitionIdentity`] — its kind and its two pin edges — and a hidden
+    /// toggle by its [`HiddenIdentity`]. The block's held levels and `-ic` are left out: they name the
+    /// firing the analysis measured, and which firing represents an event is the walk's free choice.
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    enum StatedEvent {
+        Transition(TransitionIdentity),
+        Toggle(HiddenIdentity),
+    }
+
+    /// Every event `cell` states at the emitter's defaults, with how many blocks state it. A
+    /// `define_leakage` states no event and is passed over. A constraint arc is stated only for a pin the
+    /// spec selects, and the cells read here select none, so one fails the test rather than going
+    /// uncounted.
+    fn stated_events(cell: &AnalysedCell) -> HashMap<StatedEvent, usize> {
+        let event = |t: &Transition| TransitionEvent {
+            output: t.output.clone(),
+            related: t.related.clone(),
+        };
+        let mut events = HashMap::new();
+        for block in stated(cell) {
+            let stated = match &block {
+                Block::Async(t) => StatedEvent::Transition(TransitionIdentity::Async(event(t))),
+                Block::Edge(t) => StatedEvent::Transition(TransitionIdentity::Edge(event(t))),
+                Block::Combinational(t) => {
+                    StatedEvent::Transition(TransitionIdentity::Combinational(event(t)))
+                }
+                Block::Hidden(t) => StatedEvent::Toggle(HiddenIdentity { pin: t.pin.clone() }),
+                Block::LeakageHeld(_) | Block::LeakageResting(_) => continue,
+                Block::Setup(_)
+                | Block::Hold(_)
+                | Block::NonSeqSetup(_)
+                | Block::NonSeqHold(_)
+                | Block::MinPulseWidth(_) => panic!(
+                    "{} selects no constraint pin, yet states:\n{block}",
+                    cell.repr_name()
+                ),
+            };
+            *events.entry(stated).or_insert(0) += 1;
+        }
+        events
+    }
+
     /// The blocks `cell` states at the emitter's defaults, under whatever class selection its own `when`
     /// set carries. Re-emitting ONE analysed cell under several selections is what the tests below
     /// compare: `cell_arcs` is deterministic given one [`AnalysedCell`], so a full-block comparison
@@ -5284,6 +5382,12 @@ Q = "CLKB*M + !CLKB*Q"
                 );
             }
         }
+        // The loop asserts nothing of a deck with no measured block; `Y = A` makes the deck state one.
+        assert!(
+            default.iter().any(|b| matches!(b, Block::Combinational(t)
+                if t.related == pin_edge("A", Edge::Rise) && t.output == pin_edge("Y", Edge::Rise))),
+            "Y = A states the A-rise → Y-rise transition"
+        );
     }
 
     #[test]
