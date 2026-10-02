@@ -370,10 +370,13 @@ reported is whichever the parallel analysis reached, not whichever failed first.
 Raise a ceiling for a run with `--max-candidates`/`--max-states`.
 
 A run's artifacts are written all together or not at all: each goes to a temporary file beside the
-artifact it becomes, and they are renamed into place once every one of them has been written. A run
-that fails — at an exploration ceiling, on a spec it cannot read, or part-way through writing — leaves
-the output directory as it stands, so the artifacts a downstream Liberate run finds there are always
-one cellsmith run's.
+artifact it becomes, and they are renamed into place once every one of them has been written, each
+rename first setting aside whatever the artifact's path held so that it can be put back. A run that
+fails — at an exploration ceiling, on a spec it cannot read, or part-way through writing or renaming
+its artifacts — leaves none of its artifacts behind, and the ones it would have replaced stay as they
+were. That covers the artifacts a run writes and no others: a run under `--no-cells` writes no
+`<base>_cells.tcl`, so one an earlier run left in the output directory stays there beside this run's
+artifacts.
 
 Examples:
 
