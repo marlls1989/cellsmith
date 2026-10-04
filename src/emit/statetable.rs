@@ -44,7 +44,7 @@
 //! register node is a state-table node even when its region is non-hysteretic (a combinational output
 //! made sequential — the dual-edge mux-DET Q).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use espresso_logic::{Anonymous, Cover, Minimizable, Minterm, Symbol};
 
@@ -144,8 +144,12 @@ pub(crate) struct StateModel {
     /// an edge row never set the same node, so where the level rows sit beside the edge rows decides
     /// nothing either.
     pub(crate) rows: Vec<StateRow>,
-    /// The edge-triggered rows contributed by the cell's recognised edge registers, after the level rows
-    /// in register (`signals()`) order. Empty for a cell with no collapsed master-slave pair.
+    /// The edge-triggered rows contributed by the cell's recognised edge registers, after the level rows.
+    /// Within one register the capture rows come before the off-edge rows: a register with more than one
+    /// capture writes its off-edge rows with a `-` clock column, which also matches at the edges, and
+    /// Liberty's first-match lets the captures decide there only while they come first. An edge row sets
+    /// its own register's next slot alone, so the rows of different registers sit in no particular order
+    /// relative to each other. Empty for a cell with no collapsed master-slave pair.
     pub(crate) edge_rows: Vec<EdgeRow>,
 }
 
@@ -172,8 +176,8 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     // vanishes entirely — no node, no column, no rows; an edge-register node keeps its column but its
     // rows come from the annotation in (e), never the level cover pass in (d).
     let edge_regs = &cell.edge.captures;
-    let folded: BTreeSet<Symbol> = cell.edge.folded.iter().cloned().collect();
-    let edge_nodes: BTreeSet<Symbol> = edge_regs.iter().map(|er| er.node.clone()).collect();
+    let folded: HashSet<Symbol> = cell.edge.folded.iter().cloned().collect();
+    let edge_nodes: HashSet<Symbol> = edge_regs.iter().map(|er| er.node.clone()).collect();
     // A register node is ALWAYS a state-table node, whether or not its region is hysteretic: a
     // combinational output made sequential (the dual-edge mux-DET Q) is still a register column.
     let is_node = |sig: &Symbol, sr: &StateRegions| {
@@ -183,7 +187,7 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     // declared signals are first-class internal nodes: their edge rows flow through the name-driven
     // machinery in (e) exactly like a declared register's, and their cols name primary inputs. A declared
     // register reused by the factorisation is already a signal, so it is not re-appended here.
-    let signal_names: BTreeSet<Symbol> = cell
+    let signal_names: HashSet<Symbol> = cell
         .signal_regions()
         .map(|(sig, _)| sig.name.clone())
         .collect();
@@ -214,8 +218,8 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     // escalating past any real signal of that name; see [`crate::logic::mint_state_node`]). A genuine
     // internal state node and a derived register have no competing output pin, so each keeps its own
     // name. Folded masters are excluded.
-    let output_names: BTreeSet<Symbol> = cell.outputs.iter().map(|o| o.name.clone()).collect();
-    let mut taken: BTreeSet<Symbol> = cell
+    let output_names: HashSet<Symbol> = cell.outputs.iter().map(|o| o.name.clone()).collect();
+    let mut taken: HashSet<Symbol> = cell
         .inputs
         .iter()
         .cloned()
@@ -257,7 +261,7 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     // edge register additionally contributes its own non-state cols and its clock (which the level maths
     // never sees, the clock having been projected out of the cofactors). input_nodes = the union of
     // input-side cols.
-    let mut input_cols: BTreeSet<Symbol> = BTreeSet::new();
+    let mut input_cols: HashSet<Symbol> = HashSet::new();
     for (sig, sr) in cell.signal_regions().filter(|(_, sr)| sr.hysteretic) {
         if folded.contains(&sig.name) || edge_nodes.contains(&sig.name) {
             continue;
@@ -366,8 +370,8 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
                 .output_labels()
                 .iter()
                 .cloned()
-                .collect::<BTreeSet<_>>(),
-            labels.iter().cloned().collect::<BTreeSet<_>>(),
+                .collect::<HashSet<_>>(),
+            labels.iter().cloned().collect::<HashSet<_>>(),
             "joint {action:?} cover carries exactly the stacked node names",
         );
         // Joint (multi-output, cube-shared) minimisation, falling back to the un-minimised cover.
@@ -409,7 +413,7 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
         })
         .collect();
 
-    // (e) Edge rows from the register annotations, in `signals()` (register) order, cubes in cover order.
+    // (e) Edge rows from the register annotations, cubes in cover order.
     // Each active edge (`captures`, Rise before Fall) contributes a capture group: its on-cubes drive the
     // register high at the active token, its off-cubes low. The off-edge follows: for a single-edge
     // register it fires at the inactive face (`NotRise`/`NotFall`); for a dual-edge register (both edges
@@ -539,7 +543,7 @@ impl<'a> ColumnLayout<'a> {
         debug_assert_eq!(node_index.len(), nodes.len());
         // A repeat in either header would be deduplicated by `project_to_labels` — which names a SET of
         // variables — and the projection would then be one column short of the header it is read against.
-        debug_assert_eq!(inputs.iter().collect::<BTreeSet<_>>().len(), inputs.len());
+        debug_assert_eq!(inputs.iter().collect::<HashSet<_>>().len(), inputs.len());
         ColumnLayout {
             inputs,
             nodes,
@@ -583,7 +587,7 @@ impl<'a> ColumnLayout<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
     use crate::emit::verilog::tests::multiset;
@@ -1096,7 +1100,7 @@ Y = "C*L"
 
             // Emitted rows carry unique (inputs, current) keys. `inputs`/`current` have a fixed width
             // per model, so their concatenation is an unambiguous key.
-            let mut keys: BTreeSet<Vec<Option<bool>>> = BTreeSet::new();
+            let mut keys: HashSet<Vec<Option<bool>>> = HashSet::new();
             for r in &m.rows {
                 let mut key = r.inputs.clone();
                 key.extend(r.current.iter().copied());

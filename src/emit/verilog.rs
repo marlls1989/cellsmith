@@ -16,7 +16,7 @@
 //! A cell's declarations travel as the values [`cell_verilog`] states — one [`Item`] apiece — and become
 //! text once, in [`Display`](fmt::Display), written into the writer the model is going out on.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use espresso_logic::{Anonymous, BoolExpr, Cover, Minterm, Symbol};
@@ -74,17 +74,17 @@ impl fmt::Display for Verilog<'_> {
 pub fn cell_verilog(cell: &AnalysedCell) -> Vec<Item<'_>> {
     // Recognised edge registers, keyed by their output node, and the pure masters folded into them —
     // a folded master emits no primitive, no wire and no instance.
-    let edge_by_node: BTreeMap<&str, &EdgeCaptures> = cell
+    let edge_by_node: HashMap<&str, &EdgeCaptures> = cell
         .edge
         .captures
         .iter()
         .map(|er| (er.node.as_str(), er))
         .collect();
-    let folded: BTreeSet<&str> = cell.edge.folded.iter().map(Symbol::as_str).collect();
+    let folded: HashSet<&str> = cell.edge.folded.iter().map(Symbol::as_str).collect();
     // Read-gated outputs read a factored register combinationally: they emit a continuous `assign` in the
     // wrapper, no UDP of their own. Their factored register (minted, not a declared signal) emits an
     // edge-sensitive UDP like any register.
-    let signal_names: BTreeSet<&str> = cell
+    let signal_names: HashSet<&str> = cell
         .signal_regions()
         .map(|(s, _)| s.name.as_str())
         .collect();
@@ -124,7 +124,7 @@ pub fn cell_verilog(cell: &AnalysedCell) -> Vec<Item<'_>> {
 
 /// The cell's read-gated outputs mapped to their combinational read function over the factored register
 /// and gate pins (the read-gate factorisation). Empty for a cell with no such output.
-fn read_functions(cell: &AnalysedCell) -> BTreeMap<&str, &StateRegions> {
+fn read_functions(cell: &AnalysedCell) -> HashMap<&str, &StateRegions> {
     cell.edge
         .derived
         .iter()
@@ -606,14 +606,14 @@ pub struct Wrapper<'a> {
 fn wrapper<'a>(
     cell: &'a AnalysedCell,
     name: &'a Symbol,
-    edge_by_node: &BTreeMap<&str, &'a EdgeCaptures>,
-    folded: &BTreeSet<&str>,
+    edge_by_node: &HashMap<&str, &'a EdgeCaptures>,
+    folded: &HashSet<&str>,
 ) -> Wrapper<'a> {
     let outputs: Vec<&Symbol> = cell.outputs.iter().map(|o| &o.name).collect();
     // Read-gated outputs (continuous assigns) and their minted factored registers (internal wires driven
     // by an edge UDP).
-    let read_of: BTreeMap<&str, &StateRegions> = read_functions(cell);
-    let signal_names: BTreeSet<&str> = cell
+    let read_of: HashMap<&str, &StateRegions> = read_functions(cell);
+    let signal_names: HashSet<&str> = cell
         .signal_regions()
         .map(|(s, _)| s.name.as_str())
         .collect();
