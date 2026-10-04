@@ -242,9 +242,7 @@ fn table_rows(sr: &StateRegions) -> Vec<TableRow<'_>> {
         }));
     }
     // IEEE 1364 matches a UDP row by its pattern and resolves an overlap by rule, never by a row's
-    // position, so a consumer reads the table as a set of rows. This order over the row values is the
-    // tool's own and carries nothing to that consumer.
-    rows.sort();
+    // position, so a consumer reads the table as a set of rows and the order they come out in is free.
     rows
 }
 
@@ -252,7 +250,7 @@ fn table_rows(sr: &StateRegions) -> Vec<TableRow<'_>> {
 /// that cube states over the signal's columns, and the state the pin takes there. The current-state
 /// (`reg`) field is `?` — a level row matches on the input columns alone, and a hold row is what carries
 /// the pin's prior state forward.
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(PartialEq, Eq)]
 struct TableRow<'a> {
     /// The cube's input pattern: the value it fixes at each column it constrains, every other column
     /// being don't-care by the row not naming it.
@@ -274,7 +272,7 @@ impl fmt::Display for TableRow<'_> {
 }
 
 /// Where a UDP table row leaves the pin: driven high (`1`), driven low (`0`) or unchanged (`-`).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Next {
     On,
     Off,
@@ -305,7 +303,7 @@ impl fmt::Display for Pattern<'_> {
 }
 
 /// One column value as a Verilog UDP table symbol: `1` high, `0` low, `?` any.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct Level(Option<bool>);
 
 impl fmt::Display for Level {
@@ -489,9 +487,7 @@ fn edge_table_rows(er: &EdgeCaptures) -> Vec<EdgeRow> {
         rows.push(EdgeRow::holding(cells));
     }
 
-    // The tool's own order over the row values, carrying nothing to a UDP consumer, as in
-    // `table_rows` above.
-    rows.sort();
+    // A UDP consumer reads these rows as a set, as it does `table_rows`'s above, so their order is free.
     rows
 }
 
@@ -532,7 +528,7 @@ fn region_row(
 
 /// One row of an edge-sensitive UDP table: its columns in the primitive's port order (the data columns
 /// then the clocks), the current-state (`reg`) field and the state the register takes.
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(PartialEq, Eq)]
 struct EdgeRow {
     cells: Vec<EdgeColumn>,
     reg: Level,
@@ -561,7 +557,7 @@ impl fmt::Display for EdgeRow {
 /// One column of an [`EdgeRow`]: a steady [`Level`], the clock edge the row fires on (`(01)` for a rise,
 /// `(10)` for a fall), or a change to any value (`(??)`), which is what a steady-clock ignore row keys
 /// its data column off.
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(PartialEq, Eq)]
 enum EdgeColumn {
     Level(Level),
     Edge(Edge),
@@ -798,17 +794,17 @@ Q = "A*B + Q*(A+B)"
         );
         let v = emit(&cell);
         eprintln!("{v}");
-        assert!(v.contains("primitive C2_Q(Q, A, B);"));
+        let rows = udp_rows_over(&v, "C2_Q", &["A", "B"]);
         assert!(v.contains("reg    Q;"));
         // Hysteresis appears as no-change rows, on/off as 1/0.
         assert!(v.contains(": ? : -;"));
-        assert!(v.contains("1 1 : ? : 1;"));
-        assert!(v.contains("0 0 : ? : 0;"));
+        assert!(has_row(&rows, "1 1 : ? : 1;"));
+        assert!(has_row(&rows, "0 0 : ? : 0;"));
         // Wrapper module + specify + instantiation.
         assert!(v.contains("`celldefine"));
         assert!(v.contains("module C2(Q, A, B);"));
         assert!(v.contains("(A => Q) = (0.1, 0.1);"));
-        assert!(v.contains("C2_Q u_C2_Q (Q, A, B);"));
+        assert_instance_follows_ports(&v, "C2_Q");
         assert!(v.contains("`endcelldefine"));
     }
 
@@ -852,13 +848,13 @@ Q = "CLK*M + !CLK*Q"
         eprintln!("{v}");
         // A UDP for the internal master and for the slave; the slave takes M as an input column. Q's
         // function (CLK*M + !CLK*Q) does not depend on D, so D is not one of DFF_Q's columns.
-        assert!(v.contains("primitive DFF_M(M, CLK, D);"));
-        assert!(v.contains("primitive DFF_Q(Q, CLK, M);"));
+        assert_eq!(multiset(udp_ports(&v, "DFF_M")), ["CLK", "D"]);
+        assert_eq!(multiset(udp_ports(&v, "DFF_Q")), ["CLK", "M"]);
         // Module ports are the external face only; M is an internal wire, both UDPs instantiated.
         assert!(v.contains("module DFF(Q, CLK, D);"));
         assert!(v.contains("wire   M;"));
-        assert!(v.contains("DFF_M u_DFF_M (M, CLK, D);"));
-        assert!(v.contains("DFF_Q u_DFF_Q (Q, CLK, M);"));
+        assert_instance_follows_ports(&v, "DFF_M");
+        assert_instance_follows_ports(&v, "DFF_Q");
         // M is never declared as a module output.
         assert!(!v.contains("output Q, M"));
         assert!(!v.contains("module DFF(Q, M,"));
@@ -882,16 +878,15 @@ Q = "CLK*M + !CLK*Q"
         );
         let v = emit(&cell);
         eprintln!("{v}");
-        // One edge-sensitive UDP with the clock last; captures on the rising edge.
-        assert!(v.contains("primitive DFF_Q(Q, D, CLK);"));
+        // One edge-sensitive UDP over D and the clock; captures on the rising edge.
+        let rows = udp_rows_over(&v, "DFF_Q", &["D", "CLK"]);
         assert!(v.contains("reg    Q;"));
-        assert!(v.contains("1 (01) : ? : 1;"));
-        assert!(v.contains("0 (01) : ? : 0;"));
+        assert!(has_row(&rows, "1 (01) : ? : 1;"));
+        assert!(has_row(&rows, "0 (01) : ? : 0;"));
         // The folded master leaves no trace: no primitive, no wire, no instance.
         assert!(!v.contains("DFF_M"));
         assert!(!v.contains("wire   M;"));
-        // Instance connects in port order (pin, cols…, clock).
-        assert!(v.contains("DFF_Q u_DFF_Q (Q, D, CLK);"));
+        assert_instance_follows_ports(&v, "DFF_Q");
         assert!(v.contains("module DFF(Q, CLK, D);"));
     }
 
@@ -915,9 +910,9 @@ Y = "!((CLK*L1 + !CLK*L2)*A)"
         let v = emit(&cell);
         eprintln!("{v}");
         // The factored register is a dual-edge UDP capturing !D (D=0 -> 1, D=1 -> 0 on both edges).
-        assert!(v.contains("primitive BDET_Y_st(Y_st, D, CLK);"));
-        assert!(v.contains("0 (01) : ? : 1;") && v.contains("1 (01) : ? : 0;"));
-        assert!(v.contains("0 (10) : ? : 1;") && v.contains("1 (10) : ? : 0;"));
+        let rows = udp_rows_over(&v, "BDET_Y_st", &["D", "CLK"]);
+        assert!(has_row(&rows, "0 (01) : ? : 1;") && has_row(&rows, "1 (01) : ? : 0;"));
+        assert!(has_row(&rows, "0 (10) : ? : 1;") && has_row(&rows, "1 (10) : ? : 0;"));
         // The read-gated output is a continuous assign over Y_st and A — never a UDP of its own.
         assert!(v.contains("assign Y = "));
         assert!(
@@ -926,7 +921,7 @@ Y = "!((CLK*L1 + !CLK*L2)*A)"
         );
         // Y_st is an internal wire, instantiated; Y is the module output. Folded masters leave no trace.
         assert!(v.contains("wire   Y_st;"));
-        assert!(v.contains("BDET_Y_st u_BDET_Y_st (Y_st, D, CLK);"));
+        assert_instance_follows_ports(&v, "BDET_Y_st");
         assert!(v.contains("module BDET(Y, CLK, D, A);"));
         assert!(!v.contains("BDET_L1") && !v.contains("BDET_L2"));
     }
@@ -1070,13 +1065,18 @@ GCLK = "enA*CLKA+enB*CLKB"
         // sela2 survives as a rising-edge register (folding sela1); enA as a falling-edge one.
         assert!(prim_block(&v, "primitive ICM_sela2(").contains("(01)"));
         assert!(prim_block(&v, "primitive ICM_enA(").contains("(10)"));
-        // The async reset RA emits a clock-independent LEVEL clear row (next 0) in enA's table; RA is
-        // enA's second data column (cols `sela2, RA`), so the clear pattern is `? 1 ?`.
-        assert!(prim_block(&v, "primitive ICM_enA(").contains("? 1 ? : ? : 0;"));
+        // The async reset RA emits a clock-independent LEVEL clear row (next 0) in enA's table: read over
+        // enA's columns `sela2, RA, CLKA`, the clear pattern is `? 1 ?`.
+        let en_a = udp_rows_over(&v, "ICM_enA", &["sela2", "RA", "CLKA"]);
+        assert!(has_row(&en_a, "? 1 ? : ? : 0;"));
 
-        // The surviving registers instantiate in port order (pin, cols…, clock).
-        assert!(v.contains("ICM_sela2 u_ICM_sela2 (sela2, RA, S, enB, CLKA);"));
-        assert!(v.contains("ICM_enA u_ICM_enA (enA, sela2, RA, CLKA);"));
+        // The surviving registers instantiate in their primitives' own port order.
+        assert_eq!(
+            multiset(udp_ports(&v, "ICM_sela2")),
+            ["CLKA", "RA", "S", "enB"]
+        );
+        assert_instance_follows_ports(&v, "ICM_sela2");
+        assert_instance_follows_ports(&v, "ICM_enA");
     }
 
     /// The table body of one named `primitive` (from its header up to `endprimitive`), for asserting
@@ -1241,7 +1241,7 @@ Y = "!(A*B)"
 "#,
         );
         let v = emit(&cell);
-        assert!(v.contains("primitive ND2_Y(Y, A, B);"));
+        assert_eq!(multiset(udp_ports(&v, "ND2_Y")), ["A", "B"]);
         assert!(!v.contains(": ? : -;")); // no hysteresis
     }
 
@@ -1333,6 +1333,83 @@ Y = "!(A*B)"
         let open = line.find('(').expect("a connection list");
         let close = open + line[open..].find(')').expect("a closed connection list");
         line[open + 1..close].split(',').map(str::trim).collect()
+    }
+
+    /// `names` as a multiset, held sorted so two compare with `==`: which names a list holds, without the
+    /// order the run picked for them.
+    fn multiset(mut names: Vec<&str>) -> Vec<&str> {
+        names.sort_unstable();
+        names
+    }
+
+    /// The header line of the rendered UDP `name`.
+    fn udp_header<'a>(v: &'a str, name: &str) -> &'a str {
+        let head = format!("primitive {name}(");
+        v.lines()
+            .find(|l| l.starts_with(&head))
+            .unwrap_or_else(|| panic!("primitive {name} is declared"))
+    }
+
+    /// The input ports the rendered UDP `name` declares after its output pin, in its own order: the columns
+    /// its table rows line up with.
+    fn udp_ports<'a>(v: &'a str, name: &str) -> Vec<&'a str> {
+        connections(udp_header(v, name))[1..].to_vec()
+    }
+
+    /// The table rows of the rendered UDP `name`, each read by column name: `cols` lists the UDP's input
+    /// ports in the order the caller writes rows against, and each row's fields are re-laid in that order
+    /// through where each column sits among the ports the primitive declares, so a row the caller writes
+    /// compares with `==` whatever port order the run picked. Asserts the ports are `cols` as a multiset. A
+    /// row comes back as `<fields> : <reg> : <next>;`.
+    fn udp_rows_over(v: &str, name: &str, cols: &[&str]) -> Vec<String> {
+        let ports = udp_ports(v, name);
+        assert_eq!(
+            multiset(ports.clone()),
+            multiset(cols.to_vec()),
+            "the input ports of {name}"
+        );
+        let at: Vec<usize> = cols
+            .iter()
+            .map(|col| ports.iter().position(|p| p == col).expect("a port"))
+            .collect();
+        prim_block(v, &format!("primitive {name}("))
+            .lines()
+            .skip_while(|l| l.trim() != "table")
+            .skip(1)
+            .take_while(|l| l.trim() != "endtable")
+            .map(|line| {
+                let fields: Vec<&str> = line.split(':').collect();
+                let cells: Vec<&str> = fields[0].split_whitespace().collect();
+                let relaid: Vec<&str> = at.iter().map(|&i| cells[i]).collect();
+                format!(
+                    "{} : {} : {}",
+                    relaid.join(" "),
+                    fields[1].trim(),
+                    fields[2].trim()
+                )
+            })
+            .collect()
+    }
+
+    /// Whether `rows` holds `row`.
+    fn has_row(rows: &[String], row: &str) -> bool {
+        rows.iter().any(|r| r == row)
+    }
+
+    /// Assert every rendered instance of the UDP `name` connects in the order the primitive declares its
+    /// ports, Verilog connecting an instance by position.
+    fn assert_instance_follows_ports(v: &str, name: &str) {
+        let ports = connections(udp_header(v, name));
+        let head = format!("{name} u_{name} (");
+        let instances: Vec<&str> = v.lines().filter(|l| l.starts_with(&head)).collect();
+        assert!(!instances.is_empty(), "{name} is instantiated");
+        for instance in instances {
+            assert_eq!(
+                connections(instance),
+                ports,
+                "u_{name} connects in the order its primitive declares its ports"
+            );
+        }
     }
 
     /// Four shapes the behavioural classifier recognises as NO edge register even under default (on)
@@ -1527,21 +1604,9 @@ Q = "CLK*M + !CLK*Q"
                 primitives.len(),
                 "{name} instantiates each UDP once"
             );
+            let v = emit(&cell);
             for p in &primitives {
-                let declared = p.to_string();
-                let header = declared.lines().next().expect("a primitive header");
-                let instance = w
-                    .instances
-                    .iter()
-                    .find(|i| i.name.pin == p.name.pin)
-                    .unwrap_or_else(|| panic!("{name} instantiates {}", p.name))
-                    .to_string();
-                assert_eq!(
-                    connections(&instance),
-                    connections(header),
-                    "{name}: u_{} connects in the order its primitive declares its ports",
-                    p.name
-                );
+                assert_instance_follows_ports(&v, &p.name.to_string());
             }
         }
     }
@@ -1593,18 +1658,16 @@ Q = "CLK*M + !CLK*Q"
             // The master is the negative-level latch the spec writes: it passes D while CLK is low and
             // holds while CLK is high. Its rows read against the port list the same run wrote, the UDP
             // being a columnar format.
-            assert!(v.contains("primitive DFF_M(M, CLK, D);"));
-            let m = prim_block(v, "primitive DFF_M(");
-            assert!(m.contains("0 0 : ? : 0;"));
-            assert!(m.contains("0 1 : ? : 1;"));
-            assert!(m.contains("1 ? : ? : -;"));
+            let m = udp_rows_over(v, "DFF_M", &["CLK", "D"]);
+            assert!(has_row(&m, "0 0 : ? : 0;"));
+            assert!(has_row(&m, "0 1 : ? : 1;"));
+            assert!(has_row(&m, "1 ? : ? : -;"));
             // The slave is the positive-level latch, and it keys off M rather than D -- which is what
             // the opt-out preserves: a collapsed Q would capture D on the clock edge instead.
-            assert!(v.contains("primitive DFF_Q(Q, CLK, M);"));
-            let q = prim_block(v, "primitive DFF_Q(");
-            assert!(q.contains("0 ? : ? : -;"));
-            assert!(q.contains("1 0 : ? : 0;"));
-            assert!(q.contains("1 1 : ? : 1;"));
+            let q = udp_rows_over(v, "DFF_Q", &["CLK", "M"]);
+            assert!(has_row(&q, "0 ? : ? : -;"));
+            assert!(has_row(&q, "1 0 : ? : 0;"));
+            assert!(has_row(&q, "1 1 : ? : 1;"));
             // M is the cell's internal node, so it is a wire the master drives, not a module port.
             assert!(v.contains("module DFF(Q, CLK, D);"));
             assert!(v.contains("wire   M;"));
@@ -1635,10 +1698,10 @@ M = "!CLK*D + CLK*M"
         // Q is a rising-edge register; its capture cover PREFERS the input D over the internal M (D and M
         // coincide over the CLK=0 capture domain), so Q's UDP keys off D. The master M keeps its own level
         // UDP and survives as an output.
-        assert!(v.contains("primitive EMDFF_Q(Q, D, CLK);"));
-        assert!(prim_block(&v, "primitive EMDFF_Q(").contains("0 (01) : ? : 0;"));
-        assert!(prim_block(&v, "primitive EMDFF_Q(").contains("1 (01) : ? : 1;"));
-        assert!(v.contains("primitive EMDFF_M(M, CLK, D);"));
+        let q = udp_rows_over(&v, "EMDFF_Q", &["D", "CLK"]);
+        assert!(has_row(&q, "0 (01) : ? : 0;"));
+        assert!(has_row(&q, "1 (01) : ? : 1;"));
+        assert_eq!(multiset(udp_ports(&v, "EMDFF_M")), ["CLK", "D"]);
         // M is an output, so it is a module port, not folded away.
         assert!(v.contains("module EMDFF(M, Q, CLK, D);"));
         assert!(!v.contains("wire   M;"));
@@ -1664,19 +1727,19 @@ Q = "CLK*L1 + !CLK*L2"
         );
         let v = emit(&cell);
         eprintln!("{v}");
-        let q = prim_block(&v, "primitive DET_Q(");
+        let q = udp_rows_over(&v, "DET_Q", &["D", "CLK"]);
         // Both edges capture D; each row carries exactly one edge indicator.
-        assert!(q.contains("0 (01) : ? : 0;"));
-        assert!(q.contains("1 (01) : ? : 1;"));
-        assert!(q.contains("0 (10) : ? : 0;"));
-        assert!(q.contains("1 (10) : ? : 1;"));
-        for row in q.lines().filter(|l| l.contains("(0") || l.contains("(1")) {
+        assert!(has_row(&q, "0 (01) : ? : 0;"));
+        assert!(has_row(&q, "1 (01) : ? : 1;"));
+        assert!(has_row(&q, "0 (10) : ? : 0;"));
+        assert!(has_row(&q, "1 (10) : ? : 1;"));
+        for row in &q {
             let edges = row.matches("(01)").count() + row.matches("(10)").count();
             assert!(edges <= 1, "row carries more than one edge token: {row}");
         }
         // No opposite-edge no-change row: the only `-` rows are the steady-clock data-ignore rows.
-        assert!(!q.contains("? (10) : ? : -;"));
-        assert!(!q.contains("? (01) : ? : -;"));
+        assert!(!has_row(&q, "? (10) : ? : -;"));
+        assert!(!has_row(&q, "? (01) : ? : -;"));
         // Both internal latches fold away.
         assert!(!v.contains("DET_L1"));
         assert!(!v.contains("DET_L2"));
@@ -1700,12 +1763,11 @@ Q = "CLK*!M + !CLK*Q"
         );
         let v = emit(&cell);
         eprintln!("{v}");
-        let q = prim_block(&v, "primitive IDFF_Q(");
-        assert!(v.contains("primitive IDFF_Q(Q, D, CLK);"));
-        assert!(q.contains("0 (01) : ? : 1;"));
-        assert!(q.contains("1 (01) : ? : 0;"));
+        let q = udp_rows_over(&v, "IDFF_Q", &["D", "CLK"]);
+        assert!(has_row(&q, "0 (01) : ? : 1;"));
+        assert!(has_row(&q, "1 (01) : ? : 0;"));
         // Single-edge register keeps the opposite-edge no-change row and folds its master.
-        assert!(q.contains("? (10) : ? : -;"));
+        assert!(has_row(&q, "? (10) : ? : -;"));
         assert!(!v.contains("IDFF_M"));
     }
 
@@ -1732,17 +1794,29 @@ Q = "!R*(CLK*M + !CLK*Q)"
         let v = emit(&cell);
         eprintln!("{v}");
         // Q is the self-referencing rising-edge register: its own symbol is the reg field, not an input.
-        assert!(v.contains("primitive TFF_Q(Q, R, CLK);"));
-        let q = prim_block(&v, "primitive TFF_Q(");
-        assert!(q.contains("input  R, CLK;"), "self Q is not an input port");
+        let q = udp_rows_over(&v, "TFF_Q", &["R", "CLK"]);
+        let declared: Vec<&str> = prim_block(&v, "primitive TFF_Q(")
+            .lines()
+            .find_map(|l| l.strip_prefix("input"))
+            .expect("an input declaration")
+            .trim()
+            .trim_end_matches(';')
+            .split(',')
+            .map(str::trim)
+            .collect();
+        assert_eq!(
+            multiset(declared),
+            ["CLK", "R"],
+            "self Q is not an input port"
+        );
         // The rising capture prints Q's own literal in the current-state (reg) field, not `?`.
-        assert!(q.contains("0 (01) : 0 : 1;"));
-        assert!(q.contains("? (01) : 1 : 0;"));
+        assert!(has_row(&q, "0 (01) : 0 : 1;"));
+        assert!(has_row(&q, "? (01) : 1 : 0;"));
         // M captures the same toggle on the falling edge, keying off the surviving Q (an input to M's UDP).
-        assert!(v.contains("primitive TFF_M(M, R, Q, CLK);"));
+        assert_eq!(multiset(udp_ports(&v, "TFF_M")), ["CLK", "Q", "R"]);
         // The self-fed master survives as an internal wire, and neither instance duplicates M.
         assert!(v.contains("wire   M;"));
-        assert!(v.contains("TFF_Q u_TFF_Q (Q, R, CLK);"));
-        assert!(v.contains("TFF_M u_TFF_M (M, R, Q, CLK);"));
+        assert_instance_follows_ports(&v, "TFF_Q");
+        assert_instance_follows_ports(&v, "TFF_M");
     }
 }

@@ -44,7 +44,7 @@
 //! register node is a state-table node even when its region is non-hysteretic (a combinational output
 //! made sequential — the dual-edge mux-DET Q).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 
 use espresso_logic::{Anonymous, Cover, Minimizable, Minterm, Symbol};
 
@@ -127,15 +127,22 @@ pub(crate) struct StateNode {
 }
 
 /// The joint state-table model of a sequential cell: the input-node and state-node column headers, and
-/// the deduplicated, sorted joint rows.
+/// the deduplicated joint rows.
 #[derive(Debug)]
 pub(crate) struct StateModel {
-    /// Primary-input columns, ordered by the cell's input-pin order.
+    /// The primary-input columns: every primary input a level signal or an edge register reads.
     pub(crate) input_nodes: Vec<Symbol>,
     /// The state columns in `current`/`next` order, one [`StateNode`] each. Folded masters are excluded;
     /// recognised edge-register nodes keep their column.
     pub(crate) state_nodes: Vec<StateNode>,
-    /// The joint level (level-sensitive) next-state rows, deduplicated and sorted.
+    /// The joint level (level-sensitive) next-state rows, one per distinct input pattern, in no particular
+    /// order. Liberty resolves each node at the first row that specifies it, but no two level rows a state
+    /// matches give one node different actions: a row's action for a node comes from a cube of that node's
+    /// on, off or hold cover, those three regions are pairwise disjoint ([`crate::logic::regions`]), and
+    /// each pass's joint cover is minimised with no don't-care set, so every cube stays inside its node's
+    /// region. Which matching row comes first therefore never changes a node's next state. A level row and
+    /// an edge row never set the same node, so where the level rows sit beside the edge rows decides
+    /// nothing either.
     pub(crate) rows: Vec<StateRow>,
     /// The edge-triggered rows contributed by the cell's recognised edge registers, after the level rows
     /// in register (`signals()`) order. Empty for a cell with no collapsed master-slave pair.
@@ -249,7 +256,7 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
     // I3), asserted below. Level (non-edge, non-folded) signals contribute their non-state cols; each
     // edge register additionally contributes its own non-state cols and its clock (which the level maths
     // never sees, the clock having been projected out of the cofactors). input_nodes = the union of
-    // input-side cols, ordered by cell.inputs order.
+    // input-side cols.
     let mut input_cols: BTreeSet<Symbol> = BTreeSet::new();
     for (sig, sr) in cell.signal_regions().filter(|(_, sr)| sr.hysteretic) {
         if folded.contains(&sig.name) || edge_nodes.contains(&sig.name) {
@@ -332,7 +339,7 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
         },
     ];
 
-    let mut row_map: BTreeMap<Minterm<Symbol>, Vec<Option<Next>>> = BTreeMap::new();
+    let mut row_map: HashMap<Minterm<Symbol>, Vec<Option<Next>>> = HashMap::new();
     for CoverPass { action, pick } in passes {
         let mut labels: Vec<Symbol> = Vec::new();
         let mut joint: Option<Cover<Symbol, Symbol>> = None;
@@ -386,9 +393,10 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
         }
     }
 
-    // Emit level rows in Minterm order (BTreeMap iteration). Each row reads its input and current levels
-    // off the shared-header key BY NAME (an absent column reads `None` = `-`); unstamped next slots stay
-    // `None` (=> `-`), including every edge-register node's slot — those are set only by (e).
+    // The level rows, in whatever order the map yields them (the order is free; see `StateModel::rows`).
+    // Each row reads its input and current levels off the shared-header key BY NAME (an absent column
+    // reads `None` = `-`); unstamped next slots stay `None` (=> `-`), including every edge-register
+    // node's slot — those are set only by (e).
     let rows: Vec<StateRow> = row_map
         .into_iter()
         .map(|(key, next)| StateRow {
@@ -575,6 +583,8 @@ impl<'a> ColumnLayout<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::logic::regions::StateRegions;
     use crate::model::{analyse_both, analyse_one as analyse, AnalysedOutput, AnalysedPair};
@@ -629,28 +639,62 @@ mod tests {
         }
     }
 
+    /// Where each column `want` names sits among the columns `have`, matched by name: `want` lists them in
+    /// the order a caller writes rows against, `have` in the order a run picked. The two name the same
+    /// columns.
+    fn positions(want: &[&str], have: &[&str]) -> Vec<usize> {
+        assert_eq!(
+            want.len(),
+            have.len(),
+            "the tables hold as many columns: {want:?} / {have:?}"
+        );
+        want.iter()
+            .map(|col| {
+                have.iter()
+                    .position(|c| c == col)
+                    .unwrap_or_else(|| panic!("no {col} column in {have:?}"))
+            })
+            .collect()
+    }
+
+    /// `m`'s level rows read by column name: `inputs` names its input columns and `states` its state
+    /// columns (by SIGNAL name), in the order the caller writes rows against, and each row's fields are
+    /// re-laid in that order through [`positions`], so a row the caller writes compares with `==`
+    /// whatever column order the run picked.
+    fn level_rows_over(m: &StateModel, inputs: &[&str], states: &[&str]) -> Vec<StateRow> {
+        let ins = positions(inputs, &names(&m.input_nodes));
+        let sts = positions(states, &signal_names(m));
+        m.rows
+            .iter()
+            .map(|row| StateRow {
+                inputs: ins.iter().map(|&i| row.inputs[i]).collect(),
+                current: sts.iter().map(|&i| row.current[i]).collect(),
+                next: sts.iter().map(|&i| row.next[i]).collect(),
+            })
+            .collect()
+    }
+
+    /// `m`'s edge rows read by column name, as [`level_rows_over`] reads the level rows. Each row keeps
+    /// its place in the edge-row order, which Liberty's first-match reads.
+    fn edge_rows_over(m: &StateModel, inputs: &[&str], states: &[&str]) -> Vec<EdgeRow> {
+        let ins = positions(inputs, &names(&m.input_nodes));
+        let sts = positions(states, &signal_names(m));
+        m.edge_rows
+            .iter()
+            .map(|row| EdgeRow {
+                clock: row.clock.clone(),
+                token: row.token,
+                inputs: ins.iter().map(|&i| row.inputs[i]).collect(),
+                current: sts.iter().map(|&i| row.current[i]).collect(),
+                next: sts.iter().map(|&i| row.next[i]).collect(),
+            })
+            .collect()
+    }
+
     /// Assert `a` and `b` are the same level table, reading no order: the same input columns, the same
-    /// state columns under the same table nodes, and the same level rows as a multiset. A row is written
-    /// against its own table's columns by position, so `b`'s rows are read through where each of `a`'s
-    /// columns sits in `b` before the two are compared. Edge rows are left to the caller.
+    /// state columns under the same table nodes, and the same level rows as a multiset, `b`'s read over
+    /// `a`'s columns by name. Edge rows are left to the caller.
     fn assert_same_level_table(a: &StateModel, b: &StateModel) {
-        /// Where each column of `a` sits among the columns of `b`, matched by name.
-        fn positions(a: &[&str], b: &[&str]) -> Vec<usize> {
-            assert_eq!(
-                a.len(),
-                b.len(),
-                "the tables hold as many columns: {a:?} / {b:?}"
-            );
-            a.iter()
-                .map(|col| {
-                    b.iter()
-                        .position(|c| c == col)
-                        .unwrap_or_else(|| panic!("no {col} column in {b:?}"))
-                })
-                .collect()
-        }
-        let inputs = positions(&names(&a.input_nodes), &names(&b.input_nodes));
-        let states = positions(&signal_names(a), &signal_names(b));
         for col in &a.state_nodes {
             assert_eq!(
                 b.node_of(&col.signal),
@@ -660,15 +704,7 @@ mod tests {
             );
         }
         let mut rows_a: Vec<StateRow> = a.rows.clone();
-        let mut rows_b: Vec<StateRow> = b
-            .rows
-            .iter()
-            .map(|row| StateRow {
-                inputs: inputs.iter().map(|&i| row.inputs[i]).collect(),
-                current: states.iter().map(|&i| row.current[i]).collect(),
-                next: states.iter().map(|&i| row.next[i]).collect(),
-            })
-            .collect();
+        let mut rows_b = level_rows_over(b, &names(&a.input_nodes), &signal_names(a));
         rows_a.sort_unstable();
         rows_b.sort_unstable();
         assert_eq!(rows_a, rows_b, "level rows");
@@ -686,14 +722,16 @@ Q = "A*B + Q*(A+B)"
 "#,
         );
         let m = build_state_model(&cell).expect("C2 is sequential");
-        assert_eq!(names(&m.input_nodes), ["A", "B"]);
+        assert_eq!(multiset(names(&m.input_nodes)), ["A", "B"]);
         assert_eq!(node_names(&m), ["Q_st"]);
         // One node, so every row carries a definite action (no deferral). On A*B, off !A*!B, hold A^B.
-        assert_eq!(m.rows.len(), 4);
-        assert!(m.rows.contains(&row(&[T, T], &[X], &[HI])));
-        assert!(m.rows.contains(&row(&[F, F], &[X], &[LO])));
-        assert!(m.rows.contains(&row(&[F, T], &[X], &[NO])));
-        assert!(m.rows.contains(&row(&[T, F], &[X], &[NO])));
+        // Rows read over inputs [A, B] and states [Q].
+        let rows = level_rows_over(&m, &["A", "B"], &["Q"]);
+        assert_eq!(rows.len(), 4);
+        assert!(rows.contains(&row(&[T, T], &[X], &[HI])));
+        assert!(rows.contains(&row(&[F, F], &[X], &[LO])));
+        assert!(rows.contains(&row(&[F, T], &[X], &[NO])));
+        assert!(rows.contains(&row(&[T, F], &[X], &[NO])));
     }
 
     #[test]
@@ -717,21 +755,22 @@ Q = "CLK*M + !CLK*Q"
         // The output Q mints its node; the internal master M, having no output pin to compete with,
         // keeps its own name.
         assert_eq!(multiset(node_names(&m)), ["M", "Q_st"]);
-        assert_eq!(signal_names(&m), ["Q", "M"]);
+        assert_eq!(multiset(signal_names(&m)), ["M", "Q"]);
         assert_eq!(node_of(&m, "M"), Some("M"));
         assert_eq!(node_of(&m, "Q"), Some("Q_st"));
         assert!(m.edge_rows.is_empty());
-        // Per-output rows: Q rows are keyed by CLK/M (M slot deferred `-`); M rows keyed by CLK/D
-        // (Q slot deferred `-`). Six rows in all.
-        assert_eq!(m.rows.len(), 6);
+        // Per-output rows, read over inputs [CLK, D] and states [Q, M]: Q rows are keyed by CLK/M (M slot
+        // deferred `-`); M rows keyed by CLK/D (Q slot deferred `-`). Six rows in all.
+        let rows = level_rows_over(&m, &["CLK", "D"], &["Q", "M"]);
+        assert_eq!(rows.len(), 6);
         // Q: drives off the master's current, holds while transparent-low.
-        assert!(m.rows.contains(&row(&[T, X], &[X, T], &[HI, DC])));
-        assert!(m.rows.contains(&row(&[T, X], &[X, F], &[LO, DC])));
-        assert!(m.rows.contains(&row(&[F, X], &[X, X], &[NO, DC])));
+        assert!(rows.contains(&row(&[T, X], &[X, T], &[HI, DC])));
+        assert!(rows.contains(&row(&[T, X], &[X, F], &[LO, DC])));
+        assert!(rows.contains(&row(&[F, X], &[X, X], &[NO, DC])));
         // M: samples D while CLK low, holds while CLK high.
-        assert!(m.rows.contains(&row(&[F, T], &[X, X], &[DC, HI])));
-        assert!(m.rows.contains(&row(&[F, F], &[X, X], &[DC, LO])));
-        assert!(m.rows.contains(&row(&[T, X], &[X, X], &[DC, NO])));
+        assert!(rows.contains(&row(&[F, T], &[X, X], &[DC, HI])));
+        assert!(rows.contains(&row(&[F, F], &[X, X], &[DC, LO])));
+        assert!(rows.contains(&row(&[T, X], &[X, X], &[DC, NO])));
     }
 
     #[test]
@@ -756,8 +795,9 @@ Q = "CLK*M + !CLK*Q"
         assert!(node_of(&m, "M").is_none());
         // No level rows survive; the behaviour is entirely edge rows.
         assert!(m.rows.is_empty());
-        assert_eq!(m.edge_rows.len(), 3);
-        // inputs align to [CLK, D] (clock slot `None`, renderer prints the token); current is `[Q]`.
+        // Edge rows read over inputs [CLK, D] (clock slot `None`, renderer prints the token) and states [Q].
+        let rows = edge_rows_over(&m, &["CLK", "D"], &["Q"]);
+        assert_eq!(rows.len(), 3);
         let rise_hi = EdgeRow {
             clock: Symbol::from("CLK"),
             token: EdgeTok::Rise,
@@ -779,9 +819,9 @@ Q = "CLK*M + !CLK*Q"
             current: vec![X],
             next: vec![NO],
         };
-        assert!(m.edge_rows.contains(&rise_hi));
-        assert!(m.edge_rows.contains(&rise_lo));
-        assert!(m.edge_rows.contains(&hold));
+        assert!(rows.contains(&rise_hi));
+        assert!(rows.contains(&rise_lo));
+        assert!(rows.contains(&hold));
     }
 
     #[test]
@@ -809,8 +849,10 @@ Y = "!((CLK*L1 + !CLK*L2)*A)"
         assert!(node_of(&m, "L1").is_none());
         assert!(node_of(&m, "Y").is_none());
         // Native dual-edge rows: BOTH edges capture, delivering !D (D=L drives Yst high on each edge).
+        // Read over inputs [CLK, D] and states [Y_st].
         assert!(m.edge_rows.iter().any(|r| r.token == EdgeTok::Rise));
         assert!(m.edge_rows.iter().any(|r| r.token == EdgeTok::Fall));
+        let rows = edge_rows_over(&m, &["CLK", "D"], &["Y_st"]);
         let rise_hi = EdgeRow {
             clock: Symbol::from("CLK"),
             token: EdgeTok::Rise,
@@ -825,16 +867,8 @@ Y = "!((CLK*L1 + !CLK*L2)*A)"
             current: vec![X],
             next: vec![LO],
         };
-        assert!(
-            m.edge_rows.contains(&rise_hi),
-            "rise captures !D: {:?}",
-            m.edge_rows
-        );
-        assert!(
-            m.edge_rows.contains(&fall_lo),
-            "fall captures !D: {:?}",
-            m.edge_rows
-        );
+        assert!(rows.contains(&rise_hi), "rise captures !D: {rows:?}");
+        assert!(rows.contains(&fall_lo), "fall captures !D: {rows:?}");
     }
 
     #[test]
@@ -890,11 +924,13 @@ Qb = "!Qa * B"
 "#,
         );
         let m = build_state_model(&cell).expect("MUT is sequential");
-        assert_eq!(node_names(&m), ["Qa_st", "Qb_st"]);
+        assert_eq!(multiset(node_names(&m)), ["Qa_st", "Qb_st"]);
         // The joint race resolves into two per-output rows: each grant drives high off its own request
-        // and the other grant being currently low, the other slot deferred `-`.
-        assert!(m.rows.contains(&row(&[T, X], &[X, F], &[HI, DC])));
-        assert!(m.rows.contains(&row(&[X, T], &[F, X], &[DC, HI])));
+        // and the other grant being currently low, the other slot deferred `-`. Read over inputs [A, B]
+        // and states [Qa, Qb].
+        let rows = level_rows_over(&m, &["A", "B"], &["Qa", "Qb"]);
+        assert!(rows.contains(&row(&[T, X], &[X, F], &[HI, DC])));
+        assert!(rows.contains(&row(&[X, T], &[F, X], &[DC, HI])));
     }
 
     #[test]
@@ -910,8 +946,8 @@ Qn = "!(S + Q)"
 "#,
         );
         let m = build_state_model(&cell).expect("SR is sequential");
-        assert_eq!(names(&m.input_nodes), ["S", "R"]);
-        assert_eq!(node_names(&m), ["Q_st", "Qn_st"]);
+        assert_eq!(multiset(names(&m.input_nodes)), ["R", "S"]);
+        assert_eq!(multiset(node_names(&m)), ["Q_st", "Qn_st"]);
     }
 
     #[test]
@@ -1275,6 +1311,33 @@ M = "!CLK*D + CLK*M"
         assert!(node_names(&m).contains(&"M_st"));
         assert!(!m.edge_rows.is_empty(), "Q contributes edge rows");
         assert!(!m.rows.is_empty(), "M contributes level rows");
+        // Both outputs are state outputs, so each mints its node.
+        assert_eq!(multiset(names(&m.input_nodes)), ["CLK", "D"]);
+        assert_eq!(multiset(node_names(&m)), ["M_st", "Q_st"]);
+        // Rows read over inputs [CLK, D] and states [M, Q]. Q captures the INPUT D at the rising edge (the
+        // capture cover prefers the input over M, the two coinciding over the CLK=0 capture domain) and
+        // holds on the `~R` face, M's slot deferred throughout.
+        let edge = edge_rows_over(&m, &["CLK", "D"], &["M", "Q"]);
+        let q_row = |token, d, next| EdgeRow {
+            clock: Symbol::from("CLK"),
+            token,
+            inputs: vec![X, d],
+            current: vec![X, X],
+            next: vec![DC, next],
+        };
+        assert!(edge.contains(&q_row(EdgeTok::Rise, T, HI)), "{edge:?}");
+        assert!(edge.contains(&q_row(EdgeTok::Rise, F, LO)), "{edge:?}");
+        assert!(edge.contains(&q_row(EdgeTok::NotRise, X, NO)), "{edge:?}");
+        // M is a level latch on CLK, sampling D while CLK is low, Q's slot deferred.
+        let level = level_rows_over(&m, &["CLK", "D"], &["M", "Q"]);
+        assert!(
+            level.contains(&row(&[F, T], &[X, X], &[HI, DC])),
+            "{level:?}"
+        );
+        assert!(
+            level.contains(&row(&[F, F], &[X, X], &[LO, DC])),
+            "{level:?}"
+        );
     }
 
     // Master/slave pair split across two DIFFERENT declared clocks: M latches on CLKA, Q on CLKB. Q tracks
@@ -1305,8 +1368,33 @@ Q = "CLKB*M + !CLKB*Q"
         );
         let m = build_state_model(&cell).expect("sequential");
         assert!(m.edge_rows.is_empty(), "no edge rows: stays level");
-        // Both latches keep their own level columns.
+        // Both latches keep their own level columns, over both clocks and the data input.
         assert_eq!(multiset(node_names(&m)), ["M", "Q_st"]);
+        assert_eq!(multiset(names(&m.input_nodes)), ["CLKA", "CLKB", "D"]);
+    }
+
+    // Cross-coupled-NAND master-slave flop: the mutually referencing master pair M/Mn folds as the pass
+    // DFF's lone M does, and the outputs Q and Qn survive as two edge registers.
+    const NDFF: &str = r#"
+[[cell]]
+name = "NDFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+[cell.internal]
+Mn = "!( !(!D*!CLK) * M )"
+M = "!( !(D*!CLK) * Mn )"
+[cell.outputs]
+Qn = "!( !(!M*CLK) * Q )"
+Q = "!( !(M*CLK) * Qn )"
+"#;
+
+    #[test]
+    fn ndff_keeps_both_outputs_as_nodes_over_the_folded_master_pair() {
+        let cell = analyse(NDFF);
+        let m = build_state_model(&cell).expect("NDFF is sequential");
+        // The two outputs mint their nodes; the folded masters keep no column.
+        assert_eq!(multiset(names(&m.input_nodes)), ["CLK", "D"]);
+        assert_eq!(multiset(node_names(&m)), ["Q_st", "Qn_st"]);
     }
 
     // Dual-edge mux-DET: two transparent-opposite latches feed a mux; Q captures D on BOTH clock edges and
@@ -1341,13 +1429,14 @@ Q = "CLK*L1 + !CLK*L2"
             current: vec![X],
             next: vec![next],
         };
-        // Both clock faces capture D (Rise group then Fall group).
-        assert!(m.edge_rows.contains(&cap(EdgeTok::Rise, T, HI)));
-        assert!(m.edge_rows.contains(&cap(EdgeTok::Rise, F, LO)));
-        assert!(m.edge_rows.contains(&cap(EdgeTok::Fall, T, HI)));
-        assert!(m.edge_rows.contains(&cap(EdgeTok::Fall, F, LO)));
+        // Both clock faces capture D (Rise group then Fall group). Read over inputs [CLK, D] and states [Q].
+        let rows = edge_rows_over(&m, &["CLK", "D"], &["Q"]);
+        assert!(rows.contains(&cap(EdgeTok::Rise, T, HI)));
+        assert!(rows.contains(&cap(EdgeTok::Rise, F, LO)));
+        assert!(rows.contains(&cap(EdgeTok::Fall, T, HI)));
+        assert!(rows.contains(&cap(EdgeTok::Fall, F, LO)));
         // Between edges the register holds: a Level (`-` clock column) off-edge row.
-        assert!(m.edge_rows.contains(&cap(EdgeTok::Level, None, NO)));
+        assert!(rows.contains(&cap(EdgeTok::Level, None, NO)));
         // The Level off-edge rows land AFTER every capture row (Liberty first-match priority).
         let first_level = m
             .edge_rows
@@ -1391,10 +1480,12 @@ Q = "CLK*!M + !CLK*Q"
             current: vec![X],
             next: vec![next],
         };
-        assert!(m.edge_rows.contains(&rise(F, HI)));
-        assert!(m.edge_rows.contains(&rise(T, LO)));
+        // Read over inputs [CLK, D] and states [Q].
+        let rows = edge_rows_over(&m, &["CLK", "D"], &["Q"]);
+        assert!(rows.contains(&rise(F, HI)));
+        assert!(rows.contains(&rise(T, LO)));
         // Single-edge register: the off-edge holds on the inactive (~R) face, never a Level row.
-        assert!(m.edge_rows.contains(&EdgeRow {
+        assert!(rows.contains(&EdgeRow {
             clock: Symbol::from("CLK"),
             token: EdgeTok::NotRise,
             inputs: vec![X, X],
