@@ -450,6 +450,15 @@ pub(crate) mod tests {
         }
     }
 
+    /// Every `internal_node` a pin of `cellg` names, in no order. A sequential cell gives each node of its
+    /// one `statetable` the pin that anchors it, so this is the table's node set as the pins state it.
+    fn internal_nodes(cellg: &Group) -> HashSet<String> {
+        cellg
+            .iter_pins()
+            .filter_map(|pin| attr_string(pin, "internal_node"))
+            .collect()
+    }
+
     /// Whether `a` and `b` hold the same elements as often as each other under `same`, in any order.
     /// `same` has to be an equivalence relation, as equality over a chosen set of fields is.
     pub(crate) fn same_multiset<T>(a: &[T], b: &[T], same: impl Fn(&T, &T) -> bool) -> bool {
@@ -529,7 +538,9 @@ Q = "A*B + Q*(A+B)"
     #[test]
     fn dff_emits_one_joint_statetable() {
         // MIGRATED two-latch coverage: the same DFF with a declared clock but collapse opted OUT keeps
-        // its master-slave statetable (`Q M` nodes, six per-output rows, a `pin (M)`).
+        // its master-slave statetable over the nodes `Q_st` and `M`, and a `pin (M)`. The table's columns
+        // and its six per-output rows are pinned by `statetable.rs`'s
+        // `dff_joint_table_internal_unaliased`.
         let cell = analyse(
             r#"
 [[cell]]
@@ -545,32 +556,24 @@ Q = "CLK*M + !CLK*Q"
         );
         let frag = fragment(&cell);
         eprintln!("{frag}");
-        // Exactly one joint table over both state nodes (output Q and internal M).
-        assert_eq!(frag.matches("statetable").count(), 1);
-        assert!(frag.contains("statetable (\"CLK D\", \"Q_st M\")"));
-        // Per-output next-state rows (Q first, M second): Q rows constrain CLK/M and defer M (`-`);
-        // M rows constrain CLK/D and defer Q (`-`).
-        assert!(frag.contains("H - : - H : H -")); // Q drives high off M currently high
-        assert!(frag.contains("H - : - L : L -")); // Q drives low off M currently low
-        assert!(frag.contains("L - : - - : N -")); // Q holds while CLK low
-        assert!(frag.contains("L H : - - : - H")); // M samples D high while CLK low
-        assert!(frag.contains("L L : - - : - L")); // M samples D low while CLK low
-        assert!(frag.contains("H - : - - : - N")); // M holds while CLK high
-                                                   // The master is a genuine internal pin anchoring its same-named node.
-        assert!(frag.contains("pin (M)"));
-        assert!(frag.contains("direction : internal;"));
-        assert!(frag.contains("internal_node : \"M\";"));
-        // The fragment still round-trips through liberty-parser.
+        // The fragment round-trips through liberty-parser.
         let lib = parse_frag(&frag);
         let cellg = lib
             .iter()
             .flat_map(|g| g.subgroups.iter())
             .find(|g| g.type_ == "cell" && g.name == "DFF")
             .expect("DFF cell present");
-        assert!(cellg
-            .subgroups
-            .iter()
-            .any(|g| g.type_ == "pin" && g.name == "M"));
+        // Exactly one joint table, whose nodes — output Q's minted `Q_st` and internal M — each have the
+        // pin that anchors them.
+        assert_eq!(cellg.iter_subgroups_of_type("statetable").count(), 1);
+        assert_eq!(
+            internal_nodes(cellg),
+            HashSet::from(["Q_st", "M"].map(String::from))
+        );
+        // The master is a genuine internal pin anchoring its same-named node.
+        let m = find_pin(cellg, "M");
+        assert_eq!(attr_expr(m, "direction").as_deref(), Some("internal"));
+        assert_eq!(attr_string(m, "internal_node").as_deref(), Some("M"));
         // The slave output reads its own node — no combinational `function`, no `internal_node`.
         let q = find_pin(cellg, "Q");
         assert_eq!(attr_string(q, "state_function").as_deref(), Some("Q_st"));
@@ -581,7 +584,9 @@ Q = "CLK*M + !CLK*Q"
     #[test]
     fn dff_collapses_to_edge_statetable() {
         // Default (collapse ON) with a declared clock: the master-slave DFF becomes ONE rising-edge
-        // register Q, folding M away. The table carries only the register's node `Q` and edge rows.
+        // register Q, folding M away. The table carries only the register's node `Q_st`. Its columns and
+        // its edge rows — the rising edge capturing D, the off-edge face holding — are pinned by
+        // `statetable.rs`'s `dff_collapses_to_edge_rows`.
         let cell = analyse(
             r#"
 [[cell]]
@@ -596,17 +601,14 @@ Q = "CLK*M + !CLK*Q"
         );
         let frag = fragment(&cell);
         eprintln!("{frag}");
-        assert_eq!(frag.matches("statetable").count(), 1);
-        assert!(frag.contains("statetable (\"CLK D\", \"Q_st\")"));
-        // Rising-edge capture (R) drives Q from D; the off-edge face (~R) holds.
-        assert!(frag.contains("R H : - : H"));
-        assert!(frag.contains("R L : - : L"));
-        assert!(frag.contains("~R - : - : N"));
-        // The folded master M keeps no pin group and no node column in the statetable header.
-        assert!(!frag.contains("pin (M)"));
-        assert!(!frag.contains("\"Q M\""));
         let lib = parse_frag(&frag);
         let cellg = find_cell(&lib, "DFF");
+        assert_eq!(cellg.iter_subgroups_of_type("statetable").count(), 1);
+        // The folded master M keeps no pin group and no node of the table.
+        assert_eq!(
+            internal_nodes(cellg),
+            HashSet::from(["Q_st"].map(String::from))
+        );
         assert!(!cellg
             .subgroups
             .iter()
@@ -640,13 +642,15 @@ Q = "!( !(M*CLK) * Qn )"
         );
         let frag = fragment(&cell);
         eprintln!("{frag}");
-        assert_eq!(frag.matches("statetable").count(), 1);
         assert!(frag.contains("statetable (\"CLK D\", \"Q_st Qn_st\")"));
-        // The folded master pair keeps no pin group and no node column in the statetable header.
-        assert!(!frag.contains("pin (M)"));
-        assert!(!frag.contains("pin (Mn)"));
         let lib = parse_frag(&frag);
         let cellg = find_cell(&lib, "NDFF");
+        assert_eq!(cellg.iter_subgroups_of_type("statetable").count(), 1);
+        // The folded master pair keeps no pin group and no node of the table.
+        assert_eq!(
+            internal_nodes(cellg),
+            HashSet::from(["Q_st", "Qn_st"].map(String::from))
+        );
         for gone in ["M", "Mn"] {
             assert!(
                 !cellg
@@ -1325,11 +1329,12 @@ Q = "CLK*M + !CLK*Q"
 
     #[test]
     fn no_edge_collapse_flips_dff_liberty_between_edge_and_level_forms() {
-        // `analyse_both` re-analyses the same DFF spec with `no_edge_collapse` forced true -- the
-        // same code path the `--no-edge-collapse` CLI flag exercises -- so the flip between the
-        // collapsed edge-register Liberty form (a `R` token statetable row, no `pin (M)`) and the
-        // two-latch level form (`pin (M)` with `internal_node : "M"`, no edge token) needs no
-        // process run.
+        // `analyse_both` analyses the DFF as written and with `no_edge_collapse` set on the cell, the
+        // field `apply_overrides` sets for the `--no-edge-collapse` CLI flag. As written, the DFF
+        // collapses to a rising-edge register: M folds away and keeps no pin, and the table's one node
+        // is `Q_st`. Opted out, it keeps the two-latch level form: `pin (M)` anchors node M beside
+        // `Q_st`. The table's columns and rows are pinned by `statetable.rs`: the collapsed form by
+        // `dff_collapses_to_edge_rows`, the level form by `dff_joint_table_internal_unaliased`.
         const DFF: &str = r#"
 [[cell]]
 name = "DFF"
@@ -1342,9 +1347,6 @@ Q = "CLK*M + !CLK*Q"
 "#;
         let AnalysedPair { default, forced } = analyse_both(DFF);
 
-        let frag_default = fragment(&default);
-        assert!(frag_default.contains("statetable (\"CLK D\", \"Q_st\")"));
-        assert!(frag_default.split_whitespace().any(|t| t == "R"));
         let groups_default = cell_liberty(&default);
         let [cell_default] = groups_default.as_slice() else {
             panic!("DFF declares one name, so states one cell group");
@@ -1353,10 +1355,11 @@ Q = "CLK*M + !CLK*Q"
             cell_default.get_pin("M").is_none(),
             "the collapsed register folds M, which keeps no pin"
         );
+        assert_eq!(
+            internal_nodes(cell_default),
+            HashSet::from(["Q_st"].map(String::from))
+        );
 
-        let frag_forced = fragment(&forced);
-        assert!(frag_forced.contains("statetable (\"CLK D\", \"Q_st M\")"));
-        assert!(!frag_forced.split_whitespace().any(|t| t == "R"));
         let groups_forced = cell_liberty(&forced);
         let [cell_forced] = groups_forced.as_slice() else {
             panic!("DFF declares one name, so states one cell group");
@@ -1365,6 +1368,10 @@ Q = "CLK*M + !CLK*Q"
             attr_string(find_pin(cell_forced, "M"), "internal_node").as_deref(),
             Some("M"),
             "the level form's pin M anchors the M column"
+        );
+        assert_eq!(
+            internal_nodes(cell_forced),
+            HashSet::from(["Q_st", "M"].map(String::from))
         );
     }
 
@@ -1430,7 +1437,6 @@ M = "!CLK*D + CLK*M"
         );
         let frag = fragment(&cell);
         eprintln!("{frag}");
-        assert_eq!(frag.matches("statetable").count(), 1);
         // Node order follows signals() (outputs sorted: M before Q).
         assert!(frag.contains("statetable (\"CLK D\", \"M_st Q_st\")"));
         // Q (second column) captures the INPUT D at the rising edge — the cover prefers the input over the
@@ -1443,6 +1449,12 @@ M = "!CLK*D + CLK*M"
         assert!(frag.contains("L L : - - : L -"));
         let lib = parse_frag(&frag);
         let cellg = find_cell(&lib, "EMDFF");
+        assert_eq!(cellg.iter_subgroups_of_type("statetable").count(), 1);
+        // Both outputs are table nodes, each minting its own.
+        assert_eq!(
+            internal_nodes(cellg),
+            HashSet::from(["M_st", "Q_st"].map(String::from))
+        );
         // M is a surviving output reading its own node, as is the register Q.
         for name in ["M", "Q"] {
             let pin = find_pin(cellg, name);
@@ -1458,7 +1470,8 @@ M = "!CLK*D + CLK*M"
     #[test]
     fn mcdff_two_clock_stays_level() {
         // A master/slave pair split across two declared clocks: Q depends transitively on both clocks, so
-        // no single clock keys it and the classifier recognises no register -- a fully level joint table.
+        // no single clock keys it and the classifier recognises no register -- a fully level joint table,
+        // with no edge rows, as `statetable.rs`'s `mcdff_two_clock_pair_stays_level` pins.
         let cell = analyse(
             r#"
 [[cell]]
@@ -1473,12 +1486,14 @@ Q = "CLKB*M + !CLKB*Q"
         );
         let frag = fragment(&cell);
         eprintln!("{frag}");
-        let has_edge_token = frag
-            .split_whitespace()
-            .any(|t| matches!(t, "R" | "F" | "~R" | "~F"));
-        assert!(!has_edge_token, "two-clock pair stays level, no edge token");
         assert!(frag.contains("statetable (\"CLKA CLKB D\", \"Q_st M\")"));
-        parse_frag(&frag);
+        let lib = parse_frag(&frag);
+        let cellg = find_cell(&lib, "MCDFF");
+        // Both latches keep a table node: output Q its minted `Q_st`, internal M its own name.
+        assert_eq!(
+            internal_nodes(cellg),
+            HashSet::from(["Q_st", "M"].map(String::from))
+        );
     }
 
     #[test]

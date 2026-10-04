@@ -2904,6 +2904,22 @@ T = "!CLKB*(CLK*L1 + !CLK*L2) + CLKB*T"
 Y = "!(T*A)"
 "#;
 
+    /// [`DETP_TOML`] asking for constraint arcs on every pin, so that the cell's hazards generate
+    /// constraints.
+    const DETP_CONSTRAINED_TOML: &str = r#"
+[[cell]]
+name = "DETP"
+inputs = ["CLK", "CLKB", "D", "A"]
+clock = ["CLK", "CLKB"]
+constraint_arcs = true
+[cell.internal]
+L1 = "!CLK*D + CLK*L1"
+L2 = "CLK*D + !CLK*L2"
+T = "!CLKB*(CLK*L1 + !CLK*L2) + CLKB*T"
+[cell.outputs]
+Y = "!(T*A)"
+"#;
+
     #[test]
     fn edge_bdet_read_gate_factorisation() {
         // BDET: a dual-edge flop read through an output-enable `A` (`Y = !(M*A)`, `M = CLK*L1+!CLK*L2`). `A`
@@ -3524,10 +3540,17 @@ GCLK = "CLK*EL"
     /// functions of already-explored state, never new state variables. This test additionally proves the
     /// flag-gating is PURE — when opted out (`no_edge_collapse`) the classify() call is skipped and the
     /// annotation is the plain `Default`, with every other field untouched. `BDET`/`DETP` exercise
-    /// the factorisation path: only `edge` differs there too.
+    /// the factorisation path: only `edge` differs there too. `DETP` runs a second time asking for
+    /// constraint arcs, so the constraint comparison has records to compare.
     #[test]
     fn edge_classification_changes_only_the_edge_annotation() {
-        for src in [DFF_TOML, ICM_TOML, BDET_TOML, DETP_TOML] {
+        for src in [
+            DFF_TOML,
+            ICM_TOML,
+            BDET_TOML,
+            DETP_TOML,
+            DETP_CONSTRAINED_TOML,
+        ] {
             let off = analyse_toggled(src, true); // classification suppressed
             let on = analyse_toggled(src, false); // classification active
 
@@ -3695,9 +3718,17 @@ GCLK = "CLK*EL"
             }
 
             // The guard has teeth: classification is a no-op when suppressed and does recognise captures
-            // on these fixtures when active.
+            // on these fixtures when active; and a fixture asking for constraint arcs generates some, so
+            // the constraint comparison above has records to compare.
             assert!(off.edge.captures.is_empty());
             assert!(!on.edge.captures.is_empty());
+            if off.constraint_arcs_declared != crate::model::ConstraintPins::Off {
+                assert!(
+                    !off.constraints.is_empty(),
+                    "{} asks for constraint arcs and generates none",
+                    off.repr_name()
+                );
+            }
         }
     }
 
