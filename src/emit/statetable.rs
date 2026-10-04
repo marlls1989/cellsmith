@@ -144,12 +144,12 @@ pub(crate) struct StateModel {
     /// an edge row never set the same node, so where the level rows sit beside the edge rows decides
     /// nothing either.
     pub(crate) rows: Vec<StateRow>,
-    /// The edge-triggered rows contributed by the cell's recognised edge registers, after the level rows.
-    /// Within one register the capture rows come before the off-edge rows: a register with more than one
-    /// capture writes its off-edge rows with a `-` clock column, which also matches at the edges, and
-    /// Liberty's first-match lets the captures decide there only while they come first. An edge row sets
-    /// its own register's next slot alone, so the rows of different registers sit in no particular order
-    /// relative to each other. Empty for a cell with no collapsed master-slave pair.
+    /// The edge-triggered rows contributed by the cell's recognised edge registers. Within one register
+    /// the capture rows come before the off-edge rows: a register with more than one capture writes its
+    /// off-edge rows with a `-` clock column, which also matches at the edges, and Liberty's first-match
+    /// lets the captures decide there only while they come first. An edge row sets its own register's
+    /// next slot alone, so the rows of different registers sit in no particular order relative to each
+    /// other. Empty for a cell with no collapsed master-slave pair.
     pub(crate) edge_rows: Vec<EdgeRow>,
 }
 
@@ -246,8 +246,8 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
             node,
         });
     }
-    // The minted derived registers, appended in `edge.derived` order: each keeps its own name as its node,
-    // having no output pin to compete with.
+    // The minted derived registers: each keeps its own name as its node, having no output pin to compete
+    // with.
     for n in &derived_nodes {
         state_nodes.push(StateNode {
             signal: n.clone(),
@@ -413,14 +413,14 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
         })
         .collect();
 
-    // (e) Edge rows from the register annotations, cubes in cover order.
-    // Each active edge (`captures`, Rise before Fall) contributes a capture group: its on-cubes drive the
-    // register high at the active token, its off-cubes low. The off-edge follows: for a single-edge
-    // register it fires at the inactive face (`NotRise`/`NotFall`); for a dual-edge register (both edges
-    // capture) it carries a `Level` `-` clock column and is placed AFTER the capture groups, so Liberty
-    // first-match priority keeps the captures winning at the edges. Its on/off cubes are the async
-    // set/clear, its hold cube the quiescent no-change. Every next slot other than the register's own
-    // stays `-`; a capture cube that references the register's own node stamps that node's current column.
+    // (e) Edge rows from the register annotations. Each active edge (`captures`) contributes a capture
+    // group: its on-cubes drive the register high at the active token, its off-cubes low. The off-edge
+    // follows: for a single-edge register it fires at the inactive face (`NotRise`/`NotFall`); for a
+    // dual-edge register (both edges capture) it carries a `Level` `-` clock column and is placed AFTER
+    // the capture groups, so Liberty first-match priority keeps the captures winning at the edges. Its
+    // on/off cubes are the async set/clear, its hold cube the quiescent no-change. Every next slot other
+    // than the register's own stays `-`; a capture cube that references the register's own node stamps
+    // that node's current column.
     let mut edge_rows: Vec<EdgeRow> = Vec::new();
     for er in edge_regs {
         let reg = cols_layout.node_index[&er.node];
@@ -587,8 +587,6 @@ impl<'a> ColumnLayout<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
-
     use super::*;
     use crate::emit::verilog::tests::multiset;
     use crate::model::{analyse_both, analyse_one as analyse, AnalysedPair};
@@ -892,13 +890,12 @@ GCLK = "enA*CLKA+enB*CLKB"
 "#,
         );
         let m = build_state_model(&cell).expect("ICM is sequential");
-        // The surviving state nodes are EXACTLY the four shared-boundary registers (order follows the
-        // post-minimise `signals()` order; assert the set).
+        // The surviving state nodes are EXACTLY the four shared-boundary registers.
         assert_eq!(
-            node_names(&m).into_iter().collect::<BTreeSet<_>>(),
+            node_names(&m).into_iter().collect::<HashSet<_>>(),
             ["sela2", "enA", "selb2", "enB"]
                 .into_iter()
-                .collect::<BTreeSet<_>>(),
+                .collect::<HashSet<_>>(),
         );
         for gone in ["sela1", "selb1"] {
             assert!(node_of(&m, gone).is_none());
@@ -1846,7 +1843,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
     ) -> Vec<bool> {
         let mut cur = cur0;
         let mut event = Some(toggled);
-        let mut seen: BTreeSet<Vec<bool>> = BTreeSet::new();
+        let mut seen: HashSet<Vec<bool>> = HashSet::new();
         loop {
             let next: Vec<bool> = (0..cur.len())
                 .map(|i| predict_node(input_names, rows, i, &cur, event, dest))
@@ -1907,7 +1904,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
         // Per-node async-forcing covers (the off-edge set/clear), used below to detect a node whose async
         // force lapses between the start and destination state. A node with no edge-register entry (a
         // pure level node) has no forcing and never triggers that skip.
-        let forcing: BTreeMap<&str, _> = cell
+        let forcing: HashMap<&str, _> = cell
             .edge
             .captures
             .iter()

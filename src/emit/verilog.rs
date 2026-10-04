@@ -361,8 +361,7 @@ impl fmt::Display for EdgePrimitive<'_> {
             ", ",
             std::convert::identity,
         );
-        let comment = ClockComment(&clocks);
-        writeln!(f, "primitive {name}({ports}); // {comment}")?;
+        writeln!(f, "primitive {name}({ports});")?;
         writeln!(f, "output {pin};")?;
         writeln!(f, "input  {inputs};")?;
         writeln!(f, "reg    {pin};")?;
@@ -372,22 +371,6 @@ impl fmt::Display for EdgePrimitive<'_> {
         }
         writeln!(f, "endtable")?;
         writeln!(f, "endprimitive")
-    }
-}
-
-/// The trailing comment naming an edge UDP's clock column(s), which reduces to the single-clock wording
-/// for a register keyed off one clock.
-struct ClockComment<'a>(&'a [&'a Symbol]);
-
-impl fmt::Display for ClockComment<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            [one] => write!(f, "clock {one} is the last port"),
-            many => {
-                let list = Joined::new(many.iter(), ", ", std::convert::identity);
-                write!(f, "clocks {list} are the last ports")
-            }
-        }
     }
 }
 
