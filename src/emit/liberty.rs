@@ -642,7 +642,6 @@ Q = "!( !(M*CLK) * Qn )"
         );
         let frag = fragment(&cell);
         eprintln!("{frag}");
-        assert!(frag.contains("statetable (\"CLK D\", \"Q_st Qn_st\")"));
         let lib = parse_frag(&frag);
         let cellg = find_cell(&lib, "NDFF");
         assert_eq!(cellg.iter_subgroups_of_type("statetable").count(), 1);
@@ -1423,7 +1422,8 @@ Q = "CLK*M + !CLK*Q"
     fn emdff_emits_edge_statetable_over_surviving_master() {
         // The exposed-master DFF: the behavioural pass recognises the slave Q as a rising-edge register
         // while the declared-output master M survives as a level node. The statetable carries both nodes;
-        // Q's rows are edge rows (an `R` token), M's are level rows, and M keeps its own output pin.
+        // Q's rows are edge rows (an `R` token), M's are level rows, and M keeps its own output pin. The
+        // table's columns and rows are pinned in `statetable.rs`.
         let cell = analyse(
             r#"
 [[cell]]
@@ -1437,16 +1437,6 @@ M = "!CLK*D + CLK*M"
         );
         let frag = fragment(&cell);
         eprintln!("{frag}");
-        // Node order follows signals() (outputs sorted: M before Q).
-        assert!(frag.contains("statetable (\"CLK D\", \"M_st Q_st\")"));
-        // Q (second column) captures the INPUT D at the rising edge — the cover prefers the input over the
-        // internal master M (they coincide over the CLK=0 capture domain); the ~R face holds.
-        assert!(frag.contains("R H : - - : - H"));
-        assert!(frag.contains("R L : - - : - L"));
-        assert!(frag.contains("~R - : - - : - N"));
-        // M (first column) is a level latch on CLK, sampling D while transparent-low.
-        assert!(frag.contains("L H : - - : H -"));
-        assert!(frag.contains("L L : - - : L -"));
         let lib = parse_frag(&frag);
         let cellg = find_cell(&lib, "EMDFF");
         assert_eq!(cellg.iter_subgroups_of_type("statetable").count(), 1);
@@ -1486,7 +1476,6 @@ Q = "CLKB*M + !CLKB*Q"
         );
         let frag = fragment(&cell);
         eprintln!("{frag}");
-        assert!(frag.contains("statetable (\"CLKA CLKB D\", \"Q_st M\")"));
         let lib = parse_frag(&frag);
         let cellg = find_cell(&lib, "MCDFF");
         // Both latches keep a table node: output Q its minted `Q_st`, internal M its own name.
