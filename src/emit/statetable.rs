@@ -78,8 +78,9 @@ pub(crate) struct StateRow {
 }
 
 /// The clock-edge token an [`EdgeRow`] prints in its clock column: the active edge (`Rise`/`Fall`) of a
-/// capture row, the inactive face (`NotRise`/`NotFall`) of a single-edge register's off-edge (hold /
-/// async) row, or `Level` for a dual-edge register's off-edge row (which owns neither clock face).
+/// capture row, the inactive face (`NotRise`/`NotFall`) of the off-edge (hold / async) row of a register
+/// with one capture, or `Level` for the off-edge row of a register with more than one capture (which
+/// names no clock face).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum EdgeTok {
     /// Rising clock edge — Liberty `R`.
@@ -90,8 +91,9 @@ pub(crate) enum EdgeTok {
     NotRise,
     /// The non-falling face of a fall register — Liberty `~F`.
     NotFall,
-    /// A dual-edge register's off-edge (hold/async) row: neither clock face, printed as `-` in the clock
-    /// column. Both edges capture, so Liberty first-match priority keeps the capture rows winning there.
+    /// The off-edge (hold/async) row of a register with more than one capture: no clock face, printed as
+    /// `-` in the clock column. The register's capture rows come before it, so Liberty first-match
+    /// priority keeps them winning at the register's edges.
     Level,
 }
 
@@ -1763,7 +1765,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
     /// match the destination's steady input level (`H`/`L`) or the toggled clock's edge (`R`/`F` fire only
     /// for the toggled clock on this step; `~R`/`~F` match every event that is NOT that rising/falling
     /// edge); current-state columns match the evolving node vector `cur`. `-` matches anything — a level
-    /// don't-care, or a dual-edge off-edge's free clock column.
+    /// don't-care, or the free clock column of the off-edge row of a register with more than one capture.
     fn row_matches(
         input_names: &[Symbol],
         row: &RenderedRow,

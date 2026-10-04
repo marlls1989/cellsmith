@@ -314,8 +314,8 @@ impl fmt::Display for EdgeInputColumn {
 }
 
 /// One clock-edge token as a state-table clock column: `R`/`F` for an active edge and `~R`/`~F` for an
-/// inactive face. A dual-edge register's off-edge row owns neither clock face, so it prints the level
-/// don't-care `-`.
+/// inactive face. The off-edge row of a register with more than one capture names no clock face, so it
+/// prints the level don't-care `-`.
 struct Token(EdgeTok);
 
 impl fmt::Display for Token {
