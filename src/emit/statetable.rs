@@ -87,9 +87,11 @@ pub(crate) enum EdgeTok {
     Rise,
     /// Falling clock edge — Liberty `F`.
     Fall,
-    /// The non-rising face of a rise register (its off-edge hold/async path) — Liberty `~R`.
+    /// The non-rising face, on the off-edge (hold/async) row of a register with one capture, that capture
+    /// on a rising edge — Liberty `~R`.
     NotRise,
-    /// The non-falling face of a fall register — Liberty `~F`.
+    /// The non-falling face, on the off-edge (hold/async) row of a register with one capture, that capture
+    /// on a falling edge — Liberty `~F`.
     NotFall,
     /// The off-edge (hold/async) row of a register with more than one capture: no clock face, printed as
     /// `-` in the clock column. The register's capture rows come before it, so Liberty first-match
@@ -1426,7 +1428,7 @@ Q = "CLK*L1 + !CLK*L2"
             current: vec![X],
             next: vec![next],
         };
-        // Both clock faces capture D (Rise group then Fall group). Read over inputs [CLK, D] and states [Q].
+        // Both clock faces capture D. Read over inputs [CLK, D] and states [Q].
         let rows = edge_rows_over(&m, &["CLK", "D"], &["Q"]);
         assert!(rows.contains(&cap(EdgeTok::Rise, T, HI)));
         assert!(rows.contains(&cap(EdgeTok::Rise, F, LO)));
