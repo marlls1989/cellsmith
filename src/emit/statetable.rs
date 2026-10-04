@@ -600,6 +600,13 @@ mod tests {
         m.state_nodes.iter().map(|col| col.node.as_str()).collect()
     }
 
+    /// A header's names as a multiset, held sorted so two compare with `==`: the columns a table holds,
+    /// without the order the run picked for them.
+    fn multiset(mut names: Vec<&str>) -> Vec<&str> {
+        names.sort_unstable();
+        names
+    }
+
     /// The SIGNAL name of each state column, in column order — the names the covers, the machine and the
     /// cell's own spec answer to.
     fn signal_names(m: &StateModel) -> Vec<&str> {
@@ -709,7 +716,7 @@ Q = "CLK*M + !CLK*Q"
         let m = build_state_model(&cell).expect("DFF is sequential");
         // The output Q mints its node; the internal master M, having no output pin to compete with,
         // keeps its own name.
-        assert_eq!(node_names(&m), ["Q_st", "M"]);
+        assert_eq!(multiset(node_names(&m)), ["M", "Q_st"]);
         assert_eq!(signal_names(&m), ["Q", "M"]);
         assert_eq!(node_of(&m, "M"), Some("M"));
         assert_eq!(node_of(&m, "Q"), Some("Q_st"));
@@ -744,7 +751,7 @@ Q = "CLK*M + !CLK*Q"
 "#,
         );
         let m = build_state_model(&cell).expect("DFF is sequential");
-        assert_eq!(names(&m.input_nodes), ["CLK", "D"]);
+        assert_eq!(multiset(names(&m.input_nodes)), ["CLK", "D"]);
         assert_eq!(node_names(&m), ["Q_st"]);
         assert!(node_of(&m, "M").is_none());
         // No level rows survive; the behaviour is entirely edge rows.
@@ -798,7 +805,7 @@ Y = "!((CLK*L1 + !CLK*L2)*A)"
         let m = build_state_model(&cell).expect("BDET is sequential");
         // Yst is the sole state node; the masters folded; Y is not a table node; A is not a table column.
         assert_eq!(node_names(&m), ["Y_st"]);
-        assert_eq!(names(&m.input_nodes), ["CLK", "D"]);
+        assert_eq!(multiset(names(&m.input_nodes)), ["CLK", "D"]);
         assert!(node_of(&m, "L1").is_none());
         assert!(node_of(&m, "Y").is_none());
         // Native dual-edge rows: BOTH edges capture, delivering !D (D=L drives Yst high on each edge).
@@ -1220,7 +1227,7 @@ Q = "CLK*M + !CLK*Q"
                 m.edge_rows.is_empty(),
                 "level rows must return, not edge rows"
             );
-            assert_eq!(node_names(&m), ["Q_st", "M"]);
+            assert_eq!(multiset(node_names(&m)), ["M", "Q_st"]);
             assert_eq!(m.rows.len(), 6);
         }
         let m_direct = build_state_model(&direct).expect("DFF is sequential");
@@ -1299,7 +1306,7 @@ Q = "CLKB*M + !CLKB*Q"
         let m = build_state_model(&cell).expect("sequential");
         assert!(m.edge_rows.is_empty(), "no edge rows: stays level");
         // Both latches keep their own level columns.
-        assert_eq!(node_names(&m), ["Q_st", "M"]);
+        assert_eq!(multiset(node_names(&m)), ["M", "Q_st"]);
     }
 
     // Dual-edge mux-DET: two transparent-opposite latches feed a mux; Q captures D on BOTH clock edges and
@@ -1417,7 +1424,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
         let cell = analyse(TOGGLE_FLOP);
         let m = build_state_model(&cell).expect("TFF is sequential");
         // Two edge registers survive; the ring does NOT fold the self-fed master.
-        assert_eq!(node_names(&m), ["Q_st", "M"]);
+        assert_eq!(multiset(node_names(&m)), ["M", "Q_st"]);
         let qi = index_of_node(&m, "Q");
         let mi = index_of_node(&m, "M");
         // Both captures are the toggle ring `!R*!Q` over cols [R, Q]: they drive their node's next off Q's

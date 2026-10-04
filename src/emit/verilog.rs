@@ -778,7 +778,7 @@ fn on_expr(cover: &Cover<Symbol, Anonymous>) -> BoolExpr {
 mod tests {
     use super::*;
     use crate::model::{analyse_both, analyse_one as analyse, AnalysedPair};
-    use espresso_logic::{bdd_builder, ExprNode};
+    use espresso_logic::{bdd_builder, CoverType, Cube, CubeType, ExprNode, OutputSet};
 
     /// A cell's model as the text the sink writes: its declarations, each written in turn.
     fn emit(cell: &AnalysedCell) -> String {
@@ -1245,6 +1245,96 @@ Y = "!(A*B)"
         assert!(!v.contains(": ? : -;")); // no hysteresis
     }
 
+    /// Whether `a` and `b` hold the same elements as often as each other under `same`, in any order.
+    fn same_multiset<T>(a: &[T], b: &[T], same: impl Fn(&T, &T) -> bool) -> bool {
+        a.len() == b.len()
+            && a.iter().all(|x| {
+                a.iter().filter(|y| same(x, y)).count() == b.iter().filter(|y| same(x, y)).count()
+            })
+    }
+
+    /// Whether `a` and `b` are the same level UDP, reading no order: the same name, the same input columns
+    /// matched by name, and the same table rows as a multiset. A row holds its pattern as a `Minterm`, which
+    /// compares by variable name, so two rows agree however each run ordered the columns they are written
+    /// over.
+    fn same_primitive(a: &Primitive, b: &Primitive) -> bool {
+        a.name.cell == b.name.cell
+            && a.name.pin == b.name.pin
+            && same_multiset(&a.regions.cols, &b.regions.cols, |x, y| x == y)
+            && same_multiset(&table_rows(a.regions), &table_rows(b.regions), |x, y| {
+                x.row == y.row && x.next == y.next
+            })
+    }
+
+    /// Whether `a` and `b` are the same wrapper, reading no order: the same declared name, and the same
+    /// ports, wires and instances as multisets. An instance's connections follow its primitive's column
+    /// order, which [`same_primitive`] reads by name, so they too are compared as a multiset.
+    fn same_wrapper(a: &Wrapper, b: &Wrapper) -> bool {
+        a.name == b.name
+            && same_multiset(&a.outputs, &b.outputs, |x, y| x == y)
+            && same_multiset(a.inputs, b.inputs, |x, y| x == y)
+            && same_multiset(&a.internals, &b.internals, |x, y| x == y)
+            && same_multiset(&a.instances, &b.instances, |x, y| {
+                x.name.cell == y.name.cell
+                    && x.name.pin == y.name.pin
+                    && same_multiset(&x.args, &y.args, |p, q| p == q)
+            })
+    }
+
+    /// Whether `a` and `b` are the same declaration, under [`same_primitive`] or [`same_wrapper`], or as a
+    /// constant pin of the same value.
+    fn same_item(a: &Item, b: &Item) -> bool {
+        match (a, b) {
+            (Item::Primitive(x), Item::Primitive(y)) => same_primitive(x, y),
+            (Item::Constant(x), Item::Constant(y)) => {
+                x.name.cell == y.name.cell && x.name.pin == y.name.pin && x.value == y.value
+            }
+            (Item::Wrapper(x), Item::Wrapper(y)) => same_wrapper(x, y),
+            _ => false,
+        }
+    }
+
+    /// Assert `a` and `b` state the same level-sensitive Verilog, reading no order: the same declarations
+    /// as a multiset under [`same_item`]. Which order the connections of one run take is a correspondence
+    /// within that run — an instance connects to its primitive's ports by position — and is pinned by
+    /// `level_shapes_state_each_state_signal_as_a_level_udp`. An edge register's rows are positional over
+    /// its data and clock columns, and a read-gated output is a continuous assignment; neither is read
+    /// here, so a run stating either fails rather than passing uncompared.
+    fn assert_same_level_verilog(a: &AnalysedCell, b: &AnalysedCell) {
+        let items_a = cell_verilog(a);
+        let items_b = cell_verilog(b);
+        for item in items_a.iter().chain(&items_b) {
+            match item {
+                Item::EdgeRegister(p) => {
+                    panic!(
+                        "{} is an edge register, which this reading leaves out",
+                        p.name
+                    )
+                }
+                Item::Wrapper(w) => assert!(
+                    w.assigns.is_empty(),
+                    "{} reads a register through a gate, which this reading leaves out",
+                    w.name
+                ),
+                Item::Primitive(_) | Item::Constant(_) => {}
+            }
+        }
+        assert!(
+            same_multiset(&items_a, &items_b, same_item),
+            "{}\nis not\n{}",
+            Verilog(&items_a),
+            Verilog(&items_b)
+        );
+    }
+
+    /// The names a rendered declaration connects, in its own order: those listed between the first `(` of
+    /// `line` and the `)` after it — a primitive header's ports, or an instance's connections.
+    fn connections(line: &str) -> Vec<&str> {
+        let open = line.find('(').expect("a connection list");
+        let close = open + line[open..].find(')').expect("a closed connection list");
+        line[open + 1..close].split(',').map(str::trim).collect()
+    }
+
     /// Four shapes the behavioural classifier recognises as NO edge register even under default (on)
     /// collapse: a single latch, a gated (self-referencing) latch, a master/slave pair split across two
     /// DIFFERENT declared clocks (the slave stays level — its data is transparent in one phase of the
@@ -1289,18 +1379,169 @@ Q = "CLK*M + !CLK*Q"
 "#,
     ];
 
+    /// `no_edge_collapse` suppresses the behavioural edge classification, "leaving every arc in its
+    /// combinational form" (`Cell::no_edge_collapse`), and the annotation it suppresses,
+    /// `AnalysedCell::edge`, "never alters the exploration". The Verilog reads four parts of that
+    /// annotation — the recognised registers, the masters folded into them, the derived read-gate
+    /// registers and the outputs factored over them — so where classification finds none of the four,
+    /// the switch permits no change to the Verilog. What the Verilog holds is pinned directly by
+    /// `level_shapes_state_each_state_signal_as_a_level_udp`.
     #[test]
     fn non_collapsible_suite_verilog_matches_the_no_edge_collapse_flag() {
         // No clock-edge indicator (`(01)`/`(10)`) appears, whether the flag is left off (default
-        // collapse, a no-op on these shapes) or forced on -- and the two runs state the same UDP table
-        // rows.
+        // collapse, a no-op on these shapes) or forced on -- and the two runs state the same Verilog.
         for src in NON_COLLAPSIBLE {
             let AnalysedPair { default, forced } = analyse_both(src);
+            let name = default.repr_name();
+            assert!(
+                default.edge.captures.is_empty(),
+                "unexpected edge register recognised in {name}"
+            );
+            assert!(
+                default.edge.folded.is_empty(),
+                "unexpected master folded in {name}"
+            );
+            assert!(
+                default.edge.derived.is_empty(),
+                "unexpected read-gate register derived in {name}"
+            );
+            assert!(
+                default.edge.factored.is_empty(),
+                "unexpected output factored in {name}"
+            );
             let v_default = emit(&default);
             let v_forced = emit(&forced);
             for v in [&v_default, &v_forced] {
                 assert!(!v.contains("(01)"), "unexpected rising-edge token");
                 assert!(!v.contains("(10)"), "unexpected falling-edge token");
+            }
+            assert_same_level_verilog(&default, &forced);
+        }
+    }
+
+    /// What each level shape states in Verilog, read off its spec. Each state signal — the output `Q`, and
+    /// in the two-latch shapes the master `M` — is a level UDP of its own, whose input ports are the
+    /// signals its function reads, its own state aside. Read over those ports, its `1`, `0` and `-` rows
+    /// are where the function drives the pin high whatever its prior state (`∀self. f`), drives it low
+    /// whatever its prior state (`∀self. ¬f`), and depends on that prior state (the gap the two leave) —
+    /// the regions `crate::logic::regions` derives. The wrapper's ports are `Q` and the declared inputs, `M`
+    /// is an internal wire, and each UDP is instantiated once with its connections in the order its
+    /// primitive declares its ports, Verilog connecting an instance by position. The shapes state nothing
+    /// else: no edge register, constant or continuous assignment.
+    #[test]
+    fn level_shapes_state_each_state_signal_as_a_level_udp() {
+        for src in NON_COLLAPSIBLE {
+            let cell = analyse(src);
+            let name = cell.repr_name().as_str();
+            let mut signals: Vec<&str> = match name {
+                "DLAT" | "GLAT" => vec!["Q"],
+                "MCDFF" | "UCDFF" => vec!["Q", "M"],
+                other => panic!("no expectation stated for {other}"),
+            };
+            signals.sort_unstable();
+            // `M`, in the shapes that have it, is the internal the spec declares.
+            let wires: Vec<&str> = signals.iter().copied().filter(|s| *s == "M").collect();
+
+            let items = cell_verilog(&cell);
+            let mut primitives: Vec<&Primitive> = Vec::new();
+            let mut wrappers: Vec<&Wrapper> = Vec::new();
+            for item in &items {
+                match item {
+                    Item::Primitive(p) => primitives.push(p),
+                    Item::Wrapper(w) => wrappers.push(w),
+                    Item::EdgeRegister(p) => panic!("{name} states an edge register {}", p.name),
+                    Item::Constant(c) => panic!("{name} states a constant pin {}", c.name),
+                }
+            }
+            let mut pins: Vec<&str> = primitives.iter().map(|p| p.name.pin.as_str()).collect();
+            pins.sort_unstable();
+            assert_eq!(
+                pins, signals,
+                "{name} states one level UDP per state signal"
+            );
+
+            for p in &primitives {
+                let pin = p.name.pin;
+                let (sig, _) = cell
+                    .signal_regions()
+                    .find(|(sig, _)| sig.name == *pin)
+                    .expect("a UDP models one of the cell's signals");
+                // The reference regions, built from the signal's own function in the manager the rows are
+                // rebuilt in below, so the two compare.
+                let builder = bdd_builder!();
+                let f = builder.build(&sig.expr);
+                let own: Vec<&str> = if sig.feedback.contains(pin) {
+                    vec![pin.as_str()]
+                } else {
+                    vec![]
+                };
+                let on = f.forall(&own);
+                let off = (!f.clone()).forall(&own);
+                let hold = !on.or(&off);
+                let reads: Vec<Symbol> = f.variables().filter(|v| v != pin).collect();
+                assert!(
+                    same_multiset(&p.regions.cols, &reads, |x, y| x == y),
+                    "{name}.{pin}'s input ports are the signals its function reads"
+                );
+                let rows = table_rows(p.regions);
+                for next in [Next::On, Next::Off, Next::Hold] {
+                    let region = match next {
+                        Next::On => &on,
+                        Next::Off => &off,
+                        Next::Hold => &hold,
+                    };
+                    // Each row as it reads over the UDP's ports, a port it does not name being `?`.
+                    let cubes = rows.iter().filter(|r| r.next == next).map(|r| {
+                        Cube::new(
+                            r.row.project_to_labels(p.regions.cols.iter().cloned()),
+                            OutputSet::anonymous(&[true]),
+                            CubeType::F,
+                        )
+                    });
+                    let stated = builder.build_cover(&Cover::from_cubes(CoverType::F, cubes));
+                    assert!(
+                        stated.equivalent_to(region),
+                        "{name}.{pin}: the `{next}` rows state the region they stand for"
+                    );
+                }
+            }
+
+            let [w] = wrappers.as_slice() else {
+                panic!("{name} declares one name, so states one wrapper");
+            };
+            let outputs: Vec<&str> = w.outputs.iter().map(|s| s.as_str()).collect();
+            assert_eq!(outputs, ["Q"], "{name}'s one output port");
+            assert!(
+                same_multiset(w.inputs, &cell.inputs, |x, y| x == y),
+                "{name}'s input ports are the declared inputs"
+            );
+            let mut internals: Vec<&str> = w.internals.iter().map(|s| s.as_str()).collect();
+            internals.sort_unstable();
+            assert_eq!(internals, wires, "{name}'s internal wires");
+            assert!(
+                w.assigns.is_empty(),
+                "{name} reads no register through a gate"
+            );
+            assert_eq!(
+                w.instances.len(),
+                primitives.len(),
+                "{name} instantiates each UDP once"
+            );
+            for p in &primitives {
+                let declared = p.to_string();
+                let header = declared.lines().next().expect("a primitive header");
+                let instance = w
+                    .instances
+                    .iter()
+                    .find(|i| i.name.pin == p.name.pin)
+                    .unwrap_or_else(|| panic!("{name} instantiates {}", p.name))
+                    .to_string();
+                assert_eq!(
+                    connections(&instance),
+                    connections(header),
+                    "{name}: u_{} connects in the order its primitive declares its ports",
+                    p.name
+                );
             }
         }
     }
@@ -1312,7 +1553,8 @@ Q = "CLK*M + !CLK*Q"
         // two-latch model the spec writes: a `DFF_M` master transparent while CLK is low and holding
         // while it is high, a `DFF_Q` slave keyed off M -- holding while CLK is low and transparent
         // while it is high -- M an internal wire rather than a module port, and no edge row anywhere,
-        // the collapse being off.
+        // the collapse being off. The flag acts "exactly as if each had declared
+        // `no_edge_collapse = true`" (`apply_overrides`), so the two switches permit no difference at all.
         const DFF: &str = r#"
 [[cell]]
 name = "DFF"
@@ -1323,11 +1565,18 @@ M = "!CLK*D + CLK*M"
 [cell.outputs]
 Q = "CLK*M + !CLK*Q"
 "#;
-        let direct = {
-            let mut spec = crate::model::parse_spec(DFF).unwrap();
-            spec.cells[0].no_edge_collapse = true;
-            spec.cells.remove(0).analyse().unwrap()
-        };
+        const DECLARED: &str = r#"
+[[cell]]
+name = "DFF"
+inputs = ["CLK", "D"]
+clock = ["CLK"]
+no_edge_collapse = true
+[cell.internal]
+M = "!CLK*D + CLK*M"
+[cell.outputs]
+Q = "CLK*M + !CLK*Q"
+"#;
+        let direct = analyse(DECLARED);
         let via_flag = {
             // Mirrors apply_overrides's blanket application of `--no-edge-collapse` over every cell.
             let mut spec = crate::model::parse_spec(DFF).unwrap();
@@ -1363,6 +1612,7 @@ Q = "CLK*M + !CLK*Q"
             assert!(!v.contains("(01)"), "unexpected rising-edge token");
             assert!(!v.contains("(10)"), "unexpected falling-edge token");
         }
+        assert_same_level_verilog(&direct, &via_flag);
     }
 
     #[test]
