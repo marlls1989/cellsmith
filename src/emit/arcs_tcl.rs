@@ -4859,8 +4859,8 @@ Q = "CLK*M + !CLK*Q"
 
     #[test]
     fn non_collapsible_suite_emits_no_edge_type_with_or_without_the_flag() {
-        // Zero `-type edge` blocks, whether the flag is left off (default classification, a no-op on
-        // these shapes) or forced on.
+        // No block the cell states is an `edge` transition, whether the flag is left off (default
+        // classification, a no-op on these shapes) or forced on.
         //
         // The switch suppresses the edge classification, "leaving every arc in its combinational form"
         // (`Cell::no_edge_collapse`), and the classification "never alters the exploration"
@@ -4871,10 +4871,14 @@ Q = "CLK*M + !CLK*Q"
         // pinned by `non_collapsible_suite_states_its_transitions_and_hidden_toggles`.
         for src in NON_COLLAPSIBLE {
             let AnalysedPair { default, forced } = analyse_both(src);
-            let tcl_default = emit(&default, ArcsTclOptions::default());
-            let tcl_forced = emit(&forced, ArcsTclOptions::default());
-            assert_eq!(tcl_default.matches("-type edge").count(), 0);
-            assert_eq!(tcl_forced.matches("-type edge").count(), 0);
+            for cell in [&default, &forced] {
+                if let Some(block) = stated(cell)
+                    .into_iter()
+                    .find(|block| matches!(block, Block::Edge(_)))
+                {
+                    panic!("{} states an edge block:\n{block}", cell.repr_name());
+                }
+            }
             assert_eq!(
                 stated_events(&default),
                 stated_events(&forced),

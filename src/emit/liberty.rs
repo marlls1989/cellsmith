@@ -400,7 +400,7 @@ fn function_expr(sr: &StateRegions, model: Option<&StateModel>) -> BoolExpr {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::model::{analyse_both, analyse_one as analyse, AnalysedPair};
     use std::collections::{BTreeSet, HashSet};
@@ -451,7 +451,8 @@ mod tests {
     }
 
     /// Whether `a` and `b` hold the same elements as often as each other under `same`, in any order.
-    fn same_multiset<T>(a: &[T], b: &[T], same: impl Fn(&T, &T) -> bool) -> bool {
+    /// `same` has to be an equivalence relation, as equality over a chosen set of fields is.
+    pub(crate) fn same_multiset<T>(a: &[T], b: &[T], same: impl Fn(&T, &T) -> bool) -> bool {
         a.len() == b.len()
             && a.iter().all(|x| {
                 a.iter().filter(|y| same(x, y)).count() == b.iter().filter(|y| same(x, y)).count()
@@ -1344,13 +1345,27 @@ Q = "CLK*M + !CLK*Q"
         let frag_default = fragment(&default);
         assert!(frag_default.contains("statetable (\"CLK D\", \"Q_st\")"));
         assert!(frag_default.split_whitespace().any(|t| t == "R"));
-        assert!(!frag_default.contains("pin (M)"));
+        let groups_default = cell_liberty(&default);
+        let [cell_default] = groups_default.as_slice() else {
+            panic!("DFF declares one name, so states one cell group");
+        };
+        assert!(
+            cell_default.get_pin("M").is_none(),
+            "the collapsed register folds M, which keeps no pin"
+        );
 
         let frag_forced = fragment(&forced);
         assert!(frag_forced.contains("statetable (\"CLK D\", \"Q_st M\")"));
-        assert!(frag_forced.contains("pin (M)"));
-        assert!(frag_forced.contains("internal_node : \"M\";"));
         assert!(!frag_forced.split_whitespace().any(|t| t == "R"));
+        let groups_forced = cell_liberty(&forced);
+        let [cell_forced] = groups_forced.as_slice() else {
+            panic!("DFF declares one name, so states one cell group");
+        };
+        assert_eq!(
+            attr_string(find_pin(cell_forced, "M"), "internal_node").as_deref(),
+            Some("M"),
+            "the level form's pin M anchors the M column"
+        );
     }
 
     #[test]
@@ -1383,11 +1398,16 @@ Q = "CLK*M + !CLK*Q"
             spec.cells.remove(0).analyse().unwrap()
         };
 
-        let frag_direct = fragment(&direct);
-        let frag_via_flag = fragment(&via_flag);
-        for frag in [&frag_direct, &frag_via_flag] {
-            assert!(frag.contains("pin (M)"));
-            assert!(frag.contains("internal_node : \"M\";"));
+        for cell in [&direct, &via_flag] {
+            let groups = cell_liberty(cell);
+            let [cellg] = groups.as_slice() else {
+                panic!("DFF declares one name, so states one cell group");
+            };
+            assert_eq!(
+                attr_string(find_pin(cellg, "M"), "internal_node").as_deref(),
+                Some("M"),
+                "the opted-out DFF's pin M anchors the M column"
+            );
         }
         assert_same_beside_statetable(&direct, &via_flag);
     }

@@ -1731,7 +1731,9 @@ fn capture_cols(captures: &[Capture], off_edge: &StateRegions) -> Vec<Symbol> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logic::hazard::Cause;
+    use crate::emit::liberty::tests::same_multiset;
+    use crate::logic::constraint::{Constraint, ConstraintKind};
+    use crate::logic::hazard::{Cause, Hazard};
     use espresso_logic::sync_bdd_builder;
     use std::collections::BTreeSet;
 
@@ -3570,111 +3572,92 @@ GCLK = "CLK*EL"
                 off.async_pins, on.async_pins,
                 "edge classification changed AnalysedCell::async_pins"
             );
+            // Each record list below is compared as a multiset, in no order, of what identifies a
+            // record.
+            //
             // Arcs and hidden arcs by what they characterise — the pins and the direction — rather
             // than by the state the run measured them at. `start`, `end`, `prevector` and `levels`
             // name a representative of that arc's context, and a walk that claims a level in parallel
-            // is free to reach one representative before another.
-            let arc_shapes = |c: &crate::model::AnalysedCell| {
-                let mut v: Vec<String> = c
-                    .arcs
-                    .iter()
-                    .map(|a| {
-                        format!(
-                            "{:?} {} {} {}",
-                            a.output.edge,
-                            a.output.pin,
-                            a.related,
-                            c.async_pins.contains(&a.related)
-                        )
-                    })
-                    .collect();
-                v.sort();
-                v
-            };
-            let hidden_shapes = |c: &crate::model::AnalysedCell| {
-                let mut v: Vec<String> = c
-                    .hidden_arcs
-                    .iter()
-                    .map(|h| format!("{:?} {}", h.pin.edge, h.pin.pin))
-                    .collect();
-                v.sort();
-                v
-            };
-            assert_eq!(
-                arc_shapes(&off),
-                arc_shapes(&on),
-                "edge classification changed which arcs AnalysedCell::arcs holds",
+            // is free to reach one representative before another. Whether an arc's related pin is
+            // asynchronous is `async_pins`'s to say, compared above.
+            assert!(
+                same_multiset(&off.arcs, &on.arcs, |a, b| a.output == b.output
+                    && a.related == b.related),
+                "edge classification changed which arcs AnalysedCell::arcs holds:\n{:#?}\nis not\n{:#?}",
+                off.arcs,
+                on.arcs,
             );
-            assert_eq!(
-                hidden_shapes(&off),
-                hidden_shapes(&on),
-                "edge classification changed which arcs AnalysedCell::hidden_arcs holds",
+            assert!(
+                same_multiset(&off.hidden_arcs, &on.hidden_arcs, |a, b| a.pin == b.pin),
+                "edge classification changed which arcs AnalysedCell::hidden_arcs holds:\n{:#?}\nis \
+                 not\n{:#?}",
+                off.hidden_arcs,
+                on.hidden_arcs,
             );
             // Leakage states by the rest state each records — the inputs held and every output's
             // settled level — rather than by the prevector reaching it, which names one of several
             // paths into that state and follows the same free BFS order the arcs' representatives do.
-            let leakage_shapes = |c: &crate::model::AnalysedCell| {
-                let mut v: Vec<String> = c
-                    .leakage
-                    .iter()
-                    .map(|l| format!("{:?} {:?}", l.inputs, l.levels.outputs))
-                    .collect();
-                v.sort();
-                v
-            };
-            assert_eq!(
-                leakage_shapes(&off),
-                leakage_shapes(&on),
-                "edge classification changed which states AnalysedCell::leakage holds",
+            assert!(
+                same_multiset(&off.leakage, &on.leakage, |a, b| a.inputs == b.inputs
+                    && a.levels.outputs == b.levels.outputs),
+                "edge classification changed which states AnalysedCell::leakage holds:\n{:#?}\nis \
+                 not\n{:#?}",
+                off.leakage,
+                on.leakage,
             );
             // Hazards and constraints likewise, by what they identify. `prevector` and `levels` are
             // sampled at the probed state and name the same free representative the arcs do, and
             // `condition` is a FULL input assignment, so it carries the inputs outside the race at
             // whatever the probed state held them — the racing pins and their edges are what the
-            // hazard is. `settled` is a set of alternatives, canonicalised here before the compare.
+            // hazard is. A race's two pins are the pair the probe toggled, whichever way round it
+            // named them; `group` names the state variables the hazard decides, and which ones it names
+            // is what classification could change; and `settled` is a set of alternatives. Each of the
+            // three compares in no order.
             // Input-cause hazards only, a lone toggle's as much as a pair's: this equivalence check has
             // never compared pulse-cause ones.
-            let hazard_shapes = |c: &crate::model::AnalysedCell| {
-                let mut v: Vec<String> = c
-                    .hazards
+            let same_cause = |a: &Cause, b: &Cause| match (a, b) {
+                (Cause::Race { pins: x }, Cause::Race { pins: y }) => {
+                    same_multiset(x, y, PartialEq::eq)
+                }
+                _ => a == b,
+            };
+            fn input_caused(c: &crate::model::AnalysedCell) -> Vec<&Hazard> {
+                c.hazards
                     .iter()
                     .filter(|h| matches!(h.cause, Cause::Toggle { .. } | Cause::Race { .. }))
-                    .map(|h| {
-                        let mut landed: Vec<String> =
-                            h.settled.iter().map(|m| format!("{m:?}")).collect();
-                        landed.sort();
-                        format!("{:?} {:?} {:?} {landed:?}", h.cause, h.outcome, h.group)
-                    })
-                    .collect();
-                v.sort();
-                v
-            };
-            let constraint_shapes = |c: &crate::model::AnalysedCell| {
-                let mut v: Vec<String> = c
-                    .constraints
-                    .iter()
-                    .map(|k| {
-                        // The kind carries the other pin of a separation with the edge it makes, so
-                        // the pin the constraint constrains completes the identity.
-                        format!("{:?} {}", k.kind, k.pin)
-                    })
-                    .collect();
-                v.sort();
-                v
-            };
-            assert_eq!(
-                hazard_shapes(&off),
-                hazard_shapes(&on),
-                "edge classification changed AnalysedCell::hazards",
+                    .collect()
+            }
+            let hazards_off = input_caused(&off);
+            let hazards_on = input_caused(&on);
+            assert!(
+                same_multiset(&hazards_off, &hazards_on, |a, b| {
+                    same_cause(&a.cause, &b.cause)
+                        && a.outcome == b.outcome
+                        && same_multiset(&a.group, &b.group, PartialEq::eq)
+                        && same_multiset(&a.settled, &b.settled, PartialEq::eq)
+                }),
+                "edge classification changed AnalysedCell::hazards:\n{hazards_off:#?}\nis \
+                 not\n{hazards_on:#?}",
             );
             assert_eq!(
                 off.clock_pins, on.clock_pins,
                 "edge classification changed AnalysedCell::clock_pins"
             );
-            assert_eq!(
-                constraint_shapes(&off),
-                constraint_shapes(&on),
-                "edge classification changed AnalysedCell::constraints",
+            // A constraint by its kind and the pin it constrains — the kind carries the other pin of a
+            // separation with the edge it makes. The two ends of a symmetric separation share one role,
+            // so which of them a record names as its constrained pin follows the way round the probe
+            // reached the pair, and the two compare as an unordered pair.
+            let same_constraint = |a: &Constraint, b: &Constraint| match (&a.kind, &b.kind) {
+                (ConstraintKind::NonSeq { other: x }, ConstraintKind::NonSeq { other: y }) => {
+                    same_multiset(&[&a.pin, x], &[&b.pin, y], PartialEq::eq)
+                }
+                _ => a.kind == b.kind && a.pin == b.pin,
+            };
+            assert!(
+                same_multiset(&off.constraints, &on.constraints, same_constraint),
+                "edge classification changed AnalysedCell::constraints:\n{:#?}\nis not\n{:#?}",
+                off.constraints,
+                on.constraints,
             );
             assert_eq!(
                 off.constraint_arcs_declared, on.constraint_arcs_declared,
