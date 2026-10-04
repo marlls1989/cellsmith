@@ -36,13 +36,14 @@
 //! EDGE REGISTERS. When [`crate::logic::edge`] has recognised a node as an edge-triggered register, that
 //! register's node keeps its column but its rows come from the annotation (`EdgeRow`) rather than the
 //! level cover pass: a capture cube stamps the active edge token (`R`/`F`) with the register's next
-//! action, an off-edge cube the hold/async action. A single-edge register prints the off-edge on its
-//! inactive face (`~R`/`~F`); a dual-edge register (both edges capture) prints its off-edge with a
-//! `Level` `-` token AFTER the two capture groups, so first-match priority keeps the captures winning at
-//! the edges. Any folded master vanishes entirely — no node, no column, no rows. The clock sits in the
-//! input header; the renderer prints the token there, e.g. `... R H : - : H` / `... ~R - : - : N`. A
-//! register node is a state-table node even when its region is non-hysteretic (a combinational output
-//! made sequential — the dual-edge mux-DET Q).
+//! action, an off-edge cube the hold/async action. A register with one capture prints the off-edge on
+//! that capture's inactive face (`~R`/`~F`); a register with more than one capture — both edges of one
+//! clock, or captures spread across clocks — prints its off-edge with a `Level` `-` token AFTER its
+//! capture groups, so first-match priority keeps the captures winning at the edges. Any folded master
+//! vanishes entirely — no node, no column, no rows. The clock sits in the input header; the renderer
+//! prints the token there, e.g. `... R H : - : H` / `... ~R - : - : N`. A register node is a state-table
+//! node even when its region is non-hysteretic (a combinational output made sequential — the dual-edge
+//! mux-DET Q).
 
 use std::collections::{HashMap, HashSet};
 
@@ -415,12 +416,12 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
 
     // (e) Edge rows from the register annotations. Each active edge (`captures`) contributes a capture
     // group: its on-cubes drive the register high at the active token, its off-cubes low. The off-edge
-    // follows: for a single-edge register it fires at the inactive face (`NotRise`/`NotFall`); for a
-    // dual-edge register (both edges capture) it carries a `Level` `-` clock column and is placed AFTER
-    // the capture groups, so Liberty first-match priority keeps the captures winning at the edges. Its
-    // on/off cubes are the async set/clear, its hold cube the quiescent no-change. Every next slot other
-    // than the register's own stays `-`; a capture cube that references the register's own node stamps
-    // that node's current column.
+    // follows: for a register with one capture it fires at that capture's inactive face
+    // (`NotRise`/`NotFall`); for a register with more than one capture it carries a `Level` `-` clock
+    // column and is placed AFTER the capture groups, so Liberty first-match priority keeps the captures
+    // winning at the edges. Its on/off cubes are the async set/clear, its hold cube the quiescent
+    // no-change. Every next slot other than the register's own stays `-`; a capture cube that references
+    // the register's own node stamps that node's current column.
     let mut edge_rows: Vec<EdgeRow> = Vec::new();
     for er in edge_regs {
         let reg = cols_layout.node_index[&er.node];
