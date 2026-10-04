@@ -10,8 +10,8 @@
 //! **edge-sensitive** UDP instead: the level-latch rows are replaced by clock-edge (`(01)`/`(10)`)
 //! capture rows — one group per active `(clock, edge)`, so a dual-edge register captures on both — plus
 //! async set/clear level rows, a no-change row for each clock's inactive edge and no-change rows for
-//! steady-clock data transitions. The keying clocks are the primitive's LAST ports. A pure master folded
-//! into such a register contributes nothing — no primitive, no wire, no instance.
+//! steady-clock data transitions. A pure master folded into such a register contributes nothing — no
+//! primitive, no wire, no instance.
 //!
 //! A cell's declarations travel as the values [`cell_verilog`] states — one [`Item`] apiece — and become
 //! text once, in [`Display`](fmt::Display), written into the writer the model is going out on.
@@ -319,9 +319,9 @@ impl fmt::Display for Level {
 /// The register's DATA columns: `er.cols` with the register's own symbol and every keying clock removed.
 /// A self-referencing register (a toggle flop, whose capture depends on its own prior state) carries its
 /// own node in `er.cols`; that node is the UDP's `reg` current-state, not an input port. A multi-clock
-/// register carries the OTHER clocks' levels in a conditioned capture's cols; those clocks are the
-/// primitive's dedicated trailing clock columns, not data ports. Both are excluded here (for a single
-/// clock the clock is never in `er.cols`, so this reduces to removing the register's own symbol).
+/// register carries the OTHER clocks' levels in a conditioned capture's cols; those clocks are clock
+/// columns of the primitive, not data ports. Both are excluded here (for a single clock the clock is
+/// never in `er.cols`, so this reduces to removing the register's own symbol).
 fn data_cols(er: &EdgeCaptures) -> Vec<&Symbol> {
     let clocks = er.clocks();
     er.cols
@@ -330,12 +330,13 @@ fn data_cols(er: &EdgeCaptures) -> Vec<&Symbol> {
         .collect()
 }
 
-/// One edge-register signal's UDP: an edge-sensitive sequential `primitive` whose ports are
-/// `(pin, data cols…, clocks…)` with the keying clocks LAST in `EdgeCaptures::clocks` order. The `reg`
-/// captures on each active clock edge (`(01)` for `Rise`, `(10)` for `Fall`) and honours async set/clear
-/// as clock-independent level rows. The register's own symbol (a toggle flop's self-feedback) and the
-/// clocks are excluded from the data columns — the self column is the `reg` current-state and the clocks
-/// are the dedicated trailing clock columns, not input ports.
+/// One edge-register signal's UDP: an edge-sensitive sequential `primitive` whose ports are the pin, its
+/// data columns (`data_cols`) and its keying clocks (`EdgeCaptures::clocks`). The header, every table row
+/// and the wrapper's instance list those columns in one order: Verilog matches a row's fields and an
+/// instance's connections to the header by position. The `reg` captures on each active clock edge (`(01)`
+/// for `Rise`, `(10)` for `Fall`) and honours async set/clear as clock-independent level rows. The
+/// register's own symbol (a toggle flop's self-feedback) and the clocks are excluded from the data
+/// columns — the self column is the `reg` current-state, and each clock is a clock column of its own.
 pub struct EdgePrimitive<'a> {
     name: PrimName<'a>,
     captures: &'a EdgeCaptures,
@@ -346,7 +347,8 @@ impl fmt::Display for EdgePrimitive<'_> {
         let (name, pin, er) = (self.name, self.name.pin, self.captures);
         let clocks = er.clocks();
         let cols = data_cols(er);
-        // Ports: the pin, its data columns (self and clocks excluded), then the clocks last in clocks() order.
+        // Ports: the pin, then its data columns (self and clocks excluded) and its clocks, in the order the
+        // rows and the wrapper's instance lay them out in.
         let ports = Joined::new(
             std::iter::once(pin)
                 .chain(cols.iter().copied())
@@ -389,12 +391,12 @@ impl fmt::Display for ClockComment<'_> {
     }
 }
 
-/// The edge-register UDP table rows. Column order is the data cols (`er.cols` minus the register's own
-/// symbol and the clocks) then the clocks in [`EdgeCaptures::clocks`] order; the current-state (`reg`)
-/// field is `?` except on a self-referencing register's capture rows, where it carries that register's
-/// own literal. Each capture row carries exactly ONE edge indicator (IEEE 1364); the capturing clock's
-/// column holds it while every other clock column carries the conditioning level. For a single clock
-/// every rule reduces exactly to the single-clock rows.
+/// The edge-register UDP table rows, each laid out over the data columns ([`data_cols`]) and the clocks
+/// ([`EdgeCaptures::clocks`]) in the primitive's port order (see [`EdgePrimitive`]); the current-state
+/// (`reg`) field is `?` except on a self-referencing register's capture rows, where it carries that
+/// register's own literal. Each capture row carries exactly ONE edge indicator (IEEE 1364); the
+/// capturing clock's column holds it while every other clock column carries the conditioning level. For
+/// a single clock every rule reduces exactly to the single-clock rows.
 fn edge_table_rows(er: &EdgeCaptures) -> Vec<EdgeRow> {
     let cols = data_cols(er);
     let clocks = er.clocks();
@@ -492,14 +494,15 @@ fn edge_table_rows(er: &EdgeCaptures) -> Vec<EdgeRow> {
 }
 
 /// One region row of an edge-register table: the data columns (`cols`, self and clocks excluded) read
-/// out of `row` by name, then the clock columns (`clocks`, in order), the current-state (`reg`) field
-/// and the `next` action. When `active` names a clock edge, that clock's column carries the edge and
-/// every OTHER clock column carries its level from `row` (a conditioned capture references the other
-/// clock's level); when `active` is `None` (a clock-independent level row) every clock column reads its
-/// `row` level, which is `?` for an off-edge region since it never references a clock. A data or clock
-/// column the row does not name is a don't-care in it and reads `?`. The `reg` field is `?` unless the
-/// register is self-referencing (its own symbol in `er.cols`), in which case it carries that node's
-/// literal from `row` — the capture's dependence on the register's own prior state.
+/// out of `row` by name and the clock columns (`clocks`), in the primitive's port order, then the
+/// current-state (`reg`) field and the `next` action. When `active` names a clock edge, that clock's
+/// column carries the edge and every OTHER clock column carries its level from `row` (a conditioned
+/// capture references the other clock's level); when `active` is `None` (a clock-independent level row)
+/// every clock column reads its `row` level, which is `?` for an off-edge region since it never
+/// references a clock. A data or clock column the row does not name is a don't-care in it and reads `?`.
+/// The `reg` field is `?` unless the register is self-referencing (its own symbol in `er.cols`), in which
+/// case it carries that node's literal from `row` — the capture's dependence on the register's own prior
+/// state.
 fn region_row(
     er: &EdgeCaptures,
     cols: &[&Symbol],
@@ -512,8 +515,8 @@ fn region_row(
         .iter()
         .map(|&c| EdgeColumn::Level(Level(row.value_of(c))))
         .collect();
-    // Clock columns LAST, in clocks() order: the capturing clock carries its edge indicator, every other
-    // clock its conditioning level from the row.
+    // Clock columns: the capturing clock carries its edge indicator, every other clock its conditioning
+    // level from the row.
     cells.extend(clocks.iter().map(|&clock| match active {
         Some(active) if clock == &active.pin => EdgeColumn::Edge(active.edge),
         _ => EdgeColumn::Level(Level(row.value_of(clock))),
@@ -526,8 +529,8 @@ fn region_row(
     EdgeRow { cells, reg, next }
 }
 
-/// One row of an edge-sensitive UDP table: its columns in the primitive's port order (the data columns
-/// then the clocks), the current-state (`reg`) field and the state the register takes.
+/// One row of an edge-sensitive UDP table: its columns in the primitive's port order, the current-state
+/// (`reg`) field and the state the register takes.
 #[derive(PartialEq, Eq)]
 struct EdgeRow {
     cells: Vec<EdgeColumn>,
@@ -637,8 +640,9 @@ fn wrapper<'a>(
         if folded.contains(sig.name.as_str()) || cell.edge.factored.contains(&sig.name) {
             continue;
         }
-        // Edge registers connect in port order `(pin, cols…, clocks…)` with the clocks last in
-        // clocks() order; constant pins take just their own port; other sequential pins add their columns.
+        // Each instance connects in its primitive's port order: an edge register its pin, data columns and
+        // clocks as `EdgePrimitive` declares them; a constant pin just its own port; any other sequential
+        // pin its own port and then its columns.
         let args: Vec<&Symbol> = if let Some(er) = edge_by_node.get(sig.name.as_str()) {
             std::iter::once(&sig.name)
                 .chain(data_cols(er))
@@ -654,8 +658,8 @@ fn wrapper<'a>(
             args,
         });
     }
-    // The minted factored registers: an edge UDP instance driving the register's own wire, in port order
-    // `(pin, data cols…, clocks…)` — the same layout as any edge register.
+    // The minted factored registers: an edge UDP instance driving the register's own wire, connected in
+    // its primitive's port order as any edge register is.
     for d in &derived_minted {
         let Some(er) = edge_by_node.get(d.as_str()) else {
             continue;
@@ -771,8 +775,9 @@ fn on_expr(cover: &Cover<Symbol, Anonymous>) -> BoolExpr {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use crate::emit::liberty::tests::same_multiset;
     use crate::model::{analyse_both, analyse_one as analyse, AnalysedPair};
     use espresso_logic::{bdd_builder, CoverType, Cube, CubeType, ExprNode, OutputSet};
 
@@ -1128,7 +1133,7 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
     #[test]
     fn hierarchical_slave_udp_captures_on_both_clocks() {
         // Hierarchical master-slave across two clocks (HPIPE): the slave Q's UDP captures from CLKA on its
-        // rising edge AND from CLKB on its falling edge -- both keying clocks trail, no arc dropped.
+        // rising edge AND from CLKB on its falling edge -- both keying clocks are ports, no arc dropped.
         let cell = analyse(
             r#"
 [[cell]]
@@ -1179,7 +1184,7 @@ Q = "!CLKB*M2 + CLKB*Q"
         assert!(saw_clka_rise, "Q captures on CLKA rising");
         assert!(
             saw_clkb_fall,
-            "Q captures on CLKB falling (its own latch opening) -- both keying clocks trail, no arc dropped"
+            "Q captures on CLKB falling (its own latch opening) -- both keying clocks are ports, no arc dropped"
         );
     }
 
@@ -1243,14 +1248,6 @@ Y = "!(A*B)"
         let v = emit(&cell);
         assert_eq!(multiset(udp_ports(&v, "ND2_Y")), ["A", "B"]);
         assert!(!v.contains(": ? : -;")); // no hysteresis
-    }
-
-    /// Whether `a` and `b` hold the same elements as often as each other under `same`, in any order.
-    fn same_multiset<T>(a: &[T], b: &[T], same: impl Fn(&T, &T) -> bool) -> bool {
-        a.len() == b.len()
-            && a.iter().all(|x| {
-                a.iter().filter(|y| same(x, y)).count() == b.iter().filter(|y| same(x, y)).count()
-            })
     }
 
     /// Whether `a` and `b` are the same level UDP, reading no order: the same name, the same input columns
@@ -1337,7 +1334,7 @@ Y = "!(A*B)"
 
     /// `names` as a multiset, held sorted so two compare with `==`: which names a list holds, without the
     /// order the run picked for them.
-    fn multiset(mut names: Vec<&str>) -> Vec<&str> {
+    pub(crate) fn multiset(mut names: Vec<&str>) -> Vec<&str> {
         names.sort_unstable();
         names
     }

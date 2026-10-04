@@ -44,7 +44,7 @@
 //! register node is a state-table node even when its region is non-hysteretic (a combinational output
 //! made sequential — the dual-edge mux-DET Q).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use espresso_logic::{Anonymous, Cover, Minimizable, Minterm, Symbol};
 
@@ -195,10 +195,10 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
         .filter(|n| !signal_names.contains(n))
         .collect();
 
-    // (a) State signals = the hysteretic signals plus the (possibly non-hysteretic) edge-register nodes,
-    // in `signals()` order, then the minted derived registers, minus any folded master (absorbed into its
-    // register's capture, no column).
-    let mut state_names: BTreeSet<Symbol> = cell
+    // (a) State signals: the hysteretic signals and the (possibly non-hysteretic) edge-register nodes,
+    // minus any folded master (absorbed into its register's capture, no column), plus the minted derived
+    // registers.
+    let mut state_names: HashSet<Symbol> = cell
         .signal_regions()
         .filter(|(sig, sr)| is_node(&sig.name, sr))
         .map(|(sig, _)| sig.name.clone())
@@ -586,8 +586,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::logic::regions::StateRegions;
-    use crate::model::{analyse_both, analyse_one as analyse, AnalysedOutput, AnalysedPair};
+    use crate::emit::verilog::tests::multiset;
+    use crate::model::{analyse_both, analyse_one as analyse, AnalysedPair};
     use espresso_logic::bdd::{Bdd, BddBuilder, Brand, ManagerCell};
     use espresso_logic::{bdd_builder, sync_bdd_builder, CoverType, Cube, CubeType, OutputSet};
 
@@ -608,13 +608,6 @@ mod tests {
     /// The TABLE-NODE name of each state column, in column order — the statetable header.
     fn node_names(m: &StateModel) -> Vec<&str> {
         m.state_nodes.iter().map(|col| col.node.as_str()).collect()
-    }
-
-    /// A header's names as a multiset, held sorted so two compare with `==`: the columns a table holds,
-    /// without the order the run picked for them.
-    fn multiset(mut names: Vec<&str>) -> Vec<&str> {
-        names.sort_unstable();
-        names
     }
 
     /// The SIGNAL name of each state column, in column order — the names the covers, the machine and the
@@ -1007,32 +1000,38 @@ Y = "!(A*B)"
         assert!(build_state_model(&cell).is_none());
     }
 
-    /// Rebuild a BDD from the emitted rows selecting one per-node action: the ON-set of the cover whose
-    /// cubes are exactly those rows, each re-paired with the joint header (input nodes ++ state-signal
-    /// original names) it was written positionally over. A row that fixes no column is the all-don't-care
-    /// cube, and no selected row at all is the empty cover, which `build_cover` reads as `true` and
-    /// `false` respectively.
+    /// Rebuild a BDD from `m`'s level rows selecting one per-node action at state slot `node`: the ON-set
+    /// of the cover whose cubes are exactly those rows, each re-paired with the columns of `m` it was
+    /// written positionally over — the input nodes, then the state columns under their SIGNAL names. A row
+    /// that fixes no column is the all-don't-care cube, and no selected row at all is the empty cover,
+    /// which `build_cover` reads as `true` and `false` respectively.
     fn reconstruct_action<B: Brand, C: ManagerCell>(
         builder: &BddBuilder<B, C>,
-        input_nodes: &[Symbol],
-        state_orig: &[Symbol],
-        rows: &[StateRow],
+        m: &StateModel,
         node: usize,
         want: Next,
     ) -> Bdd<B, C> {
-        let cubes = rows.iter().filter(|r| r.next[node] == Some(want)).map(|r| {
-            let literals: Vec<(Symbol, Option<bool>)> = input_nodes
-                .iter()
-                .zip(r.inputs.iter())
-                .chain(state_orig.iter().zip(r.current.iter()))
-                .map(|(col, val)| (col.clone(), *val))
-                .collect();
-            Cube::new(
-                Minterm::labeled(&literals).expect("the joint header names each column once"),
-                OutputSet::anonymous(&[true]),
-                CubeType::F,
-            )
-        });
+        let header: Vec<&Symbol> = m
+            .input_nodes
+            .iter()
+            .chain(m.state_nodes.iter().map(|col| &col.signal))
+            .collect();
+        let cubes = m
+            .rows
+            .iter()
+            .filter(|r| r.next[node] == Some(want))
+            .map(|r| {
+                let literals: Vec<(Symbol, Option<bool>)> = header
+                    .iter()
+                    .zip(r.inputs.iter().chain(r.current.iter()))
+                    .map(|(&col, val)| (col.clone(), *val))
+                    .collect();
+                Cube::new(
+                    Minterm::labeled(&literals).expect("the joint header names each column once"),
+                    OutputSet::anonymous(&[true]),
+                    CubeType::F,
+                )
+            });
         builder.build_cover(&Cover::from_cubes(CoverType::F, cubes))
     }
 
@@ -1108,14 +1107,9 @@ Y = "C*L"
                 );
             }
 
-            // State signals in node order == the hysteretic signals in signals() order.
-            let state: Vec<(&AnalysedOutput, &StateRegions)> = cell
-                .signal_regions()
-                .filter(|(_, sr)| sr.hysteretic)
-                .collect();
-            let state_orig: Vec<Symbol> = state.iter().map(|(sig, _)| sig.name.clone()).collect();
-
-            for (i, (sig, _sr)) in state.iter().enumerate() {
+            // Each hysteretic signal's slot, read by name off the model's own state columns.
+            for (sig, _) in cell.signal_regions().filter(|(_, sr)| sr.hysteretic) {
+                let i = index_of_node(&m, sig.name.as_str());
                 // Reference on/off/hold BDDs, built exactly as `state_regions` does, on one builder so
                 // `equivalent_to` shares a manager with the reconstruction.
                 let builder = bdd_builder!();
@@ -1134,8 +1128,7 @@ Y = "C*L"
                     (Next::Low, &off_bdd, "off"),
                     (Next::Hold, &hold_bdd, "hold"),
                 ] {
-                    let got =
-                        reconstruct_action(&builder, &m.input_nodes, &state_orig, &m.rows, i, want);
+                    let got = reconstruct_action(&builder, &m, i, want);
                     assert!(
                         got.equivalent_to(reference),
                         "{} region mismatch for {}.{}",
