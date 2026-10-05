@@ -392,7 +392,7 @@ pub(crate) fn explore<B: Brand, C: ManagerCell + Send + Sync>(
                 let minterms = c.expand_to(input_names);
                 let n = minterms.len();
                 let total = charged
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |t| {
+                    .try_update(Ordering::Relaxed, Ordering::Relaxed, |t| {
                         Some(t.saturating_add(n))
                     })
                     .unwrap_or_else(|t| t) // the closure never declines, so this is the observed total
