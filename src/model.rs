@@ -733,13 +733,18 @@ impl fmt::Display for ModelError {
             // Which command-line flag raises the ceiling belongs beside the counter that passed it, and
             // this is the outermost layer that still knows which counter that was: `main` prints the
             // error and nothing else. The match is over the crate's own enum, so a third budget cannot
-            // be added without a flag being named for it here.
+            // be added without a flag being named for it here. What the stop costs is the cell's — it
+            // derives nothing — so it is stated here, whichever budget stopped it.
             ModelError::Exploration { cell, source } => {
                 let flag = match source {
                     ExplorationLimit::Candidates(_) => "--max-candidates",
                     ExplorationLimit::States(_) => "--max-states",
                 };
-                write!(f, "cell {cell:?}: {source} — raise it with {flag}")
+                write!(
+                    f,
+                    "cell {cell:?}: {source}; no arcs, hazards, leakage states or constraints are \
+                     derived — raise it with {flag}"
+                )
             }
         }
     }
