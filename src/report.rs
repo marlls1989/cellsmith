@@ -1,13 +1,13 @@
-//! The rendering vocabulary of the diagnostics the run writes to standard error, and the layout of a
-//! hazard warning.
+//! The rendering vocabulary of the diagnostics the run writes to standard error, and the layout of
+//! each warning.
 //!
 //! A warning's subjects are the values the analysis already holds — a state is a
 //! [`Minterm`](espresso_logic::Minterm) over the cell's signals, a path a sequence of them — and each
 //! adapter here borrows one and writes it into the warning's own writer. Nothing is rendered ahead of
 //! the write, so a subject travels as itself and becomes text once, where the warning is written.
 //!
-//! Which warnings a run prints is the caller's to decide; [`hazard_warning`] writes one of them, a
-//! header over a [`subblock`] of labelled fields.
+//! Which warnings a run prints is the caller's to decide; [`hazard_warning`] and
+//! [`conflation_warning`] each write one of them, a header over a block of labelled fields.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -15,6 +15,8 @@ use std::io;
 
 use espresso_logic::{Minterm, Symbol};
 
+use crate::emit::arcs_tcl::Conflation;
+use crate::emit::block::Description;
 use crate::logic::arcs::PinEdge;
 use crate::logic::hazard::{Cause, Hazard, Outcome};
 use crate::model::AnalysedCell;
@@ -78,16 +80,16 @@ impl<T: fmt::Display> fmt::Display for Commas<'_, T> {
 
 /// One field of a warning's subblock: the colon-labelled name written to stderr and the value rendered
 /// beside it.
-pub struct SubblockField<'a> {
-    pub label: &'a str,
-    pub value: &'a dyn fmt::Display,
+struct SubblockField<'a> {
+    label: &'a str,
+    value: &'a dyn fmt::Display,
 }
 
 /// Write one warning detail block: colon-labelled fields, indented under the header with their values
 /// column-aligned. `lead` opens the first line — a hazard warning states one block and opens it at the
 /// same indent as the rest, while the masked-arc warning states a block per conflated arc and bullets
 /// each so the blocks read apart.
-pub fn subblock(w: &mut impl io::Write, lead: &str, fields: &[SubblockField]) -> io::Result<()> {
+fn subblock(w: &mut impl io::Write, lead: &str, fields: &[SubblockField]) -> io::Result<()> {
     for (i, SubblockField { label, value }) in fields.iter().enumerate() {
         let marker = if i == 0 { lead } else { "    " };
         // The colon belongs to the label, so it is what the 16-column field is padded around: the label
@@ -351,6 +353,39 @@ impl fmt::Display for Trigger<'_> {
             Trigger::Simultaneous([a, b]) => write!(f, "simultaneous toggle {a} & {b}"),
         }
     }
+}
+
+/// One cell's masked-arc warning: a header counting the blocks that conflate measurements and the
+/// measurements they conflate, over a bulleted detail block per conflation naming the block and every
+/// cell state it covers.
+pub fn conflation_warning(
+    w: &mut impl io::Write,
+    cell: &AnalysedCell,
+    conflations: &[Conflation],
+) -> io::Result<()> {
+    writeln!(
+        w,
+        "cellsmith: warning: cell {:?}: {} block(s) conflate {} measurements: too few nodes exposed to express the cell state",
+        cell.repr_name(),
+        conflations.len(),
+        conflations.iter().map(|m| m.states.len()).sum::<usize>(),
+    )?;
+    for m in conflations {
+        // Every state the block covers, as equals — it expresses none of them, and which firing
+        // reached the emitter first is nothing to report. What differs across them wants exposing.
+        let block = Description(&m.block);
+        let states: Vec<State> = m.states.iter().map(State).collect();
+        let mut fields: Vec<SubblockField> = vec![SubblockField {
+            label: "block",
+            value: &block,
+        }];
+        fields.extend(states.iter().map(|s| SubblockField {
+            label: "cell state",
+            value: s,
+        }));
+        subblock(w, "  - ", &fields)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

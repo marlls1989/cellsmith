@@ -16,14 +16,13 @@ use liberty_parser::liberty::{Group, Liberty};
 use rayon::prelude::*;
 
 use cellsmith::emit::arcs_tcl::{cell_arcs, ArcsTclOptions, CellArcs, Deck};
-use cellsmith::emit::block::Description;
 use cellsmith::emit::define_cell::{cell_define_cell, Declarations, DefineCell};
 use cellsmith::emit::liberty::{cell_liberty, library_liberty};
 use cellsmith::emit::verilog::{cell_verilog, Item, Verilog};
 use cellsmith::logic::hazard::Hazard;
 use cellsmith::logic::machine::ExplorationBudget;
 use cellsmith::model::{parse_spec, AnalysedCell, ArcClass, ArcClasses, ConstraintPins, Spec};
-use cellsmith::report::{hazard_warning, subblock, Occasion, State, SubblockField};
+use cellsmith::report::{conflation_warning, hazard_warning, Occasion};
 
 /// Generate Cadence Liberate transition arcs, a behavioural Verilog model and a
 /// Liberty fragment for logic cells, including state-holding/hysteretic cells.
@@ -381,28 +380,7 @@ fn diagnostics(
         if std::mem::replace(&mut warned, true) {
             writeln!(w)?;
         }
-        writeln!(
-            w,
-            "cellsmith: warning: cell {:?}: {} block(s) conflate {} measurements: too few nodes exposed to express the cell state",
-            c.repr_name(),
-            r.conflations.len(),
-            r.conflations.iter().map(|m| m.states.len()).sum::<usize>(),
-        )?;
-        for m in &r.conflations {
-            // Every state the block covers, as equals — it expresses none of them, and which firing
-            // reached the emitter first is nothing to report. What differs across them wants exposing.
-            let block = Description(&m.block);
-            let states: Vec<State> = m.states.iter().map(State).collect();
-            let mut fields: Vec<SubblockField> = vec![SubblockField {
-                label: "block",
-                value: &block,
-            }];
-            fields.extend(states.iter().map(|s| SubblockField {
-                label: "cell state",
-                value: s,
-            }));
-            subblock(w, "  - ", &fields)?;
-        }
+        conflation_warning(w, c, &r.conflations)?;
     }
     Ok(())
 }
