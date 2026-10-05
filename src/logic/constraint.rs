@@ -116,13 +116,11 @@ pub(crate) struct Constraint {
 
 impl Constraint {
     /// The names alone of the nodes this constraint's cause attacks, in `nodes` order — what the emitted
-    /// `-probe` lists, and what emission compares by containment when it decides which observation
-    /// speaks for the constraint.
+    /// `-probe` lists and the order the block's victim columns are minted in.
     ///
-    /// The level beside each name belongs to the ONE probed state this record was measured from, so two
-    /// observations of the same constraint carry the same names holding whatever their own states hold.
-    /// Whatever identifies a constraint therefore reads the names, and the levels stay here, with the
-    /// state they were sampled at.
+    /// Emission identifies a constraint by `nodes` whole, names and levels: a victim holding 0 and the
+    /// same victim holding 1 are two conditions the timing protects, and each is characterised in its
+    /// own right. The names alone serve where a position is read — the `-probe` line and the columns.
     pub(crate) fn victim_names(&self) -> &[Symbol] {
         self.nodes.vars()
     }

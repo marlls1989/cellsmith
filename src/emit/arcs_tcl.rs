@@ -48,7 +48,7 @@
 //! `define_cell` pinlist (`pinlist`) and every other artifact keep to the cell's actual pins.
 
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 
@@ -103,8 +103,9 @@ pub struct Conflation {
     pub states: Vec<Minterm<Symbol>>,
 }
 
-/// A cell's `define_arc` and `define_leakage` blocks in the order the cell states them, with the
-/// measurements that went unstated for want of a column to tell them apart (see [`Conflation`]).
+/// A cell's `define_arc` and `define_leakage` blocks, in no particular order — the order blocks are
+/// written in carries no meaning — with the measurements that went unstated for want of a column to
+/// tell them apart (see [`Conflation`]).
 pub struct CellArcs {
     pub blocks: Vec<Block>,
     pub conflations: Vec<Conflation>,
@@ -112,7 +113,7 @@ pub struct CellArcs {
 
 /// A run's Liberate blocks as the text they write: every cell's blocks in turn, written into the
 /// writer the `arcs.tcl` is going out on. The cells come in the order they were analysed and each
-/// cell's blocks in the order its emitter stated them.
+/// cell's blocks in the order [`CellArcs::blocks`] holds them, which is unspecified.
 pub struct Deck<'a>(pub &'a [CellArcs]);
 
 impl fmt::Display for Deck<'_> {
@@ -292,15 +293,17 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
 /// ([`transition_columns`]), a hidden arc's toggled pin ([`hidden_columns`]) and both pins a constraint
 /// holds apart ([`constraint_columns`], through [`RacingPins::edge_of`]). Two firings whose text agrees
 /// therefore agree on the `-vector` beneath the pins that text names, and so on the edges themselves.
+///
+/// The map is read only by key, to fold a repeated block onto the one already stated, so the blocks
+/// come out of it in no particular order: emission order carries no meaning in the deck.
 struct Blocks {
-    /// Insertion-ordered, which is the order the cell states its blocks in.
-    stated: IndexMap<Block, Vec<Minterm<Symbol>>>,
+    stated: HashMap<Block, Vec<Minterm<Symbol>>>,
 }
 
 impl Blocks {
     fn new() -> Self {
         Blocks {
-            stated: IndexMap::new(),
+            stated: HashMap::new(),
         }
     }
 
@@ -310,7 +313,7 @@ impl Blocks {
         self.stated.entry(block).or_default().push(firing);
     }
 
-    /// The cell's blocks in the order it stated them, with the conflations among them: a block covering
+    /// The cell's blocks, in no particular order, with the conflations among them: a block covering
     /// more than one state expresses none of them (see [`Conflation`]).
     fn finish(self) -> CellArcs {
         let mut blocks = Vec::with_capacity(self.stated.len());
@@ -679,24 +682,28 @@ fn constraint_blocks(
 }
 
 /// What an emitted constraint block states of the arc it renders: the constraint's kind, the pin it
-/// constrains with the edge that pin makes, and the nodes it probes. The kind is the whole of the
-/// classification: it decides which `-type`s the constraint fans out to and which pin each of those
-/// blocks relates to, with the edge THAT pin makes ([`constraint_blocks`] and [`switching_pins`] read
-/// both off it) — a separation's related half is the pin its kind names, and a minimum pulse width
-/// relates the constrained pin to itself, which is the `pin` already here. Everything
-/// else a block carries — the `-ic` levels, the `-vector`'s held digits and the `-when` — names the
-/// OBSERVATION it was measured from, so one identity comes out as one general block however many
-/// observations were made of it, and each of those observations returns as its own conditioned block
-/// under `--when`.
+/// constrains with the edge that pin makes, and the nodes it probes with the level each holds. The kind
+/// is the whole of the classification: it decides which `-type`s the constraint fans out to and which
+/// pin each of those blocks relates to, with the edge THAT pin makes ([`constraint_blocks`] and
+/// [`switching_pins`] read both off it) — a separation's related half is the pin its kind names, and a
+/// minimum pulse width relates the constrained pin to itself, which is the `pin` already here.
+/// Everything else a block carries — the `-ic` levels of the nodes it does not probe, the `-vector`'s
+/// held digits and the `-when` — names the OBSERVATION it was measured from, so one identity comes out
+/// as one general block however many observations were made of it, and each of those observations
+/// returns as its own conditioned block under `--when`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ConstraintIdentity {
     kind: ConstraintKind,
     pin: PinEdge,
-    /// The victim nodes probed, by name ([`Constraint::victim_names`]). An identity states WHICH nodes the
-    /// block is about, and the level each holds belongs to the one probed state an observation was
-    /// measured from — so reading the levels here would split the observations of one constraint into an
-    /// identity apiece, each with a general block claiming to stand for the whole of it.
-    nodes: Vec<Symbol>,
+    /// The victim nodes probed, each at the level it holds where the observation was made
+    /// ([`Constraint::nodes`]). The levels are the condition the timing protects — a hold keeping a 0
+    /// captured and a hold keeping a 1 captured are two conditions — so observations whose victims hold
+    /// different levels are two identities, each with a general block of its own. The rest of the
+    /// probed state stays out of the key: an observation differing from another only in nodes it does
+    /// not probe or in inputs it does not switch is the same constraint reached along another walk.
+    /// `Minterm` equality and hashing align variables by name, so the order the row stores them in
+    /// decides nothing here.
+    nodes: Minterm<Symbol>,
 }
 
 impl ConstraintIdentity {
@@ -704,7 +711,7 @@ impl ConstraintIdentity {
         ConstraintIdentity {
             kind: c.kind.clone(),
             pin: c.pin.clone(),
-            nodes: c.victim_names().to_vec(),
+            nodes: c.nodes.clone(),
         }
     }
 }
@@ -712,13 +719,14 @@ impl ConstraintIdentity {
 /// The tie-break among EQUALLY DOMINANT observations: the exploration index of the probed state, then
 /// the (cause, outcome) cell it occupies ([`crate::logic::hazard::Hazard::ordinal`]).
 ///
-/// What decides which observations supply a general block is containment between their victim node
-/// sets ([`dominates`]); this settles the choice between the ones that come out equally dominant. Neither
-/// component states a preference — `discovered` is a breadth-first exploration index, not stable between
-/// runs, and the ordinal is a fixed numbering of the four ranks the six (cause, outcome) cells collapse
-/// into, a toggle and a race sharing a rank at the same outcome — so this is no quality judgement. Two
-/// observations of one probed state tie on the first component and differ only in which of the four
-/// ranks they were read from; which of the equals supplies the general block carries nothing.
+/// What decides which observations supply a general block is containment between their victim
+/// assignments ([`dominates`]); this settles the choice between the ones that come out equally
+/// dominant. Neither component states a preference — `discovered` is a breadth-first exploration index,
+/// not stable between runs, and the ordinal is a fixed numbering of the four ranks the six (cause,
+/// outcome) cells collapse into, a toggle and a race sharing a rank at the same outcome — so this is no
+/// quality judgement. Two observations of one probed state tie on the first component and differ only
+/// in which of the four ranks they were read from; which of the equals supplies the general block
+/// carries nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct ConstraintRank {
     discovered: usize,
@@ -734,47 +742,48 @@ impl ConstraintRank {
     }
 }
 
-/// Does `outer` speak for `inner` — is `inner` an observation of the same constraint over a strict subset
-/// of the victim nodes `outer` probes?
+/// Does `outer` speak for `inner` — is `inner` an observation of the same constraint whose victim
+/// assignment `outer`'s strictly refines: `outer` probes every node `inner` probes, each at the same
+/// level, and at least one node more?
 ///
 /// The comparison is [`ConstraintIdentity`] minus its `nodes`: the kind, the constrained pin and the
-/// edge that pin makes, compared field for field. What is left to order within such a group is the node
-/// sets, by containment.
+/// edge that pin makes, compared field for field. What is left to order within such a group is the
+/// victim assignments, by containment of the sets of states they denote. A victim row is a cube over the
+/// nodes it fixes, and [`Minterm::is_subset_of`] aligns two rows by name, reading a node one row does not
+/// define as a don't-care — so `outer ⊆ inner` holds exactly when `outer` fixes every node `inner` fixes,
+/// at the same level, and the reverse failing is what makes `outer` fix at least one node more. Two
+/// observations probing the same nodes at the same levels are one identity, settled by
+/// [`ConstraintRank`]; two disagreeing on the level of a node both probe protect different conditions,
+/// so neither speaks for the other.
 ///
 /// One constraint decides different nodes from different states, and on a cell whose internals form a
 /// chain those node sets nest — one set per depth the cascade was cut at, every one of them the same
-/// constraint seen from further in. The **maximal** sets under containment are the ones that supply a
-/// general block, which stands for the constraint however it was reached: a block names the nodes it
-/// probes in Liberate's `-probe`, so a block probing a strict superset states everything the subset's
-/// does and more. Two sets that nest neither way ask different questions, so both are maximal and each
-/// supplies a general block of its own.
+/// constraint seen from further in. The **maximal** assignments under that order are the ones that supply
+/// a general block, which stands for the constraint however it was reached: a block names the nodes it
+/// probes in Liberate's `-probe` and initialises each through `-ic`, so a block probing a strict superset
+/// at the same levels states everything the subset's does and more. Two assignments that nest neither way
+/// ask different questions, so both are maximal and each supplies a general block of its own.
 ///
 /// Being dominated is a DEMOTION, not a drop. The observation renders no general block and still renders
 /// its own conditioned block under `--when`, characterised in the input context it was observed in — so
 /// a conditioned block can carry a `-probe` narrower than any general block's.
 fn dominates(outer: &Constraint, inner: &Constraint) -> bool {
     (&outer.kind, &outer.pin) == (&inner.kind, &inner.pin)
-        && strictly_within(inner.victim_names(), outer.victim_names())
-}
-
-/// Is every node of `inner` among `outer`'s, with `outer` naming at least one more? Strict on purpose:
-/// two observations over the same nodes are one constraint reached along different walks, settled by
-/// [`ConstraintRank`] rather than by one displacing the other.
-fn strictly_within(inner: &[Symbol], outer: &[Symbol]) -> bool {
-    let inner: BTreeSet<&Symbol> = inner.iter().collect();
-    let outer: BTreeSet<&Symbol> = outer.iter().collect();
-    inner.len() < outer.len() && inner.is_subset(&outer)
+        && outer.nodes.is_subset_of(&inner.nodes)
+        && !inner.nodes.is_subset_of(&outer.nodes)
 }
 
 /// Which of a cell's constraints supply the general blocks: each such identity's representative index
 /// into the cell's constraints, mapped to the number of observations that identity carries — read
 /// exactly as the delay arcs read [`generalised`]'s map.
 ///
-/// An observation another one dominates supplies no general block ([`dominates`]) and is dropped before
-/// the fold; what is left goes to [`representatives`] keyed by [`ConstraintIdentity`] and ranked by
-/// [`ConstraintRank`], so each group's representative — the observation its general block is rendered
-/// from — is its minimum rank. Every observation renders a conditioned block regardless, so nothing here
-/// decides whether one is characterised, only how.
+/// An observation another one dominates — same kind and pin, victim assignment strictly refined by the
+/// other's — supplies no general block ([`dominates`]) and is dropped before the fold; what is left goes
+/// to [`representatives`] keyed by [`ConstraintIdentity`], so observations whose victims are the same
+/// nodes at the same levels share one general block and any difference in a victim's level gives each
+/// its own. Ranked by [`ConstraintRank`], each group's representative — the observation its general
+/// block is rendered from — is its minimum rank. Every observation renders a conditioned block
+/// regardless, so nothing here decides whether one is characterised, only how.
 fn constraint_selection(constraints: &[Constraint]) -> HashMap<usize, usize> {
     representatives(
         constraints
@@ -1363,7 +1372,7 @@ Y = "A*B"
         );
         let tcl = emit(&cell, NO_LEAKAGE);
         eprintln!("{tcl}");
-        for frag in tcl.split("define_arc") {
+        for frag in arc_texts(&tcl) {
             if !frag.contains("-type hidden") {
                 continue;
             }
@@ -1381,11 +1390,9 @@ Y = "A*B"
         }
         // The A-falls-while-B=0 general block holds Y at 0 — the held output rides in the `-vector`,
         // which is why the conditioned `-when` would add nothing.
-        assert!(tcl
-            .split("define_arc")
-            .any(|frag| frag.contains("-type hidden")
-                && frag.contains("-vector {F 0 0}")
-                && frag.contains("-pin A")));
+        assert!(arc_texts(&tcl).any(|frag| frag.contains("-type hidden")
+            && frag.contains("-vector {F 0 0}")
+            && frag.contains("-pin A")));
     }
 
     #[test]
@@ -1406,8 +1413,7 @@ Q = "E*D + !E*Q"
         );
         let tcl = emit(&cell, NO_LEAKAGE);
         eprintln!("{tcl}");
-        let d_hidden: Vec<&str> = tcl
-            .split("define_arc")
+        let d_hidden: Vec<&str> = arc_texts(&tcl)
             .filter(|frag| frag.contains("-type hidden") && frag.contains("-pin D"))
             .collect();
         // The `-when` of one context holds Q true (`& Q`, not `!Q`) and another holds Q false (`!Q`). Only
@@ -1658,12 +1664,11 @@ Y = "A*B"
         emit_leakage: false,
     };
 
-    /// The emitted `define_arc` blocks: the text following each `define_arc`, truncated at its trailing
-    /// blank line (the block separator) so the `define_leakage` section that follows the last arc block
-    /// stays out of it, and trimmed. Block identity is the whole text, so the same arc emitted twice —
-    /// once as its transition's general representative, once carrying its `-when` — yields two blocks
-    /// differing by that one line.
-    fn blocks(tcl: &str) -> Vec<String> {
+    /// The text of each emitted `define_arc` block: what follows the `define_arc` word, truncated at its
+    /// trailing blank line (the block separator) and trimmed. The deck interleaves `define_arc` and
+    /// `define_leakage` blocks in no particular order, so the cut is what keeps a `define_leakage` block
+    /// that happens to follow an arc out of that arc's text.
+    fn arc_texts(tcl: &str) -> impl Iterator<Item = &str> {
         tcl.split("define_arc")
             .skip(1)
             .map(|b| match b.find("\n\n") {
@@ -1671,8 +1676,13 @@ Y = "A*B"
                 None => b,
             })
             .map(str::trim)
-            .map(String::from)
-            .collect()
+    }
+
+    /// The emitted `define_arc` blocks ([`arc_texts`]), owned. Block identity is the whole text, so the
+    /// same arc emitted twice — once as its transition's general representative, once carrying its
+    /// `-when` — yields two blocks differing by that one line.
+    fn blocks(tcl: &str) -> Vec<String> {
+        arc_texts(tcl).map(String::from).collect()
     }
 
     /// Whether a block carries an ARC `-when` line. The line start is the discriminator: an arc's `-when`
@@ -1814,9 +1824,7 @@ Y = "A*B"
             let tcl = emit(&cell, NO_LEAKAGE);
 
             // Transition side: one block per distinct transition.
-            let non_hidden = tcl
-                .split("define_arc")
-                .skip(1)
+            let non_hidden = arc_texts(&tcl)
                 .filter(|b| !b.contains("-type hidden"))
                 .count();
             let transitions: HashSet<_> = cell
@@ -2678,8 +2686,10 @@ Y = "!A"
     fn ic_is_the_only_line_the_gate_adds() {
         // `-ic` is purely additive: the `-ic` line is the whole of the delta the gate permits, so a
         // state-holding cell's blocks with those lines dropped are the blocks the same cell states with
-        // the gate clear. The two decks are read as multisets of blocks -- which order a deck states
-        // them in is free, and nothing here may rest on it.
+        // the gate clear. The two decks are read as sets of blocks -- which order a deck states them in
+        // is free, and nothing here may rest on it. A set rather than a multiset because a cell states
+        // each block once: two gated blocks differing in their `-ic` alone -- a constraint whose victims
+        // are observed at two levels -- are one block once the gate is clear.
         let mut cell = analyse(IC_DFF);
         let gated = emit(&cell, ArcsTclOptions::default());
         // The gate reads the cached regions, so clearing every signal's `hysteretic` is how the cell is
@@ -2691,11 +2701,10 @@ Y = "!A"
         assert!(gated.contains("-ic \""));
         assert!(!ungated.contains("-ic"));
         /// Every block of a deck -- `define_arc` and `define_leakage` alike, the blank line between two
-        /// blocks separating them -- stripped of its `-ic` line and sorted: the deck as a multiset of
-        /// blocks, so emission order does not enter the comparison.
-        fn stripped_blocks(tcl: &str) -> Vec<String> {
-            let mut stripped: Vec<String> = tcl
-                .split("\n\n")
+        /// blocks separating them -- stripped of its `-ic` line: the deck as a set of blocks, so
+        /// emission order does not enter the comparison.
+        fn stripped_blocks(tcl: &str) -> HashSet<String> {
+            tcl.split("\n\n")
                 .map(str::trim)
                 .filter(|b| !b.is_empty())
                 .map(|b| {
@@ -2704,9 +2713,7 @@ Y = "!A"
                         .collect::<Vec<_>>()
                         .join("\n")
                 })
-                .collect();
-            stripped.sort();
-            stripped
+                .collect()
         }
         assert_eq!(stripped_blocks(&gated), stripped_blocks(&ungated));
     }
@@ -3307,18 +3314,20 @@ Y = "!W"
     #[test]
     fn a_min_pulse_width_block_switches_the_constrained_pin_alone() {
         // The flop's two width-dependent hazards — the CLK↑ pulse deciding the slave, the CLK↓ pulse
-        // deciding the master and the slave after it — are a block each. A block states ONE edge, on the
-        // constrained pin, and Liberate narrows the pulse from there: everything else is either held at
-        // the level it starts from (the other inputs) or left to the cell (the outputs, which the block
-        // measures nothing of).
+        // deciding the master and the slave after it — are a block per level the decided nodes hold. The
+        // flop is self-dual (complementing D, M and Q maps its equations onto themselves), so each pulse
+        // is observed with its victims holding one level and again holding the other, and those are two
+        // conditions the width protects. A block states ONE edge, on the constrained pin, and Liberate
+        // narrows the pulse from there: everything else is either held at the level it starts from (the
+        // other inputs) or left to the cell (the outputs, which the block measures nothing of).
         let cell = analyse(IC_DFF);
         let tcl = emit(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
         let pblocks = pulse_blocks(&tcl);
         assert_eq!(
             pblocks.len(),
-            2,
-            "the flop's clock carries a width hazard in each direction:\n{tcl}"
+            4,
+            "the flop's clock carries a width hazard in each direction, at each victim level:\n{tcl}"
         );
         for block in &pblocks {
             let pin = named(block, "-pin");
@@ -3363,24 +3372,47 @@ Y = "!W"
         // Which nodes a pulse decides is the direction's: a CLK↑ pulse reaches the slave alone, and `Q`
         // is a pin already, so that block lists the cell's own columns. The CLK↓ pulse walks `D` into the
         // master and the master into the slave, so its block also mints a column for `M` — a probed node
-        // with neither a pin nor an exposure to carry it.
-        let of_edge = |edge: &str| -> String {
-            let mut found = pblocks
+        // with neither a pin nor an exposure to carry it. The two blocks of a direction are the mirror
+        // images self-duality gives: every probed node starts high in one and low in the other.
+        let of_edge = |edge: &str| -> Vec<&String> {
+            let found: Vec<&String> = pblocks
                 .iter()
-                .filter(|b| vector_values(b)[column_of(b, "CLK")] == edge);
-            let block = found
-                .next()
-                .unwrap_or_else(|| panic!("a CLK{edge} pulse block:\n{tcl}"))
-                .clone();
-            assert!(found.next().is_none(), "one CLK{edge} pulse block:\n{tcl}");
-            block
+                .filter(|b| vector_values(b)[column_of(b, "CLK")] == edge)
+                .collect();
+            assert_eq!(found.len(), 2, "two CLK{edge} pulse blocks:\n{tcl}");
+            found
         };
-        let rise = of_edge("R");
-        assert_eq!(braced(&rise, "-probe"), Some("Q"), "{rise}");
-        assert_eq!(pinlist_of(&rise), ["CLK", "D", "Q"], "{rise}");
-        let fall = of_edge("F");
-        assert_eq!(braced(&fall, "-probe"), Some("Q M"), "{fall}");
-        assert_eq!(pinlist_of(&fall), ["CLK", "D", "M", "Q"], "{fall}");
+        let low = cell.voltages.of(false);
+        let high = cell.voltages.of(true);
+        for (edge, probe, pinlist) in [
+            ("R", "Q", &["CLK", "D", "Q"][..]),
+            ("F", "Q M", &["CLK", "D", "M", "Q"][..]),
+        ] {
+            let [one, other] = of_edge(edge)[..] else {
+                unreachable!("of_edge returns two blocks")
+            };
+            for block in [one, other] {
+                assert_eq!(braced(block, "-probe"), Some(probe), "{block}");
+                assert_eq!(pinlist_of(block), pinlist, "{block}");
+            }
+            for node in probe.split_whitespace() {
+                let levels: HashSet<&str> = [one, other]
+                    .into_iter()
+                    .map(|b| probed_level(b, node))
+                    .collect();
+                assert_eq!(
+                    levels,
+                    HashSet::from([low, high]),
+                    "{node} starts at each level once across the CLK{edge} blocks:\n{one}\n\n{other}"
+                );
+            }
+        }
+    }
+
+    /// The `-ic` entry of `node`'s column in `block`: the level a probed node starts the measurement at.
+    fn probed_level<'a>(block: &'a str, node: &str) -> &'a str {
+        let ic = ic_values(block).expect("a state-holding cell's block carries an -ic");
+        ic[column_of(block, node)]
     }
 
     #[test]
@@ -3424,10 +3456,12 @@ Qn = "!(S+Q)"
         );
     }
 
-    /// The minimum-pulse-width blocks of `tcl` constraining `pin`, with what each probes — the pairing
-    /// the maximal-node-set rule is read off.
-    fn probes_on(tcl: &str, pin: &str) -> Vec<String> {
-        let mut probed: Vec<String> = pulse_blocks(tcl)
+    /// The distinct probe sets of the minimum-pulse-width blocks of `tcl` constraining `pin` — what the
+    /// maximal-assignment rule is read off. Several blocks share one probe set where its victims are
+    /// observed at more than one assignment of levels, one general block each; which sets come out at
+    /// all is what these tests assert, so the set is read without the count.
+    fn probes_on(tcl: &str, pin: &str) -> HashSet<String> {
+        pulse_blocks(tcl)
             .iter()
             .filter(|b| named(b, "-pin") == pin)
             .map(|b| {
@@ -3435,19 +3469,23 @@ Qn = "!(S+Q)"
                     .expect("a min_pulse_width block probes")
                     .to_string()
             })
-            .collect();
-        probed.sort();
-        probed
+            .collect()
+    }
+
+    /// The probe sets `nodes` name, as [`probes_on`] reads them.
+    fn probe_sets<const N: usize>(nodes: [&str; N]) -> HashSet<String> {
+        nodes.into_iter().map(String::from).collect()
     }
 
     #[test]
     fn a_probe_set_another_one_contains_renders_no_block_of_its_own() {
         // A gated two-stage cascade: M is transparent while CLK is low, Q follows M while CLK is low AND
         // EN is high. A CLK↓ pulse decides {M} alone from one CLK-high state, {Q} alone from another and
-        // {Q, M} from a third, and detection reports all three. They are the one cause under the one
-        // outcome, so the two narrower probe sets ask nothing the widest does not — Liberate narrows the
-        // pulse until the probed behaviour fails, and the width a probe set reports is the maximum over
-        // its nodes — and only the {Q, M} block is rendered on CLK↓.
+        // {Q, M} from a third, and detection reports all three. M and Q each take both levels across
+        // those states, so every {M} or {Q} observation has a {Q, M} one fixing its node at the same level
+        // and one more. The narrower probe sets ask nothing that wider one does not — Liberate narrows
+        // the pulse until the probed behaviour fails, and the width a probe set reports is the maximum
+        // over its nodes — so only {Q, M} blocks are rendered on CLK↓.
         let cell = analyse(
             r#"
 [[cell]]
@@ -3462,7 +3500,7 @@ Q = "!CLK*(EN*M + !EN*Q) + CLK*Q"
         );
         let tcl = emit(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
-        assert_eq!(probes_on(&tcl, "CLK"), ["Q M"], "{tcl}");
+        assert_eq!(probes_on(&tcl, "CLK"), probe_sets(["Q M"]), "{tcl}");
     }
 
     #[test]
@@ -3484,14 +3522,16 @@ B = "!CLK*(!SEL*D + SEL*B) + CLK*B"
         );
         let tcl = emit(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
-        assert_eq!(probes_on(&tcl, "CLK"), ["A", "B"], "{tcl}");
+        assert_eq!(probes_on(&tcl, "CLK"), probe_sets(["A", "B"]), "{tcl}");
     }
 
     /// The cross-NOR SR with an internal node L latching the set output while S is asserted, opting into
     /// constraint arcs with whatever cell-level keys `extra` adds. From the reset state a set pulse rings
     /// over {Q, Qn} at one cut and lands somewhere its reference does not over {Q, Qn, L} at another —
-    /// one cause with two outcomes, so one constraint probing {Q, Qn, L}. From the already-set state the
-    /// same pulse decides L alone, which is a cause of its own and sits inside the first.
+    /// one cause with two outcomes, so one constraint probing {Q, Qn, L}. L holds while S is low, so the
+    /// reset state is reached with L at either level and that constraint is observed at both. From
+    /// another state the same pulse decides L alone, which is a cause of its own and sits inside the
+    /// {Q, Qn, L} observation holding L at the same level.
     fn srl(extra: &str) -> String {
         format!(
             r#"
@@ -3510,12 +3550,13 @@ Qn = "!(S+Q)"
 
     #[test]
     fn the_widest_probe_set_of_a_pulse_states_its_general_block() {
-        // {Q, Qn} and {L} each sit inside {Q, Qn, L}, so the widest set is the one that stands for the S
-        // pulse however it was reached: a block names what it probes in Liberate's `-probe`, and the
-        // wider probe states everything the narrower ones do and more.
+        // {Q, Qn} and {L} each sit inside a {Q, Qn, L} observation holding their nodes at the same levels,
+        // so the widest set is the one that stands for the S pulse however it was reached: a block names
+        // what it probes in Liberate's `-probe`, and the wider probe states everything the narrower ones
+        // do and more.
         let tcl = emit(&analyse(&srl("")), ArcsTclOptions::default());
         eprintln!("{tcl}");
-        assert_eq!(probes_on(&tcl, "S"), ["Q Qn L"], "{tcl}");
+        assert_eq!(probes_on(&tcl, "S"), probe_sets(["Q Qn L"]), "{tcl}");
     }
 
     #[test]
@@ -3531,7 +3572,7 @@ Qn = "!(S+Q)"
         let probed = probes_on(&tcl, "S");
         for nodes in ["Q Qn L", "L"] {
             assert!(
-                probed.contains(&nodes.to_string()),
+                probed.contains(nodes),
                 "the {{{nodes}}} observation is characterised in its own right:\n{tcl}"
             );
         }
@@ -3543,21 +3584,140 @@ Qn = "!(S+Q)"
         }
     }
 
-    /// A same-phase two-stage cascade opting into constraint arcs, with whatever cell-level keys `extra`
-    /// adds. Its CLK↓ minimum pulse width is observed from two CLK-high states — one with D high over a
-    /// cleared pair, one with D low over a set pair — so one identity carries two observations.
+    #[test]
+    fn a_victim_held_at_another_level_is_a_general_block_of_its_own() {
+        // The flop's hold on a falling D puts the master and the slave at risk. Before D falls with CLK
+        // low the master follows D, so M is high, while Q holds whatever the last capture left — high or
+        // low. The two observations probe the same nodes, and the hold protects a different condition in
+        // each, so each is a general block: no `-when`, the same `-probe`, M starting high in both and Q
+        // starting low in one and high in the other.
+        let cell = analyse(IC_DFF);
+        let tcl = emit(&cell, ArcsTclOptions::default());
+        eprintln!("{tcl}");
+        let holds: Vec<String> = blocks(&tcl)
+            .into_iter()
+            .filter(|b| {
+                type_word(b) == "hold"
+                    && named(b, "-pin") == "D"
+                    && vector_values(b)[column_of(b, "D")] == "F"
+            })
+            .collect();
+        assert_eq!(holds.len(), 2, "a hold block per level Q holds:\n{tcl}");
+        let high = cell.voltages.of(true);
+        for block in &holds {
+            assert!(!has_when(block), "an unconditioned block:\n{block}");
+            assert_eq!(braced(block, "-probe"), Some("Q M"), "{block}");
+            assert_eq!(probed_level(block, "M"), high, "M follows D high:\n{block}");
+        }
+        let q: HashSet<&str> = holds.iter().map(|b| probed_level(b, "Q")).collect();
+        assert_eq!(
+            q,
+            HashSet::from([cell.voltages.of(false), high]),
+            "Q starts at each level once:\n{tcl}"
+        );
+    }
+
+    /// A minimum-pulse-width record of IC_DFF with its victims replaced by `levels`: every field but
+    /// the victims is the one record's, so two of these differ in their victims and nothing else.
+    fn with_victims(cell: &AnalysedCell, levels: &[(&str, bool)]) -> Constraint {
+        let mut c = width_constraints(cell)
+            .first()
+            .map(|&c| c.clone())
+            .expect("premise: IC_DFF constrains a pulse width");
+        let row: Vec<(Symbol, Option<bool>)> = levels
+            .iter()
+            .map(|&(node, level)| (Symbol::from(node), Some(level)))
+            .collect();
+        c.nodes = Minterm::labeled(&row).expect("no victim repeats");
+        c
+    }
+
+    #[test]
+    fn nested_victims_at_the_same_levels_dominate() {
+        // An observation fixing every victim another fixes, at the same level, and one more speaks for
+        // it: a block probing the wider set initialises the shared nodes to the same levels and measures
+        // one node more. The narrower one supplies no general block.
+        let cell = analyse(IC_DFF);
+        let outer = with_victims(&cell, &[("Q", false), ("M", false)]);
+        let inner = with_victims(&cell, &[("M", false)]);
+        assert!(dominates(&outer, &inner));
+        assert!(!dominates(&inner, &outer));
+        let general = constraint_selection(&[outer, inner]);
+        assert_eq!(general, HashMap::from([(0, 1)]), "the wider set alone");
+    }
+
+    #[test]
+    fn nested_victims_at_another_level_do_not_dominate() {
+        // A shared victim held at different levels is a different condition, so the wider set does not
+        // speak for the narrower one and each supplies a general block.
+        let cell = analyse(IC_DFF);
+        let outer = with_victims(&cell, &[("Q", false), ("M", false)]);
+        let inner = with_victims(&cell, &[("M", true)]);
+        assert!(!dominates(&outer, &inner));
+        assert!(!dominates(&inner, &outer));
+        let general = constraint_selection(&[outer, inner]);
+        assert_eq!(
+            general,
+            HashMap::from([(0, 1), (1, 1)]),
+            "a general block each"
+        );
+    }
+
+    #[test]
+    fn same_victims_at_another_level_are_two_identities() {
+        // The same nodes at different levels: neither contains the other, and they are two identities,
+        // each its own general block.
+        let cell = analyse(IC_DFF);
+        let low = with_victims(&cell, &[("Q", false), ("M", false)]);
+        let high = with_victims(&cell, &[("Q", true), ("M", false)]);
+        assert!(!dominates(&low, &high));
+        assert!(!dominates(&high, &low));
+        let general = constraint_selection(&[low, high]);
+        assert_eq!(
+            general,
+            HashMap::from([(0, 1), (1, 1)]),
+            "a general block each"
+        );
+    }
+
+    #[test]
+    fn same_victims_at_the_same_levels_are_one_identity_in_any_order() {
+        // The victims are matched by name: the same nodes at the same levels, whatever order a row
+        // lists them in, are one identity — one general block standing for both observations — and
+        // neither strictly contains the other.
+        let cell = analyse(IC_DFF);
+        let one = with_victims(&cell, &[("Q", true), ("M", false)]);
+        let other = with_victims(&cell, &[("M", false), ("Q", true)]);
+        assert!(!dominates(&one, &other));
+        assert!(!dominates(&other, &one));
+        let general = constraint_selection(&[one, other]);
+        assert_eq!(general.len(), 1, "one general block: {general:?}");
+        assert_eq!(
+            general.values().copied().collect::<Vec<_>>(),
+            [2],
+            "standing for both observations"
+        );
+    }
+
+    /// A same-phase two-stage cascade opting into constraint arcs, beside a buffer `Y = E` the cascade
+    /// never reads, with whatever cell-level keys `extra` adds. Its CLK↓ minimum pulse width puts the
+    /// pair {Q, M} at risk from two kinds of CLK-high state — D high over a cleared pair, D low over a
+    /// set pair — which are two identities, the victims holding 0 in one and 1 in the other. Each is
+    /// observed with E low and again with E high: those states differ only in E and Y, which the pulse
+    /// does not put at risk, so each identity carries two observations.
     fn tcasc(extra: &str) -> String {
         format!(
             r#"
 [[cell]]
 name = "TCASC"
-inputs = ["CLK", "D"]
+inputs = ["CLK", "D", "E"]
 clock = ["CLK"]
 constraint_arcs = true
 {extra}[cell.internal]
 M = "!CLK*D + CLK*M"
 [cell.outputs]
 Q = "!CLK*M + CLK*Q"
+Y = "E"
 "#
         )
     }
@@ -3565,41 +3725,56 @@ Q = "!CLK*M + CLK*Q"
     #[test]
     fn a_constraint_is_one_general_block_and_a_conditioned_one_per_observation() {
         // The general pass states the constraint however it was reached: one block per identity, carrying
-        // no `-when`, whichever observation supplied it.
+        // no `-when`, whichever observation supplied it. TCASC's CLK↓ pulse is two identities — the pair
+        // it puts at risk held cleared, and held set — so two general blocks, one per level.
         let plain = emit(&analyse(&tcasc("")), NO_LEAKAGE);
         eprintln!("{plain}");
         let general: Vec<String> = pulse_blocks(&plain);
-        assert_eq!(general.len(), 1, "one general CLK pulse block:\n{plain}");
-        assert!(!has_when(&general[0]), "{}", general[0]);
+        assert_eq!(
+            general.len(),
+            2,
+            "a general CLK pulse block per level:\n{plain}"
+        );
+        for block in &general {
+            assert!(!has_when(block), "{block}");
+        }
+        let starts: HashSet<&str> = general.iter().map(|b| probed_level(b, "Q")).collect();
+        assert_eq!(
+            starts.len(),
+            2,
+            "the two hold the pair at different levels:\n{plain}"
+        );
 
         // Selecting the constraint class adds a conditioned block per observation on top, the
-        // representative's own included — so the general block is joined by two, not one.
+        // representative's own included — so each identity's general block is joined by both of its
+        // observations, E low and E high: four conditioned blocks beside the two general ones.
         let conditioned = emit(&analyse(&tcasc("when = \"constraint\"\n")), NO_LEAKAGE);
         eprintln!("{conditioned}");
         let blocks = pulse_blocks(&conditioned);
-        assert_eq!(blocks.len(), 3, "{conditioned}");
+        assert_eq!(blocks.len(), 6, "{conditioned}");
         assert_eq!(
             blocks.iter().filter(|b| has_when(b)).count(),
-            2,
+            4,
             "one conditioned block per observation:\n{conditioned}"
         );
-        // The representative appears in both passes: its conditioned block restates the context its
+        // Each representative appears in both passes: its conditioned block restates the context its
         // general block already pins, and the two differ by the `-when` line alone.
-        let stripped: Vec<String> = blocks
-            .iter()
-            .map(|b| {
-                b.lines()
-                    .filter(|l| !l.trim_start().starts_with("-when"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })
-            .collect();
-        assert!(
-            stripped
-                .iter()
-                .any(|s| stripped.iter().filter(|o| *o == s).count() == 2),
-            "the representative is stated by both passes:\n{conditioned}"
-        );
+        let without_when = |b: &String| -> String {
+            b.lines()
+                .filter(|l| !l.trim_start().starts_with("-when"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        for general in blocks.iter().filter(|b| !has_when(b)) {
+            assert_eq!(
+                blocks
+                    .iter()
+                    .filter(|b| has_when(b) && without_when(b) == *general)
+                    .count(),
+                1,
+                "the representative is stated by both passes:\n{general}\n\n{conditioned}"
+            );
+        }
     }
 
     #[test]
@@ -3610,7 +3785,7 @@ Q = "!CLK*M + CLK*Q"
         let cell = analyse(&tcasc("when = \"constraint\"\n"));
         let tcl = emit(&cell, NO_LEAKAGE);
         eprintln!("{tcl}");
-        let conditions: BTreeSet<String> = pulse_blocks(&tcl)
+        let conditions: HashSet<String> = pulse_blocks(&tcl)
             .iter()
             .filter_map(|b| {
                 b.lines()
@@ -3623,13 +3798,17 @@ Q = "!CLK*M + CLK*Q"
                     })
             })
             .collect();
-        // The two observations are mirror images — a cleared pair under D high, a set pair under D low —
-        // and each condition names the held D beside the held Q. CLK is switched, so it is absent.
+        // The observations are a cleared pair under D high and a set pair under D low, each with E low and
+        // with E high, and each condition names the held D and E beside the held Q and Y. CLK is
+        // switched, so it is absent.
         assert_eq!(
             conditions,
-            ["D & !Q".to_string(), "!D & Q".to_string()]
-                .into_iter()
-                .collect(),
+            HashSet::from([
+                "D & E & !Q & Y".to_string(),
+                "D & !E & !Q & !Y".to_string(),
+                "!D & E & Q & Y".to_string(),
+                "!D & !E & Q & !Y".to_string(),
+            ]),
             "{tcl}"
         );
     }
@@ -3915,7 +4094,7 @@ Q = "CLK*M + !CLK*Q"
         // edge (CLK rising here). An arc on the opposite (falling) clock edge is level behaviour and
         // must stay `-type combinational`. The vector renders CLK first (pinlist {CLK D Q}): `R` is the
         // capturing edge, `F` the non-capturing one.
-        for frag in tcl.split("define_arc") {
+        for frag in arc_texts(&tcl) {
             if !(frag.contains("-pin Q") && frag.contains("-related_pin CLK")) {
                 continue;
             }
@@ -3940,7 +4119,7 @@ Q = "CLK*M + !CLK*Q"
             }
         }
         // The D-related hidden arc(s) are untouched: still `-type hidden`, never `-type edge`.
-        for frag in tcl.split("define_arc") {
+        for frag in arc_texts(&tcl) {
             if frag.contains("-type hidden") {
                 assert!(!frag.contains("-type edge"));
             }
@@ -3979,7 +4158,7 @@ GCLK = "enA*CLKA+enB*CLKB"
         eprintln!("{tcl}");
         // `GCLK` acts by the level of both CLKA and CLKB, not a held transition, so neither produces an
         // edge arc.
-        for frag in tcl.split("define_arc") {
+        for frag in arc_texts(&tcl) {
             if frag.contains("-pin GCLK") && frag.contains("-related_pin CLK") {
                 assert!(frag.contains("-type combinational \\"), "GCLK arc: {frag}");
             }
@@ -4019,7 +4198,7 @@ Q = "CLK*L1 + !CLK*L2"
         // notwithstanding).
         let mut saw_rise = false;
         let mut saw_fall = false;
-        for frag in tcl.split("define_arc") {
+        for frag in arc_texts(&tcl) {
             if !(frag.contains("-pin Q") && frag.contains("-related_pin CLK")) {
                 continue;
             }
@@ -4044,7 +4223,7 @@ Q = "CLK*L1 + !CLK*L2"
         // Data (D-related) arcs stay combinational -- toggling D alone never changes Q here (Q is a
         // function of CLK and the internal latches only), so D's arcs are all `-type hidden`, never
         // re-labelled edge.
-        for frag in tcl.split("define_arc") {
+        for frag in arc_texts(&tcl) {
             if frag.contains("-type hidden") {
                 assert!(!frag.contains("-type edge"));
             }
@@ -4077,7 +4256,7 @@ Q = "CLKA*MA + CLKB*MB + !CLKA*!CLKB*Q"
         // Each clock's RISING Q delay arc is re-labelled edge.
         for clock in ["CLKA", "CLKB"] {
             let related = format!("-related_pin {clock}");
-            let saw_edge = tcl.split("define_arc").any(|frag| {
+            let saw_edge = arc_texts(&tcl).any(|frag| {
                 frag.contains("-pin Q") && frag.contains(&related) && frag.contains("-type edge \\")
             });
             assert!(saw_edge, "a {clock}-related Q rise arc must be -type edge");
@@ -4140,7 +4319,7 @@ Q = "!CLKB*M2 + CLKB*Q"
         };
         let mut saw_a_rise_edge = false;
         let mut saw_b_fall_edge = false;
-        for frag in tcl.split("define_arc") {
+        for frag in arc_texts(&tcl) {
             if !frag.contains("-pin Q") {
                 continue;
             }
@@ -4189,7 +4368,7 @@ Q = "!R*(B + CLK*M + !CLK*Q)"
         let q_arc = |related: &str, ty: &str| {
             let rp = format!("-related_pin {related}");
             let ty = format!("-type {ty} \\");
-            tcl.split("define_arc")
+            arc_texts(&tcl)
                 .any(|frag| frag.contains("-pin Q") && frag.contains(&rp) && frag.contains(&ty))
         };
         assert!(q_arc("CLK", "edge"), "CLK->Q is -type edge");
@@ -4218,12 +4397,12 @@ Q = "!R*(CLK*M + !CLK*Q)"
         let cell = analyse(BOTH_RESET);
         let tcl = emit(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
-        let has_clk_edge = tcl.split("define_arc").any(|frag| {
+        let has_clk_edge = arc_texts(&tcl).any(|frag| {
             frag.contains("-pin Q")
                 && frag.contains("-related_pin CLK")
                 && frag.contains("-type edge \\")
         });
-        let has_r_async = tcl.split("define_arc").any(|frag| {
+        let has_r_async = arc_texts(&tcl).any(|frag| {
             frag.contains("-pin Q")
                 && frag.contains("-related_pin R")
                 && frag.contains("-type async \\")
@@ -4261,7 +4440,7 @@ Q = "EN*D + !EN*Q"
         let tcl = emit(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
         let mut saw_release = false;
-        for frag in tcl.split("define_arc") {
+        for frag in arc_texts(&tcl) {
             if !(frag.contains("-pin Q") && frag.contains("-related_pin EN")) {
                 continue;
             }
@@ -4522,8 +4701,12 @@ Q = "A*B + Q*(A+B)"
         // The pair that shares an input assignment and differs only in what the cell holds: no `-when`
         // can tell the two apart, so the block states the held Q level directly through its own
         // `-pinlist`/`-vector`.
+        // Each block to the blank line that ends it: the deck states its blocks in no particular order,
+        // so the text after one `define_leakage` may run on into a `define_arc`.
         let block = |needle: &str| {
             tcl.split("define_leakage")
+                .skip(1)
+                .map(|b| b.split("\n\n").next().unwrap_or(b))
                 .find(|b| b.contains(needle))
                 .unwrap_or_else(|| panic!("no leakage block containing {needle:?} in:\n{tcl}"))
         };
@@ -4776,7 +4959,7 @@ Q = "CLKB*M + !CLKB*Q"
         eprintln!("{tcl_default}");
         assert!(default.edge.captures.is_empty(), "a latch has no capture");
         // The enable's rising (opening) edge is the only CLK->Q arc, and it is `-type edge`.
-        for frag in tcl_default.split("define_arc") {
+        for frag in arc_texts(&tcl_default) {
             if !(frag.contains("-pin Q") && frag.contains("-related_pin CLK")) {
                 continue;
             }
@@ -4807,7 +4990,7 @@ Q = "CLKB*M + !CLKB*Q"
         };
         let mut saw_b_release = false;
         let mut saw_a_release = false;
-        for frag in tcl.split("define_arc") {
+        for frag in arc_texts(&tcl) {
             if !frag.contains("-pin Q") {
                 continue;
             }
@@ -4968,7 +5151,7 @@ M = "!CLK*D + CLK*M"
                 .map(str::to_string)
         };
         let (mut saw_q_capture, mut saw_m_release) = (false, false);
-        for frag in tcl.split("define_arc") {
+        for frag in arc_texts(&tcl) {
             if !frag.contains("-related_pin CLK") || frag.contains("-type hidden") {
                 continue;
             }
@@ -5010,7 +5193,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
         let tcl = emit(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
         let (mut saw_r, mut saw_clk_edge) = (false, false);
-        for frag in tcl.split("define_arc") {
+        for frag in arc_texts(&tcl) {
             if !frag.contains("-pin Q") || frag.contains("-type hidden") {
                 continue;
             }
@@ -5050,7 +5233,7 @@ GCLK = "CLK*EL"
         );
         let tcl = emit(&cell, ArcsTclOptions::default());
         eprintln!("{tcl}");
-        for frag in tcl.split("define_arc") {
+        for frag in arc_texts(&tcl) {
             if frag.contains("-pin GCLK") && frag.contains("-related_pin CLK") {
                 assert!(frag.contains("-type combinational \\"), "GCLK arc: {frag}");
             }
@@ -5060,9 +5243,9 @@ GCLK = "CLK*EL"
 
     #[test]
     fn dff_opt_out_restores_combinational_type_via_either_switch() {
-        // The two-latch DFF, opted out directly (`no_edge_collapse = true` in the TOML) versus opted
-        // out via the CLI-flag-equivalent blanket mutation over the whole spec: both switches restore
-        // the SAME arcs -- zero `-type edge` blocks.
+        // The two-latch DFF, opted out directly (`no_edge_collapse = true` in the TOML) and
+        // opted out via the CLI-flag-equivalent blanket mutation over the whole spec: under either
+        // switch the deck states no `-type edge` block and Q keeps its arcs.
         const DFF: &str = r#"
 [[cell]]
 name = "DFF"
@@ -5312,10 +5495,10 @@ Q = "CLKB*M + !CLKB*Q"
     }
 
     /// The blocks `cell` states at the emitter's defaults, under whatever class selection its own `when`
-    /// set carries. Re-emitting ONE analysed cell under several selections is what the tests below
-    /// compare: `cell_arcs` is deterministic given one [`AnalysedCell`], so a full-block comparison
-    /// across those emissions holds, where two separate analyses may legitimately pick different
-    /// representatives.
+    /// set carries, in no particular order. Re-emitting ONE analysed cell under several selections is
+    /// what the tests below compare: given one [`AnalysedCell`], `cell_arcs` states the same blocks
+    /// whatever order it lists them in, so a full-block comparison across those emissions holds, where
+    /// two separate analyses may legitimately pick different representatives.
     fn stated(cell: &AnalysedCell) -> Vec<Block> {
         cell_arcs(cell, ArcsTclOptions::default()).blocks
     }

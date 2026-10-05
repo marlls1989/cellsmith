@@ -15,7 +15,7 @@
 //! A block travels as the value [`DefineCell`] holds and becomes text once, in
 //! [`Display`](fmt::Display), written into the writer the `cells.tcl` is going out on.
 
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::fmt;
 
 use espresso_logic::Symbol;
@@ -93,7 +93,7 @@ impl fmt::Display for Declarations<'_> {
 pub fn cell_define_cell(cell: &AnalysedCell) -> Vec<DefineCell> {
     // Pin flags are group-independent, so compute them once. Clock and async pins are lifted out of
     // `-input` into their own flags (they still appear in `-pinlist`, which is untouched).
-    let excluded: BTreeSet<&Symbol> = cell.async_pins.iter().chain(&cell.clock_pins).collect();
+    let excluded: HashSet<&Symbol> = cell.async_pins.iter().chain(&cell.clock_pins).collect();
     let data_inputs: Vec<Symbol> = cell
         .inputs
         .iter()

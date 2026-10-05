@@ -42,7 +42,7 @@ use liberty_parser::{
     liberty::{Attribute, Group, Liberty},
 };
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt;
 
 use espresso_logic::{Anonymous, BoolExpr, Cover, Symbol};
@@ -120,17 +120,17 @@ fn cell_group(cell: &AnalysedCell, name: &Symbol) -> Group {
 
             // A read-gated output reads a factored register combinationally: it prints a `state_function`
             // over that register and its gate pins, not its raw region (which names the folded masters).
-            let read_of: BTreeMap<&str, &StateRegions> = cell
+            let read_of: HashMap<&Symbol, &StateRegions> = cell
                 .edge
                 .derived
                 .iter()
-                .flat_map(|d| d.reads.iter().map(|r| (r.output.as_str(), &r.function)))
+                .flat_map(|d| d.reads.iter().map(|r| (&r.output, &r.function)))
                 .collect();
 
             let n_out = cell.outputs.len();
             for (i, (sig, sr)) in cell.signal_regions().enumerate() {
                 if i < n_out {
-                    let logic = match read_of.get(sig.name.as_str()) {
+                    let logic = match read_of.get(&sig.name) {
                         // A read-gated output reads its factored register combinationally, so it names
                         // PIN ports — the register's internal pin and the gate pins — never a folded
                         // master.
