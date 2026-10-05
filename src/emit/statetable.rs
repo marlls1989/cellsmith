@@ -49,6 +49,7 @@ use std::collections::{HashMap, HashSet};
 
 use espresso_logic::{Anonymous, Cover, Minimizable, Minterm, Symbol};
 
+use crate::emit::RegionAction;
 use crate::logic::arcs::Edge;
 use crate::logic::regions::StateRegions;
 use crate::model::AnalysedCell;
@@ -439,17 +440,17 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
                 Edge::Fall => EdgeTok::Fall,
             };
             let regions = &capture.regions;
-            for CoverPass { action, pick } in [
-                CoverPass {
+            for RegionAction { cubes, action } in [
+                RegionAction {
+                    cubes: &regions.on,
                     action: Next::High,
-                    pick: |sr| &sr.on,
                 },
-                CoverPass {
+                RegionAction {
+                    cubes: &regions.off,
                     action: Next::Low,
-                    pick: |sr| &sr.off,
                 },
             ] {
-                for cube in pick(regions).cubes() {
+                for cube in cubes.cubes() {
                     push(&capture.clock.pin, active, action, cube.inputs());
                 }
             }
@@ -470,21 +471,21 @@ pub(crate) fn build_state_model(cell: &AnalysedCell) -> Option<StateModel> {
         let off_clock = er.clocks();
         let off_clock = off_clock[0];
         let off = &er.off_edge;
-        for CoverPass { action, pick } in [
-            CoverPass {
+        for RegionAction { cubes, action } in [
+            RegionAction {
+                cubes: &off.on,
                 action: Next::High,
-                pick: |sr| &sr.on,
             },
-            CoverPass {
+            RegionAction {
+                cubes: &off.off,
                 action: Next::Low,
-                pick: |sr| &sr.off,
             },
-            CoverPass {
+            RegionAction {
+                cubes: &off.hold,
                 action: Next::Hold,
-                pick: |sr| &sr.hold,
             },
         ] {
-            for cube in pick(off).cubes() {
+            for cube in cubes.cubes() {
                 push(off_clock, off_token, action, cube.inputs());
             }
         }
@@ -513,9 +514,9 @@ struct LevelSignal<'a> {
 /// [`StateRegions`].
 type Pick = fn(&StateRegions) -> &Cover<Symbol, Anonymous>;
 
-/// One region of a node's behaviour paired with the next-state action its cubes stamp. The level fold
-/// stacks the picked cover of every level signal into one multi-output cover per pass; an edge register
-/// walks the picked cover of one capture, or of its off-edge, cube by cube.
+/// One pass of the level-row fold: a next-state action and which region of a signal's
+/// [`StateRegions`] stamps it. The fold applies the same pick to every level signal and stacks the
+/// picked covers into one multi-output cover per pass.
 struct CoverPass {
     /// The next-state action this pass writes.
     action: Next,

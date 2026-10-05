@@ -18,7 +18,8 @@ use espresso_logic::{Anonymous, Cover, Symbol};
 /// or `hold` cover — of a signal's [`StateRegions`](crate::logic::regions::StateRegions), of an edge
 /// register's capture, or of that register's off-edge — and what every cube in the set drives the node
 /// to. `A` is the emitter's own next-state vocabulary: a Verilog UDP row's state, or a Liberty statetable
-/// action. Both emitters walk a node's regions this way, and both name the two components here.
+/// action. The Verilog emitter walks every region set this way; the Liberty statetable walks an edge
+/// register's capture and off-edge regions this way, and folds its level rows across signals instead.
 pub(crate) struct RegionAction<'a, A> {
     /// The region's cubes as the cover that holds them, so each cube arrives carrying the column header
     /// it is read against rather than a position into a header kept beside it.

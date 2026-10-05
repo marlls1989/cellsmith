@@ -3628,36 +3628,37 @@ GCLK = "CLK*EL"
                 off.leakage,
                 on.leakage,
             );
-            // Hazards and constraints likewise, by what they identify. `prevector` and `levels` are
+            // Hazards and constraints likewise, by what they identify. Every hazard is compared,
+            // whatever its cause — a lone toggle, a race or a pulse. `prevector` and `levels` are
             // sampled at the probed state and name the same free representative the arcs do, and
-            // `condition` is a FULL input assignment, so it carries the inputs outside the race at
-            // whatever the probed state held them — the racing pins and their edges are what the
+            // `condition` is a FULL input assignment, so it carries the inputs outside the cause at
+            // whatever the probed state held them — the cause's pins and their edges are what the
             // hazard is. A race's two pins are the pair the probe toggled, whichever way round it
-            // named them; `group` names the state variables the hazard decides, and which ones it names
-            // is what classification could change; and `settled` is a set of alternatives. Each of the
-            // three compares in no order.
-            // Input-cause hazards only, a lone toggle's as much as a pair's: this equivalence check has
-            // never compared pulse-cause ones.
+            // named them, and compare in no order; `group` names the state variables the hazard
+            // decides, and which ones it names is what classification could change, so it compares in
+            // no order too. `settled` follows the cause (see `Hazard::settled`): under a toggle or a
+            // race it is a set of alternatives and compares in no order, and under a pulse it is the
+            // landing points in causal order and compares in that order.
             let same_cause = |a: &Cause, b: &Cause| match (a, b) {
                 (Cause::Race { pins: x }, Cause::Race { pins: y }) => {
                     same_multiset(x, y, PartialEq::eq)
                 }
                 _ => a == b,
             };
-            fn input_caused(c: &crate::model::AnalysedCell) -> Vec<&Hazard> {
-                c.hazards
-                    .iter()
-                    .filter(|h| matches!(h.cause, Cause::Toggle { .. } | Cause::Race { .. }))
-                    .collect()
-            }
-            let hazards_off = input_caused(&off);
-            let hazards_on = input_caused(&on);
+            let same_settled = |a: &Hazard, b: &Hazard| match a.cause {
+                Cause::Pulse { .. } => a.settled == b.settled,
+                Cause::Toggle { .. } | Cause::Race { .. } => {
+                    same_multiset(&a.settled, &b.settled, PartialEq::eq)
+                }
+            };
+            let hazards_off = &off.hazards;
+            let hazards_on = &on.hazards;
             assert!(
-                same_multiset(&hazards_off, &hazards_on, |a, b| {
+                same_multiset(hazards_off, hazards_on, |a, b| {
                     same_cause(&a.cause, &b.cause)
                         && a.outcome == b.outcome
                         && same_multiset(&a.group, &b.group, PartialEq::eq)
-                        && same_multiset(&a.settled, &b.settled, PartialEq::eq)
+                        && same_settled(a, b)
                 }),
                 "edge classification changed AnalysedCell::hazards:\n{hazards_off:#?}\nis \
                  not\n{hazards_on:#?}",
