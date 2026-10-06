@@ -59,7 +59,7 @@ Timing arcs are derived by exploring that state machine:
    covers, stepping **one input at a time** and letting the state settle;
 3. wherever a single input toggle flips an **output**, an arc is emitted.
 
-Three properties follow from this construction:
+Four properties follow from this construction:
 
 - **related pins are always primary inputs** — outputs and internal nodes are never arc sources
   (naming one cross-coupled output as the related pin of another would be invalid); they are established
@@ -179,8 +179,8 @@ recognises, after exploration, the `CLK` rising arc on `Q` as an **edge arc**: `
 (carried by its primary-input hidden arcs) is unchanged; `Q`'s next state is re-expressed
 combinationally in terms of `D`, and its Liberate arc carries `-type edge`. Setting
 `no_edge_collapse = true` (or passing `--no-edge-collapse`) keeps the two-latch form written above
-exactly as it stands, with `M` staying a separate internal node and `Q`'s arcs discovered by the same
-walk as before.
+exactly as it stands, with `M` staying a separate internal node and `Q`'s `CLK` arcs discovered by
+walking `D` to load the master.
 
 Classification is **per arc**: every arc is labelled independently, and the label is the **edge arc**: a
 clock toggle that takes a latch from opaque to transparent and whose delivered value depends on retained
@@ -444,18 +444,18 @@ cargo test
 
 The [Criterion](https://crates.io/crates/criterion) suite measures two things: what a run costs
 overall, and what each pass of the pipeline costs on its own. cellsmith runs multithreaded, and
-parallelism can regress a cost rather than improve it — intra-cell BDD parallelism once slowed ~3.7x
-under write-lock contention — so the thread width a measurement is taken at is a parameter of the
-measurement, not a property of what is being measured.
+parallelism can make a stage slower as well as faster, so the thread width a measurement is taken at is
+a parameter of the measurement, not a property of what is being measured.
 
-Two targets, each a profile of a different thing, both driven off the 9 cells in
+Two targets, each a profile of a different thing, both driven off the 11 cells in
 `examples/cells.toml`:
 
 - `benches/stages.rs` — per-stage timings, grouped by fixture: `signal` (`parse`, `build_signal_bdds`,
-  `minimise`), `machine` (`machine_build`, `arcs_derive`, `confluence_detect`, `analyse_machine`,
-  `leakage_derive`, `derive_regions`), and `emit` (`cell_arcs`, `cell_verilog`, `cell_liberty`).
+  `minimise`), `machine` (`machine_build`, `arcs_derive`, `confluence_detect`, `width_detect`,
+  `analyse_machine`, `leakage_derive`, `derive_regions`), and `emit` (`cell_arcs`, `cell_verilog`,
+  `cell_liberty`).
 - `benches/aggregate.rs` — whole-pipeline timings: `whole_cell` (`Cell::analyse` per cell) and
-  `whole_run` (the full 9-cell run: `analyse` plus all three emitters and `library_liberty`).
+  `whole_run` (the full 11-cell run: `analyse` plus all three emitters and `library_liberty`).
 
 Every target is measured at the thread counts `CELLSMITH_BENCH_THREADS` names, as a comma-separated
 list of widths, where `max` stands for the width the global pool was built with. A width is a
@@ -512,10 +512,11 @@ through settling, and the walk into an arc's start state drives every state vari
 included) to its value there; a state-holding cell's `-ic` line is what carries that start condition
 into the measured vector.
 
-A hazard is read on two independent axes. Its **cause** is what the timing is between: a **race**, two
-input edges landing close enough together that which of them lands first changes where the cell ends up
-(a C-element's `A↓` against `B↑`, a DFF's data against its clock, an SR latch's simultaneous release),
-or a **pulse**, the two edges of one input racing each other (a clock pulse too narrow to carry a flop's
+A hazard is read on two independent axes. Its **cause** is what the timing is between: a **toggle**, one
+input's edge on its own whose cascade rings around the cell's own feedback instead of settling; a
+**race**, two input edges landing close enough together that which of them lands first changes where the
+cell ends up (a C-element's `A↓` against `B↑`, a DFF's data against its clock, an SR latch's
+simultaneous release); or a **pulse**, the two edges of one input racing each other (a clock pulse too narrow to carry a flop's
 master through to its slave leaves the flop somewhere a wider pulse does not). Its **outcome** is what
 the machine then does: **indeterminate** — it settles, but which state it settles to is not determined —
 or **oscillation** — it never settles, walking a periodic cycle instead of reaching a **stable state**
@@ -549,11 +550,6 @@ Each emitted constraint arc names its **victim nodes** — the state variables w
 hazard puts at risk, over every outcome the cause showed — in a single `-probe`, so Liberate measures
 the nodes the constraint is about. A victim node with no pin of its own, such as a flop's master latch,
 is given a `-pinlist` column on that block alone, which its `-ic` states the start level through.
-
-## Known issues
-
-Cells wide enough to panic the espresso-logic dependency during cover expansion are
-tracked in [`KNOWN-ISSUES.md`](KNOWN-ISSUES.md).
 
 ## Licence
 

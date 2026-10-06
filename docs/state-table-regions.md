@@ -13,7 +13,7 @@ Regions are derived once per signal, over the shared minimised BDD map, and cach
 sequential UDP emitter reads that cache directly, one region set per signal. The Liberty emitter reads
 the same per-signal cache but does not stop there: the Liberty spec forbids an output pin's table from
 referencing another output pin, so at emission time (`src/emit/statetable.rs`) it **joins** every
-sequential cell's state nodes' regions into one cell-wide `statetable` by cube intersection (§7).
+sequential cell's state nodes' regions into one cell-wide `statetable` by cover algebra (§7).
 
 ## 1. Two views of a signal, and which one this is
 
@@ -122,11 +122,10 @@ the tables of the outputs that reference them — an output's UDP may reference 
 
 The Liberty `statetable` cannot work the same way: the Liberty spec disallows an output pin's own table
 from referencing another output pin. So emission (`src/emit/statetable.rs`) builds one cell-wide
-`statetable` from the per-signal regions by **cover algebra**, not a cube-intersection cross-product,
-in five steps:
+`statetable` from the per-signal regions by **cover algebra**, in five steps:
 
 1. **Rename.** Each state signal's minimised `on`/`off`/`hold` cover is renamed (`rename_outputs`) so
-   its single output column carries that node's own name, rather than an anonymous placeholder.
+   its single output column carries that node's own name.
 2. **Normalise.** Each renamed cover is re-based (`over_vars`) onto one **shared header**: the union of
    every state signal's own transition function's input support (the primary-input columns from every
    signal's region, in cell input order), followed by the state signals' original names in node order.
@@ -138,7 +137,7 @@ in five steps:
    multi-output problem, so cubes can be shared across nodes that agree on the same action over the
    same input/current pattern.
 5. **Keyed fold.** Every resulting cube, from all three minimised covers, is folded into the joint row
-   table keyed by its input/current minterm (a `BTreeMap` keyed on the pattern): for each node the cube
+   table keyed by its input/current minterm (a `HashMap` keyed on the pattern): for each node the cube
    asserts, that node's slot in the row for that key is stamped with the pass's action (`H`/`L`/`N`);
    cubes that land on the same key — whether from the same action's cover or a different one — stamp
    different nodes' slots of the *same* row rather than producing separate rows.

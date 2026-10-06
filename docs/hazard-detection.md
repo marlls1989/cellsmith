@@ -169,22 +169,18 @@ latches M1's old value or D's new one depends on which latch closes first — bu
 and C2: the divergence is carried across the M1 → Q latch boundary, so it is filtered. The (C1, D) race,
 by contrast, meets directly in δ_M1 and survives as a genuine race settling indeterminately. On the ICM
 dual-clock synchroniser (see `state-machine-arc-engine.md` §3 for the cell and its internal signals; the
-same shape at scale) this filter reduces the reported hazards to the two same-domain pairs (CLKA, RA) and
-(CLKB, RB) and removes the meaningless cross-domain clock-vs-clock ones.
+same shape at scale) this filter removes the meaningless cross-domain clock-vs-clock pairs.
 
-Declassifying a relay can legitimately **surface** a race settling indeterminately that used to be
-latch-masked. Once a combinational relay is folded into its consumer (`state-space-minimisation.md`), that
-consumer's δ directly incorporates the relay's former support — so a pin pair that used to meet only
-across a latch boundary can now land in the same direct support. On the ICM cell this is exactly what
-happens: folding the selection-interlock relays sela/selb into sela1/selb1 extends each synchroniser's
-direct support, so the cell gains the derived setup/hold pairs (CLKA, S) and (CLKB, S) alongside its
-existing (CLKA, RA) and (CLKB, RB) — a genuine gain, never a loss, and consistent with the fold's own
-soundness.
+The filter runs on the minimised model. A combinational relay folded into its consumer
+(`state-space-minimisation.md`) has its support enter the consumer's direct support, so a pin pair that
+meets only across the relay meets in that consumer's δ. On the ICM cell, folding the selection-interlock
+relays sela/selb into sela1/selb1 extends each synchroniser's direct support, and the reported pairs are
+(CLKA, RA), (CLKB, RB), (CLKA, S) and (CLKB, S).
 
-The filter is symmetric in principle: because it iterates over diverging state variables, folding a
-cycle-resident relay could in theory also *drop* a pair whose divergence every consumer's settled value
-masks — the mirror image of the gain, the tool re-deciding on the minimised model what counts as a
-design-tolerated settled snapshot across a latch, a correction in the same sense rather than a regression.
+Because it iterates over diverging state variables, the filter can also *drop* a pair on the minimised
+model: folding a cycle-resident relay can leave a pair whose divergence every consumer's settled value
+masks, and the minimised model is what decides that the pair is a design-tolerated settled snapshot
+across a latch.
 
 The filter is also why an arbiter's constraint does not come from its divergence: a mutex's diverging
 grants each see only *their own* request (δ_Qa depends on {A, Qb}), so its (A, B) divergence fails the

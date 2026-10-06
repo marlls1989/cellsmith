@@ -183,12 +183,11 @@ or not it currently works.
 
 Before writing a loop over cubes, rows, variables or literals, find the operation in the library.
 **Where no single call does the job, look for the composition of two before concluding there isn't
-one** — that step is where this goes wrong. The hand-rolled code in this crate was not written in
-ignorance of the library; it was written after failing to find one method that did the whole job,
-when the answer was two calls: wrap a minterm in a one-cube cover and build it; take the
-disagreement and project it.
+one** — that step is where this goes wrong: a job with no single method is often two calls, such
+as wrapping a minterm in a one-cube cover and building it, or taking the disagreement and projecting
+it.
 
-Some the crate has needed, so the loop is never written again: `Minterm::value_of` to read one
+The operations the crate uses for these jobs: `Minterm::value_of` to read one
 variable, absent meaning don't-care; `project_to` / `project_to_labels` to re-home onto another
 variable set — silently, so it also deletes any check that a variable was defined; `disagreement`,
 `is_subset_of`, `is_superset_of`, `is_disjoint_with`, `hamming_distance` and the Kleene `&`, `|`,

@@ -1,7 +1,6 @@
 # Known issues
 
-Things found during other work and deliberately not fixed at the time, so they are not lost and do
-not have to be re-derived later. Each entry should carry enough context to act on without
+The known limitations of cellsmith. Each entry carries enough context to act on without
 reconstructing the investigation: what was observed, why it matters, and — where the fix is a
 judgement rather than a correction — what the choice actually is.
 
@@ -20,45 +19,44 @@ cell from examples/cells.toml with its `expose` list removed and `constraint_arc
 `--when` reports 330 blocks over 898 measurements — 40 combinational, 158 hidden, 10 setup, 10
 hold, 74 min_pulse_width and the same 38 leakage.
 
-## Seed settling runs sequentially, and no longer has a reason to
+## Seed settling runs sequentially
 
-`explore`'s seeding phase settles each pooled candidate one at a time. That shape was justified by an
-ordering it no longer has: the comment read "Sequential: the Vacant-insertion order into `prev` fixes
-the order seeds are pushed onto the BFS queue", and the candidate ranking that order-fixing served has
-been removed as a leftover of a superseded algorithm. `settle` is the expensive part — one walk per
-candidate — and the BFS levels below already run their toggles in parallel, so the seeding phase is the
-odd one out.
+`explore`'s seeding phase settles each pooled candidate one at a time, and nothing depends on the order
+the seeds are settled in. `settle` is the expensive part — one walk per candidate — and the BFS levels
+below already run their toggles in parallel, so the seeding phase is the odd one out.
 
 The parallel form mirrors the level pipeline directly: collect
 `pool.par_iter().filter_map(|input| settle(&stepped, &input.project_to(&full_names)))` into a
 `HashSet`, then drain it into `prev` and the frontier. Same seed set — the set dedups candidates
-settling to one state, which is what the `Vacant` entry does today — and frontier order is free, as
+settling to one state, which is what the `Vacant` entry does — and frontier order is free, as
 within-level order already is.
 
-Not taken because aligning code on a critical path is its own pass, and the benefit is unmeasured: no
-one has established what share of analyse time the seeding phase holds. The criterion benches can
-answer that first if a number is wanted before the change.
+The benefit is unmeasured: what share of analyse time the seeding phase holds is not known. The
+criterion benches can measure it.
 
-## Which observation supplies a constraint's general block is picked by a key that could go
+## Which tied observation supplies an unconditioned block varies from run to run
 
-Where several observations of one probed state are equally dominant, emission picks one by the
-`(discovered, ordinal)` key on `Hazard`. Nothing outside the crate requires that pick — Liberate
-receives whichever block is written, and detection files a record for every observation regardless — so
-the key is not a determinism guarantee owed to anyone. It is the mechanism of a free choice, and a pick
-needs some rule.
+Every arc kind emits one unconditioned block per identity, rendered from one of the observations that
+carry it, and where several tie the one picked is decided by exploration order:
 
-What the key settles is the pick within one analysis, not across runs. The candidate pool the
-exploration seeds from is a `HashSet` (`machine.rs:415`), so the order the candidates are settled in is
-schedule-dependent, and with it the seed order, the `Explored::order` indices and the `discovered` each
-hazard carries. Two runs over one cell can therefore read the same observations under different indices
-and promote a different one of the equally dominant to the general block. Within one analysis the
-indices are the one set, which is what `ic_is_the_only_line_the_gate_adds` rests on: it emits a single
-analysis twice.
+- **Delay and hidden arcs** are keyed on their pins and edges. The representative is a firing with the
+  shortest prevector, and among firings tied at that length the first in exploration order is kept
+  (`generalised` in `src/emit/arcs_tcl.rs`).
+- **Constraint arcs** are keyed on the constraint kind, the constrained pin with its edge, and the
+  victim nodes with the level each holds. An observation is dominated, and supplies no unconditioned
+  block, when another of the same kind and pin fixes every victim node it fixes at the same level and
+  at least one more. Among the rest, the representative is the minimum `(discovered, ordinal)`:
+  `discovered` is the probed state's index in exploration order, and `ordinal` numbers the (cause,
+  outcome) rank the observation was read from (`constraint_selection` in `src/emit/arcs_tcl.rs`).
 
-The judgement, should the key be revisited: deleting it does not remove the choice, it changes who
-makes it. The pick becomes schedule-dependent rather than fixed per emission, which reaches
-`ic_is_the_only_line_the_gate_adds` — that test emits one analysis twice and compares the two decks as
-multisets of `-ic`-stripped blocks, so it relies on the two emissions agreeing on the representative,
-and on nothing about the order they state their blocks in — and it reaches `Constraint`'s
-own `discovered`/`ordinal` fields and the merge code in `merged_victims`. Those are the sites a
-removal has to answer for; the key itself carries no meaning worth preserving.
+Exploration order comes from std hash containers: the candidate pool the exploration seeds from is a
+`HashSet`, and each BFS level collects the states it reaches into a `HashMap` (`explore` in
+`src/logic/machine.rs`). Their iteration order follows std's per-process random hash seed, so the order
+varies from run to run even at one thread — thread scheduling is not what drives it. Two runs over one
+cell can therefore render an identity's unconditioned block from different tied observations, whose
+blocks differ in what names the observation: the `-ic` levels and the `-vector`'s held digits. Within
+one analysis the order is fixed, which is what
+`ic_is_the_only_line_the_gate_adds` rests on: it emits a single analysis twice.
+
+Nothing outside the crate requires a particular pick — Liberate receives whichever block is written, and
+detection files a record for every observation regardless.
