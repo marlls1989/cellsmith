@@ -1,5 +1,5 @@
 //! Unified joint state-table model for a sequential cell — the single source the Liberty renderer
-//! and the behavioural Verilog draw from, built at **emission time** (not in the minimiser).
+//! and the behavioural Verilog draw from, built at **emission time** from the analysed cell.
 //!
 //! A cell's hysteretic signals (its **state variables**: outputs and internal nodes on a dependency
 //! cycle, as classified in [`crate::logic::regions`]) are folded into ONE joint next-state table. Each
@@ -737,7 +737,7 @@ Q = "A*B + Q*(A+B)"
 
     #[test]
     fn dff_joint_table_internal_unaliased() {
-        // MIGRATED two-latch coverage: a declared clock with collapse opted OUT keeps the master-slave
+        // Two-latch coverage: a declared clock with collapse opted OUT keeps the master-slave
         // joint table (both Q and M as nodes, six per-output rows, no edge rows).
         let cell = analyse(
             r#"
@@ -1057,7 +1057,7 @@ inputs = ["A", "B"]
 [cell.outputs]
 Q = "A*B + Q*(A+B)"
 "#,
-            // MIGRATED: the two-latch DFF stays in the level-row reconstruction with collapse opted out
+            // The two-latch DFF stays in the level-row reconstruction with collapse opted out
             // (the reconstruction covers level rows only; the edge form is asserted separately).
             r#"
 [[cell]]
@@ -1611,8 +1611,8 @@ Q = "!CLKB*M2 + CLKB*Q"
     }
 
     // A rising-edge DFF with a MASTER-ONLY (phase-conditioned) clear: R clears only the master M, so Q
-    // clears only while the slave is transparent (CLK high). The clear cover is `CLK*R`, the row that the
-    // pre-fix renderer corrupted to `~R - H : - : L`.
+    // clears only while the slave is transparent (CLK high). The clear cover is `CLK*R`; its row
+    // must not render as `~R - H : - : L`.
     const MOR: &str = r#"
 [[cell]]
 name = "MOR"
@@ -1661,7 +1661,7 @@ Q = "CLK*M + !CLK*Q"
 "#;
 
     // A rising-edge DFF with a FULL-async clear (R clears Q directly) declared alongside CLK as a clock.
-    // R is level-acting on Q, so its clear is the free-clock `~R - H` row that stays correct under the fix.
+    // R is level-acting on Q, so its clear is the free-clock `~R - H` row.
     const RDFF: &str = r#"
 [[cell]]
 name = "RDFF"
@@ -1870,7 +1870,7 @@ Q = "!R*(CLK*M + !CLK*Q)"
     /// transition, settle the rendered rows (level and edge, jointly, under Liberty first-match) and check
     /// the settled node values against the machine's own settled state. This is the joint edge+level
     /// coverage `emitted_rows_reconstruct_per_node_regions` lacks — the only test that fails when
-    /// `EdgeInputs` drops a clock literal (the MOR/MORA `~R - H` clear-on-any-non-rising bug).
+    /// `EdgeInputs` drops a clock literal.
     fn replay_rendered_statetable(src: &str) {
         let cell = analyse(src);
         // The rendered rows are the device under test — the sole path through `EdgeInputs`.
@@ -1976,9 +1976,10 @@ Q = "!R*(CLK*M + !CLK*Q)"
                     // When the async set/clear forcing `node` at the start state stops forcing it by the
                     // destination, the node re-acquires its value through level transparency the edge model
                     // abstracts away (TFF's master re-tracking `!Q` when R de-asserts at CLK=0). The
-                    // established replay harness (`assert_captures_faithful` clause 4) checks only
-                    // determinism there, never the exact value, and the statetable is deterministic by
-                    // construction — so skip the exact check when the force lapses.
+                    // edge-arc replay harness (`assert_captures_faithful` clause 4, in `edge.rs`)
+                    // checks only determinism there, never the exact value, and the statetable is
+                    // deterministic by construction — so skip the exact check when the force
+                    // lapses.
                     if forced(node, s).is_some() && forced(node, &dest).is_none() {
                         continue;
                     }

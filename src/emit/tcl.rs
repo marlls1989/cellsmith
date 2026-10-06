@@ -328,8 +328,8 @@ pub(crate) mod tests {
 
     /// The expressions that need more than the wrap to hold their column, each with the text the
     /// emitter writes between the `-ic` quotes. Every one of them is read back through real Tcl by
-    /// [`tclsh_reads_an_awkward_logic_voltage_as_one_column_per_pin`], which is where the doubling was
-    /// established; the pairs here pin it without an interpreter to hand.
+    /// [`tclsh_reads_an_awkward_logic_voltage_as_one_column_per_pin`]; the pairs here pin the text
+    /// without an interpreter.
     pub(crate) const AWKWARD_VOLTAGES: [AwkwardVoltage; 17] = [
         // The backslash the word's substitution would otherwise spend on the quote after it.
         AwkwardVoltage {

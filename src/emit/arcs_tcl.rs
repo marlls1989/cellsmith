@@ -154,7 +154,7 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
     // the two blocks would be identical). Any non-representative firing renders its own block and is
     // emitted whether or not it carries a condition.
     //
-    // One redundancy survives here BY DESIGN — do not "optimise" it away. On a transition with more than
+    // One redundancy here is deliberate — do not "optimise" it away. On a transition with more than
     // one context, the representative's OWN conditioned block restates the context its general block
     // already pins, yet it is emitted: the conditioned pass names every context of a multi-context
     // transition explicitly and symmetrically, the representative's included. The two blocks differ —
@@ -170,8 +170,8 @@ pub fn cell_arcs(cell: &AnalysedCell, opts: ArcsTclOptions) -> CellArcs {
     // netlist agrees on the columns IT carries — its [`Group`]. That is asked per block rather than per
     // cell: a measured block carries the cell's exposures, a constraint block those plus the nodes its
     // own cause attacks, and it is no business of a transition arc how some constraint's victim node is
-    // spelled. A cell that maps no node per alias has one group holding every alias throughout, and
-    // emits what it always did.
+    // spelled. A cell that maps no node per alias has one group, holding every alias, for every
+    // block.
     let general = generalised(
         &cell.arcs,
         |arc| TransitionIdentity::of(cell, arc),
@@ -1564,8 +1564,9 @@ Q = "A*B + Q*(A+B)"
 
     /// A two-output cell that exhibits a transition-arc collision: `Y = A` is a plain rise/fall, and `Z`
     /// is a C-element whose held value renders as `X` in `Y`'s vector. With `B = 1` both `Z = 0` and
-    /// `Z = 1` are reachable settled states, so the `A`-rise → `Y`-rise arc is measured from both and the
-    /// two blocks are identical apart from their prevectors — a same-key collision once `-when` is gone.
+    /// `Z = 1` are reachable settled states, so the `A`-rise → `Y`-rise arc is measured from both.
+    /// The two firings share a transition key, a `-vector` and a `-when`, and differ only in `Z`'s
+    /// start state — the `Z` column of their `-ic`, and their model arcs' prevectors.
     const TWO: &str = r#"
 [[cell]]
 name = "TWO"
@@ -1801,7 +1802,8 @@ Y = "A*B"
             .min()
             .expect("a non-empty group");
 
-        // In the default output, the group's emitted member carries exactly `min_len` steps.
+        // In the default output, the member whose block is emitted has a model prevector of exactly
+        // `min_len` steps.
         let default = emit(&cell, NO_LEAKAGE);
         let survivor = group
             .iter()
@@ -2033,9 +2035,9 @@ Q = "E*D + !E*Q"
         }
     }
 
-    /// REPRESENTATIVE IS A REAL FIRING: every general block is the rendering of an arc the pipeline
-    /// discovered, so its `-prevector`/`-vector` pair is a stimulus that was measured together — the
-    /// general pass promotes a firing, it never synthesises one.
+    /// REPRESENTATIVE IS A REAL FIRING: every block of the default output is the rendering of an
+    /// arc the pipeline discovered, so the start state and stimulus it states were measured
+    /// together — the general pass promotes a firing, it never synthesises one.
     #[test]
     fn general_arcs_are_measured_firings() {
         for src in GENERALISED_FIXTURES {
@@ -3147,10 +3149,9 @@ Y = "!W"
 
     #[test]
     fn a_cell_exposing_nothing_keeps_a_pin_only_pinlist() {
-        // Nothing exposed, nothing added: a MEASURED block's pinlist is the cell's pins, so it keeps
-        // the shape it had before exposed columns existed. A constraint block is the one kind that adds
-        // a column of its own — for a victim node that has no pin — so it is checked against what it
-        // probes rather than against the pins alone.
+        // Nothing exposed, nothing added: a MEASURED block's pinlist is exactly the cell's pins. A
+        // constraint block is the one kind that adds a column of its own — for a victim node that
+        // has no pin — so it is checked against what it probes rather than against the pins alone.
         for src in [AND2, MAJ3, TWO, OA22, IC_DFF] {
             let cell = analyse(src);
             assert!(cell.exposed.is_empty());
@@ -4037,9 +4038,9 @@ M = "XI4/m"
         }
     }
 
-    /// The same two-latch DFF, with edge collapse explicitly suppressed (`no_edge_collapse = true`) —
-    /// preserves the pre-collapse two-latch coverage: every delay arc on Q stays `-type combinational`,
-    /// none is re-labelled `-type edge`.
+    /// The same two-latch DFF, with edge collapse explicitly suppressed
+    /// (`no_edge_collapse = true`): every delay arc on Q is `-type combinational`, none is
+    /// re-labelled `-type edge`.
     #[test]
     fn dff_no_edge_collapse_keeps_combinational_type_on_q_arcs() {
         let cell = analyse(

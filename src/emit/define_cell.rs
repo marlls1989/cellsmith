@@ -314,8 +314,8 @@ delay = "dt2"
         assert!(inv2.contains("-constraint ct \\"));
     }
 
-    /// (g) The template key is accepted under both spellings, `constraint` and the older `constrain`,
-    /// and either emits the `-constraint` flag.
+    /// (g) The template key is accepted under both spellings, `constraint` and `constrain`, and
+    /// either emits the `-constraint` flag.
     #[test]
     fn constrain_spelling_is_accepted_as_constraint() {
         for key in ["constraint", "constrain"] {

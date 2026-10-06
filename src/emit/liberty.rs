@@ -24,9 +24,10 @@
 //! (Liberty UG Vol.1 pp.5-31..5-33), and each classification names NODES, never ports:
 //! - (A) an output that IS a state variable reads the node it minted: `state_function : "<node>"`;
 //! - (B) an output whose regions reference a state node carries `state_function : "<expr>"` over those
-//!   nodes — including a former feedthrough or inverter of a single state node, rendered by the ordinary
-//!   function renderer as a plain or negated literal (e.g. `!Q_st`) (Liberty UG Vol.1 p.5-31, and the
-//!   `pin(QNZ){state_function:"QN"}` / feedthrough `pin(Y){state_function:"A"}` examples on p.5-33).
+//!   nodes — an output that is a plain or negated single state node is rendered this way, by the
+//!   ordinary function renderer, as a plain or negated literal (e.g. `!Q_st`) (Liberty UG Vol.1
+//!   p.5-31, and the `pin(QNZ){state_function:"QN"}` / feedthrough `pin(Y){state_function:"A"}`
+//!   examples on p.5-33).
 //!   (A) is the special case of this where the expression is the bare node, and the two emit identically;
 //! - (C) an output over primary inputs only carries a plain `function : "<expr>"`, EVEN inside a cell
 //!   that has a statetable.
@@ -214,8 +215,8 @@ fn classify_output(name: &Symbol, sr: &StateRegions, model: &StateModel) -> PinL
     } else {
         // (C) Combinational output over primary inputs only — a plain `function`. By minimise
         // invariant I3 a surviving combinational output's support is inputs + state nodes only, so
-        // 'no column with a state node of its own' == 'no transitive state dependence'
-        // (ref statetable.rs:112-122).
+        // 'no column with a state node of its own' == 'no transitive state dependence' (see I3 in
+        // `minimise.rs`'s module doc, and the column partition in `build_state_model`).
         PinLogic::Function(function_expr(sr, Some(model)))
     }
 }
@@ -537,7 +538,7 @@ Q = "A*B + Q*(A+B)"
 
     #[test]
     fn dff_emits_one_joint_statetable() {
-        // MIGRATED two-latch coverage: the same DFF with a declared clock but collapse opted OUT keeps
+        // Two-latch coverage: the same DFF with a declared clock but collapse opted OUT keeps
         // its master-slave statetable over the nodes `Q_st` and `M`, and a `pin (M)`. The table's columns
         // and its six per-output rows are pinned by `statetable.rs`'s
         // `dff_joint_table_internal_unaliased`.
@@ -1181,9 +1182,10 @@ Qn = "!Q"
 
     /// Three shapes the behavioural classifier leaves fully level (no edge token) even under default (on)
     /// collapse: a single latch, a gated (self-referencing) latch, and a two-latch DFF whose clock is
-    /// never declared. Mirrors `statetable.rs`'s shrunk fixtures. EMDFF and MCDFF each have their own
-    /// dedicated fixture: EMDFF's slave Q is a recognised register (see `emdff_emits_edge_statetable_over_surviving_master`),
-    /// and MCDFF stays level because it has two clocks (see `mcdff_two_clock_stays_level`).
+    /// never declared. The same three fixtures as `statetable.rs`'s `NON_COLLAPSIBLE`. EMDFF and
+    /// MCDFF each have their own dedicated fixture: EMDFF's slave Q is a recognised register (see
+    /// `emdff_emits_edge_statetable_over_surviving_master`), and MCDFF stays level because it has
+    /// two clocks (see `mcdff_two_clock_stays_level`).
     const NON_COLLAPSIBLE: [&str; 3] = [
         r#"
 [[cell]]

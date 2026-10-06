@@ -434,7 +434,7 @@ fn edge_table_rows(er: &EdgeCaptures) -> Vec<EdgeRow> {
 
     // (c) Opposite-edge ignore: for each clock, each edge face with NO capture entry holds on a
     // transition of that edge — one row carrying that edge indicator in the clock's column and `?`
-    // elsewhere. A single-edge clock emits its one inactive edge (as today); a dual-edge clock, both
+    // elsewhere. A single-edge clock emits its one inactive edge; a dual-edge clock, both
     // faces captured, emits none.
     for &clock in &clocks {
         for edge in [Edge::Rise, Edge::Fall] {
@@ -818,7 +818,7 @@ Qn = "R + Qn*!S"
     #[test]
     fn dff_internal_master_is_a_wire_not_a_port() {
         // Opt-out fixture: the declared clock would collapse the master-slave pair, but
-        // `no_edge_collapse` keeps the two-latch form — preserving the level-latch coverage.
+        // `no_edge_collapse` keeps the two-latch form, so the master M is a level latch of its own.
         let cell = analyse(
             r#"
 [[cell]]
