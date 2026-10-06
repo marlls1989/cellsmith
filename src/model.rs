@@ -57,7 +57,7 @@ pub struct Cell {
     /// Optional: the internal nodes listed in the Liberate arcs' `-pinlist`, in declared order (the
     /// declared order fixes their pinlist position). Each is preserved through the state-space
     /// minimisation so the arcs can drive it (`-ic`) and observe it (`-vector`). Spec-only: like
-    /// `template`/`template_overrides` above, there is no CLI counterpart.
+    /// `template`/`template_overrides` below, there is no CLI counterpart.
     #[serde(default, deserialize_with = "de_symbol_vec")]
     pub(crate) expose: Vec<Symbol>,
     /// Optional: input pins that force the output regardless of held state (async set/reset),
@@ -306,9 +306,8 @@ impl ConstraintPins {
 
 /// Deserialize the cell `name` field as a non-empty `Vec<Symbol>` (order preserving). Accepts either a
 /// scalar (`name = "INV"`) or a list (`name = ["INVX1", "INVX2"]`); `Symbol` has no `serde` impl, so
-/// each entry is read as a `String` and interned (Display/Debug/Ord delegate to `str`, so the emitted
-/// bytes are unchanged). Duplicates are dropped keeping the first occurrence, and an empty list is a
-/// hard error.
+/// each entry is read as a `String` and interned (Display/Debug/Ord delegate to `str`).
+/// Duplicates are dropped keeping the first occurrence, and an empty list is a hard error.
 fn de_name_list<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Symbol>, D::Error> {
     // String variant FIRST so a TOML scalar matches `One` rather than being probed as a sequence.
     #[derive(Deserialize)]
@@ -528,9 +527,14 @@ fn de_constraint_pins<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Constrai
 
 /// Why a spec could not be turned into analysed cells.
 ///
-/// Every variant but [`Spec`](Self::Spec) reports a rule the cell model imposes on top of what TOML
-/// can express — a name used twice, a pin referenced that was never declared — and names the cell it
-/// was checking, so a spec holding many cells says which one is at fault.
+/// [`Spec`](Self::Spec) carries the TOML error for source text that does not deserialise into the
+/// spec's shape. [`Exploration`](Self::Exploration) reports an exploration budget stopping a cell's
+/// machine pass, and carries that cell and the limit it reached. Every other variant reports a rule
+/// the cell model imposes on top of what TOML can express — a name used twice, a pin referenced
+/// that was never declared. [`EmptyName`](Self::EmptyName) carries nothing, the cell having no
+/// name to report; [`DuplicateCellName`](Self::DuplicateCellName) carries only the colliding name,
+/// which two cells claim; the rest name the cell they were checking, so a spec holding many cells
+/// says which one is at fault.
 // `Clone` and `#[non_exhaustive]` follow the espresso-logic error idiom this crate's errors are written
 // in — `CoverError` and its siblings carry the same pair. Nothing in cellsmith clones a `ModelError` or
 // matches one from outside the crate; the derives are here so the two crates' errors present one shape.
@@ -908,7 +912,8 @@ pub struct AnalysedCell {
 
 impl AnalysedCell {
     /// The representative (first-as-written) cell name, for single-name contexts (diagnostics and the
-    /// still-single-name emitter paths). Safe to index: `de_name_list` rejects empty name lists.
+    /// emitter paths that take a single name). Safe to index: `de_name_list` rejects empty name
+    /// lists.
     pub fn repr_name(&self) -> &Symbol {
         &self.name[0]
     }
@@ -1590,7 +1595,7 @@ Y2 = "A*Z2"
 
     #[test]
     fn rejects_unknown_cell_key() {
-        // A misspelt or stale spec key must be a hard error, not silently ignored.
+        // A spec key the cell does not define is a hard error.
         let s = r#"
 [[cell]]
 name = "X"
@@ -2360,7 +2365,7 @@ M = "CLK"
     #[test]
     fn an_unmapped_cell_emits_one_group() {
         // The common case: nothing mapped, so every alias is named together and the exposed node keeps
-        // its own name — the output a cell had before any of this existed.
+        // its own name.
         let cell = analyse_one(
             r#"
 [[cell]]
@@ -2499,9 +2504,10 @@ Q = "!QN"
     #[test]
     fn every_arc_carries_the_prevector_that_reaches_it() {
         // Every arc, hidden arc and constraint of BOTH views must carry a real prevector: non-empty,
-        // and ending at the record's own start state projected onto the inputs (the pattern at
-        // arcs.rs:618). A rebuilt `prev` that breaks `path_to` either empties the prevector — panicking
-        // the `.expect` the constraint columns read their held levels through
+        // and ending at the record's own start state projected onto the inputs (the check
+        // `logic::arcs::tests::c_element_has_rise_and_fall_per_input` makes on one view). A rebuilt
+        // `prev` that breaks `path_to` either empties the prevector — panicking the `.expect` the
+        // constraint columns read their held levels through
         // (`arcs_tcl::constraint_columns`) — or misaligns the chain, corrupting the `prevector.len()`
         // constraint-dedup tie-break in `constraint::record`.
         let cell = analyse_one(&c_element_src(r#"expose = ["QN"]"#));
@@ -2798,10 +2804,10 @@ Q = "CLK*M + !CLK*Q"
 
     #[test]
     fn exposure_changes_the_arcs_and_nothing_else() {
-        // The arcs-only claim, as an invariance of THIS binary rather than against a recorded baseline:
-        // analyse each fixture twice, once exposing and once not, and the model view every emitter but
-        // the arcs one reads emits the same records either way. The arcs are where the difference lands,
-        // as the exposed node's own column.
+        // The arcs-only claim, as an invariance of THIS binary: analyse each fixture twice, once
+        // exposing and once not, and the model view every emitter but the arcs one reads emits the
+        // same records either way. The arcs are where the difference lands, as the exposed node's
+        // own column.
         for fixture in exposure_pairs() {
             let exposed = analyse_one(&fixture.exposing);
             let plain = analyse_one(&fixture.exposure_free);
@@ -3076,7 +3082,7 @@ Q = "CLK*M + !CLK*Q"
     #[test]
     fn invalid_output_function_fails_at_parse_spec() {
         // A malformed function under `[cell.outputs]` is a hard error at TOML deserialise time
-        // (parse_spec), never reaching `.analyse()` — parse failures now surface at LOAD, at the
+        // (parse_spec), never reaching `.analyse()` — parse failures surface at LOAD, at the
         // value's own TOML span, carrying the underlying BoolExpr parse error through.
         let s = r#"
 [[cell]]
@@ -3091,9 +3097,9 @@ Q = "A +"
 
     #[test]
     fn output_function_builds_to_expected_bdd() {
-        // Preserves the c-element / NOT>AND>OR precedence grammar coverage that lived in the removed
-        // src/expr.rs, now exercised at the deserialise-time parse boundary: a function parsed once
-        // into a BoolExpr at load must build to the same BDD as the equivalent hand-built expression.
+        // The c-element function and the NOT > AND > OR precedence grammar, at the
+        // deserialise-time parse boundary: a function parsed once into a BoolExpr at load must
+        // build to the same BDD as the equivalent hand-built expression.
         const SRC: &str = r#"
 [[cell]]
 name = "GRAMMAR"
@@ -3149,9 +3155,9 @@ Y2 = "!a*b"
     #[test]
     fn accepts_superset_operator_syntax_at_parse_spec() {
         // espresso's grammar also accepts `&`/`|`/`~`/`^` and `true`/`false`; precedence NOT > AND >
-        // XOR > OR, so `a & b | ~c ^ d` == `(a&b) | ((~c)^d)`. Preserves the coverage that lived in the
-        // removed src/expr.rs's `accepts_superset_syntax`, now exercised at the deserialise-time parse
-        // boundary: the raw, parse-time field on `Cell.outputs` (not the post-pipeline `AnalysedCell`).
+        // XOR > OR, so `a & b | ~c ^ d` == `(a&b) | ((~c)^d)`. Checked at the deserialise-time
+        // parse boundary: the raw, parse-time field on `Cell.outputs` (not the post-pipeline
+        // `AnalysedCell`).
         let s = r#"
 [[cell]]
 name = "SUPERSET"
@@ -3169,8 +3175,8 @@ Y = "a & b | ~c ^ d"
 
     #[test]
     fn xor_precedence_pinned_between_and_and_or_at_parse_spec() {
-        // Pins the one precedence boundary left uncovered: NOT > AND > XOR > OR, so XOR binds looser
-        // than AND but tighter than OR. Each case asserts both an equivalence to the correctly
+        // Pins where XOR sits in the precedence NOT > AND > XOR > OR: it binds looser than AND but
+        // tighter than OR. Each case asserts both an equivalence to the correctly
         // parenthesised reading and a non-equivalence to the wrongly parenthesised reading — the
         // non-equivalence is what actually pins the boundary, since a merely-equivalent pair would
         // pass under either precedence.
@@ -3214,10 +3220,9 @@ XorBeforeOr = "a ^ b + c"
 
     #[test]
     fn accepts_constant_literals_at_parse_spec() {
-        // Preserves the constant-literal coverage that lived in the removed src/expr.rs (the bare
-        // numeral `1` from `constants_and_pin_names_with_digits`, and the `true`/`false` word literals
-        // from `accepts_superset_syntax`), now exercised at the deserialise-time parse boundary: the
-        // raw, parse-time field on `Cell.outputs`.
+        // The constant literals — the bare numeral `1` and the `true`/`false` words — build to the
+        // constant they name, at the deserialise-time parse boundary: the raw, parse-time field on
+        // `Cell.outputs`.
         let s = r#"
 [[cell]]
 name = "CONST"
@@ -3247,9 +3252,8 @@ F = "false"
     #[test]
     fn accepts_digit_and_underscore_identifiers_at_parse_spec() {
         // Pins the identifier rule stated as a guarantee on [`Cell::outputs`] and in the README: an
-        // identifier is a letter or `_` followed by letters, digits or `_`. Preserves the pin-name
-        // half of the removed src/expr.rs's `constants_and_pin_names_with_digits`, now exercised at
-        // the deserialise-time parse boundary.
+        // identifier is a letter or `_` followed by letters, digits or `_`. Checked at the
+        // deserialise-time parse boundary.
         let s = r#"
 [[cell]]
 name = "IDENT"
@@ -3278,10 +3282,9 @@ Z = "_x*M1"
 
     #[test]
     fn rejects_malformed_output_function_at_parse_spec() {
-        // Preserves the malformed-input coverage that lived in the removed src/expr.rs's
-        // `rejects_garbage`, now exercised at the deserialise-time parse boundary: each of these must
-        // fail `parse_spec` itself, with no `.analyse()` call reached. (`"a +"` is already covered by
-        // `invalid_output_function_fails_at_parse_spec`.)
+        // Malformed functions are rejected at the deserialise-time parse boundary: each of these
+        // must fail `parse_spec` itself, with no `.analyse()` call reached. (`"a +"` is already
+        // covered by `invalid_output_function_fails_at_parse_spec`.)
         for bad in ["", "a b", "(a", "a @ b"] {
             let s = format!(
                 r#"

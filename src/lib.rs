@@ -19,11 +19,12 @@ pub(crate) mod text;
 
 #[cfg(test)]
 mod smoke {
-    //! Confirms the espresso-logic 5.x public API and its C-FFI build link, and that the two
-    //! primitives cellsmith leans on behave as the plan assumes:
-    //!   * feedback projection via universal quantification (`forall`), and
-    //!   * universal projection to a two-sided FR cover (`cover_over_fr`), whose F/R cubes are the
-    //!     on/off sets and whose absent cubes are the undef/hold gap.
+    //! Confirms the espresso-logic 5.x public API and its C-FFI build link, and two properties of
+    //! the primitives cellsmith leans on:
+    //!   * universal quantification (`forall`) of the feedback variable out of a next-state
+    //!     function yields its on-set, and out of the function's complement its off-set; and
+    //!   * universal projection to a two-sided FR cover (`cover_over_fr`) yields F/R cubes that are
+    //!     the on/off sets, the undef/hold gap being the absence of a cube.
 
     use espresso_logic::{bdd_builder, expr, CubeType};
 
@@ -39,8 +40,7 @@ mod smoke {
         // Cover extraction works => FFI + BDD are linked.
         assert!(f.cover().num_cubes() >= 1);
 
-        // Project the feedback variable q out (complement the BDD directly rather than rebuilding a
-        // negated expression).
+        // Project the feedback variable q out; the off-set quantifies the complemented BDD.
         //   on  = ∀q. f   == a*b
         //   off = ∀q. !f  == !a*!b
         let on = f.forall(["q"]);

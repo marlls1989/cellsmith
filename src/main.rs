@@ -1217,8 +1217,8 @@ Q = "CLK*M + !CLK*Q"
 
     /// A 3-cell spec (C2, MUT, DFF) exercises the whole pipeline at once: every cell's three artifacts
     /// land in the stdout stream, and both hazard classes (MUT's oscillation, C2/DFF's order-dependent
-    /// race) are diagnosed on the warning stream. Order-insensitive `contains` checks only — no
-    /// full-output compare.
+    /// race) are diagnosed on the warning stream. The checks are order-insensitive `contains`
+    /// checks.
     #[test]
     fn multi_cell_spec_covers_all_cells() {
         let mut spec = parse_spec(MULTI).unwrap();
