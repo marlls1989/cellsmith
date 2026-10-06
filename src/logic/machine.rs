@@ -7,10 +7,10 @@
 //! and each coordinate is either **defined** (a concrete `0`/`1`) or **absent** — encoded as the
 //! don't-care `-`. Power-on is the inputs-only node: no coordinate fixed. The next-state map settles the
 //! coordinate columns (via each coordinate's minimised next-state function, read directly from the model
-//! (see [`super::minimise`])) using [`Bdd::evaluate`], which reads a δ under the node's
-//! fixed columns and returns `Ok(v)` only when they force it — an absent coordinate stays absent
-//! (its δ provably does not depend on it yet, so `evaluate` returns `Err`). A node is *stable* when it
-//! is its own next-state.
+//! (see [`super::minimise`])) using [`Bdd::evaluate_fast`], which reads a δ under the node's
+//! fixed columns and returns `Some(v)` only when they force it — otherwise it returns `None` and
+//! the coordinate stays absent (its δ still depends on an absent column). A node is *stable* when
+//! it is its own next-state.
 //!
 //! Start states are not assumed: `explore` discovers them from the forced on/off covers of the signal
 //! functions over the cell inputs ([`Bdd::cover_over_fr`]) — input vectors that force a signal
@@ -420,7 +420,7 @@ pub(crate) fn explore<B: Brand, C: ManagerCell + Send + Sync>(
 
     // Seed the BFS from the pooled candidates: widen each candidate input onto the full columns (the
     // coordinate columns arrive absent, target-only labels of the projection) and settle to a stable
-    // state, which is where a combinational coordinate first takes a value — no separate fill phase.
+    // state, which is where a combinational coordinate first takes a value.
     // Metastable seeds (no stable state) are dropped, and a `Vacant` entry dedups candidates settling
     // to one state.
     let mut prev: HashMap<Minterm<Symbol>, Option<Minterm<Symbol>>> = HashMap::new();

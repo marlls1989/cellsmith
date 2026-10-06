@@ -105,7 +105,7 @@
 //! fires only on a recurrent group, whose rep self-holds. An exposed internal is therefore either a
 //! state variable itself or referenced by nobody, which is what lets the machine's I3 `debug_assert`
 //! (`Machine::build` in [`analysis`](super::analysis) — every signal's support within the state set)
-//! stand unchanged. Any two signals with an identical **recurrent** δ would already have been deduped
+//! hold. Any two signals with an identical **recurrent** δ would already have been deduped
 //! onto a self-holding
 //! rep; combinational duplicates are left as independent full-function signals — each already lies within
 //! inputs plus self-reaching signals, so no alias to a non-state rep is ever emitted. The machine
@@ -130,15 +130,17 @@
 //!
 //! **(I5) dedup soundness.** If `δ_a == δ_b` as BDDs, then `a` and `b` are computed by the identical
 //! function and take equal values at *every* stable state — lockstep, the I1 wire generalised to any
-//! shared function. Merging is sound as a coordinate rename in general, but recurrence now licenses only
-//! the **preserved**-aliasing half of the merge: **non-preserved** retirement is unconditional (an
-//! internal no one addresses by name never has to keep naming a state variable on its own), while a
-//! **preserved** duplicate demotes to `var(rep)` only when the group is *recurrent* — read from the
-//! rep's **current** δ at commit time, not
-//! the grouping-time snapshot, since an earlier same-pass group's rewrite can only *remove* references to
-//! this group's members, never add one. When recurrent, the renamed-away member never re-enters any
-//! support — folding substitutes `var(rep)` for the member, never the member's own name — so no dedup
-//! group can re-form on it, and the demotion is idempotent under the `!=` change-check (I4). A
+//! shared function. Merging is sound as a coordinate rename in general, but recurrence licenses
+//! only the **preserved**-aliasing half of the merge: **non-preserved** retirement is unconditional
+//! (an internal no one addresses by name never has to keep naming a state variable on its own),
+//! while a **preserved** duplicate demotes to `var(rep)` only when the group is *recurrent*.
+//! Recurrence is read from the rep's δ at grouping time, before any edit — every edit of the pass
+//! is deferred to the pass end — and that read is also the value at commit: groups are disjoint and
+//! a group's rename touches only its own members, so no other group's edit can change whether this
+//! group's rep references one of this group's members. When recurrent, the renamed-away member
+//! never re-enters any support — folding substitutes `var(rep)` for the member, never the member's
+//! own name — so no dedup group can re-form on it, and the demotion is idempotent under the `!=`
+//! change-check (I4). A
 //! non-recurrent group with no non-preserved member commits nothing, leaving the duplicates as
 //! independent full-function signals — the behaviour-preserving baseline. The two roles are read apart:
 //! the demotion gate asks `is_preserved` (may this name go?), the representative preference asks
@@ -160,7 +162,7 @@
 //! coordinate across two names — but only through the demotion gate, i.e. only when the group is
 //! recurrent (I5), so a demoted signal only ever aliases a **self-reaching** rep, and the fold skips
 //! self-holding candidates: a dedup alias is never a fold candidate and can never be re-expanded.
-//! No exclusion is needed. Non-preserved retirement carries no such gate: a purge rewrite can rename
+//! Non-preserved retirement carries no such gate: a purge rewrite can rename
 //! a consumer's reference onto the rep mid-pass, handing the fold a fresh relay candidate the very same
 //! round. Conversely, an output that is a bare ±alias of a surviving internal is just the **arity-1**
 //! case of the fold: the substitution keeps the coordinate on the pin (`t` must be a non-preserved
@@ -174,8 +176,8 @@
 //! links are **all** arity `> 1` and no node self-holds: a fold can fire before any 2-cycle forms,
 //! shrinking a would-be oscillation group. No committed or mandated cell is affected — MUT and SR are
 //! 2-cycles the guard catches, and ICM's folded relays feed synchroniser latches that already self-hold.
-//! For an ironclad criterion the fold would carry a BDD check that the projected cycle structure
-//! survives; the structural guard is accepted per the decided enforcement level.
+//! An ironclad criterion would need a BDD check that the projected cycle structure survives; that
+//! check is not implemented, and the structural 2-cycle guard is what the fold enforces.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -398,11 +400,10 @@ fn dedup_pass<B: Brand, C: ManagerCell>(
             .or_else(|| members.iter().find(|m| p.is_preserved(m)))
             .unwrap_or(&members[0])
             .clone();
-        // Recurrence reads the grouping-time snapshot — equal here to the commit-time read the former
-        // incremental pass took. Groups are DISJOINT and a group's rename substitutes only its own
-        // members with its own rep, which can neither add nor remove a reference to another group's
-        // members inside that group's rep, so no earlier group's edit can flip this predicate:
-        // deferring the whole pass keeps the value the incremental read produced. A recurrent group's
+        // Recurrence reads the grouping-time snapshot, and that is the value at commit: groups are
+        // DISJOINT and a group's rename substitutes only its own members with its own rep, which
+        // can neither add nor remove a reference to another group's members inside that group's
+        // rep, so no other group's edit can flip this predicate. A recurrent group's
         // rep self-holds after the rename → var(rep), so the aliases stay machine-evaluable (I3); a
         // non-preserved duplicate always retires regardless.
         let recurrent = members
@@ -764,8 +765,8 @@ mod tests {
     #[test]
     fn complement_output_pair_keeps_both_pins() {
         // Both Q and QN are outputs; the definer QN self-holds after the fold (Q = !QN substituted in),
-        // leaving the non-cyclic output Q = !QN legally naming the cyclic output QN. No hoist runs —
-        // output/state separation is now a Liberty-only concern handled at emission time.
+        // leaving the non-cyclic output Q = !QN legally naming the cyclic output QN. Output/state
+        // separation is a Liberty-only concern handled at emission time.
         let mut sys = system! {
             outputs: ["Q", "QN"],
             "Q" = "!QN",
@@ -886,7 +887,7 @@ mod tests {
 
     #[test]
     fn all_wire_cycles_collapse_to_single_coordinate() {
-        // Notes point-2 resolution: an all-wire cycle is not refused but collapsed onto a single keeper
+        // An all-wire cycle is not refused but collapsed onto a single keeper
         // node whose dynamics are preserved — the surviving coordinate holds the one bit the cycle
         // carried (a lone keeper for a=b, a one-node oscillator for a=!b).
         //
@@ -1113,7 +1114,7 @@ mod tests {
 
     #[test]
     fn buffered_c_element_dedups_then_folds_to_single_output_coordinate() {
-        // Q and IQ both buffer !QN and are plain-BDD-equal: dedup now retires the internal duplicate IQ
+        // Q and IQ both buffer !QN and are plain-BDD-equal: dedup retires the internal duplicate IQ
         // outright (purged, consumers rewritten onto var(Q)) inside dedup_pass itself. QN then folds
         // through via the fold landing the coordinate on the output alias, so the whole cell reduces to
         // the single output coordinate Q = A*B + Q*(A+B).
@@ -1156,7 +1157,7 @@ mod tests {
     fn recurrent_duplicate_outputs_dedup_to_one_coordinate() {
         // Two output pins carry the identical *recurrent* function (the coordinate self-reaches through
         // Q1). Dedup merges Q2 onto var(Q1), making Q1 self-holding — Q2 = var(Q1) legally names the
-        // output Q1; no hoist runs (separation is now an emission-time concern).
+        // output Q1; output/state separation is an emission-time concern.
         let mut sys = system! {
             outputs: ["Q1", "Q2"],
             "Q1" = "!R*(S+Q1)",
@@ -1396,7 +1397,7 @@ mod tests {
     fn exposed_relay_folds_into_its_consumers_and_survives() {
         // W is an exposed combinational relay. The fold composes it into every consumer exactly as it
         // would a plain internal and skips only the removal, so W survives to the minimised model with
-        // no consumers left — the I3 shape that keeps the machine's support assert intact.
+        // no consumers left — the I3 shape under which the machine's support assert holds.
         let mut sys = system! {
             outputs: ["Z"],
             exposed: ["W"],
@@ -1727,7 +1728,7 @@ mod tests {
 
     #[test]
     fn exposing_a_signal_reaches_the_same_minimised_model_once_it_is_released() {
-        // D5: minimising with a wider preserved set and then re-minimising with the outputs alone must
+        // Minimising with a wider preserved set and then re-minimising with the outputs alone must
         // land on the result a single outputs-only run reaches. This is a falsification test — that the
         // dedup/fold minimised model is reachable from a partly-minimised start is NOT one of the
         // module's proved obligations, so a failure here is a finding about the design, not about the

@@ -10,8 +10,7 @@
 //!
 //! Substitution itself happens once, up front, in [`super::minimise`]: each signal's function is folded
 //! until neither pass commits, to the minimised model's residual set, before this module ever sees it. δ (a
-//! state variable's next-state function) is then a direct lookup in the shared BDD map — there is no
-//! resolve/substitution step left to perform here.
+//! state variable's next-state function) is then a direct lookup in the shared BDD map.
 
 use std::collections::{BTreeMap, BTreeSet};
 

@@ -118,7 +118,7 @@ pub struct Hazard {
     /// arc states as its initial condition. An output that is no state variable is no coordinate of
     /// `state`, so reading its level takes the machine that detection ran on.
     pub(crate) levels: ArcLevels,
-    /// The probed state itself: every input and state variable at the level it holds there. The
+    /// The probed state itself: every input and coordinate at the level it holds there. The
     /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
     /// emitted column carries.
     pub state: Minterm<Symbol>,

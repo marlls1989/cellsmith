@@ -167,8 +167,7 @@ pub(crate) struct EdgeArcs {
     pub(crate) derived: Vec<DerivedRegister>,
     /// The outputs the read-gate factorisation took apart: each one's register moved to a node of its own
     /// (`derived`) and the output itself became a combinational read over it, so it no longer carries an
-    /// `EdgeCaptures` entry of its own. Stated here by the pass that decides it, rather than recovered
-    /// downstream by asking which outputs `derived` names as readers.
+    /// `EdgeCaptures` entry of its own. Stated here by the pass that decides it.
     pub(crate) factored: BTreeSet<Symbol>,
 }
 
@@ -343,10 +342,10 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     delay_arcs: &[DelayArc],
 ) -> EdgeArcs {
     // The builder mints region covers, and is only present when the cell has state variables. With no
-    // state variable no latch can open, so condition 1' is vacuously false and both `labels` and
-    // `captures` come out empty from the loops below — there is no early return (its absence was what let
-    // an unrelated flop change an unrelated arc's type). Every path that needs the builder is guarded by
-    // a non-empty opener set, which implies a state variable exists.
+    // state variable no latch can open, so no latch GENERATES (goes opaque→transparent, step 1 of
+    // the module doc) and both `labels` and `captures` come out empty from the loops below — there
+    // is no early return. Every path that needs the builder is guarded by a non-empty opener set,
+    // which implies a state variable exists.
     let builder = m.deltas.first().map(|c| c.delta.builder());
 
     let cell = m.cell;
@@ -506,7 +505,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
         }
     }
     // TRANSPARENCY of a latch in a `(clock, level)` phase: (a) no live dependency cycle through it at any
-    // eligible stable state of the phase (`!opaque`, UNCHANGED), and (b) its value VARIES across the phase's
+    // eligible stable state of the phase (`!opaque`), and (b) its value VARIES across the phase's
     // eligible stable states. A phase where the latch is one constant everywhere is a clamp, not an opening —
     // the value arrives regardless, whoever supplies the constant (a reset, or the toggled clock's own
     // level), so it is not the delivered side of a generation. Conjunct (b) is a plain scan of the eligible
@@ -562,9 +561,8 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     };
     // A node's DIRECT-SUPPORT K-LATCHES: the state variables `δ_node` reads in ONE step that are
     // K-associated (a real latch on `clock`). Used SOLELY by the closer-exposure birth test to pick a
-    // mux's two legs. It BOUNDS NOTHING — it is NOT a propagation depth. Propagation (see `propagates`) is
-    // transitive and unbounded; this listing only names what a node reads DIRECTLY, which is exactly what
-    // the two-leg mux shape reads off, and no more.
+    // mux's two legs. Propagation (see `propagates`) is transitive and unbounded; this listing only
+    // names what a node reads DIRECTLY, which is exactly what the two-leg mux shape reads off.
     let cone = |n: &str, clock: &Symbol| -> Vec<Symbol> {
         fn_of
             .get(n)
@@ -635,7 +633,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // generators (a latch opaque→transparent) plus the closer-exposure nodes, both found at ANY node; the
     // birth universe is every candidate (an output or a state variable, each carrying a raw function).
     // Propagation is transitive with no depth cutoff, so a generator revealed through a DEEP same-phase
-    // pipe or a BURIED mux types identically to a shallow one — there is no one-step-cone gate. Per firing
+    // pipe or a BURIED mux types identically to a shallow one. Per firing
     // — `sp` is that firing's own destination — so two firings of one `(output, clock, direction)` can
     // type differently.
     let types_edge = |o: &Symbol, clock: &Symbol, edge: Edge, sp: &Minterm<Symbol>| -> bool {
@@ -974,7 +972,7 @@ pub(crate) fn classify<B: Brand, C: ManagerCell + Send + Sync>(
     // whole chain.
     //
     // The criterion is deliberately NARROWER than early minimisation's, which preserves self-referential
-    // loops so oscillation stays detectable — minimisation is untouched by this. `minimise`'s
+    // loops so oscillation stays detectable. `minimise`'s
     // minimised-model support invariant I3 (`src/logic/minimise.rs`) holds by construction: every kept
     // survivor's support is kept by closure.
     let ref_reg: BTreeSet<&str> = captures
@@ -2372,7 +2370,7 @@ enB   = "!RB*(!CLKB*selb2+CLKB*enB)"
 GCLK = "enA*CLKA+enB*CLKB"
 "#;
 
-    // === Floor: the canonical flop and interlock keep exactly their arcs ===
+    // === The canonical flop and interlock keep exactly their arcs ===
 
     #[test]
     fn edge_dff_floor() {
@@ -3733,7 +3731,7 @@ GCLK = "CLK*EL"
         }
     }
 
-    // === Grounded per-arc fixtures (DCMUX, COEX, transparent cascade, clock-and-async) ===
+    // === Per-arc fixtures (DCMUX, COEX, transparent cascade, clock-and-async) ===
 
     // DCMUX -- two independently-clocked masters merged into one output Q. Each clock's RISING edge is a
     // generation at Q (Q self-loops only when both clocks are low, and each rise takes it transparent to
@@ -3832,7 +3830,9 @@ Q = "!R*(B + CLK*M + !CLK*Q)"
 
     // Transparent cascade (zero-arc): a level latch feeding a same-phase level latch is transparent
     // overall -- the whole chain follows D through CLK's low phase, so no node keeps a capture and none
-    // carries an edge arc (it falls out of the quiet-phase rule, not from any dismissal). The XLAT
+    // carries an edge arc (it falls out of the active-edge set's hold condition, step 2 of the
+    // module doc: an edge is dropped when the node makes a non-forcing change inside the phase it
+    // delivers, at a toggle that is not itself an active edge — not from any dismissal). The XLAT
     // analogue.
     const TCASC_TOML: &str = r#"
 [[cell]]
@@ -3922,7 +3922,7 @@ Q = "!CLKB*M2 + CLKB*Q"
         //   transparent (CLKB=0) and re-delivers its own held value when CLKB is opaque (CLKB=1);
         // * CLKB:Fall is Q's OWN latch opening — Q holds M2 in CLKB=1 and reveals it on the fall, a
         //   first-class active edge with its own capture (M2). The replay harness predicts this reveal
-        //   directly, with no exemption.
+        //   directly.
         with_machine!(HPIPE_TOML, |builder, _a, _m2, m| {
             let es = classify(&m);
             assert_captures_faithful(&m, &es);
@@ -4210,7 +4210,7 @@ Q = "!( !(M2*!CLKB) * Qn )"
                 ["M1", "M1n"],
                 "the inner NAND master pair folds together, mirroring the pass-gate HPIPE folding its lone M1"
             );
-            // M2/M2n carry the CLKA captures, so they were never fold candidates under either rule.
+            // M2/M2n carry the CLKA captures, so they are not fold candidates.
             assert!(
                 !folded.iter().any(|n| *n == "M2" || *n == "M2n"),
                 "M2/M2n survive, carrying the CLKA captures"
@@ -4225,8 +4225,8 @@ Q = "!( !(M2*!CLKB) * Qn )"
     // than holding. It is an edge arc like any other — a latch has no capture but it does have an opening,
     // so it is not timing-invisible.
     //
-    // The lists below are GROUNDED: each was read off the machine before being pinned, never predicted
-    // from the equations' shape.
+    // The lists below state the arcs the machine's toggle-and-settle behaviour yields, not a
+    // reading of the equations' shape.
 
     #[test]
     fn edge_labels_single_clock_sourced_from_arcs() {
@@ -4354,7 +4354,7 @@ Q = "!( !(M2*!CLKB) * Qn )"
         });
 
         // MCDFF: two latches on UNRELATED clocks. It stays captureless (its zero-capture fixture is a
-        // separate assertion and must remain true), yet it is not timing-invisible — Q's CLKB rise opens
+        // separate assertion), yet it is not timing-invisible — Q's CLKB rise opens
         // its own latch and Q's CLKA fall reaches Q only through the open CLKB latch. Conditioning never
         // reclassifies an arc.
         with_machine!(MCDFF_TOML, |_b, _a, _m2, m| {
@@ -4472,10 +4472,11 @@ Q = "!( !(M2*!CLKB) * Qn )"
 
     #[test]
     fn folded_nodes_are_referenced_by_nothing_that_survives() {
-        // The emission invariant the group fold widens, over the sequential fixtures that exercise every
-        // fold shape: a lone master (DFF, HPIPE), a mutually-referencing capture-less pair (NDFF,
-        // NHPIPE), several independent masters (DET, ICM), a ring that folds nothing (the toggle flop)
-        // and the two masters kept live by an outside reference (tapped, exposed).
+        // The emission invariant that no surviving node references a folded one, over the
+        // sequential fixtures that exercise every fold shape: a lone master (DFF, HPIPE), a
+        // mutually-referencing capture-less pair (NDFF, NHPIPE), several independent masters (DET,
+        // ICM), a ring that folds nothing (the toggle flop) and the two masters kept live by an
+        // outside reference (tapped, exposed).
         for src in [
             DFF_TOML,
             NDFF_TOML,
@@ -4793,13 +4794,13 @@ Y = "K2*T + !K2*Y"
         );
     }
 
-    // === Generation and propagation coerce no state: no state-coercion identifier survives ===
+    // === Generation and propagation coerce no state: no code identifier names state coercion ===
 
     #[test]
     fn no_state_coercion_identifier_survives_in_src() {
         // Generation and propagation type edges purely by restriction-survival over the machine's own
-        // stable states, coercing no state. This gate proves that discipline is intact: no code identifier
-        // names a state-perturbation mechanism. Each needle is assembled from two halves so the gate never
+        // stable states, coercing no state. This gate checks that no code identifier names a
+        // state-perturbation mechanism. Each needle is assembled from two halves so the gate never
         // matches its own source, and only CODE is scanned — the part of each line before `//` — so the
         // ordinary physical word (a phase clamped to a constant is a forcing) survives in prose.
         let needles: Vec<String> = [

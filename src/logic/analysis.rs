@@ -6,7 +6,7 @@
 //! state variables and the combinational survivors alike (see [`machine`] and `resolve`). The
 //! signals' BDDs are built and minimised once in [`crate::model::Cell::analyse`]; this pass reads that
 //! shared map. After the fold every coordinate's next-state δ **is** its entry in the map — a direct
-//! lookup, no per-signal composition. Only the one
+//! lookup. Only the one
 //! `machine::explore` BFS is set up here, and it is the same setup for both derivations, so it is done
 //! **once** and shared through [`Machine`]. It is done once per CELL rather than once per view: a cell
 //! that exposes internal nodes is analysed as two views, and the second one takes the first's explored
@@ -90,8 +90,8 @@ pub struct Machine<'c, B: Brand, C: ManagerCell> {
     /// the same nodes, keyed by name rather than by position.
     ///
     /// Exposure is read only to SAMPLE levels: these names are absent from the exploration's
-    /// `seed_funcs` below, so exposing a node cannot change which states are reached. That is what makes
-    /// the change an arcs-only one — the machine explores the same state space either way.
+    /// `seed_funcs` below, so exposing a node cannot change which states are reached: exposing a
+    /// node changes the arcs only, and the machine explores the same state space either way.
     pub(crate) exposed: Vec<Symbol>,
     /// The reachable stable states over THIS view's coordinates, from the cell's one
     /// [`machine::explore`] BFS — run here, or carried onto these coordinates from the view that ran it
@@ -116,8 +116,8 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
         let inputs = &cell.inputs;
 
         let signals: Vec<&crate::model::AnalysedOutput> = cell.signals().collect();
-        // Feedback was recomputed post-fold, so this classifier is now exact: every surviving state
-        // variable genuinely self-reaches.
+        // Feedback is recomputed from the minimised model, so this classifier is exact: every
+        // surviving state variable genuinely self-reaches.
         let state_set = resolve::state_variables(&signals);
         // State variables in signal order (outputs first, then internals).
         let state_vars: Vec<Symbol> = signals
@@ -128,7 +128,7 @@ impl<'c, B: Brand, C: ManagerCell> Machine<'c, B, C> {
 
         // `minimise`'s minimised-model support invariant (I3): every signal's signal-name support is a
         // subset of the state variables, so a state variable's next-state δ and a combinational
-        // output's δ are both a direct lookup in the shared map — no per-signal composition remains.
+        // output's δ are both a direct lookup in the shared map.
         debug_assert!(
             signals.iter().all(|s| {
                 bdds[&s.name]
@@ -313,8 +313,8 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     // Behavioural edge classification is read-only over the explored machine — it mints only
     // already-existing names and mutates nothing (the exploration-unchanged invariant holds BY
     // CONSTRUCTION). The derived `arcs` are its label domain: every timing arc it labels is one of the
-    // pipeline's own delay arcs. The opt-out (`collapse == false`) SKIPS the classify() call entirely
-    // rather than discarding its result: a real bypass, leaving the annotation at its plain `Default`.
+    // pipeline's own delay arcs. The opt-out (`collapse == false`) SKIPS the classify() call
+    // entirely, leaving the annotation at its plain `Default`.
     let edge = if collapse {
         crate::logic::edge::classify(&m, &arcs)
     } else {
@@ -426,8 +426,7 @@ mod tests {
     fn wide_machine_with_a_narrow_pool_is_analysed() {
         // A machine 24 coordinates wide — 6 inputs and 18 state variables — is analysed in full: the
         // candidate counter reads the input columns alone (6 of them, so no cube expands past 2^6 seed
-        // minterms) and the state counter reads the states actually discovered, so a cell carrying many
-        // state variables is no longer turned away for its width.
+        // minterms) and the state counter reads the states actually discovered.
         //
         // Each `Qj` is set at one input vector, holds at the complementary vector and clears everywhere
         // else: genuine memory (under the hold vector its δ reads `Qj`), a distinct δ per `j` so the
@@ -467,7 +466,7 @@ mod tests {
 
     #[test]
     fn single_input_state_holder_is_coherent() {
-        // Blind spot: a state-holding cell with fewer than two inputs. A single-input set-only keeper
+        // A state-holding cell with fewer than two inputs: a single-input set-only keeper
         // (Q = A + Q) must be handled without panic. Its region view is a proper hysteretic state table
         // (Q holds while A is low, is set when A is high); it has no *measured* arc because the only
         // transition rises out of the uninitialised state, which is deliberately not characterised.
@@ -512,9 +511,9 @@ Q = "A + Q"
 
     #[test]
     fn midsize_multistate_cell_is_coherent() {
-        // Blind spot: a cell larger than the 2-input C-element but well within the guard, carrying
-        // multiple state signals (internal master M and output Q) plus an async reset. Arcs, constraints
-        // and regions are all produced coherently.
+        // A cell larger than the 2-input C-element, carrying multiple state signals (internal
+        // master M and output Q) plus an async reset. Arcs, constraints and regions are all
+        // produced coherently.
         let cell = analyse_one(
             r#"
 [[cell]]
@@ -663,7 +662,7 @@ Q = "CLK*M + !CLK*Q"
         );
     }
 
-    /// The wave-1 coordinate fixture, built once per test: the keeper `Q` — a state variable — beside
+    /// The coordinate fixture, built once per test: the keeper `Q` — a state variable — beside
     /// the exposed combinational node `W`, so one cell carries both kinds of coordinate. The
     /// minimisation runs with `W` preserved (`Preserved::with_exposed`), which is what keeps a
     /// combinational exposure in the model at all.
@@ -700,10 +699,10 @@ Q = "W + Q*(A+B)"
 
     #[test]
     fn every_explored_node_carries_a_column_per_coordinate() {
-        // What promoting the combinational survivors to coordinates establishes: each one is a column
-        // of every explored node, carrying exactly what its δ evaluates to there — the same relation a
-        // state variable's column already stood in. Read over both halves at once, so a coordinate that
-        // was left out of the node's columns, or left holding a value its δ contradicts, fails here.
+        // Every coordinate — state variable and combinational survivor alike — is a column of
+        // every explored node, carrying exactly what its δ evaluates to there. Read over both kinds
+        // at once, so a coordinate left out of the node's columns, or holding a value its δ
+        // contradicts, fails here.
         let cell = coordinate_fixture();
         let builder = espresso_logic::sync_bdd_builder!();
         let bdds = crate::model::build_signal_bdds(&cell, &builder);

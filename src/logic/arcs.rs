@@ -1,14 +1,16 @@
 //! Transition-arc derivation over the cell's **asynchronous state machine**.
 //!
-//! A cell is a state machine over `inputs × state-variables` (each output's own feedback and every
-//! internal state node; see `resolve`). A node is a [`Minterm<Symbol>`] over
-//! `inputs…, state_vars…` ([`machine`]); traversal states may be partial — an uninitialised latch
+//! A cell is a state machine over `inputs × coordinates`: the state variables (each output's own
+//! feedback and every internal state node; see `resolve`) plus the combinational survivors of the
+//! minimisation, promoted to coordinates alongside them. A node is a [`Minterm<Symbol>`] over
+//! `inputs…, coordinates…` ([`machine`]); traversal states may be partial — an uninitialised latch
 //! leaves its state column a don't-care — but every MEASURED arc comes only from a fully-initialised
 //! (determinate) state, per the shared `Machine::arc_eligible` predicate. Arcs are derived by
 //! exploring it:
 //!
 //!   1. Each state variable's δ comes directly from the cell's minimised signal functions; `machine::settle` applies them
-//!      via [`Bdd::evaluate`](espresso_logic::bdd::Bdd::evaluate) until the state stops changing.
+//!      via [`Bdd::evaluate_fast`](espresso_logic::bdd::Bdd::evaluate_fast), which yields `Some(v)`
+//!      when the node's columns force δ and `None` otherwise, until the state stops changing.
 //!   2. BFS from the reachable stable states — which are not assumed but discovered by `machine::explore`
 //!      from the on/off covers of the signal characteristic functions (never an assumed all-zero state) —
 //!      stepping one input at a time and letting the state settle. Oscillating transitions (the state
@@ -202,9 +204,9 @@ pub struct Arc {
     pub(crate) output: PinEdge,
     pub(crate) related: Symbol,
     /// Start state of the measured edge (the prevector's target): the FULL machine node, over the
-    /// input AND state-variable columns, not just the input projection. This is the arc's context:
-    /// two firings that agree on the inputs but differ in internal state are different arcs, each
-    /// with its own prevector, and both are emitted.
+    /// input AND coordinate columns (state variables and combinational survivors). This is the
+    /// arc's context: two firings that agree on the inputs but differ in internal state are
+    /// different arcs, each with its own prevector, and both are emitted.
     pub(crate) start: Minterm<Symbol>,
     /// End state of the measured edge (defines the vector and the `-when` condition).
     pub(crate) end: Minterm<Symbol>,
@@ -220,8 +222,8 @@ pub struct Arc {
 pub struct HiddenArc {
     /// The toggled primary input and the edge it makes.
     pub(crate) pin: PinEdge,
-    /// Start state of the measured toggle: the FULL machine node before it (inputs and state
-    /// variables), the arc's context — see [`Arc::start`].
+    /// Start state of the measured toggle: the FULL machine node before it (inputs and all
+    /// coordinates), the arc's context — see [`Arc::start`].
     pub(crate) start: Minterm<Symbol>,
     pub(crate) end: Minterm<Symbol>, // input vector after the toggle
     pub(crate) prevector: Vec<Minterm<Symbol>>,
@@ -260,7 +262,7 @@ impl OutputLevels<'_> {
 
 /// Derive transition arcs for every output of a cell by re-walking its shared asynchronous state machine
 /// (see [`machine`] and [`Machine`]). A machine node is a [`Minterm<Symbol>`] over
-/// `[inputs…, state_vars…]`; traversal states may be partial, but each arc is measured only from a
+/// `[inputs…, coordinates…]`; traversal states may be partial, but each arc is measured only from a
 /// fully-initialised (determinate) state (see `Machine::arc_eligible`). Also derives the
 /// whole-cell internal-power ('hidden') arcs — single input toggles that settle but leave every
 /// output unchanged.
@@ -648,7 +650,7 @@ Q = "A*B + Q*(A+B)"
     fn c2_arc_and_hidden_prevector_walk_depths() {
         // multiset of prevector lengths, one entry per derived arc — pins the walk depth each context
         // costs. C2's only state variable is the output itself, so no two contexts share an identity:
-        // the counts are the same ones full-context keying yields. Re-capture only for a deliberate
+        // every context is its own arc. Re-capture only for a deliberate
         // algorithm change.
         let cell = analyse(
             r#"
@@ -732,7 +734,8 @@ Q = "E*D + !E*Q"
     /// Two latches, one of them masked out of the output: `K` drives `Y`, while `L` reaches it only
     /// through `S`. At `S=0` the two stored values of `L` are indistinguishable at the pins, so the
     /// same firing happens in two machine contexts that share every input value and every output
-    /// value — the minimal shape of the interlocked cells where the arc growth lands.
+    /// value — the minimal shape of an interlocked cell whose firings repeat across contexts the
+    /// pins cannot tell apart.
     const MASKED_PAIR: &str = r#"
 [[cell]]
 name = "MASKPAIR"

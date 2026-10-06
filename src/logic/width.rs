@@ -83,9 +83,9 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
     if m.state_vars.is_empty() {
         return Vec::new();
     }
-    // No input-count guard: a pulse-cause hazard relates one pin to ITSELF, so `confluence::detect`'s
-    // pair-wise `n < 2` early-out — a race there relates two inputs — is that pass's rule and not this
-    // one's.
+    // A single input is enough: a pulse-cause hazard relates one pin to ITSELF. The pair-wise
+    // `n < 2` early-out in `confluence::detect` belongs to that pass, where a race relates two
+    // inputs.
 
     let inputs = &m.cell.inputs;
     let ex = &m.explored;

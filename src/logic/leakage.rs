@@ -26,8 +26,7 @@ use crate::logic::analysis::Machine;
 /// one row keyed by node name, read back with [`Minterm::value_of`].
 ///
 /// A rest state is a single settled point of the machine — the block stating it measures no transition —
-/// so a node holds ONE level there, and the type carries one. There is no second end for a level to be
-/// read at.
+/// so a node holds ONE level there, and the type carries one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RestLevels {
     pub(crate) outputs: Minterm<Symbol>,
@@ -82,9 +81,10 @@ pub struct LeakageState {
     /// The state's primary-input assignment (inputs are always fully fixed at a node): `state`
     /// projected onto `cell.inputs`.
     pub(crate) inputs: Minterm<Symbol>,
-    /// The full machine state the cell rests at, over the input AND state-variable columns. Two rest
-    /// states agreeing on `inputs` and on `levels` still differ here — in a state variable no leakage
-    /// column names — which is what a conflation report has to point at.
+    /// The full machine state the cell rests at, over the input AND coordinate columns (state
+    /// variables and combinational survivors). Two rest states agreeing on `inputs` and on `levels`
+    /// still differ here — in a state variable no leakage column names — which is what a conflation
+    /// report has to point at.
     pub(crate) state: Minterm<Symbol>,
     /// The levels the cell holds at `state`: every output's settled value and every exposed internal
     /// node's level, one apiece — the rest state is the single point they are all read at.

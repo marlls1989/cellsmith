@@ -152,10 +152,9 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
     // combinational survivor is not excluded from settling just because nothing below reads its column.
     let deltas: Vec<machine::Delta<B, C>> = m.coordinate_deltas();
     // The direct support of every coordinate's δ — precomputed once, used by the
-    // combinational-neighbourhood divergence filter below (see the module doc). Left over the merged
-    // set rather than filtered down to the state variables: `support` is only ever INDEXED at a state
-    // key (`support[w]` for a diverging state variable `w`), so a combinational entry sits unread —
-    // harmless, and no guard is added to carve it back out.
+    // combinational-neighbourhood divergence filter below (see the module doc). It covers every
+    // coordinate: `support` is only ever INDEXED at a state key (`support[w]` for a diverging state
+    // variable `w`), so a combinational entry sits unread.
     let support: BTreeMap<Symbol, BTreeSet<Symbol>> = deltas
         .iter()
         .map(|c| (c.signal.clone(), c.delta.variables().collect()))
@@ -294,9 +293,9 @@ pub fn detect<B: Brand, C: ManagerCell + Send + Sync>(m: &Machine<B, C>) -> Vec<
                 // Where the two settle orders part: the Kleene XOR of the two rows, aligned by variable
                 // identity, holds 1 at every variable they fix differently and 0 at every variable they
                 // agree on. A variable either order left undefined comes through as `-` (`- ^ x = -`)
-                // rather than as agreement, so the read below raises `DETERMINATE` on it exactly as the
-                // two reads it replaces did. Taken over the whole row like `support` above — only ever
-                // read at a state key, so the input and combinational columns sit unread.
+                // rather than as agreement, so the read below raises `DETERMINATE` on it. Taken
+                // over the whole row like `support` above — only ever read at a state key, so the
+                // input and combinational columns sit unread.
                 let divergence = s_xy ^ s_yx;
                 let diverges = |w: &Symbol| divergence.value_of(w.as_str()).expect(DETERMINATE);
 

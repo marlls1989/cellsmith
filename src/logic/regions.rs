@@ -222,7 +222,7 @@ Q = "CLK*M + !CLK*Q"
         );
         let q = regions_of(&cell, &cell.outputs[0]);
         // Q = CLK*M + !CLK*Q depends on CLK and the internal M only — D is not in its support, so it is
-        // no longer a column (Q, its self-feedback, is projected out as the reg).
+        // not a column (Q, its self-feedback, is projected out as the reg).
         assert_eq!(
             q.cols.iter().map(Symbol::as_str).collect::<Vec<_>>(),
             ["CLK", "M"]
@@ -396,7 +396,7 @@ Y = "!(A*B)"
 
     #[test]
     fn state_regions_self_holding_keeper_stays_hysteretic() {
-        // A C-element keeper self-holds directly (Q on its own cycle) ⇒ hysteretic, as before.
+        // A C-element keeper self-holds directly (Q on its own cycle) ⇒ hysteretic.
         let cell = analyse(
             r#"
 [[cell]]

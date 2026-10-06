@@ -98,7 +98,7 @@ pub(crate) struct Constraint {
     /// `-probe`, so the characterisation measures every node the cause puts at risk, and `-ic`
     /// initialises each of those columns to the level standing beside its name here.
     pub(crate) nodes: Minterm<Symbol>,
-    /// The probed state itself: every input and state variable at the level it holds there. The
+    /// The probed state itself: every input and coordinate at the level it holds there. The
     /// prevector reaches it and the levels sample its pins, but only this names the internal nodes no
     /// emitted column carries.
     pub(crate) state: Minterm<Symbol>,
