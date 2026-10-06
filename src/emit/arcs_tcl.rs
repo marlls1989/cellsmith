@@ -1785,8 +1785,9 @@ Y = "A*B"
         assert_eq!(survivors, 1, "the colliding A→Y arcs collapse to one block");
     }
 
-    /// SHORTEST PREVECTOR: the surviving member of a collapsed group keeps the shortest prevector, on the
-    /// DEFAULT output. The minimum is read FROM `cell.arcs` (never hardcoded), so a length tie cannot
+    /// SHORTEST PREVECTOR: in the DEFAULT output, the one block a group of A→Y arcs sharing a
+    /// transition key comes out as is rendered from a model arc whose prevector is the group's
+    /// shortest. The minimum is read FROM `cell.arcs` (never hardcoded), so a length tie cannot
     /// make the assertion vacuous.
     #[test]
     fn general_keeps_the_shortest_prevector() {
@@ -2059,9 +2060,9 @@ Q = "E*D + !E*Q"
         }
     }
 
-    /// SHORTEST PREVECTOR AT THE TRANSITION GRAIN: each emitted representative carries the minimum
-    /// prevector length of its whole transition group — the minimum read FROM `cell.arcs`, over the
-    /// larger groups the transition grain forms.
+    /// SHORTEST PREVECTOR AT THE TRANSITION GRAIN: each emitted general block is rendered from a
+    /// model arc whose prevector has the minimum length of its whole transition group — the minimum
+    /// read FROM `cell.arcs`, over the larger groups the transition grain forms.
     #[test]
     fn general_arcs_keep_the_shortest_prevector_per_transition() {
         for src in GENERALISED_FIXTURES {

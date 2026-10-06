@@ -142,7 +142,7 @@
 //! own name — so no dedup group can re-form on it, and the demotion is idempotent under the `!=`
 //! change-check (I4). A
 //! non-recurrent group with no non-preserved member commits nothing, leaving the duplicates as
-//! independent full-function signals — the behaviour-preserving baseline. The two roles are read apart:
+//! independent full-function signals. The two roles are read apart:
 //! the demotion gate asks `is_preserved` (may this name go?), the representative preference asks
 //! `is_output` first and `is_preserved` only after (which name should carry the coordinate?), so an
 //! exposed internal never outranks a real output pin but does outrank a plain internal. A consumer that

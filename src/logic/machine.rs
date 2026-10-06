@@ -25,10 +25,10 @@
 //!
 //! # Exploration budgets
 //!
-//! `explore` is bounded by two counters, carried together in [`ExplorationBudget`] and charged against
-//! the work the call actually performs — never against the cell's declared shape (a cell is not turned
-//! away for having many inputs or many state variables). Whichever counter trips is the returned
-//! [`ExplorationLimit`] error, carrying the ceiling it passed.
+//! `explore` is bounded by two counters, carried together in [`ExplorationBudget`] and charged
+//! against the work the call actually performs, so a cell with many inputs or many state variables
+//! is explored as long as that work stays within the budgets. Whichever counter trips is the
+//! returned [`ExplorationLimit`] error, carrying the ceiling it passed.
 //!
 //! * **`candidates`** counts the **seed minterms** of the candidate pool. The pool expands every seed
 //!   function's forced FR cover into complete input assignments, so one cube carrying `d` don't-care

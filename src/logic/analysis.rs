@@ -303,7 +303,7 @@ pub fn analyse_machine<B: Brand, C: ManagerCell + Send + Sync>(
     // generator.
     let hazards: Vec<Hazard> = detected.into_iter().chain(width_dependence).collect();
     let constraints = match &cell.constraint_arcs_declared {
-        // Nothing is wanted of any pin, so generation is skipped whole rather than run and discarded.
+        // Nothing is wanted of any pin, so generation does not run and the constraint set is empty.
         ConstraintPins::Off => Vec::new(),
         selection => constraint::constrain(&hazards, &m.cell.clock_pins)
             .into_iter()

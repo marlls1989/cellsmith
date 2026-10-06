@@ -93,8 +93,9 @@ Every term the later sections lean on, pinned here before first use.
 
 Every state variable's δ_v is already determined by the time the machine is built. Minimisation rewrites
 the signal model **once**, before the machine is constructed, so that every surviving signal's function
-is expressed purely over primary inputs and the surviving state variables: building the machine then
-reads each state variable's function and each combinational output's function directly, and the settle
+is expressed purely over primary inputs and the coordinates — the state variables together with
+the combinational signals kept beside them (§2.1): building the machine then reads each state
+variable's function and each combinational output's function directly, and the settle
 and explore passes (§5–§6) only evaluate them. Constructing δ_v is therefore a direct lookup.
 
 The model was folded by two staged discriminators run until neither commits (the algorithm is documented

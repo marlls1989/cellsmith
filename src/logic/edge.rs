@@ -3616,8 +3616,9 @@ GCLK = "CLK*EL"
                 on.hidden_arcs,
             );
             // Leakage states by the rest state each records — the inputs held and every output's
-            // settled level — rather than by the prevector reaching it, which names one of several
-            // paths into that state and follows the same free BFS order the arcs' representatives do.
+            // settled level. The prevector reaching a state names one of several paths into it,
+            // picked by the same free BFS order the arcs' representatives follow, so the comparison
+            // leaves it out.
             assert!(
                 same_multiset(&off.leakage, &on.leakage, |a, b| a.inputs == b.inputs
                     && a.levels.outputs == b.levels.outputs),
