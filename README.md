@@ -346,6 +346,7 @@ Arguments:
 
 Options:
   -o, --outdir <OUTDIR>       Output directory [default: .]
+      --stdout                Write the artifacts to stdout instead of to files
   -n, --name <NAME>           Output base name [default: the spec file stem]
       --when[=<CLASS>]        Also emit `-when`-conditioned arcs; bare = every class, repeatable
                               [possible values: transition, hidden, constraint]
@@ -356,7 +357,6 @@ Options:
       --no-edge-collapse      Suppress the edge-register annotation
       --logic-low <VOLTAGE>   Voltage for logic `0` [default: 0]
       --logic-high <VOLTAGE>  Voltage for logic `1` [default: $VDD]
-      --stdout                Write the artifacts to stdout instead of to files
       --max-candidates <N>    Ceiling on pooled seed minterms [default: 4194304]
       --max-states <N>        Ceiling on recorded stable states [default: 1048576]
   -h, --help                  Print help
