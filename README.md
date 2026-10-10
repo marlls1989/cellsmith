@@ -59,7 +59,7 @@ Timing arcs are derived by exploring that state machine:
    covers, stepping **one input at a time** and letting the state settle;
 3. wherever a single input toggle flips an **output**, an arc is emitted.
 
-Three properties follow from this construction:
+Four properties follow from this construction:
 
 - **related pins are always primary inputs** — outputs and internal nodes are never arc sources
   (naming one cross-coupled output as the related pin of another would be invalid); they are established
@@ -77,20 +77,23 @@ Three properties follow from this construction:
 
 A cross-coupled cell is also **bistable**: co-asserting a mutex's two requests walks the joint
 next-state around a cycle it never leaves, so the machine reaches no **stable state** — an **oscillation
-hazard**, whose physical risk is metastability. An oscillation is annotated on the constraint it
-motivated: the comment leads the blocks generated to separate the racing pair, naming the condition the
+hazard**, whose physical risk is metastability. A ring is reported on stderr, naming the condition the
 pair toggles OUT of, the group of nodes involved and the states honouring the timing settles them to:
 
 ```
-# oscillation: !A*!B risks metastability in {Qa, Qb}, settling to one of {Qa=0, Qb=1} | {Qa=1, Qb=0}
+cellsmith: warning: cell "MUT": too little separation between A↑ and B↑ causes a hazard at {A=0, B=0, Qa=0, Qb=0}
+    when:            !A & !B
+    reached along:   {A=0, B=0}
+    pre-hazard:      {A=0, B=0}
+    triggered by:    simultaneous toggle A↑ & B↑
+    oscillation:     {Qa, Qb} lands at {Qa=0, Qb=1} or {Qa=1, Qb=0}
 ```
 
-(and the equivalent `/* oscillation: ... */` form heading the cell's Liberty stub). A comment explains
-what it accompanies, so a ring with no constraint beside it carries none — constraint arcs are opt-in,
-through a cell's `constraint_arcs` key or `--constraints` for every input pin of every cell, and a ring
-observed under a lone toggle names one pin, which has nothing to be separated from. Detection does not
-depend on that selection: the hazard report on stderr carries every hazard, one entry per cause — what
-the timing is between — and the state it goes wrong from. The hazard is derived from the functions
+The emitted artifacts carry the timing that removes the hazard and nothing else: the constraint blocks
+separating the racing pair, which are opt-in through a cell's `constraint_arcs` key or `--constraints`
+for every input pin of every cell. Detection does not depend on that selection: the hazard report on
+stderr carries every hazard, one entry per cause — what the timing is between — and the state it goes
+wrong from, whether or not a constraint was asked for. The hazard is derived from the functions
 themselves; there is no spec key to declare or silence it. The arbitration *choice* itself is a physical
 property Liberate characterises separately, outside cellsmith's deterministic timing arcs.
 
@@ -110,7 +113,7 @@ list.
 A TOML file describing many cells. The `name` field accepts either a single string or a list of
 strings; a list generates arcs and models for multiple physical cell variants that share the same
 function and interface but differ in drive strength or electrical properties. Cadence Liberate groups
-these as a braced list in the arc trailer (e.g. `define_arc ... { INVX1 INVX2 }`).
+these as a braced list in the arc trailer (e.g. `define_arc ... {INVX1 INVX2}`).
 
 ```toml
 [[cell]]
@@ -176,8 +179,8 @@ recognises, after exploration, the `CLK` rising arc on `Q` as an **edge arc**: `
 (carried by its primary-input hidden arcs) is unchanged; `Q`'s next state is re-expressed
 combinationally in terms of `D`, and its Liberate arc carries `-type edge`. Setting
 `no_edge_collapse = true` (or passing `--no-edge-collapse`) keeps the two-latch form written above
-exactly as it stands, with `M` staying a separate internal node and `Q`'s arcs discovered by the same
-walk as before.
+exactly as it stands, with `M` staying a separate internal node and `Q`'s `CLK` arcs discovered by
+walking `D` to load the master.
 
 Classification is **per arc**: every arc is labelled independently, and the label is the **edge arc**: a
 clock toggle that takes a latch from opaque to transparent and whose delivered value depends on retained
@@ -343,6 +346,7 @@ Arguments:
 
 Options:
   -o, --outdir <OUTDIR>       Output directory [default: .]
+      --stdout                Write the artifacts to stdout instead of to files
   -n, --name <NAME>           Output base name [default: the spec file stem]
       --when[=<CLASS>]        Also emit `-when`-conditioned arcs; bare = every class, repeatable
                               [possible values: transition, hidden, constraint]
@@ -353,17 +357,26 @@ Options:
       --no-edge-collapse      Suppress the edge-register annotation
       --logic-low <VOLTAGE>   Voltage for logic `0` [default: 0]
       --logic-high <VOLTAGE>  Voltage for logic `1` [default: $VDD]
-      --stdout                Write the artifacts to stdout instead of to files
       --max-candidates <N>    Ceiling on pooled seed minterms [default: 4194304]
       --max-states <N>        Ceiling on recorded stable states [default: 1048576]
   -h, --help                  Print help
   -V, --version               Print version
 ```
 
-Exceeding either exploration ceiling is a hard error: cellsmith names every cell whose exploration
-stopped there and exits without writing any artifacts, rather than presenting an unexplored cell's
-absent arcs and hazards as if that were its behaviour. Raise a ceiling for a run with
-`--max-candidates`/`--max-states`.
+Exceeding either exploration ceiling is a hard error: the analysis stops at a cell whose exploration
+was stopped there and names it, rather than presenting an unexplored cell's absent arcs and hazards as
+if that were its behaviour. Cells are analysed in parallel, so where several pass a ceiling the one
+reported is whichever the parallel analysis reached, not whichever failed first.
+Raise a ceiling for a run with `--max-candidates`/`--max-states`.
+
+A run's artifacts are written all together or not at all: each goes to a temporary file beside the
+artifact it becomes, and they are renamed into place once every one of them has been written, each
+rename first setting aside whatever the artifact's path held so that it can be put back. A run that
+fails — at an exploration ceiling, on a spec it cannot read, or part-way through writing or renaming
+its artifacts — leaves none of its artifacts behind, and the ones it would have replaced stay as they
+were. That covers the artifacts a run writes and no others: a run under `--no-cells` writes no
+`<base>_cells.tcl`, so one an earlier run left in the output directory stays there beside this run's
+artifacts.
 
 Examples:
 
@@ -429,31 +442,39 @@ cargo test
 
 ## Benchmarks
 
-The [Criterion](https://crates.io/crates/criterion) suite times every pipeline stage across a rayon
-thread sweep, from a serial `n=1` baseline up to `max` threads (`rayon::current_num_threads()`).
-cellsmith runs multithreaded, and parallelism can regress a stage's cost — intra-cell BDD parallelism
-once slowed ~3.7x under write-lock contention — so each stage is reported across the full sweep.
+The [Criterion](https://crates.io/crates/criterion) suite measures two things: what a run costs
+overall, and what each pass of the pipeline costs on its own. cellsmith runs multithreaded, and
+parallelism can make a stage slower as well as faster, so the thread width a measurement is taken at is
+a parameter of the measurement, not a property of what is being measured.
 
-Two targets cover the pipeline at different granularities, both driven off the 9 cells in
+Two targets, each a profile of a different thing, both driven off the 11 cells in
 `examples/cells.toml`:
 
 - `benches/stages.rs` — per-stage timings, grouped by fixture: `signal` (`parse`, `build_signal_bdds`,
-  `minimise`), `machine` (`machine_build`, `arcs_derive`, `confluence_detect`, `analyse_machine`,
-  `leakage_derive`, `derive_regions`), and `emit` (`cell_arcs_tcl`, `cell_verilog`, `cell_liberty`).
+  `minimise`), `machine` (`machine_build`, `arcs_derive`, `confluence_detect`, `width_detect`,
+  `analyse_machine`, `leakage_derive`, `derive_regions`), and `emit` (`cell_arcs`, `cell_verilog`,
+  `cell_liberty`).
 - `benches/aggregate.rs` — whole-pipeline timings: `whole_cell` (`Cell::analyse` per cell) and
-  `whole_run` (the full 9-cell run: `analyse` plus all three emitters and `library_liberty`).
+  `whole_run` (the full 11-cell run: `analyse` plus all three emitters and `library_liberty`).
 
-Sweep width follows each stage's cost and parallelism, via `benches/common/mod.rs::sweep`: internally
-parallel stages (`machine_build`, `arcs_derive`, `confluence_detect`, `analyse_machine`, and both
-aggregate targets) sweep the full `{1, 2, 4, 8, max}` range on the two `HEAVY` cells (`ICM`,
-`RACELEM21`); serial stages sweep the flat `{1, max}` on those same cells as a flatness check; every
-stage on every cell is additionally measured at `n=max` so the cost gradient across cells is visible
-(`max` is `rayon::current_num_threads()`, e.g. `{1, 2, 4, 8}` on an 8-core host).
+Every target is measured at the thread counts `CELLSMITH_BENCH_THREADS` names, as a comma-separated
+list of widths, where `max` stands for the width the global pool was built with. A width is a
+point on one axis rather than a mode, so the single-threaded measurement is the
+`n=1` point of a sweep and is asked for the same way as any other. With the variable unset each target
+is measured once with nothing pinned, on the global pool at whatever width it was configured with —
+which is how the tool itself runs. The list reaches the benchmarks through the environment because
+`criterion_main!` owns `argv` and rejects arguments it does not recognise.
 
 ```sh
-cargo bench                    # both targets
-cargo bench --bench stages     # per-stage only
-cargo bench --bench aggregate  # whole-pipeline only
+cargo bench                                     # both targets, nothing pinned
+cargo bench --bench stages                      # per-pass only
+cargo bench --bench aggregate                   # whole-run only
+
+# Set CELLSMITH_BENCH_THREADS to choose the widths, as a comma-separated list:
+CELLSMITH_BENCH_THREADS=1 cargo bench           # the single-threaded point alone
+CELLSMITH_BENCH_THREADS=1,2,4,8 cargo bench     # a four-point sweep
+CELLSMITH_BENCH_THREADS=1,2,4,max cargo bench   # up to the host's width, whatever it is
+CELLSMITH_BENCH_THREADS=1,max cargo bench --bench aggregate   # one target, two widths
 ```
 
 Results (with HTML reports) land under `target/criterion`. To compare before/after a change:
@@ -473,10 +494,10 @@ cargo resolves these Rust crates automatically — the only *external* requireme
   provides the BDD and cover/minterm engine cellsmith is built on (BDD feedback projection and
   cover/minterm extraction).
 - [`liberty-parser`](https://crates.io/crates/liberty-parser) `0.3` — the published Liberty parser
-  crate (used as `liberty_parse`); its generic Liberty `Group` trees back the `.lib` emitter.
+  crate; its generic Liberty `Group` trees back the `.lib` emitter.
 
-Plus the standard ecosystem crates: `serde`/`toml` (spec parsing), `clap` (CLI), `indexmap`,
-`thiserror`, and `rayon` (parallelism).
+Plus the standard ecosystem crates: `serde`/`toml` (spec parsing), `clap` (CLI), `indexmap`, and
+`rayon` (parallelism).
 
 ## Status and scope
 
@@ -491,10 +512,11 @@ through settling, and the walk into an arc's start state drives every state vari
 included) to its value there; a state-holding cell's `-ic` line is what carries that start condition
 into the measured vector.
 
-A hazard is read on two independent axes. Its **cause** is what the timing is between: a **race**, two
-input edges landing close enough together that which of them lands first changes where the cell ends up
-(a C-element's `A↓` against `B↑`, a DFF's data against its clock, an SR latch's simultaneous release),
-or a **pulse**, the two edges of one input racing each other (a clock pulse too narrow to carry a flop's
+A hazard is read on two independent axes. Its **cause** is what the timing is between: a **toggle**, one
+input's edge on its own whose cascade rings around the cell's own feedback instead of settling; a
+**race**, two input edges landing close enough together that which of them lands first changes where the
+cell ends up (a C-element's `A↓` against `B↑`, a DFF's data against its clock, an SR latch's
+simultaneous release); or a **pulse**, the two edges of one input racing each other (a clock pulse too narrow to carry a flop's
 master through to its slave leaves the flop somewhere a wider pulse does not). Its **outcome** is what
 the machine then does: **indeterminate** — it settles, but which state it settles to is not determined —
 or **oscillation** — it never settles, walking a periodic cycle instead of reaching a **stable state**
@@ -528,11 +550,6 @@ Each emitted constraint arc names its **victim nodes** — the state variables w
 hazard puts at risk, over every outcome the cause showed — in a single `-probe`, so Liberate measures
 the nodes the constraint is about. A victim node with no pin of its own, such as a flop's master latch,
 is given a `-pinlist` column on that block alone, which its `-ic` states the start level through.
-
-## Known issues
-
-Cells wide enough to panic the espresso-logic dependency during cover expansion are
-tracked in [`KNOWN-ISSUES.md`](KNOWN-ISSUES.md).
 
 ## Licence
 

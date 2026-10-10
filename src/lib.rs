@@ -6,21 +6,25 @@
 //! carries no stability guarantee across any version, and using it as a library is at your own risk.
 //!
 //! Modules: the input model ([`model`]), the logic core ([`logic`]: signal resolution, the state
-//! machine, arc and hazard derivation, and state-table regions), and the arcs / Verilog / Liberty
-//! emitters ([`emit`]).
+//! machine, arc and hazard derivation, and state-table regions), the arcs / Verilog / Liberty
+//! emitters ([`emit`]), the diagnostics' rendering vocabulary ([`report`]), and the separators both
+//! of those render their lists with (`text`).
 #![doc(hidden)]
 
 pub mod emit;
 pub mod logic;
 pub mod model;
+pub mod report;
+pub(crate) mod text;
 
 #[cfg(test)]
 mod smoke {
-    //! Confirms the espresso-logic 5.x public API and its C-FFI build link, and that the two
-    //! primitives cellsmith leans on behave as the plan assumes:
-    //!   * feedback projection via universal quantification (`forall`), and
-    //!   * universal projection to a two-sided FR cover (`cover_over_fr`), whose F/R cubes are the
-    //!     on/off sets and whose absent cubes are the undef/hold gap.
+    //! Confirms the espresso-logic 5.x public API and its C-FFI build link, and two properties of
+    //! the primitives cellsmith leans on:
+    //!   * universal quantification (`forall`) of the feedback variable out of a next-state
+    //!     function yields its on-set, and out of the function's complement its off-set; and
+    //!   * universal projection to a two-sided FR cover (`cover_over_fr`) yields F/R cubes that are
+    //!     the on/off sets, the undef/hold gap being the absence of a cube.
 
     use espresso_logic::{bdd_builder, expr, CubeType};
 
@@ -36,8 +40,7 @@ mod smoke {
         // Cover extraction works => FFI + BDD are linked.
         assert!(f.cover().num_cubes() >= 1);
 
-        // Project the feedback variable q out (complement the BDD directly rather than rebuilding a
-        // negated expression).
+        // Project the feedback variable q out; the off-set quantifies the complemented BDD.
         //   on  = ∀q. f   == a*b
         //   off = ∀q. !f  == !a*!b
         let on = f.forall(["q"]);
@@ -51,24 +54,40 @@ mod smoke {
             "off-set of a C-element must be !a*!b"
         );
 
+        // One cube's assignment to the C-element's two inputs, `a` and `b`.
+        #[derive(Debug, PartialEq)]
+        struct AbValues {
+            a: Option<bool>,
+            b: Option<bool>,
+        }
+
         // Universal projection onto the inputs as a two-sided FR cover: the on-set is a=b=1
         // (q⁺ forced high regardless of the held q), the off-set is a=b=0, and a≠b lands in
         // NEITHER side — the C-element hold gap is the absence of a cube, not a `D` cube.
         let fr = f.cover_over_fr(["a", "b"]).maximize();
-        let side = |t: CubeType| -> Vec<(Option<bool>, Option<bool>)> {
+        let side = |t: CubeType| -> Vec<AbValues> {
             fr.cubes()
                 .filter(|c| c.cube_type() == t)
-                .map(|c| (c.inputs().value_of("a"), c.inputs().value_of("b")))
+                .map(|c| AbValues {
+                    a: c.inputs().value_of("a"),
+                    b: c.inputs().value_of("b"),
+                })
                 .collect()
         };
         assert_eq!(
             side(CubeType::F),
-            vec![(Some(true), Some(true))],
+            vec![AbValues {
+                a: Some(true),
+                b: Some(true)
+            }],
             "on-set must be a=b=1"
         );
         assert_eq!(
             side(CubeType::R),
-            vec![(Some(false), Some(false))],
+            vec![AbValues {
+                a: Some(false),
+                b: Some(false)
+            }],
             "off-set must be a=b=0"
         );
         assert_eq!(

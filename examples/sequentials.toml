@@ -1,7 +1,8 @@
 # Example cellsmith input — every sequential/clocked cell fixture used by the test suite, gathered
-# into one runnable config. The equations are copied verbatim from the `#[cfg(test)]` fixtures in
-# src/logic/edge.rs and src/emit/{arcs_tcl,statetable,verilog,liberty}.rs, so this file doubles as a
-# hand-runnable exercise of the edge-register collapse, the state tables and the emitters.
+# into one runnable config. Each cell's equations are those of a `#[cfg(test)]` fixture in
+# src/logic/edge.rs or src/emit/{arcs_tcl,statetable,verilog,liberty}.rs, except MCDFFX1/MCDFFX4,
+# which is MCDFF over two drive strengths with its master node renamed `sela0`. The file doubles as
+# a hand-runnable exercise of the edge-register collapse, the state tables and the emitters.
 #
 #   cellsmith examples/sequentials.toml -o out      # -> out/sequentials_arcs.tcl, .v, .lib, _cells.tcl
 #   cellsmith examples/sequentials.toml --stdout    # preview everything on stdout

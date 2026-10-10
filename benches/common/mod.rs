@@ -1,15 +1,6 @@
-//! Shared fixtures and thread-sweep helpers for the `stages` and `aggregate` bench binaries.
+//! Shared fixtures and the thread-count list for the `stages` and `aggregate` bench binaries.
 
 use cellsmith::model::{parse_spec, Cell};
-
-/// Cells whose machine width makes them worth sweeping across the full thread range; the rest are
-/// cheap enough that only the `n=1` baseline and the default parallelism are informative.
-pub const HEAVY: [&str; 2] = ["ICM", "RACELEM21"];
-
-/// Whether `name` is one of the [`HEAVY`] cells.
-pub fn is_heavy(name: &str) -> bool {
-    HEAVY.contains(&name)
-}
 
 /// Parse the example spec's cells (unanalysed), fresh for each benchmark iteration.
 pub fn raw_cells() -> Vec<Cell> {
@@ -18,46 +9,78 @@ pub fn raw_cells() -> Vec<Cell> {
         .cells
 }
 
-/// The rayon global thread pool's configured width.
-pub fn max_threads() -> usize {
-    rayon::current_num_threads()
-}
+/// The environment variable naming the thread counts to measure at.
+pub const THREADS_VAR: &str = "CELLSMITH_BENCH_THREADS";
 
-/// The full thread sweep for heavy, parallel-capable benchmarks: 1, 2, 4, 8 (each below the max) plus
-/// the max itself.
-pub fn full_sweep() -> Vec<usize> {
-    let m = max_threads();
-    let mut v: Vec<usize> = [1, 2, 4, 8].into_iter().filter(|&n| n < m).collect();
-    v.push(m);
-    v
-}
-
-/// A flat two-point sweep (baseline `n=1` and the max) for heavy but non-parallel benchmarks.
-pub fn flat_sweep() -> Vec<usize> {
-    let m = max_threads();
-    if m == 1 {
-        vec![1]
+/// The thread counts every target is measured at, as a comma-separated list in [`THREADS_VAR`]:
+/// `CELLSMITH_BENCH_THREADS=1,2,4,8` measures those four widths, and `CELLSMITH_BENCH_THREADS=1`
+/// measures the single-threaded point alone. A width is a point on one axis, not a mode — one thread
+/// is where the sweep starts, not a separate kind of run.
+///
+/// `max` stands for the width the global pool was built with, so `1,2,4,max` reaches the top of the
+/// host without naming a number that holds on only one machine. It resolves as the list is read and
+/// is reported as the count it resolved to, that being what was measured. A width the list reaches
+/// twice once resolved — `4,max` on a four-core host — is measured once.
+///
+/// Unset is one measurement with nothing pinned: the work runs on the global pool at whatever width
+/// it was configured with, which is how the tool itself runs.
+///
+/// The list arrives through the environment because `criterion_main!` owns `argv` and rejects
+/// arguments it does not recognise, so a bench cannot take one of its own.
+pub fn thread_counts() -> Vec<Option<usize>> {
+    let Ok(list) = std::env::var(THREADS_VAR) else {
+        return vec![None];
+    };
+    let counts: Vec<Option<usize>> = list
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            let n: usize = if s.eq_ignore_ascii_case("max") {
+                rayon::current_num_threads()
+            } else {
+                s.parse().unwrap_or_else(|_| {
+                    panic!("{THREADS_VAR}: {s:?} is not a thread count or `max`")
+                })
+            };
+            assert!(n > 0, "{THREADS_VAR}: a thread count is at least 1");
+            Some(n)
+        })
+        .collect();
+    // `max` resolves to a number and so can name a width the list already holds; criterion takes one
+    // registration per benchmark id.
+    let mut seen = std::collections::HashSet::new();
+    let counts: Vec<Option<usize>> = counts.into_iter().filter(|n| seen.insert(*n)).collect();
+    if counts.is_empty() {
+        vec![None]
     } else {
-        vec![1, m]
+        counts
     }
 }
 
-/// Pick the thread sweep for a stage given whether it is internally parallel and whether it is
-/// [`HEAVY`]: light stages only run at the max thread count, heavy stages sweep 1..max (fully if
-/// parallel, flat otherwise).
-pub fn sweep(parallel: bool, heavy: bool) -> Vec<usize> {
-    match (parallel, heavy) {
-        (_, false) => vec![max_threads()],
-        (true, true) => full_sweep(),
-        (false, true) => flat_sweep(),
+/// How a thread count reads in a benchmark id.
+pub fn label(n: Option<usize>) -> String {
+    match n {
+        Some(n) => format!("n{n}"),
+        None => "default".to_string(),
     }
 }
 
-/// Build a scoped rayon thread pool of width `n`, for measuring a stage under a specific thread
-/// count.
-pub fn pool(n: usize) -> rayon::ThreadPool {
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(n)
-        .build()
-        .unwrap()
+/// The pool a measurement runs in: one of width `n`, or none where nothing is pinned. Built once per
+/// registration, outside the timed closure.
+pub fn pool(n: Option<usize>) -> Option<rayon::ThreadPool> {
+    n.map(|n| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .build()
+            .unwrap()
+    })
+}
+
+/// Run `f` in `pool`, or on the global pool where nothing is pinned.
+pub fn in_pool<R: Send>(pool: &Option<rayon::ThreadPool>, f: impl FnOnce() -> R + Send) -> R {
+    match pool {
+        Some(p) => p.install(f),
+        None => f(),
+    }
 }

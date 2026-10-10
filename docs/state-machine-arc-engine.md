@@ -5,8 +5,9 @@ mutexes/arbiters, flip-flops with internal state). This document explains the mo
 how a state is settled to a stable state, and how arcs are discovered — with a full worked example.
 
 The functional state-table view of the same signals is documented separately in
-`state-table-regions.md`. The hazard vocabulary this document leans on — the two detected hazards
-(order-dependent and oscillation) and the timing constraints generated from them — is set out in
+`state-table-regions.md`. The hazard vocabulary this document leans on — a detected hazard's cause
+(toggle, race or pulse) and outcome (indeterminate or oscillation), and the timing constraints generated
+from them — is set out in
 `hazard-detection.md`, and the one-shot state-space minimisation it relies on in
 `state-space-minimisation.md`.
 
@@ -86,17 +87,16 @@ Every term the later sections lean on, pinned here before first use.
   - **minimise** — drive substitution to the **minimised model** once, before the machine is built:
     collapse alias/complement chains and fold non-self-holding relays into their consumers, dedup then
     fold, until neither pass commits (`state-space-minimisation.md`). Each δ_v is then the
-    minimised model's own function for `v`, read directly; no per-signal composition remains once the
-    machine is built.
+    minimised model's own function for `v`, read directly when the machine is built.
 
 ## 3. Constructing the transition function δ_v
 
 Every state variable's δ_v is already determined by the time the machine is built. Minimisation rewrites
 the signal model **once**, before the machine is constructed, so that every surviving signal's function
-is expressed purely over primary inputs and the surviving state variables: building the machine then
-reads each state variable's function and each combinational output's function directly, and the settle
-and explore passes (§5–§6) only evaluate them. Constructing δ_v is therefore a direct lookup, not a
-per-analysis composition.
+is expressed purely over primary inputs and the surviving state variables (invariant I3 in
+`state-space-minimisation.md`): building the machine then reads each state
+variable's function and each combinational output's function directly, and the settle
+and explore passes (§5–§6) only evaluate them. Constructing δ_v is therefore a direct lookup.
 
 The model was folded by two staged discriminators run until neither commits (the algorithm is documented
 in full in `state-space-minimisation.md`; §3.1 below covers the safety guard): **M1** collapses an
@@ -120,8 +120,8 @@ in `D`'s own support). `M`'s entry in the minimised model already reads:
 
 - **δ_M = !CLK·(A·B) + CLK·M**  (`D` folded away; `M` kept; `CLK`, `A`, `B` are inputs)
 
-`D` has vanished from δ_M — that is a composition actually firing, just done once, upstream of the
-machine pass, rather than per analysis.
+`D` has vanished from δ_M — that is a composition firing once, in minimisation, upstream of the
+machine pass.
 
 **A state variable is kept.** The plain mutex `Qa = !Qb·A`, `Qb = !Qa·B` — both signals are state
 variables, so nothing is folded away and each δ keeps its cross-coupled peer:
@@ -291,9 +291,7 @@ The exploration both discovers the start states and runs the BFS:
 1. **Start candidates — never an assumed all-zero state.** For each seed function (each state variable's
    δ plus the combinational outputs' δ) it takes the forced on/off cover over the inputs: input
    assignments that force the signal *regardless of* the undefined power-on state. These input minterms
-   are pooled, then **ranked by how many state variables they settle** — the state variables alone, since
-   what the ranking measures is how much of the cell's memory a candidate resolves (ties broken toward
-   state nearest the inputs). Each candidate input is widened onto the full `[inputs…, coordinates…]`
+   are pooled. Each candidate input is widened onto the full `[inputs…, coordinates…]`
    columns — every coordinate column arrives **absent**, and settling is what first gives a combinational
    one its value — and settled. A state-holding cell whose reset is an input *sequence*
    rather than a level is therefore initialised by the sequence that actually resolves it, not by an
@@ -339,15 +337,16 @@ cascade naturally through the multi-round settle.
 Derivation hands the emitter (`src/emit/arcs_tcl.rs`) every firing it found; the emitter is where the
 grain of the generated `.tcl` is decided.
 
-A block form is a variant there. The nine variants of `DefineArc` are Liberate's `-type` taxonomy —
-`async`, `edge` and `combinational` for a measured transition, `hidden` for an input toggle that settles
-with no output following it, and the five constraint types — and each variant renders its whole
-`define_arc` block, writing its own `-type` word. Picking the variant is the classification: a measured
-transition's kind is decided in one place, `TransitionIdentity::of`, and the identity it returns — the
-transition together with that kind — is what the general pass groups the arc under. The exploration's
-rest states come out as `define_leakage` blocks, one per state the cell can sit and leak in, and the two
-forms that command takes are the variants of `LeakageBlock`: the columns holding every pin and exposed
-node at the level the rest state carries, and the condition the inputs alone settle it at.
+A block form is a variant of `Block` (`src/emit/block.rs`), one emitted Liberate command as the value it
+is: the emitter builds those values and each writes its whole block where the deck is written. Nine of
+the variants are Liberate's `-type` taxonomy — `async`, `edge` and `combinational` for a measured
+transition, `hidden` for an input toggle that settles with no output following it, and the five
+constraint types — and each writes its own `-type` word. Picking the variant is the classification: a
+measured transition's kind is decided in one place, `TransitionIdentity::of`, and the identity it
+returns — the transition together with that kind — is what the general pass groups the arc under. The
+exploration's rest states come out as `define_leakage` blocks, one per state the cell can sit and leak
+in, and the two forms that command takes are the remaining two variants: the columns holding every pin
+and exposed node at the level the rest state carries, and the condition the inputs alone settle it at.
 
 Each arc class is emitted in two passes. The **general pass** always runs. It groups the class's derived
 arcs by **transition** — the output pin and the edge it makes, the related pin and the edge IT makes —
@@ -396,19 +395,19 @@ walked into.
 ### The shared machine pass
 
 The whole setup happens once, over the **minimised** model. Building the machine takes the cell's shared
-per-cell signal map (minted once when the cell is analysed, and reused here — no rebuild): each state
+per-cell signal map (minted once when the cell is analysed, and reused here): each state
 variable's δ and each combinational output's δ are **direct lookups** into that map, and it runs the
 **one** exploration BFS seeded from all of them. The one shared machine is what `analyse_machine` draws
 every derivation off: the transition and hidden arcs, the detected hazards, the constraints that remedy
 them, the edge-register classification, and the leakage states.
 
-Two exploration budgets gate the whole shared pass, each charged against work the pass actually performs
-rather than the cell's declared shape (a cell is not turned away for having many inputs or many state
-variables): the **candidate** budget bounds the seed minterms the candidate pool expands the signals'
-forced on/off covers into, before ranking and seeding the BFS; the **state** budget bounds the reachable
-stable states the BFS records in `Explored::order`. Exceeding either leaves the cell unexplored — arcs
-*and* hazards come back empty for it — and is reported as a hard error naming the cell; each budget is
-raised for a run with its own flag, `--max-candidates` or `--max-states`.
+Two exploration budgets gate the whole shared pass, each charged against work the pass actually
+performs: the **candidate** budget bounds the seed minterms the candidate pool expands the signals'
+forced on/off covers into, seeding the BFS; the **state** budget bounds the reachable
+stable states the BFS records in `Explored::order`. Exceeding either fails the analysis at that cell —
+without an exploration its arcs *and* hazards would both be empty — and is reported as a hard error
+naming the cell; each budget is raised for a run with its own flag, `--max-candidates` or
+`--max-states`.
 
 ## 7. Worked example: discovering `B↓ → Qa↑` on the mutex
 

@@ -26,45 +26,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   constraint arcs too, so `--when=constraint` — or `when = "constraint"` on a cell — adds one
   conditioned block per observation. A hazard reachable from ten states used to be kept from one of
   them, the one reached along the shortest walk in, and the other nine were discarded before
-  emission saw them; all ten now survive. The observation attacking the widest set of nodes supplies
-  the general block that stands for the constraint however it was reached, and every remaining one
-  adds a conditioned block over its own nodes, so a conditioned block can probe less than the
-  general one beside it.
+  emission saw them; all ten now survive. Every observation adds a conditioned block over its own
+  victim nodes, while the general blocks come from the observations no other observation of the same
+  constraint refines (see below), so a conditioned block can probe less than the general one beside
+  it.
 
 ### Changed
 
 - **A hazard is reported under its cause and its outcome, one report entry per cause.** A cause is
-  what the timing is between — two inputs racing each other, or one input's own two edges — and an
-  outcome is what the machine then does, settling indeterminately or oscillating. Every combination
-  of the two is detected, and a cause observed to do both is reported as both, so a cell that drew
-  one warning can draw several. The entry's header names the timing and the state it goes wrong
+  what the timing is between — one input's edge on its own whose cascade rings around the cell's
+  feedback, two inputs racing each other, or one input's own two edges — and an outcome is what the
+  machine then does, settling indeterminately or oscillating. A lone toggle is reported when it
+  oscillates, a race and a pulse under either outcome, and a cause observed to do both is reported as
+  both, so a cell that drew one warning can draw several. The entry's header names the timing and the state it goes wrong
   from; its body names the condition, the walk into that state, and then one field per outcome
   observed, each listing the victim nodes that reading names and where the machine lands on them
   when the timing is honoured — for a race the alternatives it may settle to, for a pulse the rest
   states an adequately wide one walks through. The header carries no node set, because two outcomes
   of one cause need not attack the same nodes — an SR latch's set pulse rings over `{Q, Qn}` and
   settles indeterminately over `{Q, Qn, L}`. The constraint follows the cause alone: a directed
-  setup/hold or a symmetric non-sequential separation for a race, a minimum pulse width for a pulse.
+  setup/hold or a symmetric non-sequential separation for a race, a minimum pulse width for a pulse,
+  and none for a lone toggle, whose one edge has nothing to be separated from.
 
-- **A cell that reaches one input assignment in several stored states is constrained in each of
-  them.** A state-holding cell arrives at one input assignment in more than one stored state — a
-  C-element holds either value under `A*!B` — and those used to be folded into a single constraint
-  before emission could see them, so such a cell now emits more constraint blocks. Where a block's
-  `-ic` and `-vector` cannot tell two of them apart, the run warns that too few nodes are exposed
-  for `-ic` to express the cell state, naming the arc and every state that block conflates, rather
-  than the difference vanishing silently. A constraint covers on `-probe` everything its cause
-  endangers, since the timing that removes the cause removes every consequence at once.
+- **A constraint has one general block per level its victim nodes hold.** A constraint's general
+  block — the one written without a `-when` — is keyed on the constraint kind, the constrained pin
+  with its edge, and the victim nodes together with the level each holds where the hazard was
+  observed: a hold keeping a captured 0 and a hold keeping a captured 1 protect different conditions,
+  so each has a general block of its own. Release 0.5.1 keyed it on the victim node names alone, so
+  some cells now emit more constraint blocks — a C-element holds either value under `A & !B`, and is
+  constrained in each. An observation supplies no general block when another of the same kind and pin
+  fixes every victim node it fixes, at the same level, and at least one more. A constraint covers on
+  `-probe` everything its cause endangers, since the timing that removes the cause removes every
+  consequence at once.
+
+- **The conflation warning names blocks and counts measurements.** It reads `… block(s) conflate N
+  measurements: too few nodes exposed to express the cell state`, and lists each block under `block:`
+  with every cell state it conflates under `cell state:`. It covers every block a cell states —
+  constraint and `define_leakage` blocks included.
 
 - **`when` is the input assignment a transition happens FROM, on every arc of every kind.** A
   block's `-when` states the standing assignment its measured transition starts at, and the pins it
   switches are written as edges rather than as literals of the condition. Race-cause hazards used to
   carry the assignment the machine is left in once both edges have landed, which disagreed with the
-  `-when` the block beside them wrote: a mutex's ring is now reported and annotated under `!A*!B`,
-  the idle state its two requests rise out of, rather than under the `A*B` they land in.
+  `-when` the block beside them wrote: a mutex's ring is now reported under `!A & !B`, the idle state
+  its two requests rise out of, rather than under the `A & B` they land in.
 
 - **A cell with a single input is reported when it rings.** A race is between two pins and needs
   both, while a toggle that leaves the cell ringing around its own feedback needs only the one, so a
   one-input ring — `Q = "!(EN*Q)"` — is reported as an oscillation instead of passing silently.
+
+- **A condition is written `A & !B`.** Every `-when` value in the emitted Tcl, and the `when:` field
+  of the report on stderr, spell the product with `&` and the negation with `!`. Liberate accepts that
+  spelling of a condition as readily as the `A*!B` one it replaces.
+
+- **A Liberty `function` or `state_function` is written `A & B | !C`.** The `.lib` spells a pin's
+  function in the notation the `-when` values use — `&` for the product, `|` for the sum and `!` for
+  the negation — so an AND2's output reads `function : "A & B"`, and a toggle flop's
+  `state_function : "M & !M2 | !M & M2"`.
 
 - **`constraint_arcs` takes a pin name or a list of them as well as `true`, and a name selects the
   constraints that pin has a role in.** The roles are the kind's. A non-sequential separation is
@@ -76,19 +94,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spec error — `constraint pin "Q" is not a declared input` — rather than a selection that matches
   nothing.
 
-- **An oscillation is annotated on the constraint it motivated.** The `# oscillation:` comment in
-  the emitted Tcl, and the `/* oscillation: … */` form in the `.lib`, lead the constraint block
-  generated from the ringing observation instead of heading the file. A comment explains what it
-  accompanies, so a ring with no constraint beside it carries none — a ring observed under a lone
-  toggle names one pin, and one edge has nothing to be separated from. Every detected hazard reaches
-  the user through the report on stderr either way.
+- **A hazard is reported on stderr and nowhere else.** The emitted Tcl and `.lib` state the timing
+  that removes a hazard — the constraint blocks — and carry no comment about the hazard itself, so the
+  report on stderr is the run's whole account of what was detected, for every hazard alike rather than
+  only for the ones a constraint was asked for.
 
-- **A `define_leakage` block states its rest state through its own columns.** The `-pinlist` names the
-  inputs, the cell's exposed internal nodes, and the outputs, and the `-vector` holds every one of those
-  columns at the level the rest state carries. No leakage block emits a `-prevector`: Cadence Liberate
-  segfaults on one inside a `define_leakage` block. Rest states no column tells apart render one block
-  between them, which the conflation warning names; listing the node that separates them in the cell's
-  `expose` gives each its own block.
+- **A `define_leakage` block for a state the cell is walked into states it through its own columns.**
+  A rest state the inputs drive the cell into on their own is still the bare
+  `define_leakage -when "…" { … }`. A rest state the cell must be walked into carries a `-pinlist`
+  naming the inputs, the cell's exposed internal nodes and the outputs, a `-vector` holding every one
+  of those columns at the level the rest state carries, and the `-when` beside them. No leakage block
+  emits a `-prevector`: Cadence Liberate segfaults on one inside a `define_leakage` block. Rest states
+  no column tells apart render one block between them, which the conflation warning names; listing
+  the node that separates them in the cell's `expose` gives each its own block.
+
+- **A run ends at the cell whose exploration passes a ceiling, naming that one cell and writing
+  nothing.** A cell stopped at `--max-candidates` or `--max-states` has no arcs, hazards, leakage
+  states or constraints, so the analysis fails there instead of carrying the cell to the end of
+  the run: the error names the cell, the ceiling it passed and the flag that raises it. Cells are
+  analysed in parallel and rayon does not say which error a failed collect returns, so where
+  several cells pass a ceiling the one named is whichever the analysis reached — raise that cell's
+  ceiling, rerun, and the next is named in turn. A run used to analyse every cell first and list
+  every offending one before exiting.
+
+- **A run writes its artifacts together or not at all.** Each artifact is written to a hidden
+  temporary file beside it, and the temporaries are renamed onto the artifacts once every one of them
+  is written. A run that fails part-way, whether writing a file or renaming one into place, leaves
+  none of its artifacts behind, and the ones it would have replaced stay as they were. That covers
+  the artifacts a run writes: under `--no-cells` a run writes no `<base>_cells.tcl`, and one already
+  in the output directory is left as it is.
+
+- **A fatal error is labelled `cellsmith: error:` on stderr.** A warning is labelled
+  `cellsmith: warning:`, and the label says which of the two a line is.
+
+- **Blocks and table rows whose order carries no meaning come out in no particular order.** The
+  blocks of a cell in the arcs deck, the rows of a Verilog UDP table, and a Liberty `statetable`'s
+  level rows and its different registers' edge rows can come out in a different order from one run to
+  the next. Liberty reads a `statetable` first match first, and no two level rows a state matches set
+  one node differently, so their order never changes a next state; within one register the capture
+  rows come before the off-edge rows, which is the order that reading depends on.
+
+- **A Tcl brace list is written without inner padding, and an edge-triggered UDP's header carries no
+  comment.** The decks write `-pinlist {A B Y}` and `{AND2}` where they wrote `{ A B Y }` and
+  `{ AND2 }`, which Tcl reads as the same list. An edge-triggered Verilog primitive opens with its port
+  list alone, without the `// clock CLK is the last port` comment.
 
 ## [0.5.1] - 2026-08-08
 

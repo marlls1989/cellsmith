@@ -246,7 +246,7 @@ says with every read-gate held at the level that lets the register's value throu
 register — every forcing pin changes the held state — is left untouched.
 
 The factored register **reuses a declared register** whose content matches the cofactored content up to
-inversion, and otherwise **mints** a fresh, collision-checked node named `<output>st` holding that
+inversion, and otherwise **mints** a fresh, collision-checked node named `<output>_st` holding that
 content. A minted register carries its own `EdgeCaptures`, taken from the output's already-synthesised
 covers cofactored gate-free (the captures shed the gate columns, the off-edge collapses to a pure hold),
 so the whole name-driven edge-row / UDP machinery flows through unchanged. The reading output records a
@@ -255,10 +255,10 @@ state-table regions in `DerivedRegister::reads`; its fold seed is redirected ont
 support so its masters fold (§7).
 
 `BDET` is the ratified shape. `A` is a read-gate — toggling it never moves the DET latches `L1`/`L2` in
-`Y`'s cone — so the register is factored out as a minted `Yst = !M` (`δ_Y` cofactored at `A=1`, with
-`M = CLK*L1 + !CLK*L2`). `Yst` is a dual-edge register capturing `!D` on both edges — the NAND read
+`Y`'s cone — so the register is factored out as a minted `Y_st = !M` (`δ_Y` cofactored at `A=1`, with
+`M = CLK*L1 + !CLK*L2`). `Y_st` is a dual-edge register capturing `!D` on both edges — the NAND read
 inverts the held content, and inversion is not special-cased — and `Y` becomes the read function
-`state_function` `Yst + !A`, machine-equivalent to `!(M*A)`. That equivalence is proven by full reachable
+`state_function` `Y_st + !A`, machine-equivalent to `!(M*A)`. That equivalence is proven by full reachable
 state-space replay, not a literal SOP match (`assert_reads_faithful` in `src/logic/edge.rs`). `DETP` is
 the reuse case: its DET mux is buried in the declared cross-clock latch `T`, `Y`'s cofactored content `!T`
 matches `T` up to inversion, so `T` is reused and nothing is minted.
@@ -307,30 +307,33 @@ self-referential set that reaches no output may be collapsed even though minimis
   model the latch and Liberate derives the timing from the Tcl. A **read-gate factorisation** (§6) adds a
   first-class `internal_node` pin for a minted register — its native edge rows join the joint statetable —
   and the read-gated output prints a `state_function` over the factored register and the gate pins
-  (`Y`'s `Yst + !A`), never its folded master.
+  (`Y`'s `Y_st + !A`), never its folded master.
 - **Verilog** — the sequential UDP is written in edge-triggered form for the edge registers and elides
   folded masters; likewise independent of `labels`, the level rows already carrying the latch. A minted factored
   register emits its own edge UDP driving an internal wire, and the read-gated output becomes a continuous
   assign over that wire and the gate pins.
 
-## 9. Retained restrictions
+## 9. Restrictions
 
 - **Declared clocks only.** A cell with no declared clock carries no edge arc.
 - **Never-changing ⇒ no arc.** A direction that never changes the node presents no arc to type.
 - **Surviving non-state internals** are not candidates.
 - **Explored machine required.** Classification needs an explored machine, so a cell whose exploration
-  passes one of the two budget ceilings — the pooled seed minterms or the recorded stable states — gets no
-  annotation. Both ceilings are raised from the command line (`--max-candidates`, `--max-states`), and a
-  cell that passes one is reported as an error rather than annotated.
+  passes one of the two budget ceilings — the pooled seed minterms or the recorded stable states — is
+  never classified: the analysis fails at that cell rather than annotating it. Both ceilings are raised
+  from the command line (`--max-candidates`, `--max-states`).
 
-## 10. The exploration is unchanged
+## 10. Classification does not affect the exploration
 
-Classification is read-only by construction, and a permanent regression guard
+Classification is read-only by construction, and a test
 (`edge_classification_changes_only_the_edge_annotation` in `src/logic/edge.rs`) checks it directly: for
-both the DFF and ICM fixtures, analysing the same spec with `no_edge_collapse` forced true and false
-produces byte-for-byte identical `AnalysedCell` fields for everything except `edge` — `arcs`,
-`hidden_arcs`, `leakage`, `order_dependence`, `oscillation`, `constraints`, and `regions` included.
-Classification changes only which form an arc is annotated in; the state-machine exploration, the
+the DFF, ICM, BDET and DETP fixtures, and DETP again with constraint arcs requested, analysing the same
+spec with `no_edge_collapse` forced true and false yields the same `AnalysedCell` fields for everything
+except `edge`. The record lists — `arcs`, `hidden_arcs`, `leakage`, `hazards` (every cause: toggle, race
+and pulse) and `constraints` — are compared as multisets, in no order, of what identifies each record;
+the state a record was measured at (`start`, `end`, `prevector`, `levels`) names a free representative
+and is excluded. `regions` is compared field by field. Classification changes only which form an arc is
+annotated in; the state-machine exploration, the
 discovered arcs and their prevectors, and hazard detection never see it.
 
 ## 11. Opt-outs

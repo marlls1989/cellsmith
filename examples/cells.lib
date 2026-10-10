@@ -8,7 +8,7 @@ library (cells) {
     }
     pin (Y) {
       direction : output;
-      function : "A*B";
+      function : "A & B";
     }
   }
   cell (INVX1) {
@@ -46,10 +46,10 @@ library (cells) {
       direction : input;
     }
     statetable ("A B", "Q_st") {
-      table : "L L : - : L , \
-               L H : - : N , \
-               H L : - : N , \
-               H H : - : H";
+      table : "L H : - : N , \
+               H H : - : H , \
+               L L : - : L , \
+               H L : - : N";
     }
     pin (Q) {
       direction : output;
@@ -71,11 +71,11 @@ library (cells) {
       direction : input;
     }
     statetable ("A B R", "Q_st") {
-      table : "- - H : - : L , \
+      table : "L H L : - : N , \
                L L - : - : L , \
-               L H L : - : N , \
-               H L L : - : N , \
-               H H L : - : H";
+               H H L : - : H , \
+               - - H : - : L , \
+               H L L : - : N";
     }
     pin (Q) {
       direction : output;
@@ -106,13 +106,13 @@ library (cells) {
       direction : input;
     }
     statetable ("M1 M2 P1 P2 C R", "Q_st") {
-      table : "- - - - - H : - : L , \
-               - H - - L L : - : N , \
+      table : "- - H H H L : - : H , \
                L L - - L - : - : L , \
-               H - - - L L : - : N , \
                - - - L H L : - : N , \
                - - L - H L : - : N , \
-               - - H H H L : - : H";
+               - H - - L L : - : N , \
+               H - - - L L : - : N , \
+               - - - - - H : - : L";
     }
     pin (Q) {
       direction : output;
@@ -131,12 +131,12 @@ library (cells) {
       direction : input;
     }
     statetable ("S R", "Q_st Qn_st") {
-      table : "H - : - - : - L , \
+      table : "- - : H - : - L , \
                - H : - - : L - , \
+               H - : - - : - L , \
                - L : - L : H - , \
                - - : - H : L - , \
-               L - : L - : - H , \
-               - - : H - : - L";
+               L - : L - : - H";
     }
     pin (Q) {
       direction : output;
@@ -163,12 +163,12 @@ library (cells) {
       direction : input;
     }
     statetable ("A B", "Qa_st Qb_st") {
-      table : "- - : - H : L - , \
+      table : "- H : L - : - H , \
                - - : H - : - L , \
                - L : - - : - L , \
-               - H : L - : - H , \
-               L - : - - : L - , \
-               H - : - L : H -";
+               H - : - L : H - , \
+               - - : - H : L - , \
+               L - : - - : L -";
     }
     pin (Qa) {
       direction : output;
@@ -216,8 +216,8 @@ library (cells) {
       direction : input;
     }
     statetable ("G D", "Q_st") {
-      table : "L - : - : N , \
-               H L : - : L , \
+      table : "H L : - : L , \
+               L - : - : N , \
                H H : - : H";
     }
     pin (Q) {
@@ -269,7 +269,7 @@ library (cells) {
     }
     pin (GCLK) {
       direction : output;
-      state_function : "enB*CLKB + enA*CLKA";
+      state_function : "CLKB & enB | CLKA & enA";
     }
     pin (enA) {
       direction : internal;
@@ -297,9 +297,9 @@ library (cells) {
     }
     statetable ("A B", "Q_st") {
       table : "L L : - : L , \
-               L H : - : N , \
                H L : - : N , \
-               H H : - : H";
+               H H : - : H , \
+               L H : - : N";
     }
     pin (Q) {
       direction : output;

@@ -3,9 +3,9 @@ output Y;
 input  A, B;
 reg    Y;
 table
-	0 ? : ? : 0;
 	1 1 : ? : 1;
 	? 0 : ? : 0;
+	0 ? : ? : 0;
 endtable
 endprimitive
 `celldefine
@@ -63,10 +63,10 @@ output Q;
 input  A, B;
 reg    Q;
 table
-	0 0 : ? : 0;
-	0 1 : ? : -;
-	1 0 : ? : -;
 	1 1 : ? : 1;
+	0 0 : ? : 0;
+	1 0 : ? : -;
+	0 1 : ? : -;
 endtable
 endprimitive
 `celldefine
@@ -85,11 +85,11 @@ output Q;
 input  A, B, R;
 reg    Q;
 table
-	0 0 ? : ? : 0;
-	0 1 0 : ? : -;
-	1 0 0 : ? : -;
 	1 1 0 : ? : 1;
+	0 0 ? : ? : 0;
 	? ? 1 : ? : 0;
+	1 0 0 : ? : -;
+	0 1 0 : ? : -;
 endtable
 endprimitive
 `celldefine
@@ -109,13 +109,13 @@ output Q;
 input  P1, P2, C, R, M1, M2;
 reg    Q;
 table
-	0 ? 1 0 ? ? : ? : -;
 	1 1 1 0 ? ? : ? : 1;
-	? 0 1 0 ? ? : ? : -;
-	? ? 0 0 1 ? : ? : -;
-	? ? 0 0 ? 1 : ? : -;
 	? ? 0 ? 0 0 : ? : 0;
 	? ? ? 1 ? ? : ? : 0;
+	? ? 0 0 ? 1 : ? : -;
+	? ? 0 0 1 ? : ? : -;
+	? 0 1 0 ? ? : ? : -;
+	0 ? 1 0 ? ? : ? : -;
 endtable
 endprimitive
 `celldefine
@@ -139,8 +139,8 @@ input  R, Qn;
 reg    Q;
 table
 	0 0 : ? : 1;
-	1 ? : ? : 0;
 	? 1 : ? : 0;
+	1 ? : ? : 0;
 endtable
 endprimitive
 primitive SR_Qn(Qn, S, Q);
@@ -149,8 +149,8 @@ input  S, Q;
 reg    Qn;
 table
 	0 0 : ? : 1;
-	1 ? : ? : 0;
 	? 1 : ? : 0;
+	1 ? : ? : 0;
 endtable
 endprimitive
 `celldefine
@@ -173,8 +173,8 @@ input  Qb, A;
 reg    Qa;
 table
 	0 1 : ? : 1;
-	1 ? : ? : 0;
 	? 0 : ? : 0;
+	1 ? : ? : 0;
 endtable
 endprimitive
 primitive MUT_Qb(Qb, Qa, B);
@@ -183,8 +183,8 @@ input  Qa, B;
 reg    Qb;
 table
 	0 1 : ? : 1;
-	1 ? : ? : 0;
 	? 0 : ? : 0;
+	1 ? : ? : 0;
 endtable
 endprimitive
 `celldefine
@@ -201,15 +201,15 @@ MUT_Qa u_MUT_Qa (Qa, Qb, A);
 MUT_Qb u_MUT_Qb (Qb, Qa, B);
 endmodule
 `endcelldefine
-primitive DFF_Q(Q, D, CLK); // clock CLK is the last port
+primitive DFF_Q(Q, D, CLK);
 output Q;
 input  D, CLK;
 reg    Q;
 table
-	(??) ? : ? : -;
-	0 (01) : ? : 0;
 	1 (01) : ? : 1;
+	0 (01) : ? : 0;
 	? (10) : ? : -;
+	(??) ? : ? : -;
 endtable
 endprimitive
 `celldefine
@@ -228,9 +228,9 @@ output Q;
 input  G, D;
 reg    Q;
 table
-	0 ? : ? : -;
-	1 0 : ? : 0;
 	1 1 : ? : 1;
+	1 0 : ? : 0;
+	0 ? : ? : -;
 endtable
 endprimitive
 `celldefine
@@ -249,70 +249,70 @@ output GCLK;
 input  enA, CLKA, enB, CLKB;
 reg    GCLK;
 table
-	0 ? 0 ? : ? : 0;
-	0 ? ? 0 : ? : 0;
-	1 1 ? ? : ? : 1;
-	? 0 0 ? : ? : 0;
-	? 0 ? 0 : ? : 0;
 	? ? 1 1 : ? : 1;
+	1 1 ? ? : ? : 1;
+	? 0 ? 0 : ? : 0;
+	0 ? ? 0 : ? : 0;
+	? 0 0 ? : ? : 0;
+	0 ? 0 ? : ? : 0;
 endtable
 endprimitive
-primitive ICM_enA(enA, sela2, RA, CLKA); // clock CLKA is the last port
+primitive ICM_enA(enA, sela2, RA, CLKA);
 output enA;
 input  sela2, RA, CLKA;
 reg    enA;
 table
-	(??) ? ? : ? : -;
-	0 ? (10) : ? : 0;
 	1 ? (10) : ? : 1;
-	? (??) ? : ? : -;
+	0 ? (10) : ? : 0;
 	? 1 ? : ? : 0;
 	? ? (01) : ? : -;
+	(??) ? ? : ? : -;
+	? (??) ? : ? : -;
 endtable
 endprimitive
-primitive ICM_enB(enB, selb2, RB, CLKB); // clock CLKB is the last port
+primitive ICM_enB(enB, selb2, RB, CLKB);
 output enB;
 input  selb2, RB, CLKB;
 reg    enB;
 table
-	(??) ? ? : ? : -;
-	0 ? (10) : ? : 0;
 	1 ? (10) : ? : 1;
-	? (??) ? : ? : -;
+	0 ? (10) : ? : 0;
 	? 1 ? : ? : 0;
 	? ? (01) : ? : -;
+	(??) ? ? : ? : -;
+	? (??) ? : ? : -;
 endtable
 endprimitive
-primitive ICM_sela2(sela2, RA, S, enB, CLKA); // clock CLKA is the last port
+primitive ICM_sela2(sela2, RA, S, enB, CLKA);
 output sela2;
 input  RA, S, enB, CLKA;
 reg    sela2;
 table
-	(??) ? ? ? : ? : -;
 	0 0 0 (01) : ? : 1;
-	1 ? ? (01) : ? : 0;
-	1 ? ? ? : ? : 0;
-	? (??) ? ? : ? : -;
 	? 1 ? (01) : ? : 0;
-	? ? (??) ? : ? : -;
+	1 ? ? (01) : ? : 0;
 	? ? 1 (01) : ? : 0;
+	1 ? ? ? : ? : 0;
 	? ? ? (10) : ? : -;
+	(??) ? ? ? : ? : -;
+	? (??) ? ? : ? : -;
+	? ? (??) ? : ? : -;
 endtable
 endprimitive
-primitive ICM_selb2(selb2, RB, S, enA, CLKB); // clock CLKB is the last port
+primitive ICM_selb2(selb2, RB, S, enA, CLKB);
 output selb2;
 input  RB, S, enA, CLKB;
 reg    selb2;
 table
-	(??) ? ? ? : ? : -;
 	0 1 0 (01) : ? : 1;
-	1 ? ? (01) : ? : 0;
-	1 ? ? ? : ? : 0;
-	? (??) ? ? : ? : -;
 	? 0 ? (01) : ? : 0;
-	? ? (??) ? : ? : -;
+	1 ? ? (01) : ? : 0;
 	? ? 1 (01) : ? : 0;
+	1 ? ? ? : ? : 0;
 	? ? ? (10) : ? : -;
+	(??) ? ? ? : ? : -;
+	? (??) ? ? : ? : -;
+	? ? (??) ? : ? : -;
 endtable
 endprimitive
 `celldefine
@@ -339,10 +339,10 @@ output Q;
 input  A, B;
 reg    Q;
 table
-	0 0 : ? : 0;
-	0 1 : ? : -;
-	1 0 : ? : -;
 	1 1 : ? : 1;
+	0 0 : ? : 0;
+	1 0 : ? : -;
+	0 1 : ? : -;
 endtable
 endprimitive
 `celldefine

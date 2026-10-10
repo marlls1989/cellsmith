@@ -92,9 +92,11 @@ not a heuristic.
    has none to protect, so plain BDD equality alone is enough to purge it and rewrite its consumers onto
    `var(rep)`. A duplicate that is an **output**, by contrast, is never purged — its pin always survives
    — and is only *aliased* (demoted to `var(rep)`) when the group is **recurrent**: its shared function
-   references one of the group's own members. Recurrence is evaluated against the representative's
-   *current* function at commit time, so an internal retirement earlier in the same pass (which can only
-   remove member references, never add one) is already reflected when an output's recurrence is judged.
+   references one of the group's own members. Recurrence is read from the representative's function
+   at grouping time, before any edit — every edit of the pass is deferred to the pass end — and that
+   read is also the value at commit: groups are disjoint and a group's rename touches only its own
+   members, so no other group's edit can change whether this group's representative references one
+   of its members.
    Once every aliased member is renamed to `var(rep)`, the representative is self-referential and so a
    genuine **state variable**, which is what makes the resulting `var(rep)` aliases machine-evaluable. A
    purely **combinational** output duplicate — no member in the shared δ, e.g. two output pins both
@@ -275,15 +277,17 @@ The two passes partition the aliasing they resolve by a hard interface rule, not
 - **(I5) Dedup soundness.** Two signals with the *same* BDD compute the same transition function, so
   they are `=` the same underlying coordinate at every state; renaming the retired members onto
   `var(rep)` is exact. Internal retirement is unconditional and purges the internal; output aliasing is
-  licensed only by recurrence — read against the representative's function at commit time — and never
+  licensed only by recurrence — read from the representative's function at grouping time, before
+  any edit, since every edit of the pass is deferred to the pass end; that read is also the value at
+  commit, because groups are disjoint and a group's rename touches only its own members — and never
   purges the pin, so the output-preferring representative keeps a pin wherever the group holds one, and
   an aliased output remains a combinational function of the representative.
 
 The safety boundary is about *behaviour*, not names: a cell's derived arcs, hidden arcs, and the
-**existence and condition** of every oscillation group must match the un-reduced cell — a folded relay
-leaving a group's membership is not a regression (see the ring-oscillator case above). Gained
-constraints are permitted (a relay can have been masking a genuine hazard); losses are not. This is
-locked by the behaviour-preservation golden tests.
+**existence and condition** of every oscillation group must match the un-reduced cell, while a group's
+membership may lose a folded relay (see the ring-oscillator case above). Gained constraints are
+permitted, since a folded relay can bring a genuine hazard's pins into one direct support; losses are
+not.
 
 ## Known limits
 
@@ -297,6 +301,6 @@ oscillation group.
 Arity-1 links never contribute to this limit: a bare ±var alias always collapses soundly (I1), so
 any ring with even one wire link is resolved rather than mis-folded. No committed or mandated cell is
 affected: MUT and SR (an SR NOR latch, as above) are 2-cycles the guard catches, and ICM's folded
-relays feed synchroniser latches that already self-hold. A fully general criterion would carry a BDD
-check that the projected cycle structure survives; the structural guard is accepted per the decided
-enforcement level.
+relays feed synchroniser latches that already self-hold. The structural 2-cycle guard is what is
+enforced; a BDD check that the projected cycle structure survives, which a fully general criterion would
+carry, is not implemented.
